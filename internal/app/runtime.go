@@ -102,6 +102,11 @@ type personLifecycle interface {
 	Stop(context.Context) error
 }
 
+type asyncJobLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 type recordLifecycle interface {
 	Start(context.Context) error
 	Stop(context.Context) error
@@ -135,6 +140,7 @@ type lifecycleRuntime struct {
 	storage     storageLifecycle
 	algorithm   algorithmLifecycle
 	person      personLifecycle
+	asyncJobs   asyncJobLifecycle
 	record      recordLifecycle
 	snapshot    snapshotLifecycle
 	spatial     spatialLifecycle
@@ -167,6 +173,7 @@ type lifecycleRuntime struct {
 	storageReady        bool
 	algorithmReady      bool
 	personReady         bool
+	asyncJobsReady      bool
 	recordReady         bool
 	snapshotReady       bool
 	spatialReady        bool
@@ -195,6 +202,7 @@ type runtimeParams struct {
 	Storage     storageLifecycle     `optional:"true"`
 	Algorithm   algorithmLifecycle   `optional:"true"`
 	Person      personLifecycle      `optional:"true"`
+	AsyncJobs   asyncJobLifecycle    `optional:"true"`
 	Record      recordLifecycle      `optional:"true"`
 	Snapshot    snapshotLifecycle    `optional:"true"`
 	Spatial     spatialLifecycle     `optional:"true"`
@@ -227,6 +235,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		storage:     p.Storage,
 		algorithm:   p.Algorithm,
 		person:      p.Person,
+		asyncJobs:   p.AsyncJobs,
 		record:      p.Record,
 		snapshot:    p.Snapshot,
 		spatial:     p.Spatial,
@@ -327,6 +336,17 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 			r.degradedStart("person", err)
 		}
 		r.personReady = true
+	}
+
+	// The job queue starts after person: its handlers are registered at graph
+	// construction, and person's Start sweeps stale staging directories that a
+	// running worker would otherwise race. Any failure is degraded, not fatal —
+	// the console must still come up so the operator can see what is stuck.
+	if r.asyncJobs != nil {
+		if err := r.asyncJobs.Start(ctx); err != nil {
+			r.degradedStart("async_jobs", err)
+		}
+		r.asyncJobsReady = true
 	}
 
 	// 底图目录的创建属于 spatial 的启动职责（构造函数保持纯粹）。失败降级而不是
@@ -474,6 +494,9 @@ func (r *lifecycleRuntime) stopSequence() []func(context.Context) error {
 		// the native engine are still alive to serve the teardown.
 		r.closeGB28181,
 		r.closeCamera,
+		// The job worker can call into person and the native engine; it must be
+		// quiesced before either is torn down.
+		r.closeAsyncJobs,
 		r.closeAlgorithm,
 		r.closePerson,
 		r.closeSpatial,
@@ -711,6 +734,19 @@ func (r *lifecycleRuntime) closePerson(ctx context.Context) error {
 	if r.person != nil {
 		if err := r.person.Stop(ctx); err != nil {
 			return fmt.Errorf("stop person service: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeAsyncJobs(ctx context.Context) error {
+	if !r.asyncJobsReady {
+		return nil
+	}
+	r.asyncJobsReady = false
+	if r.asyncJobs != nil {
+		if err := r.asyncJobs.Stop(ctx); err != nil {
+			return fmt.Errorf("stop async job service: %w", err)
 		}
 	}
 	return nil

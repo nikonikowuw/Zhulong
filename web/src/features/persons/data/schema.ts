@@ -126,6 +126,9 @@ export const faceImportJobResponseSchema = z.object({
   failed: z.number(),
   currentStage: z.string().optional().default(''),
   currentFile: z.string().optional().default(''),
+  // errorCode is the stable machine contract; errorMessage is already localized
+  // by the backend from the Accept-Language header.
+  errorCode: z.string().optional().default(''),
   errorMessage: z.string().optional().default(''),
   createdAt: z.string(),
   updatedAt: z.string(),

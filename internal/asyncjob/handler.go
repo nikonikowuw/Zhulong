@@ -2,25 +2,18 @@ package asyncjob
 
 import (
 	"github.com/gin-gonic/gin"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // Handler exposes RESTful HTTP endpoints for system background jobs.
 type Handler struct {
 	service *Service
-	logger  *zap.Logger
 }
 
 // NewHandler constructs a Handler instance.
-func NewHandler(service *Service, logger *zap.Logger) *Handler {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-	return &Handler{
-		service: service,
-		logger:  logger.Named("asyncjob.handler"),
-	}
+func NewHandler(service *Service) *Handler {
+	return &Handler{service: service}
 }
 
 // RegisterRoutes registers the system job management routes.
@@ -58,7 +51,7 @@ func (h *Handler) List(c *gin.Context) {
 		return
 	}
 
-	httputil.PaginatedSuccess(c, toJobResponses(jobs), total, window)
+	httputil.PaginatedSuccess(c, toJobResponses(jobs, requestLocale(c)), total, window)
 }
 
 // Get godoc
@@ -77,22 +70,31 @@ func (h *Handler) Get(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, toJobResponse(job))
+	httputil.Success(c, toJobResponse(job, requestLocale(c)))
 }
 
 // Cancel godoc
-// @Summary      Cancel a running background job
+// @Summary      Cancel a running or queued background job
 // @Tags         system
 // @Produce      json
 // @Param        id path string true "Job ID"
 // @Success      200  {object}  httputil.Response{data=CancelJobResponse}
+// @Failure      404  {object}  httputil.Response
+// @Failure      409  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /system/jobs/{id}/cancel [post]
 func (h *Handler) Cancel(c *gin.Context) {
 	id := c.Param("id")
+	// Declare the audit intent before the side effect so a failed cancellation
+	// (unknown id, already finished) is audited together with a successful one.
+	audithttp.Tag(c, ActionCancelJob, "job:"+id, "Cancel background job")
 	if err := h.service.CancelJob(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
 	httputil.Success(c, CancelJobResponse{Cancelled: true})
+}
+
+func requestLocale(c *gin.Context) string {
+	return httputil.ResolveLocale(c.GetHeader("Accept-Language"))
 }

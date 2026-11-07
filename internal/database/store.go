@@ -18,6 +18,11 @@ import (
 	gormlog "gorm.io/gorm/logger"
 )
 
+// ErrClosed is the shared sentinel every domain store returns when the database
+// has not been opened yet or has already been closed. It lives here so modules
+// do not each declare their own equivalent error.
+var ErrClosed = errors.New("database connection is not available")
+
 // DBProvider abstracts access to the underlying *gorm.DB.
 type DBProvider interface {
 	DB() *gorm.DB

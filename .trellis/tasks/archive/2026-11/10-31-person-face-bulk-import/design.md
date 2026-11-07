@@ -141,12 +141,13 @@ if config.Width > 4096 || config.Height > 4096 {
 - `system_async_jobs`:
   - `id` (TEXT, PK)
   - `type` (TEXT, NOT NULL, INDEX) - 任务类型（例如 `"person.face_import"`）
-  - `status` (TEXT, NOT NULL, INDEX) - 状态（PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED）
+  - `status` (TEXT, NOT NULL, INDEX) - 状态（PENDING, EXTRACTING, PROCESSING, COMPLETED, FAILED, CANCELLED）
   - `progress` (INTEGER, 0-100)
   - `total` / `processed` / `succeeded` / `failed` (INTEGER)
   - `current_stage` / `current_file` (TEXT)
   - `metadata_json` / `result_json` (TEXT)
-  - `error_message` (TEXT)
+  - `error_code` (TEXT, 迁移 `000033`) - 终态原因的稳定机器码，按 `Accept-Language` 翻译；API 不再回显原始错误文本
+  - `error_message` (TEXT) - 仅存量行保留自由文本，新写入一律清空
   - `created_at` / `updated_at` / `finished_at` (DATETIME)
 
 ### 5.2 临时目录 RAII

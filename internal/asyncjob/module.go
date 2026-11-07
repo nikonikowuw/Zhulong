@@ -28,7 +28,7 @@ func NewAsyncJobComponents(
 ) *AsyncJobComponents {
 	store := NewStore(dbProvider)
 	service := NewService(store, logger)
-	handler := NewHandler(service, logger)
+	handler := NewHandler(service)
 
 	return &AsyncJobComponents{
 		Store:           store,

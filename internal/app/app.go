@@ -676,26 +676,22 @@ var personModule = fx.Module("person",
 type asyncJobOut struct {
 	fx.Out
 
-	Store           *asyncjob.Store
 	Service         *asyncjob.Service
-	Handler         *asyncjob.Handler
+	Lifecycle       asyncJobLifecycle
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
 }
 
 func provideAsyncJob(
-	lifecycle fx.Lifecycle,
 	dbProvider database.DBProvider,
 	logger *zap.Logger,
 ) asyncJobOut {
 	comp := asyncjob.NewAsyncJobComponents(dbProvider, logger)
-	lifecycle.Append(fx.Hook{
-		OnStart: comp.Start,
-		OnStop:  comp.Stop,
-	})
+	// The job worker is started and stopped through lifecycleRuntime, not its own
+	// Fx hook: it must be quiesced before person, the native engine and SQLite go
+	// away, and only the ordered stop sequence can guarantee that.
 	return asyncJobOut{
-		Store:           comp.Store,
 		Service:         comp.Service,
-		Handler:         comp.Handler,
+		Lifecycle:       comp,
 		ProtectedRoutes: comp.ProtectedRoutes,
 	}
 }

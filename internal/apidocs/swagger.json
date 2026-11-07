@@ -5413,7 +5413,7 @@
                 "tags": [
                     "system"
                 ],
-                "summary": "Cancel a running background job",
+                "summary": "Cancel a running or queued background job",
                 "parameters": [
                     {
                         "type": "string",
@@ -5440,6 +5440,18 @@
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
@@ -7341,6 +7353,9 @@
                     "type": "string"
                 },
                 "currentStage": {
+                    "$ref": "#/definitions/asyncjob.JobStage"
+                },
+                "errorCode": {
                     "type": "string"
                 },
                 "errorMessage": {
@@ -7355,9 +7370,6 @@
                 "id": {
                     "type": "string"
                 },
-                "metadata": {
-                    "type": "string"
-                },
                 "processed": {
                     "type": "integer"
                 },
@@ -7365,7 +7377,8 @@
                     "type": "integer"
                 },
                 "result": {
-                    "type": "string"
+                    "type": "object",
+                    "additionalProperties": {}
                 },
                 "status": {
                     "$ref": "#/definitions/asyncjob.JobStatus"
@@ -7384,10 +7397,26 @@
                 }
             }
         },
+        "asyncjob.JobStage": {
+            "type": "string",
+            "enum": [
+                "INITIALIZING",
+                "EXTRACTING",
+                "PROCESSING",
+                "COMPLETED"
+            ],
+            "x-enum-varnames": [
+                "StageInitializing",
+                "StageExtracting",
+                "StageProcessing",
+                "StageCompleted"
+            ]
+        },
         "asyncjob.JobStatus": {
             "type": "string",
             "enum": [
                 "PENDING",
+                "EXTRACTING",
                 "PROCESSING",
                 "COMPLETED",
                 "FAILED",
@@ -7395,6 +7424,7 @@
             ],
             "x-enum-varnames": [
                 "StatusPending",
+                "StatusExtracting",
                 "StatusProcessing",
                 "StatusCompleted",
                 "StatusFailed",
@@ -8871,6 +8901,9 @@
                     "type": "string"
                 },
                 "currentStage": {
+                    "type": "string"
+                },
+                "errorCode": {
                     "type": "string"
                 },
                 "errorMessage": {

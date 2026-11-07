@@ -101,6 +101,36 @@ func (h *FaceImportJobHandler) Execute(ctx context.Context, job *asyncjob.Job, u
 	return h.service.ExecuteFaceImportJob(ctx, job, updater)
 }
 
+// Abort releases the staged upload for a job that will never execute.
+//
+// The execution path removes the job directory in its own defer, but a job that
+// is cancelled while still queued never reaches Execute, so the async job
+// runtime calls this instead of leaving the archive on disk until the next boot.
+func (h *FaceImportJobHandler) Abort(_ context.Context, job *asyncjob.Job) error {
+	if job == nil || job.MetadataJSON == "" {
+		return nil
+	}
+	var meta FaceImportMetadata
+	if err := json.Unmarshal([]byte(job.MetadataJSON), &meta); err != nil {
+		return fmt.Errorf("parse job metadata: %w", err)
+	}
+	if meta.JobDir == "" {
+		return nil
+	}
+	// Only remove directories this domain owns: the value comes from our own
+	// staging writer, but it is still checked against the temp root so a corrupt
+	// row cannot turn cleanup into an arbitrary recursive delete.
+	root := filepath.Clean(h.service.tempDir)
+	target := filepath.Clean(meta.JobDir)
+	if target != root && !strings.HasPrefix(target, root+string(os.PathSeparator)) {
+		return fmt.Errorf("refusing to remove %q outside the face import temp root", target)
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("remove face import job directory: %w", err)
+	}
+	return nil
+}
+
 // ExecuteFaceImportJob executes the extraction, vetting and enrollment pipeline.
 //
 // The stages are separate calls so each one can be read — and tested — on its own:
@@ -138,7 +168,7 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 	}
 
 	s.updateImportProgress(ctx, updater, asyncjob.ProgressUpdate{
-		Stage:     "COMPLETED",
+		Stage:     asyncjob.StageCompleted,
 		Total:     result.Total,
 		Processed: result.Total,
 		Succeeded: result.Succeeded,
@@ -169,7 +199,10 @@ func (s *Service) unpackFaceImport(
 	meta FaceImportMetadata,
 	updater asyncjob.ProgressUpdater,
 ) ([]faceImportEntry, string, error) {
-	s.updateImportProgress(ctx, updater, asyncjob.ProgressUpdate{Stage: "EXTRACTING"}, jobID)
+	s.updateImportProgress(ctx, updater, asyncjob.ProgressUpdate{
+		Stage:  asyncjob.StageExtracting,
+		Status: asyncjob.StatusExtracting,
+	}, jobID)
 
 	extractedDir := filepath.Join(meta.JobDir, "extracted")
 	if err := os.MkdirAll(extractedDir, 0755); err != nil {
@@ -215,7 +248,7 @@ func (s *Service) processFaceImportEntries(
 ) (FaceImportResult, []GalleryItem, error) {
 	total := len(entries)
 	s.updateImportProgress(ctx, updater, asyncjob.ProgressUpdate{
-		Stage: "PROCESSING",
+		Stage: asyncjob.StageProcessing,
 		Total: total,
 	}, jobID)
 
@@ -231,7 +264,7 @@ func (s *Service) processFaceImportEntries(
 		}
 
 		s.updateImportProgress(ctx, updater, asyncjob.ProgressUpdate{
-			Stage:       "PROCESSING",
+			Stage:       asyncjob.StageProcessing,
 			CurrentFile: entry.ImagePath,
 			Total:       total,
 			Processed:   index + 1,
@@ -296,7 +329,7 @@ func (s *Service) updateImportProgress(
 	if err := updater.Update(ctx, update); err != nil {
 		s.logger.Warn("failed to update face import progress",
 			zap.String("jobId", jobID),
-			zap.String("stage", update.Stage),
+			zap.String("stage", string(update.Stage)),
 			zap.Error(err),
 		)
 	}
@@ -934,7 +967,16 @@ func (s *Service) GetFaceImportJob(ctx context.Context, jobID string) (*asyncjob
 	if s.asyncJobs == nil {
 		return nil, apperr.Internal("ASYNC_JOB_UNAVAILABLE", "System async job service is not available", nil)
 	}
-	return s.asyncJobs.GetJob(ctx, jobID)
+	job, err := s.asyncJobs.GetJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	// The generic queue also carries jobs owned by other domains; this endpoint
+	// must not become a cross-domain read of their metadata.
+	if job.Type != FaceImportJobType {
+		return nil, apperr.NotFound("FACE_IMPORT_JOB_NOT_FOUND", "Face import job not found", nil)
+	}
+	return job, nil
 }
 
 // GetFaceImportFailedReportCSV generates a CSV diagnostic report for failed rows.

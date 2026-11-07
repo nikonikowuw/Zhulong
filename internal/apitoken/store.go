@@ -10,7 +10,9 @@ import (
 	"gorm.io/gorm"
 )
 
-var ErrDatabaseClosed = errors.New("database connection is not available")
+// ErrDatabaseClosed is an alias of the shared sentinel, kept under the name this
+// package's callers already use.
+var ErrDatabaseClosed = database.ErrClosed
 
 // Store manages persistence of API tokens in SQLite.
 type Store struct {

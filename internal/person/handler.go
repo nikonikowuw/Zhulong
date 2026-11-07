@@ -500,7 +500,7 @@ func (h *Handler) CreateFaceImportJob(c *gin.Context) {
 		return
 	}
 
-	httputil.SuccessWithStatus(c, http.StatusAccepted, newFaceImportJobResponse(job))
+	httputil.SuccessWithStatus(c, http.StatusAccepted, newFaceImportJobResponse(job, requestLocale(c)))
 }
 
 // GetFaceImportJob godoc
@@ -519,7 +519,7 @@ func (h *Handler) GetFaceImportJob(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, newFaceImportJobResponse(job))
+	httputil.Success(c, newFaceImportJobResponse(job, requestLocale(c)))
 }
 
 // GetFaceImportFailedReport godoc
@@ -653,4 +653,10 @@ func (h *Handler) SearchByImage(c *gin.Context) {
 
 	audithttp.TagDetail(c, fmt.Sprintf("Matches: %d", len(resp.Matches)))
 	httputil.Success(c, resp)
+}
+
+// requestLocale resolves the response locale for projections that render
+// catalog-backed machine codes into localized text.
+func requestLocale(c *gin.Context) string {
+	return httputil.ResolveLocale(c.GetHeader("Accept-Language"))
 }

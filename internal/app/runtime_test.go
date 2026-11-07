@@ -221,6 +221,23 @@ func (p personLifecycleStub) Stop(context.Context) error {
 	return nil
 }
 
+// asyncJobLifecycleStub records the background job worker. Handlers call domain
+// services, so the worker must start after person and stop before person, the
+// native engine and SQLite.
+type asyncJobLifecycleStub struct {
+	events *eventLog
+}
+
+func (a asyncJobLifecycleStub) Start(context.Context) error {
+	a.events.add("asyncjobs.start")
+	return nil
+}
+
+func (a asyncJobLifecycleStub) Stop(context.Context) error {
+	a.events.add("asyncjobs.stop")
+	return nil
+}
+
 // spatialLifecycleStub records spatial-domain start/stop: the maps directory is
 // created there rather than in a constructor, so both lifecycle paths must reach it.
 type spatialLifecycleStub struct {
@@ -249,12 +266,16 @@ func TestAIShutdownOrderPrecedesNativeClose(t *testing.T) {
 		native:         engineStub{events: events},
 		camera:         cameraStub{events: events},
 		algorithm:      algorithmStub{events: events},
+		person:         personLifecycleStub{events: events},
+		asyncJobs:      asyncJobLifecycleStub{events: events},
 		server:         &http.Server{Addr: "127.0.0.1:0"},
 		logger:         zap.NewNop(),
 		databaseReady:  true,
 		nativeReady:    true,
 		cameraReady:    true,
 		algorithmReady: true,
+		personReady:    true,
+		asyncJobsReady: true,
 		httpReady:      true,
 		serveDone:      serveDone,
 		shutdown: func(ctx context.Context) error {
@@ -269,7 +290,15 @@ func TestAIShutdownOrderPrecedesNativeClose(t *testing.T) {
 	}
 
 	order := events.snapshot()
-	want := []string{"http.shutdown", "camera.stop", "algorithm.stop", "engine.close", "database.close"}
+	want := []string{
+		"http.shutdown",
+		"camera.stop",
+		"asyncjobs.stop",
+		"algorithm.stop",
+		"person.stop",
+		"engine.close",
+		"database.close",
+	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("unexpected AI shutdown order: got %v, want %v", order, want)
 	}
@@ -290,6 +319,13 @@ func TestAIShutdownOrderPrecedesNativeClose(t *testing.T) {
 	if index("algorithm.stop") > index("engine.close") {
 		t.Fatal("algorithm must stop before engine.close: runner clients must be drained before the broker host is destroyed")
 	}
+	// 后台任务执行体调用 person 与 native，必须在两者释放之前静默下来。
+	if index("asyncjobs.stop") > index("person.stop") {
+		t.Fatal("async jobs must stop before person: a running handler still calls person services")
+	}
+	if index("asyncjobs.stop") > index("engine.close") {
+		t.Fatal("async jobs must stop before engine.close: a running handler may still use the native engine")
+	}
 }
 
 // TestStartupRollbackSharesShutdownOrder 守护「只有一份停机顺序」。
@@ -307,6 +343,7 @@ func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
 			audit:          auditStub{events: events},
 			storage:        storageLifecycleStub{events: events},
 			person:         personLifecycleStub{events: events},
+			asyncJobs:      asyncJobLifecycleStub{events: events},
 			record:         &recordContextStub{events: events},
 			snapshot:       snapshotLifecycleStub{events: events},
 			spatial:        spatialLifecycleStub{events: events},
@@ -318,6 +355,7 @@ func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
 			auditReady:     true,
 			storageReady:   true,
 			personReady:    true,
+			asyncJobsReady: true,
 			recordReady:    true,
 			snapshotReady:  true,
 			spatialReady:   true,
@@ -352,6 +390,54 @@ func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
 	got = got[1:]
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("rollback order diverged from shutdown order:\n rollback: %v\n shutdown: %v", want, got)
+	}
+}
+
+// TestAsyncJobWorkerBracketsPerson 守护后台任务 worker 的启动/停止边界：
+// handler 会调用 person 服务与 native 引擎，因此 worker 必须在 person 之后启动、
+// 在 person 与 engine 之前停止。改坏这条边界会在真实板端变成 use-after-close。
+func TestAsyncJobWorkerBracketsPerson(t *testing.T) {
+	events := &eventLog{}
+	server := &http.Server{Addr: "127.0.0.1:0"}
+	runtime := &lifecycleRuntime{
+		database:  databaseStub{events: events},
+		native:    engineStub{events: events},
+		person:    personLifecycleStub{events: events},
+		asyncJobs: asyncJobLifecycleStub{events: events},
+		server:    server,
+		logger:    zap.NewNop(),
+		listen: func(network, address string) (net.Listener, error) {
+			events.add("http.listen")
+			return net.Listen(network, address)
+		},
+		shutdown: server.Shutdown,
+	}
+
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	order := events.snapshot()
+	index := func(event string) int {
+		for i, got := range order {
+			if got == event {
+				return i
+			}
+		}
+		t.Fatalf("event %q missing from lifecycle order %v", event, order)
+		return -1
+	}
+	if index("person.start") > index("asyncjobs.start") {
+		t.Fatal("async jobs must start after person: handlers call person services")
+	}
+	if index("asyncjobs.stop") > index("person.stop") {
+		t.Fatal("async jobs must stop before person")
+	}
+	if index("asyncjobs.stop") > index("engine.close") {
+		t.Fatal("async jobs must stop before the native engine is destroyed")
 	}
 }
 

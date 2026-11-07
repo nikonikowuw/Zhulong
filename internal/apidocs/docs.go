@@ -5420,7 +5420,7 @@ const docTemplate = `{
                 "tags": [
                     "system"
                 ],
-                "summary": "Cancel a running background job",
+                "summary": "Cancel a running or queued background job",
                 "parameters": [
                     {
                         "type": "string",
@@ -5447,6 +5447,18 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
@@ -7348,6 +7360,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "currentStage": {
+                    "$ref": "#/definitions/asyncjob.JobStage"
+                },
+                "errorCode": {
                     "type": "string"
                 },
                 "errorMessage": {
@@ -7362,9 +7377,6 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
-                "metadata": {
-                    "type": "string"
-                },
                 "processed": {
                     "type": "integer"
                 },
@@ -7372,7 +7384,8 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "result": {
-                    "type": "string"
+                    "type": "object",
+                    "additionalProperties": {}
                 },
                 "status": {
                     "$ref": "#/definitions/asyncjob.JobStatus"
@@ -7391,10 +7404,26 @@ const docTemplate = `{
                 }
             }
         },
+        "asyncjob.JobStage": {
+            "type": "string",
+            "enum": [
+                "INITIALIZING",
+                "EXTRACTING",
+                "PROCESSING",
+                "COMPLETED"
+            ],
+            "x-enum-varnames": [
+                "StageInitializing",
+                "StageExtracting",
+                "StageProcessing",
+                "StageCompleted"
+            ]
+        },
         "asyncjob.JobStatus": {
             "type": "string",
             "enum": [
                 "PENDING",
+                "EXTRACTING",
                 "PROCESSING",
                 "COMPLETED",
                 "FAILED",
@@ -7402,6 +7431,7 @@ const docTemplate = `{
             ],
             "x-enum-varnames": [
                 "StatusPending",
+                "StatusExtracting",
                 "StatusProcessing",
                 "StatusCompleted",
                 "StatusFailed",
@@ -8878,6 +8908,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "currentStage": {
+                    "type": "string"
+                },
+                "errorCode": {
                     "type": "string"
                 },
                 "errorMessage": {

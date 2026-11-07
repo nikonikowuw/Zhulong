@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/color"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
@@ -382,5 +384,78 @@ func TestService_StartLifecycle(t *testing.T) {
 	// Other directory should remain
 	if _, err := os.Stat(otherDir); err != nil {
 		t.Fatalf("expected other directory to be kept: %v", err)
+	}
+}
+
+func TestFaceImportJobHandlerAbortRemovesStagedDirectory(t *testing.T) {
+	root := t.TempDir()
+	jobDir := filepath.Join(root, "face_import_abort")
+	if err := os.MkdirAll(jobDir, 0o755); err != nil {
+		t.Fatalf("create job dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "upload.zip"), []byte("zip"), 0o644); err != nil {
+		t.Fatalf("write staged zip: %v", err)
+	}
+
+	handler := NewFaceImportJobHandler(&Service{tempDir: root, logger: zap.NewNop()})
+	meta, err := json.Marshal(FaceImportMetadata{JobDir: jobDir})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	job := &asyncjob.Job{ID: "job-abort", Type: FaceImportJobType, MetadataJSON: string(meta)}
+
+	if err := handler.Abort(context.Background(), job); err != nil {
+		t.Fatalf("Abort failed: %v", err)
+	}
+	if _, err := os.Stat(jobDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected the staged directory to be removed, stat err = %v", err)
+	}
+}
+
+func TestFaceImportJobHandlerAbortRefusesPathOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	handler := NewFaceImportJobHandler(&Service{tempDir: root, logger: zap.NewNop()})
+	meta, err := json.Marshal(FaceImportMetadata{JobDir: outside})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	job := &asyncjob.Job{ID: "job-abort", Type: FaceImportJobType, MetadataJSON: string(meta)}
+
+	if err := handler.Abort(context.Background(), job); err == nil {
+		t.Fatalf("expected Abort to refuse a directory outside the job temp root")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("directory outside the root must survive: %v", err)
+	}
+}
+
+type stubAsyncJobs struct {
+	job *asyncjob.Job
+	err error
+}
+
+func (s stubAsyncJobs) SubmitJob(context.Context, string, string) (*asyncjob.Job, error) {
+	return nil, errors.New("not used by this test")
+}
+
+func (s stubAsyncJobs) GetJob(context.Context, string) (*asyncjob.Job, error) {
+	return s.job, s.err
+}
+
+func TestGetFaceImportJobRejectsForeignJobType(t *testing.T) {
+	svc := &Service{
+		asyncJobs: stubAsyncJobs{job: &asyncjob.Job{ID: "job-other", Type: "other.domain_job"}},
+		logger:    zap.NewNop(),
+	}
+
+	_, err := svc.GetFaceImportJob(context.Background(), "job-other")
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected *apperr.Error, got %v", err)
+	}
+	if appErr.Code != "FACE_IMPORT_JOB_NOT_FOUND" {
+		t.Fatalf("expected FACE_IMPORT_JOB_NOT_FOUND, got %s", appErr.Code)
 	}
 }

@@ -468,6 +468,8 @@ definitions:
       currentFile:
         type: string
       currentStage:
+        $ref: '#/definitions/asyncjob.JobStage'
+      errorCode:
         type: string
       errorMessage:
         type: string
@@ -477,14 +479,13 @@ definitions:
         type: string
       id:
         type: string
-      metadata:
-        type: string
       processed:
         type: integer
       progress:
         type: integer
       result:
-        type: string
+        additionalProperties: {}
+        type: object
       status:
         $ref: '#/definitions/asyncjob.JobStatus'
       succeeded:
@@ -496,9 +497,22 @@ definitions:
       updatedAt:
         type: string
     type: object
+  asyncjob.JobStage:
+    enum:
+    - INITIALIZING
+    - EXTRACTING
+    - PROCESSING
+    - COMPLETED
+    type: string
+    x-enum-varnames:
+    - StageInitializing
+    - StageExtracting
+    - StageProcessing
+    - StageCompleted
   asyncjob.JobStatus:
     enum:
     - PENDING
+    - EXTRACTING
     - PROCESSING
     - COMPLETED
     - FAILED
@@ -506,6 +520,7 @@ definitions:
     type: string
     x-enum-varnames:
     - StatusPending
+    - StatusExtracting
     - StatusProcessing
     - StatusCompleted
     - StatusFailed
@@ -1516,6 +1531,8 @@ definitions:
       currentFile:
         type: string
       currentStage:
+        type: string
+      errorCode:
         type: string
       errorMessage:
         type: string
@@ -5926,11 +5943,19 @@ paths:
                 data:
                   $ref: '#/definitions/asyncjob.CancelJobResponse'
               type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/httputil.Response'
-      summary: Cancel a running background job
+      summary: Cancel a running or queued background job
       tags:
       - system
   /system/network/confirm:

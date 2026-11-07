@@ -15,8 +15,10 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("person or face not found")
-	ErrDatabaseClosed = errors.New("database connection is not available")
+	ErrNotFound = errors.New("person or face not found")
+	// ErrDatabaseClosed is an alias of the shared sentinel: callers outside this
+	// package keep the domain-specific name, but there is only one error value.
+	ErrDatabaseClosed = database.ErrClosed
 	ErrDuplicateID    = errors.New("person with this ID already exists")
 	// ErrDuplicatePersonID reports a collision on the external business key, which is
 	// distinct from ErrDuplicateID so callers can name the offending field.

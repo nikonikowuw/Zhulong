@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
 // PersonResponse is the HTTP projection of a Person.
@@ -123,13 +124,25 @@ type FaceImportJobResponse struct {
 	Failed       int                `json:"failed"`
 	CurrentStage string             `json:"currentStage,omitempty"`
 	CurrentFile  string             `json:"currentFile,omitempty"`
+	ErrorCode    string             `json:"errorCode,omitempty"`
 	ErrorMessage string             `json:"errorMessage,omitempty"`
 	CreatedAt    time.Time          `json:"createdAt"`
 	UpdatedAt    time.Time          `json:"updatedAt"`
 	FinishedAt   *time.Time         `json:"finishedAt,omitempty"`
 }
 
-func newFaceImportJobResponse(job *asyncjob.Job) FaceImportJobResponse {
+func newFaceImportJobResponse(job *asyncjob.Job, locale string) FaceImportJobResponse {
+	var finishedAt *time.Time
+	if job.FinishedAt != nil {
+		utc := job.FinishedAt.UTC()
+		finishedAt = &utc
+	}
+	errorMessage := job.ErrorMessage
+	if job.ErrorCode != "" {
+		if localized, ok := httputil.LookupMessage(job.ErrorCode, locale); ok && localized != "" {
+			errorMessage = localized
+		}
+	}
 	return FaceImportJobResponse{
 		JobID:        job.ID,
 		Status:       job.Status,
@@ -140,10 +153,11 @@ func newFaceImportJobResponse(job *asyncjob.Job) FaceImportJobResponse {
 		Failed:       job.Failed,
 		CurrentStage: job.CurrentStage,
 		CurrentFile:  job.CurrentFile,
-		ErrorMessage: job.ErrorMessage,
+		ErrorCode:    job.ErrorCode,
+		ErrorMessage: errorMessage,
 		CreatedAt:    job.CreatedAt.UTC(),
 		UpdatedAt:    job.UpdatedAt.UTC(),
-		FinishedAt:   job.FinishedAt,
+		FinishedAt:   finishedAt,
 	}
 }
 
