@@ -53,18 +53,11 @@ describe('ImageSearch Workbench', () => {
     vi.clearAllMocks()
   })
 
-  it('renders page header, disclaimer, and idle prompt initially', async () => {
+  it('renders page header and idle prompt initially', async () => {
     const { getByRole, getByText } = await renderWithProviders(<ImageSearch />)
 
     await expect
       .element(getByRole('heading', { name: /以图搜图|Visual Search/ }))
-      .toBeInTheDocument()
-    await expect
-      .element(
-        getByText(
-          /候选结果按相似度排序，不构成身份确认|Candidates are ranked by similarity/
-        )
-      )
       .toBeInTheDocument()
     await expect
       .element(getByText(/拖拽人脸图片至此|Drag & drop an image here/))
@@ -361,5 +354,129 @@ describe('ImageSearch Workbench', () => {
 
     // Dropped image and results should be reset to idle
     await expect.element(getByText(/就绪|Ready to Search/)).toBeInTheDocument()
+  })
+
+  it('switches between visual grid view and compact list view', async () => {
+    const mockMatches = {
+      matches: [
+        {
+          personId: 'p-1',
+          personName: 'Person In View',
+          matchedFaceId: 'f-1',
+          similarity: 0.91,
+        },
+      ],
+    }
+
+    vi.spyOn(imageSearchApi, 'searchByImage').mockResolvedValueOnce(mockMatches)
+
+    const { getByRole, getByTitle, container } = await renderWithProviders(
+      <ImageSearch />
+    )
+
+    const file = new File(['fake-png-content'], 'test.png', {
+      type: 'image/png',
+    })
+    const input = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file] })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+
+    const searchBtn = getByRole('button', { name: /开始检索|Search Gallery/ })
+    await searchBtn.click()
+
+    // Switch to list view using title
+    const listViewBtn = getByTitle(/列表视图|List View/)
+    await listViewBtn.click()
+
+    // Switch back to grid view using title
+    const gridViewBtn = getByTitle(/网格|Grid View/)
+    await gridViewBtn.click()
+  })
+
+  it('opens 1:1 side-by-side comparison inspection dialog when card is clicked', async () => {
+    const mockMatches = {
+      matches: [
+        {
+          personId: 'p-inspect',
+          personExternalId: 'EMP-INSPECT',
+          personName: 'Inspect Target',
+          matchedFaceId: 'f-inspect',
+          similarity: 0.925,
+        },
+      ],
+    }
+
+    vi.spyOn(imageSearchApi, 'searchByImage').mockResolvedValueOnce(mockMatches)
+
+    const { getByRole, getByText, container } = await renderWithProviders(
+      <ImageSearch />
+    )
+
+    const file = new File(['fake-png-content'], 'test.png', {
+      type: 'image/png',
+    })
+    const input = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file] })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+
+    const searchBtn = getByRole('button', { name: /开始检索|Search Gallery/ })
+    await searchBtn.click()
+
+    // Click candidate card to inspect
+    const nameElem = getByText('Inspect Target')
+    await nameElem.click()
+
+    // Verify comparison dialog opens
+    await expect
+      .element(
+        getByRole('heading', {
+          name: /人脸比对核验|Face Verification & Inspection/,
+        })
+      )
+      .toBeInTheDocument()
+    await expect.element(getByText('VS')).toBeInTheDocument()
+    await expect
+      .element(
+        getByText(
+          /512 维特征向量余弦相似度匹配|512-d Vector Cosine Similarity/
+        )
+      )
+      .toBeInTheDocument()
+
+    // Close dialog
+    const closeBtn = getByRole('button', { name: '关闭' })
+    await closeBtn.click()
+  })
+
+  it('handles image pasting from clipboard', async () => {
+    const { getByText } = await renderWithProviders(<ImageSearch />)
+
+    const pasteFile = new File(['fake-pasted-png'], 'clipboard.png', {
+      type: 'image/png',
+    })
+
+    const pasteEvent = new Event('paste', {
+      bubbles: true,
+    }) as unknown as ClipboardEvent
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: {
+        items: [
+          {
+            type: 'image/png',
+            getAsFile: () => pasteFile,
+          },
+        ],
+      },
+    })
+
+    window.dispatchEvent(pasteEvent)
+
+    await expect
+      .element(getByText(/已选择文件：clipboard\.png|Selected file: clipboard\.png/))
+      .toBeInTheDocument()
   })
 })

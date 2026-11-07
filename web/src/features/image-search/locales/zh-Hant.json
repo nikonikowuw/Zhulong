@@ -6,6 +6,7 @@
     "title": "上傳人臉照片",
     "prompt": "拖拽人臉圖片至此，或點擊瀏覽選擇",
     "formatHint": "支援靜態 JPG、PNG、WebP（檔案最大 10MB，單邊不超過 4096 像素）。請優先使用僅含一張清晰人臉的照片。",
+    "pasteHint": "支援 Ctrl+V 貼上截圖",
     "selected": "已選擇檔案：{{name}} ({{size}})",
     "change": "更換圖片",
     "clear": "清除",
@@ -23,21 +24,28 @@
     "levelStrict": "高精嚴控 (減少誤報)",
     "levelBalanced": "推薦平衡",
     "levelRelaxed": "寬鬆召回 (提高檢出)",
+    "preset50": "50% 寬",
+    "preset70": "70% 薦",
+    "preset85": "85% 嚴",
     "topK": "候選上限 (Top-K)",
     "topKOption": "Top {{count}}",
+    "viewGrid": "網格相冊檢視",
+    "viewList": "緊湊清單檢視",
     "search": "開始檢索",
     "searching": "正在檢索...",
     "uploading": "正在上傳 {{progress}}%...",
-    "reset": "重置"
+    "reset": "重設"
   },
   "results": {
     "title": "檢索結果",
     "count_one": "找到 {{count}} 位匹配候選人員",
     "count_other": "找到 {{count}} 位匹配候選人員",
+    "filterCriteria": "閾值 ≥ {{threshold}}% • 上限 {{topK}} 人",
     "idleTitle": "就緒",
-    "idleDescription": "上傳人臉圖片並點擊「開始檢索」即可在底庫中尋找相似人員。",
+    "idleDescription": "上傳人臉圖片並點擊「開始檢索」即可在底庫中查找相似人員。",
     "emptyTitle": "未找到匹配的人員",
     "emptyDescription": "底庫中沒有達到指定相似度的人員面容。可嘗試調低閾值或上傳更清晰的人臉正臉照片。",
+    "emptyActionLowerThreshold": "調低閾值至 50% 並重新檢索",
     "errorTitle": "檢索失敗",
     "errorDescription": "檢索服務發生異常，請檢查網路或稍後重試。",
     "workflowStep1": "上傳目標人臉",
@@ -46,6 +54,12 @@
     "workflowStep2Desc": "毫秒級提取 512 維人臉特徵並在底庫快速餘弦檢索",
     "workflowStep3": "時空軌跡聯動",
     "workflowStep3Desc": "一鍵穿透抓拍檔案，復盤跨攝影機通行時空軌跡",
+    "tipsTitle": "人臉檢索專業建議",
+    "tipsItem1": "優先選擇正臉無俯仰、雙眼平視、光照均勻的高清截圖或登記照",
+    "tipsItem2": "避免大面積佩戴墨鏡、口罩或帽子等五官嚴重遮擋物",
+    "tipsItem3": "演算法基於 512 維深度特徵空間餘弦相似度匹配，具備強抗光照與微表情干擾能力",
+    "otherCandidates": "其他相似候選人員 (共 {{count}} 位)",
+    "compare": "1:1 雙圖比對",
     "card": {
       "similarity": "相似度",
       "externalId": "編號",
@@ -58,5 +72,17 @@
       "highMatch": "極高匹配",
       "moderateMatch": "相似候選"
     }
+  },
+  "compareDialog": {
+    "title": "人臉比對核驗",
+    "description": "1:1 並排比對檢索原圖與底庫登記照五官細節",
+    "queryImage": "檢索原圖",
+    "enrolledImage": "底庫登記照",
+    "similarityScore": "綜合相似度",
+    "vectorCosine": "512 維特徵向量餘弦相似度匹配",
+    "verdictHigh": "極高匹配：五官特徵與底庫檔案高度一致，判定同一人置信度極高。",
+    "verdictMedium": "中等相似：核心面部輪廓接近，建議重點比對眼角、鼻翼及臉型特徵。",
+    "verdictLow": "參考候選：相似度相對邊緣，請結合抓拍記錄與通行時空軌跡多維核驗。",
+    "close": "關閉"
   }
 }

@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Crown, Images, Map, User, UserCheck } from 'lucide-react'
+import { ArrowRightLeft, Crown, Images, Map, User, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -11,11 +11,13 @@ import { type ImageSearchMatchInfo } from '../data/schema'
 interface ImageSearchMatchRowProps {
   match: ImageSearchMatchInfo
   rank: number
+  onInspect?: (match: ImageSearchMatchInfo, rank: number) => void
 }
 
 export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
   match,
   rank,
+  onInspect,
 }: ImageSearchMatchRowProps) {
   const { t } = useTranslation('imageSearch')
   const navigate = useNavigate()
@@ -116,7 +118,11 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
         </div>
 
         {/* 命中底库面容头像与 HUD 角标 */}
-        <div className='relative h-13 w-13 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-muted/40 shadow-xs'>
+        <div
+          onClick={() => onInspect?.(match, rank)}
+          className='relative h-13 w-13 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-border/80 bg-muted/40 shadow-xs transition-transform group-hover:scale-105'
+          title={t('results.compare')}
+        >
           {/* HUD 四角瞄准线条 */}
           <div className='pointer-events-none absolute inset-0.5 z-10 opacity-70'>
             <div className='absolute top-0 left-0 h-1.5 w-1.5 border-t border-l border-primary/60' />
@@ -129,7 +135,7 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
             <AvatarImage
               src={faceUrl}
               alt={t('results.card.matchedFaceAlt')}
-              className='h-full w-full object-cover transition-transform duration-300 group-hover:scale-105'
+              className='h-full w-full object-cover transition-transform duration-300'
             />
             <AvatarFallback className='rounded-xl bg-muted/60 text-muted-foreground'>
               <User className='h-6 w-6 opacity-60' />
@@ -218,6 +224,19 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
 
         {/* 联动操作按钮区 */}
         <div className='flex items-center gap-1.5 border-t border-border/40 pt-2.5 sm:border-t-0 sm:pt-0'>
+          {onInspect && (
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              className='group/btn h-8 gap-1.5 border-border/70 bg-muted/20 px-2.5 text-xs font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
+              onClick={() => onInspect(match, rank)}
+              title={t('results.compare')}
+            >
+              <ArrowRightLeft className='h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover/btn:text-primary' />
+              <span>{t('results.compare')}</span>
+            </Button>
+          )}
           <Button
             type='button'
             variant='outline'

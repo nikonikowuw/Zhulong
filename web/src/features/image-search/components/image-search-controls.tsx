@@ -69,9 +69,9 @@ export const ImageSearchControls = memo(function ImageSearchControls({
   const levelInfo = getThresholdLevel(thresholdPercent)
 
   return (
-    <Card className='relative flex flex-col gap-5 overflow-hidden border-border/70 bg-card/60 p-4.5 shadow-xs backdrop-blur-xs'>
+    <Card className='relative flex flex-col gap-4 overflow-hidden border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-xs'>
       {/* 相似度阈值滑块设置 */}
-      <div className='flex flex-col gap-2.5'>
+      <div className='flex flex-col gap-2'>
         <div className='flex items-center justify-between'>
           <div className='flex items-center gap-1.5'>
             <Gauge className='h-3.5 w-3.5 text-primary' />
@@ -111,22 +111,32 @@ export const ImageSearchControls = memo(function ImageSearchControls({
         <div className='flex items-center justify-between text-[11px] text-muted-foreground'>
           <span className='truncate'>{t('controls.thresholdHint')}</span>
           <div className='flex shrink-0 items-center gap-1 ps-1'>
-            {PRESET_THRESHOLDS.map((preset) => (
-              <button
-                key={preset}
-                type='button'
-                disabled={isSearching}
-                aria-pressed={thresholdPercent === preset}
-                onClick={() => onThresholdChange(preset / 100)}
-                className={`rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
-                  thresholdPercent === preset
-                    ? 'bg-primary font-semibold text-primary-foreground'
-                    : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground'
-                }`}
-              >
-                {preset}%
-              </button>
-            ))}
+            {PRESET_THRESHOLDS.map((preset) => {
+              const labelKey =
+                preset === 50
+                  ? 'controls.preset50'
+                  : preset === 70
+                    ? 'controls.preset70'
+                    : 'controls.preset85'
+              const isSelected = thresholdPercent === preset
+              return (
+                <button
+                  key={preset}
+                  type='button'
+                  disabled={isSearching}
+                  aria-pressed={isSelected}
+                  title={t(labelKey, `${preset}%`)}
+                  onClick={() => onThresholdChange(preset / 100)}
+                  className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] transition-all ${
+                    isSelected
+                      ? 'bg-primary font-bold text-primary-foreground shadow-2xs'
+                      : 'bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                >
+                  {preset}%
+                </button>
+              )
+            })}
           </div>
         </div>
       </div>
@@ -170,7 +180,11 @@ export const ImageSearchControls = memo(function ImageSearchControls({
       <div className='flex items-center gap-2 border-t border-border/50 pt-3'>
         <Button
           type='button'
-          className='relative h-9.5 flex-1 gap-2 overflow-hidden text-xs font-semibold shadow-xs transition-all duration-200 active:scale-[0.99]'
+          className={`relative h-9.5 flex-1 gap-2 overflow-hidden text-xs font-semibold shadow-xs transition-all duration-200 active:scale-[0.99] ${
+            canSearch && !isSearching
+              ? 'ring-2 ring-primary/25 shadow-primary/20 hover:shadow-md'
+              : ''
+          }`}
           disabled={!canSearch || isSearching}
           onClick={onSearch}
         >
@@ -200,7 +214,7 @@ export const ImageSearchControls = memo(function ImageSearchControls({
           disabled={isSearching}
           onClick={onReset}
         >
-          <RotateCcw className='h-3.5 w-3.5 text-muted-foreground' />
+          <RotateCcw className='h-3.5 w-3.5' />
           <span>{t('controls.reset')}</span>
         </Button>
       </div>

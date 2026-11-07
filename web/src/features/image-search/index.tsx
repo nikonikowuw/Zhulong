@@ -1,4 +1,5 @@
-import { AlertTriangle, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { Sparkles } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -8,9 +9,11 @@ import { Main } from '@/components/layout/main'
 import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
+import { ImageSearchCompareDialog } from './components/image-search-compare-dialog'
 import { ImageSearchControls } from './components/image-search-controls'
 import { ImageSearchDropzone } from './components/image-search-dropzone'
 import { ImageSearchResults } from './components/image-search-results'
+import { type ImageSearchMatchInfo } from './data/schema'
 import { useImageSearch } from './hooks/use-image-search'
 
 export function ImageSearch() {
@@ -31,6 +34,16 @@ export function ImageSearch() {
     error,
     results,
   } = useImageSearch()
+
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
+  const [inspectTarget, setInspectTarget] = useState<{
+    match: ImageSearchMatchInfo
+    rank: number
+  } | null>(null)
+
+  const handleInspect = (match: ImageSearchMatchInfo, rank: number) => {
+    setInspectTarget({ match, rank })
+  }
 
   return (
     <>
@@ -64,18 +77,10 @@ export function ImageSearch() {
           </div>
         </div>
 
-        {/* 人工核验与合规声明提示栏 */}
-        <div className='relative flex items-center gap-3 overflow-hidden rounded-xl border border-amber-500/35 bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-transparent px-3.5 py-2.5 text-xs text-amber-800 backdrop-blur-xs dark:text-amber-300'>
-          <div className='flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400'>
-            <AlertTriangle className='h-3.5 w-3.5' />
-          </div>
-          <span className='leading-relaxed font-medium'>{t('disclaimer')}</span>
-        </div>
-
-        {/* 主工作区分割：左侧上传与控制，右侧结果展示 */}
+        {/* 主工作区分割：左侧原图与检索控制，右侧视觉相册网格/列表 */}
         <div className='grid grid-cols-1 items-stretch gap-6 lg:grid-cols-12'>
-          {/* 左侧控制面板列 */}
-          <div className='lg:col-span-5 xl:col-span-4'>
+          {/* 左侧控制面板列（优化宽度比例，大屏保持粘性） */}
+          <div className='lg:col-span-4 xl:col-span-3'>
             <div className='flex flex-col gap-4 lg:sticky lg:top-20'>
               <ImageSearchDropzone
                 selectedFile={selectedFile}
@@ -98,18 +103,37 @@ export function ImageSearch() {
             </div>
           </div>
 
-          {/* 检索结果展示面板（高度自适应与左侧严密平齐） */}
-          <div className='flex h-full flex-1 flex-col lg:col-span-7 xl:col-span-8'>
+          {/* 检索结果展示面板（大面积展示人脸相册网格） */}
+          <div className='flex h-full flex-1 flex-col lg:col-span-8 xl:col-span-9'>
             <ImageSearchResults
               results={results}
               isSearching={isSearching}
               isError={isError}
               error={error}
               topK={topK}
+              threshold={threshold}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
+              onInspect={handleInspect}
+              onLowerThresholdAndSearch={() => {
+                setThreshold(0.5)
+                search()
+              }}
             />
           </div>
         </div>
       </Main>
+
+      {/* 1:1 双图原图 vs 底库五官比对弹窗 */}
+      <ImageSearchCompareDialog
+        match={inspectTarget?.match ?? null}
+        rank={inspectTarget?.rank ?? 1}
+        previewUrl={previewUrl}
+        open={inspectTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setInspectTarget(null)
+        }}
+      />
     </>
   )
 }
