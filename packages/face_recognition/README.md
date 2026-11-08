@@ -65,27 +65,38 @@ diff -u packages/face_recognition/onnx/config.schema.json packages/face_recognit
 5. **人体关联与 `filter_unmatched` 场景裁剪（`src/common/face_association.hpp` + `scene_filter.hpp`）**
    - 通过 IoF `>= 0.50` 且人脸中心落在人体框上半部把人脸挂载到人体目标；开启 `filter_unmatched` 时过滤未确认身份的人脸与未挂载已确认人脸的人体，并同步重映射 `person_index`。
 
-## 配置参数
+## 配置参数与三层生效优先级
 
-所有键均支持进程级（`--config`）默认与任务级（`MSG_TASK_CONFIG`）按需覆盖；越界或类型非法字段自动回退到上一层默认（详见 `src/common/match_config.hpp`）。同时保留历史任务 JSON 别名兼容：`match_threshold` → `threshold`、`det_threshold` → `face_det_threshold`、`face_quality_threshold` → `min_face_quality`。
+参数支持三层生效优先级：
+**任务级 JSON（Web 界面/API，最高） > 进程级 `--config` > 算法包 `.env` 环境变量 > 编译期默认值（最低）**。
+越界或类型非法字段自动安全回落到上一层默认（详见 `src/common/match_config.hpp`），同时保留历史别名兼容（`match_threshold` → `threshold`、`det_threshold` → `face_det_threshold`、`face_quality_threshold` → `min_face_quality`）。
 
-| 键 | 默认 | 区间 | 说明 |
-| :--- | ---: | :--- | :--- |
-| `threshold` | 0.40 | 0.0 – 1.0 | 1:N 余弦相似度命中阈值（`>=` 命中） |
-| `top_k` | 3 | 1 – 20 | 按唯一 `person_id` 聚合返回的候选人员上限 |
-| `face_det_threshold` | 0.50 | 0.1 – 1.0 | SCRFD 人脸检出置信度阈值 |
-| `person_det_threshold` | 0.50 | 0.1 – 1.0 | SCRFD 人体检出置信度阈值 |
-| `min_face_size` | 32 | 16 – 512 | 人脸框短边最小像素尺寸硬门槛 |
-| `min_face_quality` | 0.40 | 0.0 – 1.0 | 几何与姿态综合质量分门槛（`0.0` 仅关闭软分阈值，拓扑/非有限硬拒仍生效） |
-| `filter_unmatched` | false | 布尔 | 仅输出 `matched=true` 的已确认人员，过滤陌生人与未确认目标 |
-| `enable_face_image_gate` | false | 布尔 | 流式图像清晰度与曝光门禁总开关（**默认关闭**） |
-| `min_face_sharpness` | 30.0 | 0.0 – 100000.0 | 仅在 `enable_face_image_gate=true` 时生效；上采样补偿后拉普拉斯方差下限（**占位默认值，须现场标定**） |
-| `max_face_underexposure` | 0.50 | 0.0 – 1.0 | 仅在 `enable_face_image_gate=true` 时生效；内部 `Y < 32` 像素占比上限（`0.0` 为最严，非关闭哨兵） |
-| `max_face_overexposure` | 0.30 | 0.0 – 1.0 | 仅在 `enable_face_image_gate=true` 时生效；内部 `Y > 224` 像素占比上限（`0.0` 为最严，非关闭哨兵） |
-| `min_match_margin` | 0.00 | 0.0 – 1.0 | 第一与第二不同身份的最小相似度分差（`0.0` 表示关闭；**开启前须按底库规模与现场样本标定**） |
-| `enable_face_feature_fusion` | true | 布尔 | 流式跨帧质量加权特征融合开关（**默认开启**，关闭时立即清空该路历史状态） |
-| `fusion_similarity_threshold` | 0.62 | 0.45 – 0.95 | 跨帧判定同人并允许融合的最小余弦相似度（同时校验当前融合向量与最高质量锚点） |
-| `fusion_ttl_seconds` | 3.0 | 0.5 – 30.0 | 单路特征状态池未再次观测到同人时的过期淘汰秒数 |
+### 1. Web 界面常用参数（`config.schema.json` 动态表单直接渲染）
+
+| 键名 | 界面标题 | 默认值 | 区间 | 说明 |
+| :--- | :--- | ---: | :--- | :--- |
+| `threshold` | 人脸比对阈值 | 0.40 | 0.0 – 1.0 | 识别严格程度，越高越不易误识，越低越不易漏检 |
+| `face_det_threshold` | 人脸检测阈值 | 0.50 | 0.1 – 1.0 | 人脸检出灵敏度，逆光或远距可调低，杂乱背景可调高 |
+| `person_det_threshold` | 人体检测阈值 | 0.50 | 0.1 – 1.0 | 人体检出灵敏度，用于人脸与人体的关联绑定 |
+| `min_face_size` | 最小人脸尺寸 | 32 | 16 – 512 | 过滤远景过小人脸，低于此像素尺寸不进行识别 (单位: 像素) |
+| `filter_unmatched` | 忽略陌生人 | false | 布尔 | 开启后仅记录已登记人员，未比中人员不产生抓拍和记录 |
+| `top_k` | 候选人员数量 | 3 | 1 – 20 | 识别命中时展示的最高相似度候选人数上限 |
+| `enable_face_feature_fusion` | 多帧特征融合 | true | 布尔 | 自动融合连续多帧特征，显著提升走近与轻微侧脸时的识别效果 |
+
+### 2. 高阶/专家调优参数（收归算法包 `.env` 或任务 JSON 源码模式）
+
+日常现场部署保持默认即可。如需深度微调，可在算法包根目录下配置 `.env` 文件（参考 `.env.example`）或在任务对话框中切换为“JSON 源码”模式配置：
+
+| 键名 | 对应环境变量 | 默认值 | 区间 | 说明 |
+| :--- | :--- | ---: | :--- | :--- |
+| `min_face_quality` | `ZHULONG_MIN_FACE_QUALITY` | 0.40 | 0.0 – 1.0 | 几何与姿态综合质量分门槛（`0.0` 仅关闭软分阈值，拓扑/非有限硬拒仍生效） |
+| `fusion_similarity_threshold` | `ZHULONG_FUSION_SIMILARITY_THRESHOLD` | 0.62 | 0.45 – 0.95 | 跨帧判定同人并允许融合的最小余弦相似度（同时校验当前融合向量与最高质量锚点） |
+| `fusion_ttl_seconds` | `ZHULONG_FUSION_TTL_SECONDS` | 3.0 | 0.5 – 30.0 | 单路特征状态池未再次观测到同人时的过期淘汰秒数 |
+| `min_match_margin` | `ZHULONG_MIN_MATCH_MARGIN` | 0.00 | 0.0 – 1.0 | 第一与第二不同身份的最小相似度分差（`0.0` 表示关闭；开启前须按底库规模与现场样本标定） |
+| `enable_face_image_gate` | `ZHULONG_ENABLE_FACE_IMAGE_GATE` | false | 布尔 | 流式图像清晰度与曝光门禁总开关（默认关闭） |
+| `min_face_sharpness` | `ZHULONG_MIN_FACE_SHARPNESS` | 30.0 | 0.0 – 100000.0 | 仅在 `enable_face_image_gate=true` 时生效；上采样补偿后拉普拉斯方差下限 |
+| `max_face_underexposure` | `ZHULONG_MAX_FACE_UNDEREXPOSURE` | 0.50 | 0.0 – 1.0 | 仅在 `enable_face_image_gate=true` 时生效；内部 `Y < 32` 像素占比上限 |
+| `max_face_overexposure` | `ZHULONG_MAX_FACE_OVEREXPOSURE` | 0.30 | 0.0 – 1.0 | 仅在 `enable_face_image_gate=true` 时生效；内部 `Y > 224` 像素占比上限 |
 
 ## 重要契约与运维须知
 

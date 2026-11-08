@@ -694,6 +694,27 @@ void test_resolve_match_params() {
           "低于 0.45 的 fusion_similarity_threshold 必须回落");
     check(nearly_equal(fusion_oob.fusion_ttl_seconds, 5.5f, 1e-5f),
           "高于 30.0 的 fusion_ttl_seconds 必须回落");
+
+    // 环境变量覆盖测试 (.env / 系统环境变量覆盖默认值)
+    ::setenv("ZHULONG_FACE_MATCH_THRESHOLD", "0.58", 1);
+    ::setenv("ZHULONG_FACE_DET_THRESHOLD", "0.65", 1);
+    ::setenv("ZHULONG_FILTER_UNMATCHED", "true", 1);
+    ::setenv("ZHULONG_FUSION_SIMILARITY_THRESHOLD", "0.75", 1);
+    ::setenv("ZHULONG_FACE_TOP_K", "8", 1);
+
+    const MatchParams env_loaded = zhulong::face::load_match_params_from_env();
+    check(nearly_equal(env_loaded.threshold, 0.58f, 1e-6f), "ZHULONG_FACE_MATCH_THRESHOLD 环境变量生效");
+    check(nearly_equal(env_loaded.face_det_threshold, 0.65f, 1e-6f), "ZHULONG_FACE_DET_THRESHOLD 环境变量生效");
+    check(env_loaded.filter_unmatched == true, "ZHULONG_FILTER_UNMATCHED 环境变量生效");
+    check(nearly_equal(env_loaded.fusion_similarity_threshold, 0.75f, 1e-6f),
+          "ZHULONG_FUSION_SIMILARITY_THRESHOLD 环境变量生效");
+    check(env_loaded.top_k == 8, "ZHULONG_FACE_TOP_K 环境变量生效");
+
+    ::unsetenv("ZHULONG_FACE_MATCH_THRESHOLD");
+    ::unsetenv("ZHULONG_FACE_DET_THRESHOLD");
+    ::unsetenv("ZHULONG_FILTER_UNMATCHED");
+    ::unsetenv("ZHULONG_FUSION_SIMILARITY_THRESHOLD");
+    ::unsetenv("ZHULONG_FACE_TOP_K");
 }
 
 void test_face_quality_assessment() {

@@ -152,8 +152,8 @@ private:
     FaceFeatureExtractor extractor_;
     Matcher matcher_;
     TaskFeatureFusionManager fusion_manager_;
-    /** @brief 进程级默认算法参数（`--config` / init）；任务级配置在此之上覆盖 */
-    MatchParams default_match_params_{};
+    /** @brief 进程级默认算法参数（.env / `--config` / init）；任务级配置在此之上覆盖 */
+    MatchParams default_match_params_{load_match_params_from_env()};
 };
 
 /**

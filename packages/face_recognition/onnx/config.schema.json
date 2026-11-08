@@ -4,117 +4,55 @@
   "properties": {
     "threshold": {
       "type": "number",
-      "title": "人脸比对相似度阈值",
-      "description": "人脸 1:N 余弦相似度命中阈值 (高于此值判定为已登记人员)",
+      "title": "人脸比对阈值",
+      "description": "识别严格程度，越高越不易误识，越低越不易漏检",
       "minimum": 0.0,
       "maximum": 1.0,
       "default": 0.40
     },
-    "top_k": {
-      "type": "integer",
-      "title": "Top-K 候选人上限",
-      "description": "按唯一身份 (person_id) 聚合的候选人员返回上限（每人保留最高分代表照片 ID）",
-      "minimum": 1,
-      "maximum": 20,
-      "default": 3
-    },
     "face_det_threshold": {
       "type": "number",
-      "title": "人脸检测置信度",
-      "description": "SCRFD 人脸检出置信度阈值 (低于此值的人脸不检出)",
+      "title": "人脸检测阈值",
+      "description": "人脸检出灵敏度，逆光或远距可适当调低，杂乱背景可调高",
       "minimum": 0.1,
       "maximum": 1.0,
       "default": 0.50
     },
     "person_det_threshold": {
       "type": "number",
-      "title": "人体检测置信度",
-      "description": "SCRFD 人体检出置信度阈值",
+      "title": "人体检测阈值",
+      "description": "人体检出灵敏度，用于人脸与人体的关联绑定",
       "minimum": 0.1,
       "maximum": 1.0,
       "default": 0.50
     },
     "min_face_size": {
       "type": "integer",
-      "title": "最小人脸像素尺寸",
-      "description": "人脸最小像素宽或高 (低于此尺寸不送入识别与质量评估，单位: 像素)",
+      "title": "最小人脸尺寸",
+      "description": "过滤远景过小人脸，低于此像素尺寸不进行识别 (单位: 像素)",
       "minimum": 16,
       "maximum": 512,
       "default": 32
     },
-    "min_face_quality": {
-      "type": "number",
-      "title": "人脸质量综合阈值",
-      "description": "基于几何拓扑与姿态的纯数据综合质量门槛 (0.0~1.0，低于此值不送入比对)",
-      "minimum": 0.0,
-      "maximum": 1.0,
-      "default": 0.40
-    },
     "filter_unmatched": {
       "type": "boolean",
-      "title": "过滤未识别目标",
-      "description": "仅输出匹配成功的已登记人员 (开启后陌生人及未通过分差校验的目标不产生结果与抓拍)",
+      "title": "忽略陌生人",
+      "description": "开启后仅记录已登记人员，未比中人员不产生抓拍和记录",
       "default": false
     },
-    "enable_face_image_gate": {
-      "type": "boolean",
-      "title": "启用人脸图像质量门禁",
-      "description": "在特征提取前检查对齐脸块的清晰度与欠曝/过曝比例（默认关闭，需结合现场光照与镜头离线标定后开启）",
-      "default": false
-    },
-    "min_face_sharpness": {
-      "type": "number",
-      "title": "最小人脸清晰度阈值",
-      "description": "对齐脸块经上采样尺度补偿后的拉普拉斯方差下限（仅在启用图像质量门禁时生效；默认值为占位值，须按现场样本标定）",
-      "minimum": 0.0,
-      "maximum": 100000.0,
-      "default": 30.0
-    },
-    "max_face_underexposure": {
-      "type": "number",
-      "title": "最大欠曝像素占比",
-      "description": "对齐脸块内部亮度 Y < 32 的暗部像素占比上限（仅在启用图像质量门禁时生效；0.0 表示不允许任何暗饱和像素）",
-      "minimum": 0.0,
-      "maximum": 1.0,
-      "default": 0.50
-    },
-    "max_face_overexposure": {
-      "type": "number",
-      "title": "最大过曝像素占比",
-      "description": "对齐脸块内部亮度 Y > 224 的亮部像素占比上限（仅在启用图像质量门禁时生效；0.0 表示不允许任何亮饱和像素）",
-      "minimum": 0.0,
-      "maximum": 1.0,
-      "default": 0.30
-    },
-    "min_match_margin": {
-      "type": "number",
-      "title": "最小身份相似度分差",
-      "description": "第一名与第二名不同身份之间的最小余弦相似度差值（0.0 表示关闭；开启后分差不足的目标按未确认身份拒识）",
-      "minimum": 0.0,
-      "maximum": 1.0,
-      "default": 0.00
+    "top_k": {
+      "type": "integer",
+      "title": "候选人员数量",
+      "description": "识别命中时展示的最高相似度候选人数上限",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 3
     },
     "enable_face_feature_fusion": {
       "type": "boolean",
-      "title": "启用跨帧特征融合",
-      "description": "在单路视频流上下文内对同人连续合格人脸执行质量加权特征融合（默认开启，可提升走近与姿态恢复场景召回率）",
+      "title": "多帧特征融合",
+      "description": "自动融合连续多帧特征，显著提升走近与轻微侧脸时的识别效果",
       "default": true
-    },
-    "fusion_similarity_threshold": {
-      "type": "number",
-      "title": "跨帧特征融合相似度阈值",
-      "description": "判定前后帧属于同一人脸并允许融合的最小 512 维余弦相似度（需同时满足当前融合特征与最高质量锚点特征）",
-      "minimum": 0.45,
-      "maximum": 0.95,
-      "default": 0.62
-    },
-    "fusion_ttl_seconds": {
-      "type": "number",
-      "title": "跨帧融合状态保留时长",
-      "description": "单路特征状态池内未再次观测到同人时的状态过期淘汰秒数",
-      "minimum": 0.5,
-      "maximum": 30.0,
-      "default": 3.0
     }
   },
   "additionalProperties": false

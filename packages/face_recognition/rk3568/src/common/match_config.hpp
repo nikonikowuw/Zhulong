@@ -12,8 +12,11 @@
 
 #pragma once
 
+#include <cerrno>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <limits>
 #include <string>
@@ -127,6 +130,111 @@ struct MatchParams {
     float fusion_similarity_threshold{kDefaultFusionSimilarityThreshold};
     float fusion_ttl_seconds{kDefaultFusionTtlSeconds};
 };
+
+namespace detail {
+
+inline bool parse_env_double(const char* env_name, double& out_val) noexcept {
+    if (const char* val = std::getenv(env_name); val != nullptr && val[0] != '\0') {
+        char* end = nullptr;
+        errno = 0;
+        const double parsed = std::strtod(val, &end);
+        if (end != val && errno != ERANGE && std::isfinite(parsed)) {
+            out_val = parsed;
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool parse_env_bool(const char* env_name, bool& out_val) noexcept {
+    if (const char* val = std::getenv(env_name); val != nullptr && val[0] != '\0') {
+        if (std::strcmp(val, "1") == 0 || std::strcmp(val, "true") == 0 ||
+            std::strcmp(val, "TRUE") == 0 || std::strcmp(val, "yes") == 0) {
+            out_val = true;
+            return true;
+        }
+        if (std::strcmp(val, "0") == 0 || std::strcmp(val, "false") == 0 ||
+            std::strcmp(val, "FALSE") == 0 || std::strcmp(val, "no") == 0) {
+            out_val = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace detail
+
+/**
+ * @brief 从运行环境（.env 文件或系统环境变量）加载默认算法配置
+ *
+ * 供算法插件在启动时覆盖编译期硬编码默认值；随后下发的进程级 --config 与任务级 JSON
+ * 仍按原有优先级逐层覆盖。
+ */
+inline MatchParams load_match_params_from_env(MatchParams base = MatchParams{}) noexcept {
+    MatchParams p = base;
+    double dval = 0.0;
+    bool bval = false;
+
+    if (detail::parse_env_double("ZHULONG_FACE_MATCH_THRESHOLD", dval) &&
+        dval >= static_cast<double>(kMinMatchThreshold) && dval <= static_cast<double>(kMaxMatchThreshold)) {
+        p.threshold = static_cast<float>(dval);
+    }
+    if (detail::parse_env_double("ZHULONG_FACE_TOP_K", dval) &&
+        dval >= static_cast<double>(kMinMatchTopK) && dval <= static_cast<double>(kMaxMatchTopK)) {
+        p.top_k = static_cast<size_t>(std::lround(dval));
+    }
+    if (detail::parse_env_double("ZHULONG_FACE_DET_THRESHOLD", dval) &&
+        dval >= static_cast<double>(kMinFaceDetThreshold) && dval <= static_cast<double>(kMaxFaceDetThreshold)) {
+        p.face_det_threshold = static_cast<float>(dval);
+    }
+    if (detail::parse_env_double("ZHULONG_PERSON_DET_THRESHOLD", dval) &&
+        dval >= static_cast<double>(kMinPersonDetThreshold) && dval <= static_cast<double>(kMaxPersonDetThreshold)) {
+        p.person_det_threshold = static_cast<float>(dval);
+    }
+    if (detail::parse_env_double("ZHULONG_MIN_FACE_SIZE", dval) &&
+        dval >= static_cast<double>(kMinFaceSizeBound) && dval <= static_cast<double>(kMaxFaceSizeBound)) {
+        p.min_face_size = static_cast<int>(std::lround(dval));
+    }
+    if (detail::parse_env_double("ZHULONG_MIN_FACE_QUALITY", dval) &&
+        dval >= static_cast<double>(kMinFaceQualityBound) && dval <= static_cast<double>(kMaxFaceQualityBound)) {
+        p.min_face_quality = static_cast<float>(dval);
+    }
+    if (detail::parse_env_bool("ZHULONG_FILTER_UNMATCHED", bval)) {
+        p.filter_unmatched = bval;
+    }
+    if (detail::parse_env_bool("ZHULONG_ENABLE_FACE_IMAGE_GATE", bval)) {
+        p.enable_face_image_gate = bval;
+    }
+    if (detail::parse_env_double("ZHULONG_MIN_FACE_SHARPNESS", dval) &&
+        within_float_bounds(dval, kMinFaceSharpnessBound, kMaxFaceSharpnessBound)) {
+        p.min_face_sharpness = static_cast<float>(dval);
+    }
+    if (detail::parse_env_double("ZHULONG_MAX_FACE_UNDEREXPOSURE", dval) &&
+        within_float_bounds(dval, kMinFaceExposureBound, kMaxFaceExposureBound)) {
+        p.max_face_underexposure = static_cast<float>(dval);
+    }
+    if (detail::parse_env_double("ZHULONG_MAX_FACE_OVEREXPOSURE", dval) &&
+        within_float_bounds(dval, kMinFaceExposureBound, kMaxFaceExposureBound)) {
+        p.max_face_overexposure = static_cast<float>(dval);
+    }
+    if (detail::parse_env_double("ZHULONG_MIN_MATCH_MARGIN", dval) &&
+        within_float_bounds(dval, kMinMatchMarginBound, kMaxMatchMarginBound)) {
+        p.min_match_margin = static_cast<float>(dval);
+    }
+    if (detail::parse_env_bool("ZHULONG_ENABLE_FACE_FEATURE_FUSION", bval)) {
+        p.enable_face_feature_fusion = bval;
+    }
+    if (detail::parse_env_double("ZHULONG_FUSION_SIMILARITY_THRESHOLD", dval) &&
+        within_float_bounds(dval, kMinFusionSimilarityThreshold, kMaxFusionSimilarityThreshold)) {
+        p.fusion_similarity_threshold = static_cast<float>(dval);
+    }
+    if (detail::parse_env_double("ZHULONG_FUSION_TTL_SECONDS", dval) &&
+        within_float_bounds(dval, kMinFusionTtlSeconds, kMaxFusionTtlSeconds)) {
+        p.fusion_ttl_seconds = static_cast<float>(dval);
+    }
+
+    return p;
+}
 
 /**
  * @brief 在扁平 JSON 里定位某个成员名后的冒号位置

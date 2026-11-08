@@ -496,8 +496,9 @@ std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::
 }
 
 void FaceRecognitionPlugin::parse_config(const std::string& config_json) {
-    // 字段与取值范围见 config.schema.json。
-    // 统一复用 resolve_match_params：越界值保持默认，宁可退化也不能让插件拒绝启动。
+    // 字段与取值范围见 config.schema.json 与 .env 环境变量说明。
+    // 环境变量覆盖底层硬编码默认值，随后由 config_json 叠加；越界值保持默认，宁可退化也不能让插件拒绝启动。
+    default_match_params_ = load_match_params_from_env(default_match_params_);
     default_match_params_ = resolve_match_params(config_json, default_match_params_);
 }
 
