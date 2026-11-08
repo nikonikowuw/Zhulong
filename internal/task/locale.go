@@ -44,8 +44,8 @@ func init() {
 			"zh-Hans": "分析任务至少需要绑定一个算法，清空通道请直接删除该任务",
 			"zh-Hant": "分析任務至少需要綁定一個演算法，清空通道請直接刪除該任務",
 		},
-		// INVALID_REQUEST 描述的是请求体绑定失败（HTTP 400）；algorithm 包注册了同名 key，
-		// 两处文案必须保持一致。
+		// INVALID_REQUEST 用于请求体绑定失败（400）与空更新载荷（422）；
+		// algorithm 包注册了同名 key，两处文案必须保持一致以免受 init 顺序影响。
 		"INVALID_REQUEST": {
 			"en":      "Invalid analysis task request payload",
 			"zh-Hans": "分析任务请求内容无效",
@@ -76,10 +76,12 @@ func init() {
 			"zh-Hans": "摄像头算法算力总配额超过 1000 点基准上限",
 			"zh-Hant": "攝影機演算法算力總配額超過 1000 點基準上限",
 		},
+		// ALGORITHM_NOT_FOUND 与 algorithm 包共享同名 key（本包单测独立运行不加载 algorithm），
+		// 三语文案必须与 internal/algorithm/locale.go 逐字一致，避免全局字典随 init 顺序漂移。
 		"ALGORITHM_NOT_FOUND": {
-			"en":      "Referenced algorithm not found",
-			"zh-Hans": "关联的算法不存在",
-			"zh-Hant": "關聯的演算法不存在",
+			"en":      "Algorithm not found",
+			"zh-Hans": "算法不存在",
+			"zh-Hant": "演算法不存在",
 		},
 	})
 }

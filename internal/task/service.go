@@ -1,10 +1,11 @@
 package task
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -16,12 +17,17 @@ import (
 // MaxComputePoints is the total compute points allocated across all active tasks.
 const MaxComputePoints int64 = 1000
 
-// ErrTaskAlgorithmRequired 表示本次写入会让任务不绑定任何算法。
-//
-// 通道聚合根的意义由算法子项承载，零子项的主表行是「看不见却存在」的脏数据：
-// 它不产生明细行、不占算力，却会让统计看板与通道卡片按「有任务」渲染。
-// 清空整个通道必须走 DELETE，而不是把算法列表置空。
-var ErrTaskAlgorithmRequired = errors.New("analysis task must bind at least one algorithm")
+var (
+	// errTaskAlgorithmRequired 表示本次写入会让任务不绑定任何算法。
+	//
+	// 通道聚合根的意义由算法子项承载，零子项的主表行是「看不见却存在」的脏数据：
+	// 它不产生明细行、不占算力，却会让统计看板与通道卡片按「有任务」渲染。
+	// 清空整个通道必须走 DELETE，而不是把算法列表置空。
+	errTaskAlgorithmRequired = errors.New("analysis task must bind at least one algorithm")
+
+	// errInvalidScheduleConfig 表示时间计划 JSON 解析失败或时间范围非法。
+	errInvalidScheduleConfig = errors.New("invalid schedule configuration")
+)
 
 // AlgorithmSpec contains read-only algorithm metadata needed for task validation.
 type AlgorithmSpec struct {
@@ -90,202 +96,6 @@ func (s *Service) SetTaskSavedListener(listener TaskSavedListener) {
 	s.savedListener = listener
 }
 
-// notifyTaskSaved 在写库成功后广播保存事件。
-//
-// ⚠️ 必须脱钩请求 ctx：写库已经提交，客户端断连导致的取消不应让
-// “应用新 crop”静默失败。
-func (s *Service) notifyTaskSaved(ctx context.Context, taskID, cameraID string) {
-	s.savedMu.RLock()
-	listener := s.savedListener
-	s.savedMu.RUnlock()
-	if listener == nil {
-		return
-	}
-	listener.OnTaskSaved(context.WithoutCancel(ctx), taskID, cameraID)
-}
-
-// notifyTaskChanged 通知单个算法；空 ID 已在 notifyTasksChanged 里过滤。
-func (s *Service) notifyTaskChanged(ctx context.Context, algorithmID string) {
-	for _, listener := range s.listeners {
-		if listener != nil {
-			listener.OnTaskChanged(ctx, algorithmID)
-		}
-	}
-}
-
-// notifyTasksChanged 广播算法变更，空 ID 与重复 ID 都会被过滤。
-func (s *Service) notifyTasksChanged(ctx context.Context, algorithmIDs []string) {
-	seen := make(map[string]struct{}, len(algorithmIDs))
-	for _, id := range algorithmIDs {
-		if id == "" {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		s.notifyTaskChanged(ctx, id)
-	}
-}
-
-// prepareTask 校验必填字段，并就地归一化 + 校验算法子项。
-//
-// 任务主键不在这里补全：upsert 需要先按 camera_id 命中既有行，
-// 由 Store 在事务内决定沿用还是新建。
-func (s *Service) prepareTask(ctx context.Context, t *Task) error {
-	if t == nil {
-		return apperr.Invalid("INVALID_TASK_CONFIG", "task payload is nil", nil)
-	}
-	if t.CameraID == "" {
-		return apperr.Invalid("VALIDATION_FAILED", "cameraId is required", nil)
-	}
-	// crop 的校验与归一化收敛在这里：创建与按相机 upsert 都走 prepareTask，
-	// 存储层的 null/缺省/[]/{} ≡ 不裁剪，整帧也归一化为 '{}'。
-	crop, err := region.ParseCrop(t.CropJSON)
-	if err != nil {
-		return apperr.Invalid("INVALID_CROP_CONFIG", fmt.Sprintf("invalid crop config: %v", err), err)
-	}
-	// ParseCrop 内部已做 ValidateCrop（有限、范围、非退化、MinCropSide），此处不再重复。
-	cropJSON, err := serializeCrop(crop)
-	if err != nil {
-		return err
-	}
-	t.CropJSON = cropJSON
-	return s.normalizeAndValidateAlgorithms(ctx, t.Algorithms)
-}
-
-// normalizeAndValidateAlgorithms 就地归一化算法子项（默认帧率/空 JSON、名字换成规格 ID）
-// 并校验唯一性、帧率、区域策略与参数 schema。
-//
-// 空列表是**非法配置**而不是“清空”：保存时先删子项、再无人回填，会留下一行
-// algorithms 为空的主表记录（存量脏数据就是这么来的）。清空通道请调用 DeleteTask。
-func (s *Service) normalizeAndValidateAlgorithms(ctx context.Context, algorithms []TaskAlgorithm) error {
-	if len(algorithms) == 0 {
-		return apperr.Invalid(
-			"TASK_ALGORITHM_REQUIRED",
-			"analysis task must bind at least one algorithm; delete the task to clear the channel",
-			ErrTaskAlgorithmRequired,
-		)
-	}
-
-	seen := make(map[string]struct{}, len(algorithms))
-	for i := range algorithms {
-		sub := &algorithms[i]
-		if sub.AlgorithmID == "" {
-			return apperr.Invalid(
-				"VALIDATION_FAILED",
-				"algorithmId is required for task algorithm item",
-				nil,
-			)
-		}
-		if _, ok := seen[sub.AlgorithmID]; ok {
-			return apperr.Conflict(
-				"DUPLICATE_ALGORITHM",
-				fmt.Sprintf("duplicate algorithm %q in task", sub.AlgorithmID),
-				nil,
-			)
-		}
-		seen[sub.AlgorithmID] = struct{}{}
-
-		if sub.SampleFPS == 0 {
-			sub.SampleFPS = DefaultSampleFPS
-		}
-		if _, err := ValidateSampleFPS(sub.SampleFPS); err != nil {
-			return err
-		}
-
-		if sub.ConfigJSON == "" {
-			sub.ConfigJSON = defaultConfigJSON
-		}
-		if sub.RegionConfigJSON == "" {
-			sub.RegionConfigJSON = defaultConfigJSON
-		}
-		if sub.ScheduleJSON == "" {
-			sub.ScheduleJSON = defaultConfigJSON
-		}
-
-		if _, err := region.ParseConfig(sub.RegionConfigJSON); err != nil {
-			return apperr.Invalid(
-				"INVALID_REGION_CONFIG",
-				fmt.Sprintf("invalid region config for %q: %v", sub.AlgorithmID, err),
-				err,
-			)
-		}
-
-		if _, err := schedule.Parse(sub.ScheduleJSON); err != nil {
-			return apperr.Invalid(
-				"INVALID_SCHEDULE_CONFIG",
-				fmt.Sprintf("invalid schedule config for %q: %v", sub.AlgorithmID, err),
-				ErrInvalidScheduleConfig,
-			)
-		}
-
-		if err := s.validateAlgorithmSpec(ctx, sub); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateAlgorithmSpec 用算法包元数据校正算法 ID，并校验参数 JSON 是否匹配参数规范。
-func (s *Service) validateAlgorithmSpec(ctx context.Context, sub *TaskAlgorithm) error {
-	if s.algoProvider == nil {
-		return nil
-	}
-	spec, err := s.algoProvider.GetAlgorithmSpec(ctx, sub.AlgorithmID)
-	if err != nil {
-		return apperr.NotFound(
-			"ALGORITHM_NOT_FOUND",
-			fmt.Sprintf("algorithm %q not found", sub.AlgorithmID),
-			err,
-		)
-	}
-	sub.AlgorithmID = spec.ID
-	return validateTaskConfig(spec.ConfigSchemaJSON, sub.ConfigJSON)
-}
-
-// ensureCameraIsFree 在建任务前给出 409 的快速失败；并发冲突由 Store 的唯一约束兜底。
-func (s *Service) ensureCameraIsFree(ctx context.Context, cameraID string) error {
-	existing, err := s.store.GetTaskByCamera(ctx, cameraID)
-	switch {
-	case err == nil && existing != nil:
-		return apperr.Conflict("TASK_ALREADY_EXISTS", "task already exists for camera", nil)
-	case err != nil && !errors.Is(err, ErrNotFound):
-		return apperr.Internal("INTERNAL_ERROR", "failed to check existing task", err)
-	}
-	return nil
-}
-
-// mapTaskError 把 Store 的查询错误映射成对外的 404 / 500。
-func mapTaskError(err error) error {
-	if errors.Is(err, ErrNotFound) {
-		return apperr.NotFound("TASK_NOT_FOUND", "analysis task not found", err)
-	}
-	return apperr.Internal("INTERNAL_ERROR", "failed to query task", err)
-}
-
-// mapWriteError 把 Store 的写入错误映射成对外错误；fallbackCode/fallbackMessage 用于兜底 500。
-func mapWriteError(err error, fallbackCode, fallbackMessage string) error {
-	switch {
-	case errors.Is(err, ErrComputeBudgetExceeded):
-		return apperr.Conflict("COMPUTE_BUDGET_EXCEEDED", "total compute budget exceeded", err)
-	case errors.Is(err, ErrTaskAlreadyExists):
-		return apperr.Conflict("TASK_ALREADY_EXISTS", "task already exists for camera", err)
-	case errors.Is(err, ErrNotFound):
-		return apperr.NotFound("ALGORITHM_NOT_FOUND", "referenced algorithm not found", err)
-	}
-	return apperr.Internal(fallbackCode, fallbackMessage, err)
-}
-
-// loadTask 读取任务并把 Store 错误映射成对外错误。
-func (s *Service) loadTask(ctx context.Context, id string) (*Task, error) {
-	task, err := s.store.GetTask(ctx, id)
-	if err != nil {
-		return nil, mapTaskError(err)
-	}
-	return task, nil
-}
-
 // CreateTask registers a new analysis task with budget and schema validation.
 func (s *Service) CreateTask(ctx context.Context, t *Task) error {
 	if err := s.prepareTask(ctx, t); err != nil {
@@ -298,7 +108,8 @@ func (s *Service) CreateTask(ctx context.Context, t *Task) error {
 		return mapWriteError(err, "TASK_CREATE_FAILED", "failed to persist analysis task")
 	}
 
-	s.logger.Info("analysis task created",
+	s.logger.Info(
+		"analysis task created",
 		zap.String("id", t.ID),
 		zap.String("camera_id", t.CameraID),
 		zap.Int("algorithm_count", len(t.Algorithms)),
@@ -324,16 +135,13 @@ func (s *Service) UpdateTask(ctx context.Context, id string, req *UpdateTaskRequ
 		return nil, err
 	}
 
-	// 深拷贝必须在 ApplyTo 之前：ApplyTo 原地改 Algorithms，改完就没有旧值可比较了。
+	// 深拷贝必须在 apply 之前：apply 原地改 Algorithms，改完就没有旧值可比较了。
 	before := cloneTask(task)
 	previousIDs := collectAlgorithmIDs(task)
 
-	// 先校验后改内存：ApplyCrop 可能返回 INVALID_CROP_CONFIG，此时 task 是本地副本，不落库。
-	if err := req.ApplyCrop(task); err != nil {
+	if err := req.apply(task); err != nil {
 		return nil, err
 	}
-	req.ApplyTo(task)
-
 	if err := s.normalizeAndValidateAlgorithms(ctx, task.Algorithms); err != nil {
 		return nil, err
 	}
@@ -341,7 +149,8 @@ func (s *Service) UpdateTask(ctx context.Context, id string, req *UpdateTaskRequ
 		return nil, mapWriteError(err, "TASK_UPDATE_FAILED", "failed to update task")
 	}
 
-	s.logger.Info("analysis task updated",
+	s.logger.Info(
+		"analysis task updated",
 		zap.String("id", task.ID),
 		zap.Bool("enabled", task.Enabled),
 		zap.Int("algorithm_count", len(task.Algorithms)),
@@ -363,14 +172,16 @@ func (s *Service) SaveTask(ctx context.Context, t *Task) error {
 
 	// 读旧值失败不阻断保存，但必须留痕：拿不到旧值时下面的比较只能按“新任务”处理
 	// （即多发一次重启）。排查“保存一下就重启”时这行日志是关键证据。
-	var existing *Task
-	if found, loadErr := s.store.GetTaskByCamera(ctx, t.CameraID); loadErr != nil {
-		s.logger.Debug("load task before save failed; treating as new task",
-			zap.String("camera_id", t.CameraID), zap.Error(loadErr))
-	} else if found != nil {
-		existing = found
+	existing, loadErr := s.store.GetTaskByCamera(ctx, t.CameraID)
+	if loadErr != nil {
+		s.logger.Debug(
+			"load task before save failed; treating as new task",
+			zap.String("camera_id", t.CameraID),
+			zap.Error(loadErr),
+		)
+		existing = nil
 	}
-	var previousIDs []string
+	previousIDs := []string{}
 	if existing != nil {
 		previousIDs = collectAlgorithmIDs(existing)
 	}
@@ -396,14 +207,16 @@ func (s *Service) DeleteTask(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := s.store.DeleteTask(ctx, id); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("TASK_NOT_FOUND", "analysis task not found", err)
-		}
+	err = s.store.DeleteTask(ctx, id)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return apperr.NotFound("TASK_NOT_FOUND", "analysis task not found", err)
+	case err != nil:
 		return apperr.Internal("TASK_DELETE_FAILED", "failed to delete task", err)
 	}
 
-	s.logger.Info("analysis task deleted",
+	s.logger.Info(
+		"analysis task deleted",
 		zap.String("id", id),
 		zap.Int("algorithms", len(task.Algorithms)),
 	)
@@ -458,6 +271,183 @@ func (s *Service) ListTasks(ctx context.Context, cameraID, algorithmID string) (
 	return tasks, nil
 }
 
+// notifyTaskSaved 在写库成功后广播保存事件。
+//
+// ⚠️ 必须脱钩请求 ctx：写库已经提交，客户端断连导致的取消不应让
+// “应用新 crop”静默失败。
+func (s *Service) notifyTaskSaved(ctx context.Context, taskID, cameraID string) {
+	s.savedMu.RLock()
+	listener := s.savedListener
+	s.savedMu.RUnlock()
+	if listener == nil {
+		return
+	}
+	listener.OnTaskSaved(context.WithoutCancel(ctx), taskID, cameraID)
+}
+
+// notifyTaskChanged 通知单个算法；空 ID 已在 notifyTasksChanged 里过滤。
+func (s *Service) notifyTaskChanged(ctx context.Context, algorithmID string) {
+	for _, listener := range s.listeners {
+		if listener != nil {
+			listener.OnTaskChanged(ctx, algorithmID)
+		}
+	}
+}
+
+// notifyTasksChanged 广播算法变更，空 ID 与重复 ID 都会被过滤。
+func (s *Service) notifyTasksChanged(ctx context.Context, algorithmIDs []string) {
+	seen := make(map[string]struct{}, len(algorithmIDs))
+	for _, id := range algorithmIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		s.notifyTaskChanged(ctx, id)
+	}
+}
+
+// prepareTask 校验必填字段，并就地归一化 + 校验算法子项。
+//
+// 任务主键不在这里补全：upsert 需要先按 camera_id 命中既有行，
+// 由 Store 在事务内决定沿用还是新建。
+func (s *Service) prepareTask(ctx context.Context, t *Task) error {
+	if t == nil {
+		return apperr.Invalid("INVALID_TASK_CONFIG", "task payload is nil", nil)
+	}
+	if t.CameraID == "" {
+		return apperr.Invalid("VALIDATION_FAILED", "cameraId is required", nil)
+	}
+	// crop 的校验与归一化收敛在这里：创建与按相机 upsert 都走 prepareTask，
+	// 存储层的 null/缺省/[]/{} ≡ 不裁剪，整帧也归一化为 '{}'。
+	crop, err := region.ParseCrop(t.CropJSON)
+	if err != nil {
+		return apperr.Invalid(
+			"INVALID_CROP_CONFIG",
+			fmt.Sprintf("invalid crop config: %v", err),
+			err,
+		)
+	}
+	// ParseCrop 内部已做 ValidateCrop（有限、范围、非退化、MinCropSide），此处不再重复。
+	cropJSON, err := serializeCrop(crop)
+	if err != nil {
+		return err
+	}
+	t.CropJSON = cropJSON
+	return s.normalizeAndValidateAlgorithms(ctx, t.Algorithms)
+}
+
+// normalizeAndValidateAlgorithms 就地归一化算法子项（默认帧率/空 JSON、名字换成规格 ID）
+// 并校验唯一性、帧率、区域策略与参数 schema。
+//
+// 空列表是**非法配置**而不是“清空”：保存时先删子项、再无人回填，会留下一行
+// algorithms 为空的主表记录（存量脏数据就是这么来的）。清空通道请调用 DeleteTask。
+func (s *Service) normalizeAndValidateAlgorithms(ctx context.Context, algorithms []TaskAlgorithm) error {
+	if len(algorithms) == 0 {
+		return apperr.Invalid(
+			"TASK_ALGORITHM_REQUIRED",
+			"analysis task must bind at least one algorithm; delete the task to clear the channel",
+			errTaskAlgorithmRequired,
+		)
+	}
+
+	seen := make(map[string]struct{}, len(algorithms))
+	for i := range algorithms {
+		sub := &algorithms[i]
+		if sub.AlgorithmID == "" {
+			return apperr.Invalid(
+				"VALIDATION_FAILED",
+				"algorithmId is required for task algorithm item",
+				nil,
+			)
+		}
+		if _, ok := seen[sub.AlgorithmID]; ok {
+			return apperr.Conflict(
+				"DUPLICATE_ALGORITHM",
+				fmt.Sprintf("duplicate algorithm %q in task", sub.AlgorithmID),
+				nil,
+			)
+		}
+		seen[sub.AlgorithmID] = struct{}{}
+
+		if err := s.normalizeAndValidateAlgorithm(ctx, sub); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) normalizeAndValidateAlgorithm(ctx context.Context, sub *TaskAlgorithm) error {
+	if sub.SampleFPS == 0 {
+		sub.SampleFPS = DefaultSampleFPS
+	}
+	if _, err := ValidateSampleFPS(sub.SampleFPS); err != nil {
+		return err
+	}
+
+	sub.ConfigJSON = cmp.Or(sub.ConfigJSON, defaultConfigJSON)
+	sub.RegionConfigJSON = cmp.Or(sub.RegionConfigJSON, defaultConfigJSON)
+	sub.ScheduleJSON = cmp.Or(sub.ScheduleJSON, defaultConfigJSON)
+
+	if _, err := region.ParseConfig(sub.RegionConfigJSON); err != nil {
+		return apperr.Invalid(
+			"INVALID_REGION_CONFIG",
+			fmt.Sprintf("invalid region config for %q: %v", sub.AlgorithmID, err),
+			err,
+		)
+	}
+
+	if _, err := schedule.Parse(sub.ScheduleJSON); err != nil {
+		return apperr.Invalid(
+			"INVALID_SCHEDULE_CONFIG",
+			fmt.Sprintf("invalid schedule config for %q: %v", sub.AlgorithmID, err),
+			errInvalidScheduleConfig,
+		)
+	}
+
+	return s.validateAlgorithmSpec(ctx, sub)
+}
+
+// validateAlgorithmSpec 用算法包元数据校正算法 ID，并校验参数 JSON 是否匹配参数规范。
+func (s *Service) validateAlgorithmSpec(ctx context.Context, sub *TaskAlgorithm) error {
+	if s.algoProvider == nil {
+		return nil
+	}
+	spec, err := s.algoProvider.GetAlgorithmSpec(ctx, sub.AlgorithmID)
+	if err != nil {
+		return apperr.NotFound(
+			"ALGORITHM_NOT_FOUND",
+			fmt.Sprintf("algorithm %q not found", sub.AlgorithmID),
+			err,
+		)
+	}
+	sub.AlgorithmID = spec.ID
+	return validateTaskConfig(spec.ConfigSchemaJSON, sub.ConfigJSON)
+}
+
+// ensureCameraIsFree 在建任务前给出 409 的快速失败；并发冲突由 Store 的唯一约束兜底。
+func (s *Service) ensureCameraIsFree(ctx context.Context, cameraID string) error {
+	existing, err := s.store.GetTaskByCamera(ctx, cameraID)
+	switch {
+	case err == nil && existing != nil:
+		return apperr.Conflict("TASK_ALREADY_EXISTS", "task already exists for camera", nil)
+	case err != nil && !errors.Is(err, ErrNotFound):
+		return apperr.Internal("INTERNAL_ERROR", "failed to check existing task", err)
+	}
+	return nil
+}
+
+// loadTask 读取任务并把 Store 错误映射成对外错误。
+func (s *Service) loadTask(ctx context.Context, id string) (*Task, error) {
+	task, err := s.store.GetTask(ctx, id)
+	if err != nil {
+		return nil, mapTaskError(err)
+	}
+	return task, nil
+}
+
 // warnInvalidCrop 对“库里存在但解析失败”的 crop 配置记一次可定位的告警。
 //
 // 写入路径会拒绝非法配置，因此这只可能来自手工改库或降级回滚；
@@ -467,16 +457,45 @@ func (s *Service) warnInvalidCrop(task *Task) {
 		return
 	}
 	if _, err := region.ParseCrop(task.CropJSON); err != nil {
-		s.logger.Warn("analysis task carries invalid crop config",
+		s.logger.Warn(
+			"analysis task carries invalid crop config",
 			zap.String("task_id", task.ID),
 			zap.String("camera_id", task.CameraID),
-			zap.Error(err))
+			zap.Error(err),
+		)
 	}
+}
+
+// mapTaskError 把 Store 的查询错误映射成对外的 404 / 500。
+func mapTaskError(err error) error {
+	if errors.Is(err, ErrNotFound) {
+		return apperr.NotFound("TASK_NOT_FOUND", "analysis task not found", err)
+	}
+	return apperr.Internal("INTERNAL_ERROR", "failed to query task", err)
+}
+
+// mapWriteError 把 Store 的写入错误映射成对外错误；fallbackCode/fallbackMessage 用于兜底 500。
+func mapWriteError(err error, fallbackCode, fallbackMessage string) error {
+	switch {
+	case errors.Is(err, ErrComputeBudgetExceeded):
+		return apperr.Conflict("COMPUTE_BUDGET_EXCEEDED", "total compute budget exceeded", err)
+	case errors.Is(err, ErrTaskAlreadyExists):
+		return apperr.Conflict("TASK_ALREADY_EXISTS", "task already exists for camera", err)
+	case errors.Is(err, ErrNotFound):
+		return apperr.NotFound("ALGORITHM_NOT_FOUND", "referenced algorithm not found", err)
+	}
+	return apperr.Internal(fallbackCode, fallbackMessage, err)
 }
 
 // collectAlgorithmIDs 汇总给定任务下的所有算法 ID。
 func collectAlgorithmIDs(tasks ...*Task) []string {
-	ids := make([]string, 0, len(tasks))
+	var total int
+	for _, t := range tasks {
+		if t != nil {
+			total += len(t.Algorithms)
+		}
+	}
+	ids := make([]string, 0, total)
 	for _, t := range tasks {
 		if t == nil {
 			continue
@@ -495,7 +514,7 @@ func cloneTask(t *Task) *Task {
 		return nil
 	}
 	clone := *t
-	clone.Algorithms = append([]TaskAlgorithm(nil), t.Algorithms...)
+	clone.Algorithms = slices.Clone(t.Algorithms)
 	return &clone
 }
 
@@ -509,7 +528,7 @@ func cloneTask(t *Task) *Task {
 //   - Task.ID / 子项 ID / CreatedAt / UpdatedAt：簿记字段，重建子项会换 ID 但语义不变。
 //
 // 保守方向是“不确定就当变了”：误重启只损失一次重连，漏重启会让配置静默不生效。
-// 新增 TaskAlgorithm 字段时必须同步增到 sameAlgorithmSet 的比较列表里，
+// 新增 TaskAlgorithm 字段时必须同步增到 sameAlgorithmSemantics 的比较列表里，
 // 否则新配置改完不生效。
 func sameTaskSemantics(a, b *Task) bool {
 	if a == nil || b == nil {
@@ -525,20 +544,22 @@ func sameAlgorithmSet(a, b []TaskAlgorithm) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	as := append([]TaskAlgorithm(nil), a...)
-	bs := append([]TaskAlgorithm(nil), b...)
-	sort.Slice(as, func(i, j int) bool { return as[i].AlgorithmID < as[j].AlgorithmID })
-	sort.Slice(bs, func(i, j int) bool { return bs[i].AlgorithmID < bs[j].AlgorithmID })
-	for i := range as {
-		left, right := as[i], bs[i]
-		if left.AlgorithmID != right.AlgorithmID ||
-			left.Enabled != right.Enabled ||
-			left.SampleFPS != right.SampleFPS ||
-			left.ConfigJSON != right.ConfigJSON ||
-			left.RegionConfigJSON != right.RegionConfigJSON ||
-			left.ScheduleJSON != right.ScheduleJSON {
-			return false
-		}
+	as := slices.Clone(a)
+	bs := slices.Clone(b)
+	byAlgorithmID := func(left, right TaskAlgorithm) int {
+		return cmp.Compare(left.AlgorithmID, right.AlgorithmID)
 	}
-	return true
+	slices.SortFunc(as, byAlgorithmID)
+	slices.SortFunc(bs, byAlgorithmID)
+	return slices.EqualFunc(as, bs, sameAlgorithmSemantics)
+}
+
+func sameAlgorithmSemantics(left, right TaskAlgorithm) bool {
+	sameHeader := left.AlgorithmID == right.AlgorithmID &&
+		left.Enabled == right.Enabled &&
+		left.SampleFPS == right.SampleFPS
+	sameDocs := left.ConfigJSON == right.ConfigJSON &&
+		left.RegionConfigJSON == right.RegionConfigJSON &&
+		left.ScheduleJSON == right.ScheduleJSON
+	return sameHeader && sameDocs
 }

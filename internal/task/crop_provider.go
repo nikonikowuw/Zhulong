@@ -16,13 +16,12 @@ import (
 //     整路 AI 从裁剪窗口跳回全幅，检测坐标静默错位一整批结果。
 func (s *Store) CropFor(ctx context.Context, cameraID string) (*region.Rect, error) {
 	tsk, err := s.GetTaskByCamera(ctx, cameraID)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, nil
-		}
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, nil
+	case err != nil:
 		return nil, err
-	}
-	if tsk == nil || !tsk.Enabled {
+	case tsk == nil || !tsk.Enabled:
 		return nil, nil
 	}
 

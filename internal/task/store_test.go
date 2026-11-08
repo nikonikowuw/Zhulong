@@ -21,21 +21,33 @@ func setupTestStore(t *testing.T) (*task.Store, *gorm.DB, func()) {
 
 	store := task.NewStore(dbStore)
 	cleanup := func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
 	}
 	return store, dbStore.DB(), cleanup
 }
 
-func insertMockAlgorithm(t *testing.T, db *gorm.DB, id, name string, computeCost int) {
+func insertMockAlgorithm(
+	t *testing.T,
+	db *gorm.DB,
+	id string,
+	name string,
+	computeCost int,
+) {
 	t.Helper()
-	err := db.Exec(`INSERT INTO algorithms (
-		id, name, version, task_type, category, target_arch, target_device,
-		compute_cost, memory_mb, description, manifest_json, config_schema_json,
-		status, previous_version, created_at, updated_at
-	) VALUES (
-		?, ?, '1.0.0', 'detection', 'safety', 'x86_64', 'cpu', ?, 64,
-		'', '{}', '{}', 'ACTIVE', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-	)`, id, name, computeCost,
+	err := db.Exec(
+		`INSERT INTO algorithms (
+			id, name, version, task_type, category, target_arch, target_device,
+			compute_cost, memory_mb, description, manifest_json, config_schema_json,
+			status, previous_version, created_at, updated_at
+		) VALUES (
+			?, ?, '1.0.0', 'detection', 'safety', 'x86_64', 'cpu', ?, 64,
+			'', '{}', '{}', 'ACTIVE', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+		)`,
+		id,
+		name,
+		computeCost,
 	).Error
 	if err != nil {
 		t.Fatalf("failed to insert mock algorithm: %v", err)
@@ -47,7 +59,13 @@ func TestStoreTaskCRUD(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_01", "helmet_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_01",
+		"helmet_detector",
+		10,
+	)
 
 	tsk := &task.Task{
 		ID:       "task_01",
@@ -73,8 +91,11 @@ func TestStoreTaskCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask failed: %v", err)
 	}
-	if found.CameraID != "cam_01" || len(found.Algorithms) != 1 || found.Algorithms[0].SampleFPS != 5 {
-		t.Fatalf("unexpected found task: %+v", found)
+	if found.CameraID != "cam_01" {
+		t.Fatalf("expected camera cam_01, got %s", found.CameraID)
+	}
+	if len(found.Algorithms) != 1 || found.Algorithms[0].SampleFPS != 5 {
+		t.Fatalf("unexpected found algorithms: %+v", found.Algorithms)
 	}
 
 	camList, err := store.ListTasksByCamera(ctx, "cam_01")
@@ -91,9 +112,12 @@ func TestStoreTaskCRUD(t *testing.T) {
 	if err := store.SaveTaskWithinBudget(ctx, tsk, task.MaxComputePoints); err != nil {
 		t.Fatalf("SaveTaskWithinBudget failed: %v", err)
 	}
-	updated, _ := store.GetTask(ctx, "task_01")
+	updated, err := store.GetTask(ctx, "task_01")
+	if err != nil {
+		t.Fatalf("GetTask after update failed: %v", err)
+	}
 	if len(updated.Algorithms) != 1 || updated.Algorithms[0].SampleFPS != 10 {
-		t.Fatalf("expected updated SampleFPS 10, got %d", updated.Algorithms[0].SampleFPS)
+		t.Fatalf("expected updated SampleFPS 10, got %+v", updated.Algorithms)
 	}
 
 	if err := store.DeleteTask(ctx, "task_01"); err != nil {
@@ -110,8 +134,13 @@ func TestStoreTaskBudget(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// 算法算力为 100 点
-	insertMockAlgorithm(t, db, "heavy_algo", "heavy_detector", 100)
+	insertMockAlgorithm(
+		t,
+		db,
+		"heavy_algo",
+		"heavy_detector",
+		100,
+	)
 
 	// 100 * 5 = 500 点，未超 1000
 	t1 := &task.Task{
@@ -158,7 +187,13 @@ func TestStoreCreateTaskPersistsDisabledEnabled(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_02", "face_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_02",
+		"face_detector",
+		10,
+	)
 
 	tsk := &task.Task{
 		ID:       "task_disabled",
@@ -183,10 +218,10 @@ func TestStoreCreateTaskPersistsDisabledEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask failed: %v", err)
 	}
-	if stored.Enabled != false {
+	if stored.Enabled {
 		t.Fatalf("expected parent Enabled=false to persist, got Enabled=%v", stored.Enabled)
 	}
-	if len(stored.Algorithms) != 1 || stored.Algorithms[0].Enabled != false {
+	if len(stored.Algorithms) != 1 || stored.Algorithms[0].Enabled {
 		t.Fatalf("expected child Enabled=false to persist, got %+v", stored.Algorithms)
 	}
 }
@@ -196,9 +231,22 @@ func TestStoreSaveTaskSyncAlgorithms(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_a", "algo_a", 10)
-	insertMockAlgorithm(t, db, "algo_b", "algo_b", 20)
-	insertMockAlgorithm(t, db, "algo_c", "algo_c", 30)
+	for _, algo := range []struct {
+		id   string
+		cost int
+	}{
+		{id: "algo_a", cost: 10},
+		{id: "algo_b", cost: 20},
+		{id: "algo_c", cost: 30},
+	} {
+		insertMockAlgorithm(
+			t,
+			db,
+			algo.id,
+			algo.id,
+			algo.cost,
+		)
+	}
 
 	tsk := &task.Task{
 		ID:       "task_sync",
@@ -261,7 +309,7 @@ func TestStoreSaveTaskSyncAlgorithms(t *testing.T) {
 		t.Fatalf("expected 2 algorithms after sync, got %d", len(updated.Algorithms))
 	}
 
-	algoMap := make(map[string]task.TaskAlgorithm)
+	algoMap := make(map[string]task.TaskAlgorithm, len(updated.Algorithms))
 	for _, a := range updated.Algorithms {
 		algoMap[a.AlgorithmID] = a
 	}
@@ -281,7 +329,13 @@ func TestStoreCreateTaskWithinBudgetRejectsDuplicateCamera(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_dup", "dup_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_dup",
+		"dup_detector",
+		10,
+	)
 
 	first := &task.Task{
 		CameraID: "cam_dup",
@@ -314,7 +368,13 @@ func TestStoreSaveTaskWithinBudgetRejectsCameraMove(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_move", "move_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_move",
+		"move_detector",
+		10,
+	)
 
 	taskA := &task.Task{
 		CameraID: "cam_move_a",
@@ -444,8 +504,20 @@ func TestStoreBudgetSkipsDisabledAlgorithms(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_heavy", "heavy_detector", 100)
-	insertMockAlgorithm(t, db, "algo_light", "light_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_heavy",
+		"heavy_detector",
+		100,
+	)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_light",
+		"light_detector",
+		10,
+	)
 
 	// 通道启用，但其中一条算法子项停用：只有启用项计入预算。
 	tsk := &task.Task{
@@ -475,8 +547,20 @@ func TestStoreDynamicPeakBudgetWithSchedule(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_day", "day_detector", 100)
-	insertMockAlgorithm(t, db, "algo_night", "night_detector", 100)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_day",
+		"day_detector",
+		100,
+	)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_night",
+		"night_detector",
+		100,
+	)
 
 	// 任务 1：白天运行 08:00 - 18:00，点数 100 * 6 = 600 点
 	t1 := &task.Task{
@@ -499,7 +583,7 @@ func TestStoreDynamicPeakBudgetWithSchedule(t *testing.T) {
 	}
 
 	// 任务 2（不重叠）：夜间运行 18:00 - 24:00，点数 100 * 6 = 600 点。
-	// 静态相加为 1200 > 1000，但分时峰值为 600 <= 1000，应允许成功！
+	// 静态相加为 1200 > 1000，但分时峰值为 600 <= 1000，应允许成功。
 	t2NonOverlap := &task.Task{
 		ID:       "task_night",
 		CameraID: "cam_night",
@@ -520,7 +604,7 @@ func TestStoreDynamicPeakBudgetWithSchedule(t *testing.T) {
 	}
 
 	// 任务 3（重叠）：时段为 12:00 - 20:00，点数 100 * 5 = 500 点。
-	// 在 12:00 - 18:00 与任务 1 重叠，瞬间峰值为 600 + 500 = 1100 > 1000，应拒绝！
+	// 在 12:00 - 18:00 与任务 1 重叠，瞬间峰值为 600 + 500 = 1100 > 1000，应拒绝。
 	t3Overlap := &task.Task{
 		ID:       "task_overlap",
 		CameraID: "cam_overlap",

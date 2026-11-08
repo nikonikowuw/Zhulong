@@ -11,11 +11,22 @@ import (
 	"go.uber.org/zap"
 )
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func stringPtr(v string) *string {
+	return &v
+}
+
 type mockAlgoProvider struct {
 	specs map[string]*task.AlgorithmSpec
 }
 
-func (m *mockAlgoProvider) GetAlgorithmSpec(ctx context.Context, idOrName string) (*task.AlgorithmSpec, error) {
+func (m *mockAlgoProvider) GetAlgorithmSpec(
+	_ context.Context,
+	idOrName string,
+) (*task.AlgorithmSpec, error) {
 	if spec, ok := m.specs[idOrName]; ok {
 		return spec, nil
 	}
@@ -27,7 +38,7 @@ type mockTaskChangeListener struct {
 	notifications []string
 }
 
-func (m *mockTaskChangeListener) OnTaskChanged(ctx context.Context, algorithmID string) {
+func (m *mockTaskChangeListener) OnTaskChanged(_ context.Context, algorithmID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.notifications = append(m.notifications, algorithmID)
@@ -43,8 +54,20 @@ func setupTestService(t *testing.T) (*task.Service, *mockTaskChangeListener, fun
 	t.Helper()
 	store, db, cleanup := setupTestStore(t)
 
-	insertMockAlgorithm(t, db, "algo_helmet", "helmet_detector", 20)
-	insertMockAlgorithm(t, db, "algo_vest", "vest_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_helmet",
+		"helmet_detector",
+		20,
+	)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_vest",
+		"vest_detector",
+		10,
+	)
 
 	provider := &mockAlgoProvider{
 		specs: map[string]*task.AlgorithmSpec{
@@ -81,9 +104,7 @@ func TestServiceCreateTask(t *testing.T) {
 	err := svc.CreateTask(ctx, &task.Task{
 		Algorithms: []task.TaskAlgorithm{{AlgorithmID: "algo_helmet"}},
 	})
-	if err == nil {
-		t.Fatal("expected error on missing CameraID")
-	}
+	assertAppErrCode(t, err, "VALIDATION_FAILED")
 
 	// 2. Normal creation
 	tsk := &task.Task{
@@ -113,18 +134,7 @@ func TestServiceCreateTask(t *testing.T) {
 			{AlgorithmID: "algo_helmet"},
 		},
 	}
-	err = svc.CreateTask(ctx, dup)
-	if err == nil {
-		t.Fatal("expected conflict on duplicate task")
-	}
-	var appErr *apperr.Error
-	if errors.As(err, &appErr) {
-		if appErr.Code != "TASK_ALREADY_EXISTS" {
-			t.Fatalf("expected TASK_ALREADY_EXISTS code, got %s", appErr.Code)
-		}
-	} else {
-		t.Fatalf("expected apperr.Error, got %T", err)
-	}
+	assertAppErrCode(t, svc.CreateTask(ctx, dup), "TASK_ALREADY_EXISTS")
 
 	// 4. Invalid config schema
 	invalidCfg := &task.Task{
@@ -136,10 +146,7 @@ func TestServiceCreateTask(t *testing.T) {
 			},
 		},
 	}
-	err = svc.CreateTask(ctx, invalidCfg)
-	if err == nil {
-		t.Fatal("expected schema validation failure")
-	}
+	assertAppErrCode(t, svc.CreateTask(ctx, invalidCfg), "INVALID_TASK_CONFIG")
 
 	// 5. Invalid region config
 	invalidRegion := &task.Task{
@@ -151,17 +158,7 @@ func TestServiceCreateTask(t *testing.T) {
 			},
 		},
 	}
-	err = svc.CreateTask(ctx, invalidRegion)
-	if err == nil {
-		t.Fatal("expected region config validation failure")
-	}
-	if errors.As(err, &appErr) {
-		if appErr.Code != "INVALID_REGION_CONFIG" {
-			t.Fatalf("expected INVALID_REGION_CONFIG code, got %s", appErr.Code)
-		}
-	} else {
-		t.Fatalf("expected apperr.Error, got %T", err)
-	}
+	assertAppErrCode(t, svc.CreateTask(ctx, invalidRegion), "INVALID_REGION_CONFIG")
 }
 
 func TestServiceUpdateTask(t *testing.T) {
@@ -186,7 +183,7 @@ func TestServiceUpdateTask(t *testing.T) {
 	fps := 15
 	cfg := `{"threshold": 0.9}`
 	updated, err := svc.UpdateTask(ctx, tsk.ID, &task.UpdateTaskRequest{
-		Algorithms: &[]task.TaskAlgorithmItem{
+		Algorithms: []task.TaskAlgorithmItem{
 			{
 				AlgorithmID: "algo_helmet",
 				SampleFPS:   fps,
@@ -197,34 +194,27 @@ func TestServiceUpdateTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateTask failed: %v", err)
 	}
-	if len(updated.Algorithms) != 1 || updated.Algorithms[0].SampleFPS != 15 || updated.Algorithms[0].ConfigJSON != cfg {
-		t.Fatalf("unexpected updated fields: %+v", updated)
+	if len(updated.Algorithms) != 1 {
+		t.Fatalf("expected 1 algorithm, got %d", len(updated.Algorithms))
+	}
+	gotAlgo := updated.Algorithms[0]
+	if gotAlgo.SampleFPS != 15 || gotAlgo.ConfigJSON != cfg {
+		t.Fatalf("unexpected updated fields: %+v", gotAlgo)
 	}
 	if listener.count() != 2 {
 		t.Fatalf("expected 2 notifications, got %d", listener.count())
 	}
 
-	// Invalid region config on update
 	badRegion := `{"mask": [[-0.1, 0.1, 0.5, 0.5]]}`
 	_, err = svc.UpdateTask(ctx, tsk.ID, &task.UpdateTaskRequest{
-		Algorithms: &[]task.TaskAlgorithmItem{
+		Algorithms: []task.TaskAlgorithmItem{
 			{
 				AlgorithmID:      "algo_helmet",
 				RegionConfigJSON: badRegion,
 			},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected region config validation failure on update")
-	}
-	var appErr *apperr.Error
-	if errors.As(err, &appErr) {
-		if appErr.Code != "INVALID_REGION_CONFIG" {
-			t.Fatalf("expected INVALID_REGION_CONFIG code, got %s", appErr.Code)
-		}
-	} else {
-		t.Fatalf("expected apperr.Error, got %T", err)
-	}
+	assertAppErrCode(t, err, "INVALID_REGION_CONFIG")
 }
 
 func TestServiceDeleteTask(t *testing.T) {
@@ -523,18 +513,27 @@ func TestServiceListTasksFilters(t *testing.T) {
 	}
 
 	list, err := svc.ListTasks(ctx, "", "")
-	if err != nil || len(list) != 2 {
-		t.Fatalf("unfiltered list: err=%v count=%d", err, len(list))
+	if err != nil {
+		t.Fatalf("unfiltered list failed: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(list))
 	}
 
 	byCamera, err := svc.ListTasks(ctx, "cam_list_a", "")
-	if err != nil || len(byCamera) != 1 || byCamera[0].CameraID != "cam_list_a" {
-		t.Fatalf("camera filter: err=%v list=%+v", err, byCamera)
+	if err != nil {
+		t.Fatalf("camera filter failed: %v", err)
+	}
+	if len(byCamera) != 1 || byCamera[0].CameraID != "cam_list_a" {
+		t.Fatalf("unexpected camera filter result: %+v", byCamera)
 	}
 
 	byAlgorithm, err := svc.ListTasks(ctx, "", "algo_vest")
-	if err != nil || len(byAlgorithm) != 1 || byAlgorithm[0].CameraID != "cam_list_b" {
-		t.Fatalf("algorithm filter: err=%v list=%+v", err, byAlgorithm)
+	if err != nil {
+		t.Fatalf("algorithm filter failed: %v", err)
+	}
+	if len(byAlgorithm) != 1 || byAlgorithm[0].CameraID != "cam_list_b" {
+		t.Fatalf("unexpected algorithm filter result: %+v", byAlgorithm)
 	}
 }
 
@@ -588,8 +587,9 @@ func TestServiceRejectsEmptyAlgorithmList(t *testing.T) {
 			t.Fatalf("GetTaskByCamera failed: %v", err)
 		}
 
-		empty := []task.TaskAlgorithmItem{}
-		_, err = svc.UpdateTask(ctx, stored.ID, &task.UpdateTaskRequest{Algorithms: &empty})
+		_, err = svc.UpdateTask(ctx, stored.ID, &task.UpdateTaskRequest{
+			Algorithms: []task.TaskAlgorithmItem{},
+		})
 		assertAppErrCode(t, err, "TASK_ALGORITHM_REQUIRED")
 
 		// 拒绝必须发生在写库之前：原有订阅一字不动。
@@ -620,15 +620,13 @@ func TestServiceSaveTaskRejectsCameraConflict(t *testing.T) {
 	}
 
 	// 用 A 的 ID 把任务挪到 B 的摄像头：Service 层必须映射成 409，而不是 500。
-	var taskAID string
 	existing, err := svc.GetTaskByCamera(ctx, "cam_conflict_a")
 	if err != nil {
 		t.Fatalf("GetTaskByCamera failed: %v", err)
 	}
-	taskAID = existing.ID
 
 	err = svc.SaveTask(ctx, &task.Task{
-		ID:       taskAID,
+		ID:       existing.ID,
 		CameraID: "cam_conflict_b",
 		Algorithms: []task.TaskAlgorithm{
 			{AlgorithmID: "algo_helmet", SampleFPS: 5},

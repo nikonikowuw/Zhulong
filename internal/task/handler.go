@@ -1,11 +1,18 @@
 package task
 
 import (
+	"cmp"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
+)
+
+const (
+	actionTaskCreate = "task.create"
+	actionTaskUpdate = "task.update"
+	actionTaskDelete = "task.delete"
 )
 
 // Handler handles HTTP requests for video analysis tasks.
@@ -18,21 +25,6 @@ type Handler struct {
 // NewHandler instantiates a new Task Handler.
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
-}
-
-// bindTaskPayload 解析 JSON 请求体；失败时写出 400 并返回 false。
-func bindTaskPayload(c *gin.Context, dst any) bool {
-	if err := c.ShouldBindJSON(dst); err != nil {
-		writeErr := httputil.NewError(
-			http.StatusBadRequest,
-			"INVALID_REQUEST",
-			"Invalid analysis task payload",
-			err,
-		)
-		httputil.WriteError(c, writeErr)
-		return false
-	}
-	return true
 }
 
 // RegisterRoutes registers task endpoints on the provided router group.
@@ -67,8 +59,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /tasks [get]
 func (h *Handler) ListTasks(c *gin.Context) {
-	cameraID := firstNonZero(c.Query("camera_id"), c.Query("cameraId"))
-	algorithmID := firstNonZero(c.Query("algorithm_id"), c.Query("algorithmId"))
+	cameraID := cmp.Or(c.Query("camera_id"), c.Query("cameraId"))
+	algorithmID := cmp.Or(c.Query("algorithm_id"), c.Query("algorithmId"))
 
 	tasks, err := h.service.ListTasks(c.Request.Context(), cameraID, algorithmID)
 	if err != nil {
@@ -130,14 +122,19 @@ func (h *Handler) GetTaskByCamera(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /tasks [post]
 func (h *Handler) CreateTask(c *gin.Context) {
-	audithttp.Tag(c, ActionTaskCreate, "task:", "Create analysis task")
+	audithttp.Tag(
+		c,
+		actionTaskCreate,
+		"task:",
+		"Create analysis task",
+	)
 
 	var req CreateTaskRequest
 	if !bindTaskPayload(c, &req) {
 		return
 	}
 
-	task, err := req.ToTask()
+	task, err := req.toTask()
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -167,7 +164,12 @@ func (h *Handler) CreateTask(c *gin.Context) {
 // @Router       /tasks/{id} [put]
 func (h *Handler) UpdateTask(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionTaskUpdate, "task:"+id, "Update analysis task "+id)
+	audithttp.Tag(
+		c,
+		actionTaskUpdate,
+		"task:"+id,
+		"Update analysis task "+id,
+	)
 
 	var req UpdateTaskRequest
 	if !bindTaskPayload(c, &req) {
@@ -198,7 +200,12 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 // @Router       /tasks/camera/{cameraId} [put]
 func (h *Handler) SaveTaskByCamera(c *gin.Context) {
 	camID := c.Param("cameraId")
-	audithttp.Tag(c, ActionTaskUpdate, "camera:"+camID, "Save channel task for camera "+camID)
+	audithttp.Tag(
+		c,
+		actionTaskUpdate,
+		"camera:"+camID,
+		"Save channel task for camera "+camID,
+	)
 
 	var req CreateTaskRequest
 	if !bindTaskPayload(c, &req) {
@@ -206,7 +213,7 @@ func (h *Handler) SaveTaskByCamera(c *gin.Context) {
 	}
 	req.CameraID = camID
 
-	task, err := req.ToTask()
+	task, err := req.toTask()
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -224,17 +231,37 @@ func (h *Handler) SaveTaskByCamera(c *gin.Context) {
 // @Tags         tasks
 // @Produce      json
 // @Param        id path string true "Analysis task ID"
-// @Success      200  {object}  httputil.Response{data=object}
+// @Success      200  {object}  httputil.Response{data=DeleteTaskResponse}
 // @Failure      404  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /tasks/{id} [delete]
 func (h *Handler) DeleteTask(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionTaskDelete, "task:"+id, "Delete analysis task "+id)
+	audithttp.Tag(
+		c,
+		actionTaskDelete,
+		"task:"+id,
+		"Delete analysis task "+id,
+	)
 
 	if err := h.service.DeleteTask(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, gin.H{"deleted": true})
+	httputil.Success(c, DeleteTaskResponse{Deleted: true})
+}
+
+// bindTaskPayload 解析 JSON 请求体；失败时写出 400 并返回 false。
+func bindTaskPayload(c *gin.Context, dst any) bool {
+	if err := c.ShouldBindJSON(dst); err != nil {
+		writeErr := httputil.NewError(
+			http.StatusBadRequest,
+			"INVALID_REQUEST",
+			"Invalid analysis task payload",
+			err,
+		)
+		httputil.WriteError(c, writeErr)
+		return false
+	}
+	return true
 }

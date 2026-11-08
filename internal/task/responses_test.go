@@ -42,14 +42,21 @@ func TestTaskToResponse(t *testing.T) {
 		}
 
 		resp := tsk.ToResponse()
-		if resp.ID != "task_123" || resp.CameraID != "cam_456" || !resp.Enabled || resp.Name != "Helmet Check" {
+		headerMatch := resp.ID == "task_123" &&
+			resp.CameraID == "cam_456" &&
+			resp.Enabled &&
+			resp.Name == "Helmet Check"
+		if !headerMatch {
 			t.Fatalf("unexpected task header: %+v", resp)
 		}
 		if len(resp.Algorithms) != 1 {
 			t.Fatalf("expected 1 algorithm info, got %d", len(resp.Algorithms))
 		}
 		algo := resp.Algorithms[0]
-		if algo.ID != "sub_789" || algo.AlgorithmID != "algo_helmet" || algo.SampleFPS != 10 {
+		algoMatch := algo.ID == "sub_789" &&
+			algo.AlgorithmID == "algo_helmet" &&
+			algo.SampleFPS == 10
+		if !algoMatch {
 			t.Fatalf("unexpected algorithm info: %+v", algo)
 		}
 		if algo.CreatedAt.Location() != time.UTC || algo.UpdatedAt.Location() != time.UTC {

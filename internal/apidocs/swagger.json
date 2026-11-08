@@ -6627,7 +6627,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/task.DeleteTaskResponse"
                                         }
                                     }
                                 }
@@ -10253,6 +10253,14 @@
                 },
                 "sample_fps": {
                     "type": "integer"
+                }
+            }
+        },
+        "task.DeleteTaskResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
                 }
             }
         },

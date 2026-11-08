@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	ErrInvalidTaskConfig   = errors.New("analysis task config does not match algorithm schema")
-	ErrInvalidConfigSchema = errors.New("invalid algorithm config schema")
+	errInvalidTaskConfig   = errors.New("analysis task config does not match algorithm schema")
+	errInvalidConfigSchema = errors.New("invalid algorithm config schema")
 )
 
 func compileConfigSchema(schemaJSON string) (*jsonschema.Resolved, error) {
@@ -24,11 +24,15 @@ func compileConfigSchema(schemaJSON string) (*jsonschema.Resolved, error) {
 
 func validateTaskConfig(schemaJSON, configJSON string) error {
 	if configJSON == "" {
-		configJSON = "{}"
+		configJSON = defaultConfigJSON
 	}
 	var config any
 	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
-		return apperr.Invalid("INVALID_TASK_CONFIG", fmt.Sprintf("invalid JSON: %v", err), ErrInvalidTaskConfig)
+		return apperr.Invalid(
+			"INVALID_TASK_CONFIG",
+			fmt.Sprintf("invalid JSON: %v", err),
+			errInvalidTaskConfig,
+		)
 	}
 	if schemaJSON == "" {
 		return nil
@@ -36,10 +40,14 @@ func validateTaskConfig(schemaJSON, configJSON string) error {
 
 	schema, err := compileConfigSchema(schemaJSON)
 	if err != nil {
-		return apperr.Invalid("INVALID_TASK_CONFIG", fmt.Sprintf("invalid schema: %v", err), ErrInvalidConfigSchema)
+		return apperr.Invalid(
+			"INVALID_TASK_CONFIG",
+			fmt.Sprintf("invalid schema: %v", err),
+			errInvalidConfigSchema,
+		)
 	}
 	if err := schema.Validate(config); err != nil {
-		return apperr.Invalid("INVALID_TASK_CONFIG", err.Error(), ErrInvalidTaskConfig)
+		return apperr.Invalid("INVALID_TASK_CONFIG", err.Error(), errInvalidTaskConfig)
 	}
 	return nil
 }

@@ -9,6 +9,11 @@ import (
 	"go.uber.org/zap"
 )
 
+type taskAlgorithmKey struct {
+	taskID      string
+	algorithmID string
+}
+
 // ScheduleWorker periodically checks active tasks and broadcasts OnTaskChanged
 // whenever any task algorithm transitions between active and inactive schedule windows.
 type ScheduleWorker struct {
@@ -19,7 +24,7 @@ type ScheduleWorker struct {
 	nowFunc       func() time.Time
 
 	mu         sync.Mutex
-	lastActive map[string]bool // key: "taskID#algoID"
+	lastActive map[taskAlgorithmKey]bool
 	stopCh     chan struct{}
 	wg         sync.WaitGroup
 }
@@ -43,16 +48,9 @@ func NewScheduleWorker(
 		logger:        logger,
 		checkInterval: checkInterval,
 		nowFunc:       time.Now,
-		lastActive:    make(map[string]bool),
+		lastActive:    make(map[taskAlgorithmKey]bool),
 		stopCh:        make(chan struct{}),
 	}
-}
-
-// SetNowFuncForTest overrides the time source for testing purposes.
-func (w *ScheduleWorker) SetNowFuncForTest(fn func() time.Time) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.nowFunc = fn
 }
 
 // Start launches the periodic checking loop in a background goroutine.
@@ -84,12 +82,6 @@ func (w *ScheduleWorker) Start() {
 	}()
 }
 
-func (w *ScheduleWorker) tick() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	w.Check(ctx)
-}
-
 // Stop cleanly terminates the worker loop.
 func (w *ScheduleWorker) Stop() {
 	w.mu.Lock()
@@ -101,8 +93,14 @@ func (w *ScheduleWorker) Stop() {
 	w.wg.Wait()
 }
 
-// Check evaluates all enabled tasks against the current time and notifies listeners of any flipped algorithm states.
-func (w *ScheduleWorker) Check(ctx context.Context) {
+func (w *ScheduleWorker) tick() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	w.check(ctx)
+}
+
+// check evaluates all enabled tasks against the current time and notifies listeners of any flipped algorithm states.
+func (w *ScheduleWorker) check(ctx context.Context) {
 	if w.store == nil {
 		return
 	}
@@ -115,7 +113,7 @@ func (w *ScheduleWorker) Check(ctx context.Context) {
 
 	w.mu.Lock()
 	now := w.nowFunc()
-	currentActive := make(map[string]bool)
+	currentActive := make(map[taskAlgorithmKey]bool, len(tasks))
 	changedAlgos := make(map[string]struct{})
 	for _, tsk := range tasks {
 		if !tsk.Enabled {
@@ -132,7 +130,7 @@ func (w *ScheduleWorker) Check(ctx context.Context) {
 				isActive = sched.IsActiveAt(now)
 			}
 
-			key := tsk.ID + "#" + algo.AlgorithmID
+			key := taskAlgorithmKey{taskID: tsk.ID, algorithmID: algo.AlgorithmID}
 			currentActive[key] = isActive
 
 			prevActive, found := w.lastActive[key]
@@ -145,7 +143,8 @@ func (w *ScheduleWorker) Check(ctx context.Context) {
 	w.mu.Unlock()
 
 	for algoID := range changedAlgos {
-		w.logger.Info("task algorithm schedule transitioned",
+		w.logger.Info(
+			"task algorithm schedule transitioned",
 			zap.String("algorithm_id", algoID),
 			zap.Time("transition_time", now),
 		)

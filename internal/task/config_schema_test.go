@@ -37,25 +37,25 @@ func TestValidateTaskConfig(t *testing.T) {
 			name:       "config is not json",
 			schemaJSON: numberSchema,
 			configJSON: `{not-json`,
-			wantErr:    ErrInvalidTaskConfig,
+			wantErr:    errInvalidTaskConfig,
 		},
 		{
 			name:       "schema is not json",
 			schemaJSON: `{"bad`,
 			configJSON: "{}",
-			wantErr:    ErrInvalidConfigSchema,
+			wantErr:    errInvalidConfigSchema,
 		},
 		{
 			name:       "schema is not resolvable",
 			schemaJSON: `{"$ref": "#/definitions/missing"}`,
 			configJSON: "{}",
-			wantErr:    ErrInvalidConfigSchema,
+			wantErr:    errInvalidConfigSchema,
 		},
 		{
 			name:       "config violates schema",
 			schemaJSON: numberSchema,
 			configJSON: `{"threshold": "high"}`,
-			wantErr:    ErrInvalidTaskConfig,
+			wantErr:    errInvalidTaskConfig,
 		},
 	}
 

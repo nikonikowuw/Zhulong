@@ -2459,6 +2459,11 @@ definitions:
       sampleFps:
         type: integer
     type: object
+  task.DeleteTaskResponse:
+    properties:
+      deleted:
+        type: boolean
+    type: object
   task.TaskAlgorithmInfo:
     properties:
       algorithmId:
@@ -6524,7 +6529,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  type: object
+                  $ref: '#/definitions/task.DeleteTaskResponse'
               type: object
         "404":
           description: Not Found

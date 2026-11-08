@@ -21,7 +21,13 @@ func TestServiceUpdateTaskPropagatesWriteFailure(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_fault", "fault_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_fault",
+		"fault_detector",
+		10,
+	)
 	seeded := seedTask(t, store, "cam_update_fault", "algo_fault")
 
 	svc := task.NewService(
@@ -32,7 +38,7 @@ func TestServiceUpdateTaskPropagatesWriteFailure(t *testing.T) {
 	)
 
 	fault := errors.New("injected: update failure")
-	injectFault(t, db, faultUpdate, 1, fault)
+	injectFault(t, db, faultSpec{processor: faultUpdate, nth: 1, err: fault})
 
 	_, err := svc.UpdateTask(ctx, seeded.ID, &task.UpdateTaskRequest{Name: stringPtr("renamed")})
 	assertAppErrCode(t, err, "TASK_UPDATE_FAILED")
@@ -57,7 +63,7 @@ func TestServiceDeleteTaskPropagatesWriteFailure(t *testing.T) {
 		seeded := seedTask(t, store, "cam_delete_fail")
 
 		fault := errors.New("injected: delete failure")
-		injectFault(t, db, faultDelete, 1, fault)
+		injectFault(t, db, faultSpec{processor: faultDelete, nth: 1, err: fault})
 
 		err := svc.DeleteTask(ctx, seeded.ID)
 		assertAppErrCode(t, err, "TASK_DELETE_FAILED")

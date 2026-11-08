@@ -21,21 +21,27 @@ const (
 	faultRow    = "row"
 )
 
-// injectFault 让指定 GORM 处理器的第 nth 次调用（1 起）返回 fault。
-func injectFault(t *testing.T, db *gorm.DB, processor string, nth int, fault error) {
+type faultSpec struct {
+	processor string
+	nth       int
+	err       error
+}
+
+// injectFault 让指定 GORM 处理器的第 nth 次调用（1 起）返回 spec.err。
+func injectFault(t *testing.T, db *gorm.DB, spec faultSpec) {
 	t.Helper()
 
-	calls := 0
+	var calls int
 	hook := func(tx *gorm.DB) {
 		calls++
-		if calls == nth {
-			tx.AddError(fault)
+		if calls == spec.nth {
+			tx.AddError(spec.err)
 		}
 	}
-	name := fmt.Sprintf("zhulong:test_fault:%s:%d", processor, nth)
+	name := fmt.Sprintf("zhulong:test_fault:%s:%d", spec.processor, spec.nth)
 
 	var err error
-	switch processor {
+	switch spec.processor {
 	case faultCreate:
 		err = db.Callback().Create().Before("gorm:create").Register(name, hook)
 	case faultUpdate:
@@ -48,10 +54,10 @@ func injectFault(t *testing.T, db *gorm.DB, processor string, nth int, fault err
 		// Scan 走的是 Row 处理器而不是 Query。
 		err = db.Callback().Row().Before("gorm:row").Register(name, hook)
 	default:
-		t.Fatalf("unknown gorm processor %q", processor)
+		t.Fatalf("unknown gorm processor %q", spec.processor)
 	}
 	if err != nil {
-		t.Fatalf("register %s fault hook: %v", processor, err)
+		t.Fatalf("register %s fault hook: %v", spec.processor, err)
 	}
 }
 
@@ -70,9 +76,10 @@ func neutralizeDeletes(t *testing.T, db *gorm.DB) {
 func seedTask(t *testing.T, store *task.Store, cameraID string, algorithmIDs ...string) *task.Task {
 	t.Helper()
 	tsk := &task.Task{
-		CameraID: cameraID,
-		Enabled:  false,
-		Name:     cameraID,
+		CameraID:   cameraID,
+		Enabled:    false,
+		Name:       cameraID,
+		Algorithms: make([]task.TaskAlgorithm, 0, len(algorithmIDs)),
 	}
 	for i, id := range algorithmIDs {
 		tsk.Algorithms = append(tsk.Algorithms, task.TaskAlgorithm{
@@ -94,7 +101,7 @@ func TestStoreCreateTaskPropagatesDriverFailure(t *testing.T) {
 	ctx := context.Background()
 
 	fault := errors.New("injected: disk I/O error")
-	injectFault(t, db, faultCreate, 1, fault)
+	injectFault(t, db, faultSpec{processor: faultCreate, nth: 1, err: fault})
 
 	err := store.CreateTask(ctx, &task.Task{CameraID: "cam_fault_insert"})
 	if !errors.Is(err, fault) {
@@ -108,7 +115,7 @@ func TestStoreCreateTaskWithinBudgetPropagatesDriverFailure(t *testing.T) {
 	ctx := context.Background()
 
 	fault := errors.New("injected: database or disk is full")
-	injectFault(t, db, faultCreate, 1, fault)
+	injectFault(t, db, faultSpec{processor: faultCreate, nth: 1, err: fault})
 
 	// Enabled=false 让预算校验直接放行，把断言点收敛到 INSERT 失败。
 	err := store.CreateTaskWithinBudget(ctx, &task.Task{CameraID: "cam_fault_budget"}, 1000)
@@ -125,11 +132,17 @@ func TestStoreSaveTaskPropagatesDriverFailures(t *testing.T) {
 		defer cleanup()
 		ctx := context.Background()
 
-		insertMockAlgorithm(t, db, roiAlgorithm, "fault_detector", 10)
+		insertMockAlgorithm(
+			t,
+			db,
+			roiAlgorithm,
+			"fault_detector",
+			10,
+		)
 		seedTask(t, store, "cam_lookup", roiAlgorithm)
 
 		fault := errors.New("injected: query failure")
-		injectFault(t, db, faultQuery, 1, fault)
+		injectFault(t, db, faultSpec{processor: faultQuery, nth: 1, err: fault})
 
 		err := store.SaveTaskWithinBudget(ctx, &task.Task{CameraID: "cam_lookup"}, 1000)
 		if !errors.Is(err, fault) {
@@ -144,7 +157,7 @@ func TestStoreSaveTaskPropagatesDriverFailures(t *testing.T) {
 
 		fault := errors.New("injected: owner lookup failure")
 		// 第 1 次查询是按 ID 定位（未命中），第 2 次是摄像头占用检查。
-		injectFault(t, db, faultQuery, 2, fault)
+		injectFault(t, db, faultSpec{processor: faultQuery, nth: 2, err: fault})
 
 		err := store.SaveTaskWithinBudget(ctx, &task.Task{
 			ID:       "task_fault_owner",
@@ -161,7 +174,7 @@ func TestStoreSaveTaskPropagatesDriverFailures(t *testing.T) {
 		ctx := context.Background()
 
 		fault := errors.New("injected: insert failure")
-		injectFault(t, db, faultCreate, 1, fault)
+		injectFault(t, db, faultSpec{processor: faultCreate, nth: 1, err: fault})
 
 		err := store.SaveTaskWithinBudget(ctx, &task.Task{
 			ID:       "task_fault_new",
@@ -177,11 +190,17 @@ func TestStoreSaveTaskPropagatesDriverFailures(t *testing.T) {
 		defer cleanup()
 		ctx := context.Background()
 
-		insertMockAlgorithm(t, db, roiAlgorithm, "fault_detector", 10)
+		insertMockAlgorithm(
+			t,
+			db,
+			roiAlgorithm,
+			"fault_detector",
+			10,
+		)
 		seeded := seedTask(t, store, "cam_update", roiAlgorithm)
 
 		fault := errors.New("injected: update failure")
-		injectFault(t, db, faultUpdate, 1, fault)
+		injectFault(t, db, faultSpec{processor: faultUpdate, nth: 1, err: fault})
 
 		err := store.SaveTaskWithinBudget(ctx, &task.Task{
 			ID:       seeded.ID,
@@ -200,11 +219,17 @@ func TestStoreSaveTaskPropagatesDriverFailures(t *testing.T) {
 		defer cleanup()
 		ctx := context.Background()
 
-		insertMockAlgorithm(t, db, roiAlgorithm, "fault_detector", 10)
+		insertMockAlgorithm(
+			t,
+			db,
+			roiAlgorithm,
+			"fault_detector",
+			10,
+		)
 		seeded := seedTask(t, store, "cam_prune", roiAlgorithm)
 
 		fault := errors.New("injected: delete failure")
-		injectFault(t, db, faultDelete, 1, fault)
+		injectFault(t, db, faultSpec{processor: faultDelete, nth: 1, err: fault})
 
 		err := store.SaveTaskWithinBudget(ctx, &task.Task{
 			ID:       seeded.ID,
@@ -220,12 +245,18 @@ func TestStoreSaveTaskPropagatesDriverFailures(t *testing.T) {
 		defer cleanup()
 		ctx := context.Background()
 
-		insertMockAlgorithm(t, db, roiAlgorithm, "fault_detector", 10)
+		insertMockAlgorithm(
+			t,
+			db,
+			roiAlgorithm,
+			"fault_detector",
+			10,
+		)
 		seeded := seedTask(t, store, "cam_algo_update", roiAlgorithm)
 
 		fault := errors.New("injected: algorithm update failure")
 		// 第 1 次 UPDATE 写主表，第 2 次写算法子项。
-		injectFault(t, db, faultUpdate, 2, fault)
+		injectFault(t, db, faultSpec{processor: faultUpdate, nth: 2, err: fault})
 
 		err := store.SaveTaskWithinBudget(ctx, &task.Task{
 			ID:       seeded.ID,
@@ -244,12 +275,24 @@ func TestStoreSaveTaskPropagatesDriverFailures(t *testing.T) {
 		defer cleanup()
 		ctx := context.Background()
 
-		insertMockAlgorithm(t, db, roiAlgorithm, "fault_detector", 10)
-		insertMockAlgorithm(t, db, "algo_fault_extra", "fault_extra", 10)
+		insertMockAlgorithm(
+			t,
+			db,
+			roiAlgorithm,
+			"fault_detector",
+			10,
+		)
+		insertMockAlgorithm(
+			t,
+			db,
+			"algo_fault_extra",
+			"fault_extra",
+			10,
+		)
 		seeded := seedTask(t, store, "cam_algo_insert", roiAlgorithm)
 
 		fault := errors.New("injected: algorithm insert failure")
-		injectFault(t, db, faultCreate, 1, fault)
+		injectFault(t, db, faultSpec{processor: faultCreate, nth: 1, err: fault})
 
 		err := store.SaveTaskWithinBudget(ctx, &task.Task{
 			ID:       seeded.ID,
@@ -273,7 +316,7 @@ func TestStoreDeleteTaskPropagatesDriverFailure(t *testing.T) {
 	seeded := seedTask(t, store, "cam_delete_fault")
 
 	fault := errors.New("injected: delete failure")
-	injectFault(t, db, faultDelete, 1, fault)
+	injectFault(t, db, faultSpec{processor: faultDelete, nth: 1, err: fault})
 
 	if err := store.DeleteTask(ctx, seeded.ID); !errors.Is(err, fault) {
 		t.Fatalf("expected delete failure to be wrapped, got %v", err)
@@ -281,7 +324,12 @@ func TestStoreDeleteTaskPropagatesDriverFailure(t *testing.T) {
 }
 
 // injectFaultOnQueryDest 只在查询的扫描目标匹配时才注入故障，用来精确打中某一条 SELECT。
-func injectFaultOnQueryDest(t *testing.T, db *gorm.DB, match func(dest any) bool, fault error) {
+func injectFaultOnQueryDest(
+	t *testing.T,
+	db *gorm.DB,
+	match func(dest any) bool,
+	fault error,
+) {
 	t.Helper()
 
 	hook := func(tx *gorm.DB) {
@@ -300,15 +348,26 @@ func TestStoreSaveTaskFailsOnAlgorithmLookup(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_fault_lookup", "fault_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_fault_lookup",
+		"fault_detector",
+		10,
+	)
 	seeded := seedTask(t, store, "cam_algo_lookup", "algo_fault_lookup")
 
 	fault := errors.New("injected: algorithm lookup failure")
 	// 只打中"按 (task_id, algorithm_id) 定位子项"的查询，主表查询照常成功。
-	injectFaultOnQueryDest(t, db, func(dest any) bool {
-		_, ok := dest.(*task.TaskAlgorithm)
-		return ok
-	}, fault)
+	injectFaultOnQueryDest(
+		t,
+		db,
+		func(dest any) bool {
+			_, ok := dest.(*task.TaskAlgorithm)
+			return ok
+		},
+		fault,
+	)
 
 	err := store.SaveTaskWithinBudget(ctx, &task.Task{
 		ID:       seeded.ID,
@@ -357,7 +416,7 @@ func TestStoreListTasksReportsQueryFailure(t *testing.T) {
 			store, db, cleanup := setupTestStore(t)
 			defer cleanup()
 
-			injectFault(t, db, faultQuery, 1, fault)
+			injectFault(t, db, faultSpec{processor: faultQuery, nth: 1, err: fault})
 			if err := test.call(store); !errors.Is(err, fault) {
 				t.Fatalf("expected the query failure to surface, got %v", err)
 			}
@@ -372,7 +431,7 @@ func TestStoreBudgetScanFailure(t *testing.T) {
 
 	fault := errors.New("injected: allocation scan failure")
 	// 预算汇总的第一次查询就是扫描其它任务的分配表（Scan 走 Row 处理器）。
-	injectFault(t, db, faultRow, 1, fault)
+	injectFault(t, db, faultSpec{processor: faultRow, nth: 1, err: fault})
 
 	err := store.CreateTaskWithinBudget(ctx, &task.Task{CameraID: "cam_scan_fault"}, 1000)
 	if !errors.Is(err, fault) {
@@ -385,17 +444,28 @@ func TestStoreCreateTaskProbeFailure(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_probe", "probe_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_probe",
+		"probe_detector",
+		10,
+	)
 	// 先占位，制造出 camera_id 冲突。
 	seedTask(t, store, "cam_probe", "algo_probe")
 
 	insertFault := errors.New("injected: insert failure")
-	injectFault(t, db, faultCreate, 1, insertFault)
+	injectFault(t, db, faultSpec{processor: faultCreate, nth: 1, err: insertFault})
 	// 归因探针（COUNT）也失败：错误不能被误判成"摄像头已被占用"。
-	injectFaultOnQueryDest(t, db, func(dest any) bool {
-		_, ok := dest.(*int64)
-		return ok
-	}, errors.New("injected: count failure"))
+	injectFaultOnQueryDest(
+		t,
+		db,
+		func(dest any) bool {
+			_, ok := dest.(*int64)
+			return ok
+		},
+		errors.New("injected: count failure"),
+	)
 
 	err := store.CreateTaskWithinBudget(ctx, &task.Task{
 		CameraID: "cam_probe",
@@ -414,7 +484,13 @@ func TestStoreBudgetDetectsExhaustedState(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_exhaust", "exhaust_detector", 100)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_exhaust",
+		"exhaust_detector",
+		100,
+	)
 
 	// 用无预算校验的 CreateTask 造出一个"已超额"的脏状态。
 	if err := store.CreateTask(ctx, &task.Task{
@@ -439,13 +515,19 @@ func TestStoreAddTaskComputePointsQueryFailure(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_cost_lookup", "cost_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_cost_lookup",
+		"cost_detector",
+		10,
+	)
 	seeded := seedTask(t, store, "cam_cost_lookup", "algo_cost_lookup")
 
 	fault := errors.New("injected: cost lookup failure")
 	// Query 处理器上的顺序：主表定位(1)、摄像头占用检查(2)、算法成本查询(3)。
 	// 预算汇总用的是 Scan，走 Row 处理器，不计入这里。
-	injectFault(t, db, faultQuery, 3, fault)
+	injectFault(t, db, faultSpec{processor: faultQuery, nth: 3, err: fault})
 
 	err := store.SaveTaskWithinBudget(ctx, &task.Task{
 		ID:       seeded.ID,

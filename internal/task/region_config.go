@@ -9,17 +9,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// RegionKey identifies a region configuration entry by camera and algorithm.
-type RegionKey struct {
-	CameraID    string
-	AlgorithmID string
+type regionKey struct {
+	cameraID    string
+	algorithmID string
 }
 
 // RegionConfigCache holds an atomic snapshot of active region configurations indexed by (cameraID, algorithmID).
 type RegionConfigCache struct {
 	store    *Store
 	logger   *zap.Logger
-	snapshot atomic.Pointer[map[RegionKey]region.Config]
+	snapshot atomic.Pointer[map[regionKey]region.Config]
 }
 
 // NewRegionConfigCache constructs a new RegionConfigCache.
@@ -32,7 +31,7 @@ func NewRegionConfigCache(store *Store, logger *zap.Logger) *RegionConfigCache {
 		store:  store,
 		logger: logger,
 	}
-	empty := make(map[RegionKey]region.Config)
+	empty := make(map[regionKey]region.Config)
 	cache.snapshot.Store(&empty)
 	return cache
 }
@@ -42,7 +41,7 @@ func NewRegionConfigCache(store *Store, logger *zap.Logger) *RegionConfigCache {
 func (c *RegionConfigCache) ConfigFor(cameraID, algorithmID string) (region.Config, bool) {
 	// 构造函数必然写入非 nil 快照，这里无需再判空。
 	snap := c.snapshot.Load()
-	cfg, ok := (*snap)[RegionKey{CameraID: cameraID, AlgorithmID: algorithmID}]
+	cfg, ok := (*snap)[regionKey{cameraID: cameraID, algorithmID: algorithmID}]
 	return cfg, ok
 }
 
@@ -59,8 +58,7 @@ func (c *RegionConfigCache) OnTaskChanged(ctx context.Context, _ string) {
 // and atomically replaces the current snapshot.
 //
 // 契约：全量重建（每次任务变更都重新扫一遍启用中的任务）。
-// 缓存规模与任务数同级、变更频率低，
-// 因此不做增量 diff。
+// 缓存规模与任务数同级、变更频率低，因此不做增量 diff。
 func (c *RegionConfigCache) Reload(ctx context.Context) error {
 	if c.store == nil {
 		return nil
@@ -71,9 +69,8 @@ func (c *RegionConfigCache) Reload(ctx context.Context) error {
 		return fmt.Errorf("list tasks for region config cache: %w", err)
 	}
 
-	newMap := make(map[RegionKey]region.Config, len(tasks))
+	newMap := make(map[regionKey]region.Config, len(tasks))
 	for _, t := range tasks {
-		// Only include enabled tasks with valid region configurations
 		if !t.Enabled {
 			continue
 		}
@@ -84,7 +81,8 @@ func (c *RegionConfigCache) Reload(ctx context.Context) error {
 			// ParseConfig 把空串与 "{}" 都视作"无自定义区域策略"，随后由 IsEmpty 统一过滤。
 			cfg, err := region.ParseConfig(algo.RegionConfigJSON)
 			if err != nil {
-				c.logger.Warn("skip invalid region config in cache reload",
+				c.logger.Warn(
+					"skip invalid region config in cache reload",
 					zap.String("task_id", t.ID),
 					zap.String("camera_id", t.CameraID),
 					zap.String("algorithm_id", algo.AlgorithmID),
@@ -93,7 +91,7 @@ func (c *RegionConfigCache) Reload(ctx context.Context) error {
 				continue
 			}
 			if !cfg.IsEmpty() {
-				newMap[RegionKey{CameraID: t.CameraID, AlgorithmID: algo.AlgorithmID}] = cfg
+				newMap[regionKey{cameraID: t.CameraID, algorithmID: algo.AlgorithmID}] = cfg
 			}
 		}
 	}

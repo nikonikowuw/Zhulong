@@ -1,4 +1,4 @@
-package task_test
+package task
 
 import (
 	"context"
@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/task"
+	"github.com/nikonikowuw/Zhulong/internal/database"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type recordedListener struct {
@@ -14,7 +16,7 @@ type recordedListener struct {
 	events []string
 }
 
-func (l *recordedListener) OnTaskChanged(ctx context.Context, algorithmID string) {
+func (l *recordedListener) OnTaskChanged(_ context.Context, algorithmID string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.events = append(l.events, algorithmID)
@@ -32,19 +34,41 @@ func (l *recordedListener) reset() {
 	l.events = nil
 }
 
+func setupScheduleWorkerStore(t *testing.T) (*Store, *gorm.DB) {
+	t.Helper()
+	dbStore := database.New(t.TempDir(), zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
+	})
+	return NewStore(dbStore), dbStore.DB()
+}
+
 func TestScheduleWorkerTransition(t *testing.T) {
-	store, db, cleanup := setupTestStore(t)
-	defer cleanup()
+	store, db := setupScheduleWorkerStore(t)
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_sched", "scheduled_detector", 10)
+	err := db.Exec(`INSERT INTO algorithms (
+		id, name, version, task_type, category, target_arch, target_device,
+		compute_cost, memory_mb, description, manifest_json, config_schema_json,
+		status, previous_version, created_at, updated_at
+	) VALUES (
+		'algo_sched', 'scheduled_detector', '1.0.0', 'detection', 'safety', 'x86_64', 'cpu', 10, 64,
+		'', '{}', '{}', 'ACTIVE', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+	)`).Error
+	if err != nil {
+		t.Fatalf("insert mock algorithm: %v", err)
+	}
 
-	// Task runs on Monday 08:00 - 18:00
-	tsk := &task.Task{
+	tsk := &Task{
 		ID:       "task_sched_1",
 		CameraID: "cam_sched_1",
 		Enabled:  true,
-		Algorithms: []task.TaskAlgorithm{
+		Algorithms: []TaskAlgorithm{
 			{
 				ID:           "sub_sched_1",
 				AlgorithmID:  "algo_sched",
@@ -60,24 +84,28 @@ func TestScheduleWorkerTransition(t *testing.T) {
 	}
 
 	listener := &recordedListener{}
-	worker := task.NewScheduleWorker(store, []task.TaskChangeListener{listener}, nil, 100*time.Millisecond)
+	worker := NewScheduleWorker(
+		store,
+		[]TaskChangeListener{listener},
+		nil,
+		100*time.Millisecond,
+	)
 
-	// Mock time: Monday 2026-10-19
-	loc := time.UTC
-	currentTime := time.Date(2026, 10, 19, 7, 59, 0, 0, loc)
-	worker.SetNowFuncForTest(func() time.Time {
+	// Monday 2026-10-19
+	currentTime := time.Date(2026, 10, 19, 7, 59, 0, 0, time.UTC)
+	worker.nowFunc = func() time.Time {
 		return currentTime
-	})
+	}
 
-	// 1. Initial check at 07:59 (outside window) -> primes initial state, does not fire listener
-	worker.Check(ctx)
+	// 1. Initial check at 07:59 (outside window) primes initial state without firing listener.
+	worker.check(ctx)
 	if listener.count() != 0 {
 		t.Errorf("expected 0 events on initial prime, got %d", listener.count())
 	}
 
-	// 2. Advance time to 08:01 (transitions to active) -> must fire listener
-	currentTime = time.Date(2026, 10, 19, 8, 1, 0, 0, loc)
-	worker.Check(ctx)
+	// 2. Advance time to 08:01 (transitions to active) -> fires listener.
+	currentTime = time.Date(2026, 10, 19, 8, 1, 0, 0, time.UTC)
+	worker.check(ctx)
 	if listener.count() != 1 {
 		t.Fatalf("expected 1 event on active transition, got %d", listener.count())
 	}
@@ -86,16 +114,16 @@ func TestScheduleWorkerTransition(t *testing.T) {
 	}
 	listener.reset()
 
-	// 3. Time advances to 12:00 (still active) -> should NOT fire
-	currentTime = time.Date(2026, 10, 19, 12, 0, 0, 0, loc)
-	worker.Check(ctx)
+	// 3. Time advances to 12:00 (still active) -> does not fire.
+	currentTime = time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	worker.check(ctx)
 	if listener.count() != 0 {
 		t.Errorf("expected 0 events while staying active, got %d", listener.count())
 	}
 
-	// 4. Time advances to 18:01 (transitions to inactive) -> must fire listener
-	currentTime = time.Date(2026, 10, 19, 18, 1, 0, 0, loc)
-	worker.Check(ctx)
+	// 4. Time advances to 18:01 (transitions to inactive) -> fires listener.
+	currentTime = time.Date(2026, 10, 19, 18, 1, 0, 0, time.UTC)
+	worker.check(ctx)
 	if listener.count() != 1 {
 		t.Fatalf("expected 1 event on inactive transition, got %d", listener.count())
 	}
@@ -104,19 +132,23 @@ func TestScheduleWorkerTransition(t *testing.T) {
 	}
 	listener.reset()
 
-	// 5. Time advances to 20:00 (still inactive) -> should NOT fire
-	currentTime = time.Date(2026, 10, 19, 20, 0, 0, 0, loc)
-	worker.Check(ctx)
+	// 5. Time advances to 20:00 (still inactive) -> does not fire.
+	currentTime = time.Date(2026, 10, 19, 20, 0, 0, 0, time.UTC)
+	worker.check(ctx)
 	if listener.count() != 0 {
 		t.Errorf("expected 0 events while staying inactive, got %d", listener.count())
 	}
 }
 
 func TestScheduleWorkerStartStop(t *testing.T) {
-	store, _, cleanup := setupTestStore(t)
-	defer cleanup()
+	store, _ := setupScheduleWorkerStore(t)
 
-	worker := task.NewScheduleWorker(store, nil, nil, 10*time.Millisecond)
+	worker := NewScheduleWorker(
+		store,
+		nil,
+		nil,
+		10*time.Millisecond,
+	)
 
 	worker.Start()
 	time.Sleep(30 * time.Millisecond)

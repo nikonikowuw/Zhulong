@@ -6634,7 +6634,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/task.DeleteTaskResponse"
                                         }
                                     }
                                 }
@@ -10260,6 +10260,14 @@ const docTemplate = `{
                 },
                 "sample_fps": {
                     "type": "integer"
+                }
+            }
+        },
+        "task.DeleteTaskResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
                 }
             }
         },

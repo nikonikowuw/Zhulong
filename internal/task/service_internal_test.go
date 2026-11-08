@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -56,7 +57,10 @@ func TestMapWriteError(t *testing.T) {
 			if appErr.Code != test.wantCode || appErr.Kind != test.wantKind {
 				t.Fatalf(
 					"expected %v/%s, got %v/%s",
-					test.wantKind, test.wantCode, appErr.Kind, appErr.Code,
+					test.wantKind,
+					test.wantCode,
+					appErr.Kind,
+					appErr.Code,
 				)
 			}
 			// 底层 cause 必须留在错误链上供服务端日志使用。
@@ -108,13 +112,8 @@ func TestNotifyTasksChangedFiltersEmptyAndDuplicateIDs(t *testing.T) {
 	svc.notifyTasksChanged(context.Background(), []string{"algo_a", "", "algo_a", "algo_b", ""})
 
 	want := []string{"algo_a", "algo_b"}
-	if len(listener.ids) != len(want) {
+	if !slices.Equal(listener.ids, want) {
 		t.Fatalf("expected %v, got %v", want, listener.ids)
-	}
-	for i := range want {
-		if listener.ids[i] != want[i] {
-			t.Fatalf("expected %v, got %v", want, listener.ids)
-		}
 	}
 }
 
@@ -124,13 +123,8 @@ func TestCollectAlgorithmIDs(t *testing.T) {
 
 	got := collectAlgorithmIDs(taskA, taskB)
 	want := []string{"a1", "a2", "b1"}
-	if len(got) != len(want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("expected %v, got %v", want, got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("expected %v, got %v", want, got)
-		}
 	}
 	if ids := collectAlgorithmIDs(); len(ids) != 0 {
 		t.Fatalf("expected no IDs for an empty input, got %v", ids)

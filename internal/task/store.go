@@ -23,9 +23,6 @@ var (
 	// ErrComputeBudgetExceeded 表示本次写入后总算力点会超过预算池上限。
 	ErrComputeBudgetExceeded = errors.New("compute budget exceeded")
 
-	// ErrInvalidScheduleConfig 表示时间计划 JSON 解析失败或时间范围非法。
-	ErrInvalidScheduleConfig = errors.New("invalid schedule configuration")
-
 	errStoreUnavailable = errors.New("analysis task store database is unavailable")
 	errNilTask          = errors.New("analysis task is nil")
 )
@@ -38,48 +35,6 @@ type Store struct {
 // NewStore creates a new Task Store instance.
 func NewStore(dbProvider database.DBProvider) *Store {
 	return &Store{dbProvider: dbProvider}
-}
-
-func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
-	if s.dbProvider == nil {
-		return nil, errStoreUnavailable
-	}
-	db := s.dbProvider.DB()
-	if db == nil {
-		return nil, errStoreUnavailable
-	}
-	return db.WithContext(ctx), nil
-}
-
-// initTaskTimestamps 把主表与算法子项的时间戳统一收敛到 UTC，缺省时填当前时间。
-func initTaskTimestamps(t *Task) {
-	now := time.Now().UTC()
-	t.CreatedAt = normalizeTimestamp(t.CreatedAt, now)
-	t.UpdatedAt = normalizeTimestamp(t.UpdatedAt, now)
-	for i := range t.Algorithms {
-		t.Algorithms[i].CreatedAt = normalizeTimestamp(t.Algorithms[i].CreatedAt, now)
-		t.Algorithms[i].UpdatedAt = normalizeTimestamp(t.Algorithms[i].UpdatedAt, now)
-	}
-}
-
-func normalizeTimestamp(value, fallback time.Time) time.Time {
-	if value.IsZero() {
-		return fallback
-	}
-	return value.UTC()
-}
-
-// assignIDs 补全主表与算法子项的业务主键，并把父子关联钉死。
-func assignIDs(t *Task) {
-	if t.ID == "" {
-		t.ID = idutil.New()
-	}
-	for i := range t.Algorithms {
-		if t.Algorithms[i].ID == "" {
-			t.Algorithms[i].ID = idutil.New()
-		}
-		t.Algorithms[i].TaskID = t.ID
-	}
 }
 
 // CreateTask writes a task and its algorithms without any compute-budget check.
@@ -155,11 +110,16 @@ func (s *Store) SaveTaskWithinBudget(ctx context.Context, task *Task, maxPoints 
 		if err != nil {
 			return err
 		}
-		if err := ensureCameraAvailable(ctx, tx, task, existing); err != nil {
+		if err := ensureCameraAvailable(
+			ctx,
+			tx,
+			task,
+			existing,
+		); err != nil {
 			return err
 		}
 
-		excludeID := ""
+		var excludeID string
 		if existing != nil {
 			excludeID = existing.ID
 			task.ID = existing.ID
@@ -178,19 +138,174 @@ func (s *Store) SaveTaskWithinBudget(ctx context.Context, task *Task, maxPoints 
 
 		now := time.Now().UTC()
 		task.UpdatedAt = now
-		if err := writeTaskRow(ctx, tx, task, existing != nil); err != nil {
+		if err := writeTaskRow(
+			ctx,
+			tx,
+			task,
+			existing != nil,
+		); err != nil {
 			return err
 		}
-		return syncTaskAlgorithms(ctx, tx, task, now)
+		return syncTaskAlgorithms(
+			ctx,
+			tx,
+			task,
+			now,
+		)
 	})
+}
+
+// GetTask returns a task by its primary key ID with algorithms preloaded.
+func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t, err := gorm.G[Task](db).Preload("Algorithms", nil).Where("id = ?", id).First(ctx)
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, ErrNotFound
+	case err != nil:
+		return nil, err
+	}
+	return &t, nil
+}
+
+// GetTaskByCamera returns a task by its camera ID with algorithms preloaded.
+func (s *Store) GetTaskByCamera(ctx context.Context, cameraID string) (*Task, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t, err := gorm.G[Task](db).Preload("Algorithms", nil).Where("camera_id = ?", cameraID).First(ctx)
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, ErrNotFound
+	case err != nil:
+		return nil, err
+	}
+	return &t, nil
+}
+
+// ListTasks returns all tasks ordered by created_at with algorithms preloaded.
+func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	list, err := gorm.G[Task](db).Preload("Algorithms", nil).Order("created_at ASC").Find(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if list == nil {
+		list = []Task{}
+	}
+	return list, nil
+}
+
+// ListTasksByCamera returns tasks for a specific camera with algorithms preloaded.
+func (s *Store) ListTasksByCamera(ctx context.Context, cameraID string) ([]Task, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	list, err := gorm.G[Task](db).Preload("Algorithms", nil).
+		Where("camera_id = ?", cameraID).
+		Order("created_at ASC").
+		Find(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if list == nil {
+		list = []Task{}
+	}
+	return list, nil
+}
+
+// ListTasksByAlgorithm returns tasks containing a specific algorithm with algorithms preloaded.
+func (s *Store) ListTasksByAlgorithm(ctx context.Context, algorithmID string) ([]Task, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	list := []Task{}
+	err = db.Preload("Algorithms").
+		Joins("JOIN task_algorithms ON task_algorithms.task_id = analysis_tasks.id").
+		Where("task_algorithms.algorithm_id = ?", algorithmID).
+		Distinct().
+		Order("analysis_tasks.created_at ASC").
+		Find(&list).Error
+	if err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// DeleteTask removes a task by ID (cascades to task_algorithms).
+func (s *Store) DeleteTask(ctx context.Context, id string) error {
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	rows, err := gorm.G[Task](db).Where("id = ?", id).Delete(ctx)
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
+	if s.dbProvider == nil {
+		return nil, errStoreUnavailable
+	}
+	db := s.dbProvider.DB()
+	if db == nil {
+		return nil, errStoreUnavailable
+	}
+	return db.WithContext(ctx), nil
+}
+
+// initTaskTimestamps 把主表与算法子项的时间戳统一收敛到 UTC，缺省时填当前时间。
+func initTaskTimestamps(t *Task) {
+	now := time.Now().UTC()
+	t.CreatedAt = normalizeTimestamp(t.CreatedAt, now)
+	t.UpdatedAt = normalizeTimestamp(t.UpdatedAt, now)
+	for i := range t.Algorithms {
+		t.Algorithms[i].CreatedAt = normalizeTimestamp(t.Algorithms[i].CreatedAt, now)
+		t.Algorithms[i].UpdatedAt = normalizeTimestamp(t.Algorithms[i].UpdatedAt, now)
+	}
+}
+
+func normalizeTimestamp(value, fallback time.Time) time.Time {
+	if value.IsZero() {
+		return fallback
+	}
+	return value.UTC()
+}
+
+// assignIDs 补全主表与算法子项的业务主键，并把父子关联钉死。
+func assignIDs(t *Task) {
+	if t.ID == "" {
+		t.ID = idutil.New()
+	}
+	for i := range t.Algorithms {
+		if t.Algorithms[i].ID == "" {
+			t.Algorithms[i].ID = idutil.New()
+		}
+		t.Algorithms[i].TaskID = t.ID
+	}
 }
 
 // locateTask 按显式 ID（优先）或 camera_id 定位待更新的既有任务，未命中返回 (nil, nil)。
 func locateTask(ctx context.Context, tx *gorm.DB, task *Task) (*Task, error) {
 	g := gorm.G[Task](tx).Scopes()
-	if task.ID != "" {
+	switch {
+	case task.ID != "":
 		g = g.Where("id = ?", task.ID)
-	} else {
+	default:
 		g = g.Where("camera_id = ?", task.CameraID)
 	}
 	existing, err := g.First(ctx)
@@ -256,7 +371,12 @@ func syncTaskAlgorithms(ctx context.Context, tx *gorm.DB, task *Task, now time.T
 	}
 
 	for i := range task.Algorithms {
-		if err := upsertTaskAlgorithm(ctx, tx, &task.Algorithms[i], now); err != nil {
+		if err := upsertTaskAlgorithm(
+			ctx,
+			tx,
+			&task.Algorithms[i],
+			now,
+		); err != nil {
 			return err
 		}
 	}
@@ -314,44 +434,54 @@ func validateComputeBudget(tx *gorm.DB, task *Task, excludeTaskID string, maxPoi
 	if err != nil {
 		return err
 	}
-	if task.Enabled {
-		for _, sub := range task.Algorithms {
-			if !sub.Enabled {
-				continue
-			}
-			if sub.SampleFPS < 0 {
-				return fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
-			}
-			var algorithm struct {
-				ID          string `gorm:"column:id"`
-				ComputeCost int    `gorm:"column:compute_cost"`
-			}
-			err := tx.Table("algorithms").
-				Select("id, compute_cost").
-				Where("id = ?", sub.AlgorithmID).
-				First(&algorithm).Error
-			switch {
-			case errors.Is(err, gorm.ErrRecordNotFound):
-				return ErrNotFound
-			case err != nil:
-				return err
-			}
-			if algorithm.ComputeCost < 0 {
-				return fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
-			}
-			sched, _ := schedule.Parse(sub.ScheduleJSON)
-			items = append(items, schedule.SchedulableItem{
-				Points:   int64(algorithm.ComputeCost) * int64(sub.SampleFPS),
-				Schedule: sched,
-			})
-		}
+	currentItems, err := taskSchedulableItems(tx, task, maxPoints)
+	if err != nil {
+		return err
 	}
+	items = append(items, currentItems...)
 
-	peak := schedule.CalculatePeakPoints(items)
-	if peak > maxPoints {
+	if schedule.CalculatePeakPoints(items) > maxPoints {
 		return fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
 	}
 	return nil
+}
+
+func taskSchedulableItems(tx *gorm.DB, task *Task, maxPoints int64) ([]schedule.SchedulableItem, error) {
+	if !task.Enabled {
+		return []schedule.SchedulableItem{}, nil
+	}
+
+	items := make([]schedule.SchedulableItem, 0, len(task.Algorithms))
+	for _, sub := range task.Algorithms {
+		if !sub.Enabled {
+			continue
+		}
+		if sub.SampleFPS < 0 {
+			return nil, fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
+		}
+		var algorithm struct {
+			ID          string `gorm:"column:id"`
+			ComputeCost int    `gorm:"column:compute_cost"`
+		}
+		err := tx.Table("algorithms").
+			Select("id, compute_cost").
+			Where("id = ?", sub.AlgorithmID).
+			First(&algorithm).Error
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			return nil, ErrNotFound
+		case err != nil:
+			return nil, err
+		}
+		if algorithm.ComputeCost < 0 {
+			return nil, fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
+		}
+		items = append(items, schedule.SchedulableItem{
+			Points:   int64(algorithm.ComputeCost) * int64(sub.SampleFPS),
+			Schedule: parseScheduleOrAlwaysActive(sub.ScheduleJSON),
+		})
+	}
+	return items, nil
 }
 
 // otherTasksSchedulableItems 汇总除 excludeTaskID 之外、所有启用中任务的算力调度项。
@@ -381,113 +511,20 @@ func otherTasksSchedulableItems(tx *gorm.DB, excludeTaskID string) ([]schedule.S
 
 	items := make([]schedule.SchedulableItem, 0, len(allocations))
 	for _, allocation := range allocations {
-		sched, _ := schedule.Parse(allocation.ScheduleJSON)
 		items = append(items, schedule.SchedulableItem{
 			Points:   int64(allocation.ComputeCost) * int64(allocation.SampleFPS),
-			Schedule: sched,
+			Schedule: parseScheduleOrAlwaysActive(allocation.ScheduleJSON),
 		})
 	}
 	return items, nil
 }
 
-// GetTask returns a task by its primary key ID with algorithms preloaded.
-func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
-	db, err := s.db(ctx)
+// parseScheduleOrAlwaysActive 解析时间计划；存量脏数据解析失败时回退为 nil（全时段激活），
+// 按最保守的峰值核算算力，避免单条脏数据锁死整库预算写入。
+func parseScheduleOrAlwaysActive(raw string) *schedule.WeekSchedule {
+	sched, err := schedule.Parse(raw)
 	if err != nil {
-		return nil, err
+		return nil
 	}
-	t, err := gorm.G[Task](db).Preload("Algorithms", nil).Where("id = ?", id).First(ctx)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return &t, nil
-}
-
-// GetTaskByCamera returns a task by its camera ID with algorithms preloaded.
-func (s *Store) GetTaskByCamera(ctx context.Context, cameraID string) (*Task, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
-	}
-	t, err := gorm.G[Task](db).Preload("Algorithms", nil).Where("camera_id = ?", cameraID).First(ctx)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return &t, nil
-}
-
-// ListTasks returns all tasks ordered by created_at with algorithms preloaded.
-func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
-	}
-	list, err := gorm.G[Task](db).Preload("Algorithms", nil).Order("created_at ASC").Find(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if list == nil {
-		list = []Task{}
-	}
-	return list, nil
-}
-
-// ListTasksByCamera returns tasks for a specific camera with algorithms preloaded.
-func (s *Store) ListTasksByCamera(ctx context.Context, cameraID string) ([]Task, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
-	}
-	list, err := gorm.G[Task](db).Preload("Algorithms", nil).
-		Where("camera_id = ?", cameraID).
-		Order("created_at ASC").
-		Find(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if list == nil {
-		list = []Task{}
-	}
-	return list, nil
-}
-
-// ListTasksByAlgorithm returns tasks containing a specific algorithm with algorithms preloaded.
-func (s *Store) ListTasksByAlgorithm(ctx context.Context, algorithmID string) ([]Task, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
-	}
-	list := make([]Task, 0)
-	err = db.Preload("Algorithms").
-		Joins("JOIN task_algorithms ON task_algorithms.task_id = analysis_tasks.id").
-		Where("task_algorithms.algorithm_id = ?", algorithmID).
-		Distinct().
-		Order("analysis_tasks.created_at ASC").
-		Find(&list).Error
-	if err != nil {
-		return nil, err
-	}
-	return list, nil
-}
-
-// DeleteTask removes a task by ID (cascades to task_algorithms).
-func (s *Store) DeleteTask(ctx context.Context, id string) error {
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
-	rows, err := gorm.G[Task](db).Where("id = ?", id).Delete(ctx)
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return sched
 }

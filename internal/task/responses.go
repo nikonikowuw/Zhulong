@@ -33,8 +33,43 @@ type TaskResponse struct {
 	Algorithms []TaskAlgorithmInfo `json:"algorithms"`
 }
 
+// DeleteTaskResponse represents the confirmation payload returned when a task is deleted.
+type DeleteTaskResponse struct {
+	Deleted bool `json:"deleted"`
+}
+
+// ToResponse converts a Task entity to its public API response.
+func (t *Task) ToResponse() TaskResponse {
+	if t == nil {
+		return TaskResponse{}
+	}
+	algorithms := make([]TaskAlgorithmInfo, 0, len(t.Algorithms))
+	for i := range t.Algorithms {
+		algorithms = append(algorithms, toTaskAlgorithmInfo(&t.Algorithms[i]))
+	}
+	return TaskResponse{
+		ID:         t.ID,
+		CameraID:   t.CameraID,
+		Enabled:    t.Enabled,
+		Name:       t.Name,
+		Crop:       responseCrop(t.CropJSON),
+		CreatedAt:  t.CreatedAt.UTC(),
+		UpdatedAt:  t.UpdatedAt.UTC(),
+		Algorithms: algorithms,
+	}
+}
+
+// ToTaskResponses converts a slice of Task entities to public API responses.
+func ToTaskResponses(tasks []Task) []TaskResponse {
+	responses := make([]TaskResponse, 0, len(tasks))
+	for i := range tasks {
+		responses = append(responses, tasks[i].ToResponse())
+	}
+	return responses
+}
+
 // toTaskAlgorithmInfo converts a TaskAlgorithm entity to its public API projection.
-func toTaskAlgorithmInfo(sub TaskAlgorithm) TaskAlgorithmInfo {
+func toTaskAlgorithmInfo(sub *TaskAlgorithm) TaskAlgorithmInfo {
 	return TaskAlgorithmInfo{
 		ID:               sub.ID,
 		TaskID:           sub.TaskID,
@@ -49,27 +84,6 @@ func toTaskAlgorithmInfo(sub TaskAlgorithm) TaskAlgorithmInfo {
 	}
 }
 
-// ToResponse converts a Task entity to its public API response.
-func (t *Task) ToResponse() TaskResponse {
-	if t == nil {
-		return TaskResponse{}
-	}
-	algorithms := make([]TaskAlgorithmInfo, 0, len(t.Algorithms))
-	for _, sub := range t.Algorithms {
-		algorithms = append(algorithms, toTaskAlgorithmInfo(sub))
-	}
-	return TaskResponse{
-		ID:         t.ID,
-		CameraID:   t.CameraID,
-		Enabled:    t.Enabled,
-		Name:       t.Name,
-		Crop:       responseCrop(t.CropJSON),
-		CreatedAt:  t.CreatedAt.UTC(),
-		UpdatedAt:  t.UpdatedAt.UTC(),
-		Algorithms: algorithms,
-	}
-}
-
 // responseCrop 把存储形态解析回响应字段；解析失败按 null 返回，不阻断读取。
 //
 // 非法配置的可见性由 Service 的读路径告警负责（warnInvalidCrop），投影层保持纯函数。
@@ -79,13 +93,4 @@ func responseCrop(raw string) *region.Rect {
 		return nil
 	}
 	return crop
-}
-
-// ToTaskResponses converts a slice of Task entities to public API responses.
-func ToTaskResponses(tasks []Task) []TaskResponse {
-	responses := make([]TaskResponse, 0, len(tasks))
-	for i := range tasks {
-		responses = append(responses, tasks[i].ToResponse())
-	}
-	return responses
 }

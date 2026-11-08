@@ -3,6 +3,7 @@ package task_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -30,14 +31,13 @@ func TestHandlerTaskEndpoints(t *testing.T) {
 	r, _, cleanup := setupTestRouter(t)
 	defer cleanup()
 
-	// 1. Create Task
 	payload := []byte(`{
 		"cameraId": "cam_http_1",
 		"algorithmId": "algo_helmet",
 		"sampleFps": 5,
 		"configJson": "{\"threshold\": 0.6}"
 	}`)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -60,28 +60,25 @@ func TestHandlerTaskEndpoints(t *testing.T) {
 	}
 	taskID := dataMap["id"].(string)
 
-	// 2. Get Task
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID, nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID, nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d", w.Code)
 	}
 
-	// 3. List Tasks
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/tasks?camera_id=cam_http_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/tasks?camera_id=cam_http_1", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK, got %d", w.Code)
 	}
 
-	// 4. Update Task (PUT)
 	updatePayload := []byte(`{
 		"sampleFps": 10,
 		"configJson": "{\"threshold\": 0.9}"
 	}`)
-	req, _ = http.NewRequest(http.MethodPut, "/api/v1/tasks/"+taskID, bytes.NewReader(updatePayload))
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/tasks/"+taskID, bytes.NewReader(updatePayload))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -89,16 +86,14 @@ func TestHandlerTaskEndpoints(t *testing.T) {
 		t.Fatalf("expected 200 OK on PUT, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// 5. Delete Task
-	req, _ = http.NewRequest(http.MethodDelete, "/api/v1/tasks/"+taskID, nil)
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/tasks/"+taskID, nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK on DELETE, got %d", w.Code)
 	}
 
-	// 6. Delete again -> 404
-	req, _ = http.NewRequest(http.MethodDelete, "/api/v1/tasks/"+taskID, nil)
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/tasks/"+taskID, nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -115,7 +110,7 @@ func TestHandlerTaskValidationErrors(t *testing.T) {
 		"algorithmId": "algo_helmet",
 		"sampleFps": 5
 	}`)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -124,7 +119,7 @@ func TestHandlerTaskValidationErrors(t *testing.T) {
 	}
 
 	// Malformed JSON -> 400
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader([]byte("{invalid-json")))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader([]byte("{invalid-json")))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -137,14 +132,13 @@ func TestHandlerLegacyAlgorithmTaskEndpoints(t *testing.T) {
 	r, _, cleanup := setupTestRouter(t)
 	defer cleanup()
 
-	// 1. Create Task via /api/v1/algorithms/tasks
 	payload := []byte(`{
 		"cameraId": "cam_legacy_1",
 		"algorithmId": "algo_helmet",
 		"sampleFps": 5,
 		"configJson": "{\"threshold\": 0.6}"
 	}`)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/algorithms/tasks", bytes.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/algorithms/tasks", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -160,16 +154,14 @@ func TestHandlerLegacyAlgorithmTaskEndpoints(t *testing.T) {
 	dataMap := createResp.Data.(map[string]any)
 	taskID := dataMap["id"].(string)
 
-	// 2. List Tasks via /api/v1/algorithms/tasks
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/algorithms/tasks?camera_id=cam_legacy_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/algorithms/tasks?camera_id=cam_legacy_1", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK on legacy list, got %d", w.Code)
 	}
 
-	// 3. Delete Task via /api/v1/algorithms/tasks/:id
-	req, _ = http.NewRequest(http.MethodDelete, "/api/v1/algorithms/tasks/"+taskID, nil)
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/algorithms/tasks/"+taskID, nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -185,7 +177,7 @@ func TestHandlerSaveTaskByCameraUpsert(t *testing.T) {
 		"algorithms": [{"algorithmId": "algo_helmet", "sampleFps": 5}]
 	}`)
 	put := func(body []byte) *httptest.ResponseRecorder {
-		req, _ := http.NewRequest(
+		req := httptest.NewRequest(
 			http.MethodPut,
 			"/api/v1/tasks/camera/cam_http_upsert",
 			bytes.NewReader(body),
@@ -220,13 +212,17 @@ func TestHandlerSaveTaskByCameraUpsert(t *testing.T) {
 	if !ok || len(algorithms) != 1 {
 		t.Fatalf("expected one algorithm in response, got %v", dataMap["algorithms"])
 	}
-	first, _ := algorithms[0].(map[string]any)
-	if fps, _ := first["sampleFps"].(float64); fps != 12 {
+	first, ok := algorithms[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected algorithm map, got %T", algorithms[0])
+	}
+	fps, ok := first["sampleFps"].(float64)
+	if !ok || fps != 12 {
 		t.Fatalf("expected sampleFps 12 after upsert, got %v", first["sampleFps"])
 	}
 
 	// GET /tasks/camera/:cameraId 必须命中同一份数据。
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/tasks/camera/cam_http_upsert", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/camera/cam_http_upsert", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -238,7 +234,7 @@ func TestHandlerSaveTaskByCameraRejectsMalformedJSON(t *testing.T) {
 	r, _, cleanup := setupTestRouter(t)
 	defer cleanup()
 
-	req, _ := http.NewRequest(
+	req := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/tasks/camera/cam_http_bad",
 		bytes.NewReader([]byte("{not-json")),
@@ -263,7 +259,7 @@ func TestHandlerUpdateTaskRejectsMalformedJSON(t *testing.T) {
 	r, _, cleanup := setupTestRouter(t)
 	defer cleanup()
 
-	req, _ := http.NewRequest(
+	req := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/tasks/task_bad_body",
 		bytes.NewReader([]byte("{not-json")),
@@ -299,7 +295,11 @@ func TestHandlerTaskNotFound(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			req, _ := http.NewRequest(test.method, test.path, bytes.NewReader(test.body))
+			var bodyReader io.Reader
+			if test.body != nil {
+				bodyReader = bytes.NewReader(test.body)
+			}
+			req := httptest.NewRequest(test.method, test.path, bodyReader)
 			if test.body != nil {
 				req.Header.Set("Content-Type", "application/json")
 			}
@@ -328,7 +328,7 @@ func TestHandlerListTasksAcceptsCamelCaseFilter(t *testing.T) {
 	defer cleanup()
 
 	payload := []byte(`{"cameraId": "cam_alias", "algorithmId": "algo_helmet", "sampleFps": 5}`)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -336,7 +336,7 @@ func TestHandlerListTasksAcceptsCamelCaseFilter(t *testing.T) {
 		t.Fatalf("seed task failed: %d %s", w.Code, w.Body.String())
 	}
 
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/tasks?cameraId=cam_alias", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/tasks?cameraId=cam_alias", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -359,7 +359,7 @@ func TestHandlerSaveTaskByCameraRejectsBudgetOverflow(t *testing.T) {
 
 	// algo_helmet 单点算力 20，100 fps = 2,000 点，超预算池。
 	payload := []byte(`{"algorithms": [{"algorithmId": "algo_helmet", "sampleFps": 100}]}`)
-	req, _ := http.NewRequest(
+	req := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/tasks/camera/cam_http_budget",
 		bytes.NewReader(payload),

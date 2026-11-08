@@ -14,19 +14,29 @@ func TestRegionConfigCache(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_1", "det_1", 10)
-	insertMockAlgorithm(t, db, "algo_2", "det_2", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_1",
+		"det_1",
+		10,
+	)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_2",
+		"det_2",
+		10,
+	)
 
 	cache := task.NewRegionConfigCache(store, zap.NewNop())
 
-	// Initially empty
 	cfg, ok := cache.ConfigFor("cam_1", "algo_1")
 	if ok || !cfg.IsEmpty() {
 		t.Fatalf("expected empty cache initially, got %+v, ok=%v", cfg, ok)
 	}
 
-	// Create channel task with two algorithms:
-	// algo_1 enabled with ROI, algo_2 disabled with MASK
+	// algo_1 enabled with ROI, algo_2 disabled with MASK.
 	tsk1 := &task.Task{
 		ID:       "task_1",
 		CameraID: "cam_1",
@@ -52,12 +62,10 @@ func TestRegionConfigCache(t *testing.T) {
 		t.Fatalf("create tsk1: %v", err)
 	}
 
-	// Reload
 	if err := cache.Reload(ctx); err != nil {
 		t.Fatalf("cache reload: %v", err)
 	}
 
-	// Check tsk1 algo_1
 	cfg1, ok1 := cache.ConfigFor("cam_1", "algo_1")
 	if !ok1 {
 		t.Fatalf("expected cam_1, algo_1 in cache")
@@ -66,15 +74,10 @@ func TestRegionConfigCache(t *testing.T) {
 		t.Fatalf("unexpected cached ROI: %+v", cfg1)
 	}
 
-	// Check tsk1 algo_2 (disabled)
-	_, ok2 := cache.ConfigFor("cam_1", "algo_2")
-	if ok2 {
+	if _, ok := cache.ConfigFor("cam_1", "algo_2"); ok {
 		t.Fatalf("disabled algorithm should not be in cache")
 	}
-
-	// Check nonexistent
-	_, ok3 := cache.ConfigFor("cam_99", "algo_1")
-	if ok3 {
+	if _, ok := cache.ConfigFor("cam_99", "algo_1"); ok {
 		t.Fatalf("nonexistent task should not be in cache")
 	}
 }
@@ -86,7 +89,13 @@ func TestRegionConfigCacheOnTaskChanged(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_1", "det_1", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_1",
+		"det_1",
+		10,
+	)
 
 	cache := task.NewRegionConfigCache(store, zap.NewNop())
 
@@ -127,8 +136,20 @@ func TestRegionConfigCacheMultiAlgoIndependent(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_det", "det_model", 10)
-	insertMockAlgorithm(t, db, "algo_face", "face_model", 20)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_det",
+		"det_model",
+		10,
+	)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_face",
+		"face_model",
+		20,
+	)
 
 	cache := task.NewRegionConfigCache(store, zap.NewNop())
 
@@ -161,7 +182,6 @@ func TestRegionConfigCacheMultiAlgoIndependent(t *testing.T) {
 		t.Fatalf("cache reload: %v", err)
 	}
 
-	// algo_det has ROI
 	cfgDet, okDet := cache.ConfigFor("cam_multi", "algo_det")
 	if !okDet {
 		t.Fatalf("expected algo_det in cache")
@@ -173,7 +193,6 @@ func TestRegionConfigCacheMultiAlgoIndependent(t *testing.T) {
 		t.Fatalf("expected no MASK for algo_det, got %+v", cfgDet.MASK)
 	}
 
-	// algo_face has MASK
 	cfgFace, okFace := cache.ConfigFor("cam_multi", "algo_face")
 	if !okFace {
 		t.Fatalf("expected algo_face in cache")
@@ -191,8 +210,20 @@ func TestRegionConfigCacheSkipsInactiveAndInvalidEntries(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_roi", "roi_detector", 10)
-	insertMockAlgorithm(t, db, "algo_bad", "bad_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_roi",
+		"roi_detector",
+		10,
+	)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_bad",
+		"bad_detector",
+		10,
+	)
 
 	validROI := `{"roi": [[0.1, 0.1, 0.5, 0.5]]}`
 
@@ -217,7 +248,12 @@ func TestRegionConfigCacheSkipsInactiveAndInvalidEntries(t *testing.T) {
 		CameraID: "cam_bad",
 		Enabled:  true,
 		Algorithms: []task.TaskAlgorithm{
-			{AlgorithmID: "algo_bad", Enabled: true, SampleFPS: 5, RegionConfigJSON: `{"mask": [[-0.1, 0.1, 0.5, 0.5]]}`},
+			{
+				AlgorithmID:      "algo_bad",
+				Enabled:          true,
+				SampleFPS:        5,
+				RegionConfigJSON: `{"mask": [[-0.1, 0.1, 0.5, 0.5]]}`,
+			},
 		},
 	}
 	// 4) 正常项：必须进缓存。
@@ -239,13 +275,17 @@ func TestRegionConfigCacheSkipsInactiveAndInvalidEntries(t *testing.T) {
 		t.Fatalf("Reload failed: %v", err)
 	}
 
-	for _, key := range []task.RegionKey{
-		{CameraID: "cam_off", AlgorithmID: "algo_roi"},
-		{CameraID: "cam_algo_off", AlgorithmID: "algo_roi"},
-		{CameraID: "cam_bad", AlgorithmID: "algo_bad"},
-	} {
-		if _, ok := cache.ConfigFor(key.CameraID, key.AlgorithmID); ok {
-			t.Errorf("expected %s/%s to be absent from the cache", key.CameraID, key.AlgorithmID)
+	absentKeys := []struct {
+		cameraID    string
+		algorithmID string
+	}{
+		{cameraID: "cam_off", algorithmID: "algo_roi"},
+		{cameraID: "cam_algo_off", algorithmID: "algo_roi"},
+		{cameraID: "cam_bad", algorithmID: "algo_bad"},
+	}
+	for _, key := range absentKeys {
+		if _, ok := cache.ConfigFor(key.cameraID, key.algorithmID); ok {
+			t.Errorf("expected %s/%s to be absent from the cache", key.cameraID, key.algorithmID)
 		}
 	}
 	cfg, ok := cache.ConfigFor("cam_on", "algo_roi")
@@ -289,7 +329,13 @@ func TestRegionConfigCacheSkipsEmptyRegionConfig(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	insertMockAlgorithm(t, db, "algo_plain", "plain_detector", 10)
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_plain",
+		"plain_detector",
+		10,
+	)
 
 	// 启用中的任务但没有任何自定义区域策略：不进缓存（回落到全帧）。
 	// 同时覆盖 "" 与 "{}" 两种"空配置"写法。

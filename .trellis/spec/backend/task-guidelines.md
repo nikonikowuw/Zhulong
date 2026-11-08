@@ -81,7 +81,7 @@ type TaskChangeListener interface {
   空 `config_json` / `region_config_json` 收敛为 `{}`，并把按名字传入的 `AlgorithmID` 替换为规格 ID。
 - `sample_fps` **负数不静默纠正**：直接返回 422 `INVALID_TASK_CONFIG`。上限为 `SampleFPSMax = 1000`。
 - 同一任务内重复的 `algorithmId` 返回 409 `DUPLICATE_ALGORITHM`。
-- `Enabled` 的"默认开启"只发生在 Handler 的请求类型层（`CreateTaskRequest.ToTask`）；**直接调用 `Service` 时必须显式设置**，
+- `Enabled` 的"默认开启"只发生在 Handler 的请求类型层（`CreateTaskRequest.toTask`，见 `requests.go`）；**直接调用 `Service` 时必须显式设置**，
   零值 `Enabled=false` 会原样落库（这是 `gorm` 零值不回弹特性的直接后果，不要试图在 Store 里补默认值）。
 - 包内不保留双份职责的构造函数：`TaskComponents` / `NewTaskComponents` 已删除，Fx 装配在 `internal/app` 内完成。
 
@@ -109,12 +109,12 @@ type TaskChangeListener interface {
 
 - 本包对外的全部机器码：`TASK_NOT_FOUND`、`TASK_ALREADY_EXISTS`、`TASK_CREATE_FAILED`、`TASK_UPDATE_FAILED`、
   `TASK_DELETE_FAILED`、`TASK_SAVE_FAILED`、`DUPLICATE_ALGORITHM`、`TASK_ALGORITHM_REQUIRED`、`INVALID_TASK_CONFIG`、
-  `INVALID_REGION_CONFIG`、`INVALID_SCHEDULE_CONFIG`、`COMPUTE_BUDGET_EXCEEDED`、`ALGORITHM_NOT_FOUND`、`INVALID_REQUEST`，以及复用的
+  `INVALID_REGION_CONFIG`、`INVALID_CROP_CONFIG`、`INVALID_SCHEDULE_CONFIG`、`COMPUTE_BUDGET_EXCEEDED`、`ALGORITHM_NOT_FOUND`、`INVALID_REQUEST`，以及复用的
   `VALIDATION_FAILED`、`INTERNAL_ERROR`。
 - 每个码都必须在 `internal/task/locale.go`（或 `httputil` 内置目录）有 en / zh-Hans / zh-Hant 三语文案；
   漏注册会让 `WriteError` 静默回退到通用 `REQUEST_FAILED` 文案。
 - `internal/task/error_codes_test.go` 是这条契约的门禁：新增错误码必须同步加入 `taskErrorCodes` 表。
-- `INVALID_REQUEST` 与 `internal/algorithm/locale.go` 共享同名 key，两处文案必须保持一致。
+- `ALGORITHM_NOT_FOUND` 与 `INVALID_REQUEST` 和 `internal/algorithm/locale.go` 共享同名全局 key，两处三语文案必须保持严格一致，避免包 `init()` 顺序导致文案漂移。
 
 ---
 

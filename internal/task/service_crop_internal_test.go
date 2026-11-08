@@ -12,10 +12,24 @@ func cropSemanticsTask(name string) *Task {
 		Name:     name,
 		CropJSON: "{}",
 		Algorithms: []TaskAlgorithm{
-			{ID: "sub_a", AlgorithmID: "algo_a", Enabled: true, SampleFPS: 5,
-				ConfigJSON: "{}", RegionConfigJSON: "{}", ScheduleJSON: "{}"},
-			{ID: "sub_b", AlgorithmID: "algo_b", Enabled: false, SampleFPS: 2,
-				ConfigJSON: `{"k":1}`, RegionConfigJSON: `{"roi":[[0,0,1,1]]}`, ScheduleJSON: "{}"},
+			{
+				ID:               "sub_a",
+				AlgorithmID:      "algo_a",
+				Enabled:          true,
+				SampleFPS:        5,
+				ConfigJSON:       "{}",
+				RegionConfigJSON: "{}",
+				ScheduleJSON:     "{}",
+			},
+			{
+				ID:               "sub_b",
+				AlgorithmID:      "algo_b",
+				Enabled:          false,
+				SampleFPS:        2,
+				ConfigJSON:       `{"k":1}`,
+				RegionConfigJSON: `{"roi":[[0,0,1,1]]}`,
+				ScheduleJSON:     "{}",
+			},
 		},
 	}
 }
@@ -44,9 +58,15 @@ func TestSameTaskSemanticsDetectsRealChanges(t *testing.T) {
 	}{
 		{name: "enabled", mutate: func(t *Task) { t.Enabled = false }},
 		{name: "camera", mutate: func(t *Task) { t.CameraID = "cam_2" }},
-		{name: "algorithm added", mutate: func(t *Task) {
-			t.Algorithms = append(t.Algorithms, TaskAlgorithm{AlgorithmID: "algo_c", Enabled: true, SampleFPS: 5})
-		}},
+		{
+			name: "algorithm added",
+			mutate: func(t *Task) {
+				t.Algorithms = append(
+					t.Algorithms,
+					TaskAlgorithm{AlgorithmID: "algo_c", Enabled: true, SampleFPS: 5},
+				)
+			},
+		},
 		{name: "algorithm removed", mutate: func(t *Task) { t.Algorithms = t.Algorithms[:1] }},
 		{name: "fps", mutate: func(t *Task) { t.Algorithms[0].SampleFPS = 10 }},
 		{name: "config", mutate: func(t *Task) { t.Algorithms[0].ConfigJSON = `{"k":2}` }},
