@@ -112,8 +112,19 @@ func NewAlgorithmComponents(
 ) *AlgorithmComponents {
 	store := NewStore(dbProvider)
 	verifier := NewVerifier(host, VerifyOptions{Logger: logger})
-	supervisor := algorunner.NewSupervisor(store, rt, algorunner.DefaultRecoveryOptions(), logger)
-	service := NewService(store, verifier, supervisor, rt, logger)
+	supervisor := algorunner.NewSupervisor(
+		store,
+		rt,
+		algorunner.DefaultRecoveryOptions(),
+		logger,
+	)
+	service := NewService(
+		store,
+		verifier,
+		supervisor,
+		rt,
+		logger,
+	)
 	handler := NewHandler(service, logger)
 
 	return &AlgorithmComponents{

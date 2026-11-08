@@ -238,7 +238,12 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*VerifyR
 
 	// Stage 2: Dynamic black-box verification by running the package entry
 	if !v.skipDynamic {
-		if err := v.runDynamicVerification(ctx, entryPath, samplePath, manifest.TaskType); err != nil {
+		if err := v.runDynamicVerification(
+			ctx,
+			entryPath,
+			samplePath,
+			manifest.TaskType,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -302,7 +307,11 @@ func validateIdentity(manifest *Manifest) error {
 
 func validateEnums(manifest *Manifest) error {
 	switch manifest.TaskType {
-	case TaskTypeDetection, TaskTypeClassification, TaskTypePersonStructure, TaskTypeVehicleStructure, TaskTypeSceneStructure:
+	case TaskTypeDetection,
+		TaskTypeClassification,
+		TaskTypePersonStructure,
+		TaskTypeVehicleStructure,
+		TaskTypeSceneStructure:
 	default:
 		return fmt.Errorf("%w: invalid task_type %q", ErrInvalidManifest, manifest.TaskType)
 	}
@@ -427,7 +436,13 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 		sampleArg = framePath
 	}
 
-	cmd := exec.CommandContext(vCtx, entryPath, "--verify", "--sample", sampleArg)
+	cmd := exec.CommandContext(
+		vCtx,
+		entryPath,
+		"--verify",
+		"--sample",
+		sampleArg,
+	)
 	// 以包目录为 CWD：验包必须复现部署布局（可执行文件与 models/ 同级）。
 	// 否则「从源码树 CWD 意外命中权重」会让模型路径类缺陷（拼出 models/models/…）
 	// 在开发机上全部逃过准入，到部署环境才以 model_create 失败爆出。
@@ -451,11 +466,12 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 
 	// 准入结论的可信度取决于「样本帧是否真的进了模型」：
 	// 没解码成功就只能证明 ABI 生命周期。
-	if !report.SampleDecoded {
+	switch {
+	case !report.SampleDecoded:
 		v.warn("algorithm verification ran without a decoded sample frame; only the ABI lifecycle was exercised",
 			zap.String("sample", samplePath),
 			zap.String("entry", entryPath))
-	} else if report.Count == 0 {
+	case report.Count == 0:
 		v.warn("algorithm verification decoded the sample frame but the plugin reported zero results",
 			zap.String("sample", samplePath),
 			zap.Int("width", report.Width),
@@ -469,7 +485,7 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 		matches := report.ResultType == int(expected) ||
 			(taskType == TaskTypePersonStructure && report.ResultType == int(ResultTypeSceneStructure))
 		if !matches {
-			return fmt.Errorf("%w: expected result_type %d for %s, got %d",
+			return fmt.Errorf("%w: expected result_type %d for %q, got %d",
 				ErrResultTypeMismatch, expected, taskType, report.ResultType)
 		}
 	}

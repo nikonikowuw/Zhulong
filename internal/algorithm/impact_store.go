@@ -34,7 +34,7 @@ func (s *Store) ListCameraIDsByAlgorithm(ctx context.Context, algorithmID string
 		return nil, err
 	}
 	if ids == nil {
-		ids = make([]string, 0)
+		ids = []string{}
 	}
 	return ids, nil
 }

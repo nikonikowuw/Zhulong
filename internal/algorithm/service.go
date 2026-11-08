@@ -114,25 +114,60 @@ func normalizeInstallError(err error) error {
 	}
 	switch {
 	case errors.Is(err, ErrPlatformTargetRetired):
-		return httputil.NewError(http.StatusBadRequest, "PLATFORM_TARGET_CPU_RETIRED", err.Error(), err)
+		return httputil.NewError(
+			http.StatusBadRequest,
+			"PLATFORM_TARGET_CPU_RETIRED",
+			err.Error(),
+			err,
+		)
 	case errors.Is(err, ErrPlatformMismatch):
-		return httputil.NewError(http.StatusBadRequest, "ALGO_PLATFORM_MISMATCH", "Platform mismatch", err)
+		return httputil.NewError(
+			http.StatusBadRequest,
+			"ALGO_PLATFORM_MISMATCH",
+			"Platform mismatch",
+			err,
+		)
 	case errors.Is(err, ErrUnsupportedArchive):
-		return httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_ARCHIVE_FORMAT", "Unsupported archive format", err)
+		return httputil.NewError(
+			http.StatusBadRequest,
+			"UNSUPPORTED_ARCHIVE_FORMAT",
+			"Unsupported archive format",
+			err,
+		)
 	case errors.Is(err, ErrZipSlip):
-		return httputil.NewError(http.StatusBadRequest, "ZIP_SLIP_ATTACK_DETECTED", "Zip-slip attack detected", err)
+		return httputil.NewError(
+			http.StatusBadRequest,
+			"ZIP_SLIP_ATTACK_DETECTED",
+			"Zip-slip attack detected",
+			err,
+		)
 	case errors.Is(err, ErrDecompressionBombSize), errors.Is(err, ErrDecompressionBombFile):
-		return httputil.NewError(http.StatusBadRequest, "DECOMPRESSION_BOMB_DETECTED", "Decompression bomb detected", err)
+		return httputil.NewError(
+			http.StatusBadRequest,
+			"DECOMPRESSION_BOMB_DETECTED",
+			"Decompression bomb detected",
+			err,
+		)
 	case errors.Is(err, ErrVerificationFailed), errors.Is(err, ErrResultTypeMismatch):
 		return apperr.Invalid("ALGO_VERIFICATION_FAILED", "Verification failed", err)
 	case errors.Is(err, ErrInvalidManifestToken):
-		return httputil.NewError(http.StatusBadRequest, "INVALID_MANIFEST_TOKEN", err.Error(), err)
+		return httputil.NewError(
+			http.StatusBadRequest,
+			"INVALID_MANIFEST_TOKEN",
+			err.Error(),
+			err,
+		)
 	case errors.Is(err, ErrVersionAlreadyInstalled):
 		return apperr.Conflict("ALGORITHM_VERSION_EXISTS", "Algorithm version is already installed", err)
 	case errors.Is(err, ErrInvalidConfigSchema):
 		return apperr.Invalid("ALGO_VERIFICATION_FAILED", "Invalid algorithm configuration schema", err)
 	default:
-		return httputil.NewError(http.StatusBadRequest, "ALGO_INSTALL_FAILED", err.Error(), err)
+		return httputil.NewError(
+			http.StatusBadRequest,
+			"ALGO_INSTALL_FAILED",
+			err.Error(),
+			err,
+		)
 	}
 }
 
@@ -146,7 +181,12 @@ func (s *Service) InstallAlgorithmFromStream(ctx context.Context, r io.Reader, l
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.Is(err, ErrFileTooLarge) || errors.As(err, &maxBytesErr) {
-			return nil, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "Uploaded file exceeds 500MB", err)
+			return nil, httputil.NewError(
+				http.StatusRequestEntityTooLarge,
+				"FILE_TOO_LARGE",
+				"Uploaded file exceeds 500MB",
+				err,
+			)
 		}
 		return nil, apperr.Internal(internalErrorCode, "Failed to save upload", err)
 	}
@@ -180,7 +220,12 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 
 	// Check if an algorithm with same name/ID already exists
 	existing, err := s.store.GetAlgorithm(ctx, algo.ID)
-	if err == nil && existing != nil {
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		discardStagedVersion()
+		return nil, normalizeInstallError(fmt.Errorf("check existing algorithm: %w", err))
+	}
+
+	if existing != nil {
 		algo.PreviousVersion = existing.Version
 		if err := s.store.UpdateAlgorithm(ctx, algo); err != nil {
 			discardStagedVersion()
@@ -212,10 +257,6 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 		}
 
 		return algo, nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		discardStagedVersion()
-		return nil, normalizeInstallError(fmt.Errorf("check existing algorithm: %w", err))
 	}
 
 	if err := s.store.CreateAlgorithm(ctx, algo); err != nil {
@@ -503,7 +544,8 @@ func (s *Service) restartAlgorithmNow(algorithmID string) {
 	}
 
 	liveStatus := s.supervisor.GetStatus(algorithmID)
-	if liveStatus == StatusRunning || liveStatus == StatusStarting {
+	switch liveStatus {
+	case StatusRunning, StatusStarting:
 		// 运行中：执行 RestartAlgorithm（若任务变为空，
 		// Supervisor.RestartAlgorithm 会优雅停止并恢复 ACTIVE）
 		if err := s.supervisor.RestartAlgorithm(context.Background(), algorithmID); err != nil {
@@ -512,15 +554,19 @@ func (s *Service) restartAlgorithmNow(algorithmID string) {
 				zap.Error(err),
 			)
 		}
-	} else if liveStatus == StatusDisabled {
+	case StatusDisabled:
 		// 处于待命态（Standby）：新任务加入，尝试从待命态拉起 Runner
 		if err := s.supervisor.StartAlgorithm(context.Background(), algo.ToPackageMeta()); err != nil {
-			if algorunner.IsEntryError(err) {
+			switch {
+			case algorunner.IsEntryError(err):
 				s.logger.Error("standby algorithm has no runnable entry, leaving it disabled",
 					zap.String("algorithm_id", algorithmID),
 					zap.Error(err),
 				)
-			} else if !errors.Is(err, algorunner.ErrNoBrokerSockets) && !errors.Is(err, algorunner.ErrAlgorithmAlreadyRunning) {
+			case errors.Is(err, algorunner.ErrNoBrokerSockets),
+				errors.Is(err, algorunner.ErrAlgorithmAlreadyRunning):
+				// 待命或并发拉起已成功，无需警告
+			default:
 				s.logger.Warn("failed to start standby algorithm after task change",
 					zap.String("algorithm_id", algorithmID),
 					zap.Error(err),
@@ -581,7 +627,7 @@ func (s *Service) TrialInference(
 	default:
 		return nil, apperr.Conflict(
 			"ALGORITHM_IS_ACTIVE",
-			fmt.Sprintf("Algorithm status %s is not allowed for trial inference", algo.Status),
+			fmt.Sprintf("Algorithm status %q is not allowed for trial inference", algo.Status),
 			nil,
 		)
 	}
@@ -610,7 +656,13 @@ func (s *Service) TrialInference(
 	tCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(tCtx, entryPath, "--verify", "--sample", trialImg.Path)
+	cmd := exec.CommandContext(
+		tCtx,
+		entryPath,
+		"--verify",
+		"--sample",
+		trialImg.Path,
+	)
 	cmd.Dir = pkgDir
 	cmd.SysProcAttr = algorunner.PackageSysProcAttr()
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -659,28 +711,30 @@ func (s *Service) TrialInference(
 		Height:          trialImg.Height,
 		TaskType:        algo.TaskType,
 		Count:           report.Count,
-		Detections:      make([]aitypes.DetectionItem, 0),
-		Classifications: make([]aitypes.ClassificationItem, 0),
-		Persons:         make([]aitypes.PersonItem, 0),
-		Vehicles:        make([]aitypes.VehicleItem, 0),
+		Detections:      []aitypes.DetectionItem{},
+		Classifications: []aitypes.ClassificationItem{},
+		Persons:         []aitypes.PersonItem{},
+		Vehicles:        []aitypes.VehicleItem{},
 	}
 
-	if report.Result != nil {
-		if report.Result.TaskType != "" {
-			resp.TaskType = report.Result.TaskType
-		}
-		if len(report.Result.Detections) > 0 {
-			resp.Detections = report.Result.Detections
-		}
-		if len(report.Result.Classifications) > 0 {
-			resp.Classifications = report.Result.Classifications
-		}
-		if len(report.Result.Persons) > 0 {
-			resp.Persons = report.Result.Persons
-		}
-		if len(report.Result.Vehicles) > 0 {
-			resp.Vehicles = report.Result.Vehicles
-		}
+	if report.Result == nil {
+		return resp, nil
+	}
+
+	if report.Result.TaskType != "" {
+		resp.TaskType = report.Result.TaskType
+	}
+	if len(report.Result.Detections) > 0 {
+		resp.Detections = report.Result.Detections
+	}
+	if len(report.Result.Classifications) > 0 {
+		resp.Classifications = report.Result.Classifications
+	}
+	if len(report.Result.Persons) > 0 {
+		resp.Persons = report.Result.Persons
+	}
+	if len(report.Result.Vehicles) > 0 {
+		resp.Vehicles = report.Result.Vehicles
 	}
 
 	return resp, nil

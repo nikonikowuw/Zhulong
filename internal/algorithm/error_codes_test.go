@@ -28,6 +28,12 @@ var algorithmErrorCodes = []string{
 func TestAlgorithmErrorCodesAreLocalized(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	genericMessages := map[string]string{
+		"en":      "The request could not be completed",
+		"zh-Hans": "无法完成请求",
+		"zh-Hant": "無法完成此請求",
+	}
+
 	for _, code := range algorithmErrorCodes {
 		for _, locale := range []string{"en", "zh-Hans", "zh-Hant"} {
 			t.Run(code+"/"+locale, func(t *testing.T) {
@@ -37,8 +43,15 @@ func TestAlgorithmErrorCodesAreLocalized(t *testing.T) {
 				context.Request.Header.Set("Accept-Language", locale)
 
 				// The raw cause must never reach the client.
-				httputil.WriteError(context, httputil.NewError(
-					http.StatusBadRequest, code, "raw internal detail: /var/lib/secret", nil))
+				httputil.WriteError(
+					context,
+					httputil.NewError(
+						http.StatusBadRequest,
+						code,
+						"raw internal detail: /var/lib/secret",
+						nil,
+					),
+				)
 
 				var body httputil.Response
 				if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
@@ -51,11 +64,7 @@ func TestAlgorithmErrorCodesAreLocalized(t *testing.T) {
 					t.Fatalf("expected localized message for %q in %q", code, locale)
 				}
 				// A generic fallback means the catalog entry is missing.
-				generic := map[string]string{
-					"en":      "The request could not be completed",
-					"zh-Hans": "无法完成请求",
-					"zh-Hant": "無法完成此請求",
-				}[locale]
+				generic := genericMessages[locale]
 				if body.Message == generic {
 					t.Errorf("code %q fell back to generic message in %q", code, locale)
 				}

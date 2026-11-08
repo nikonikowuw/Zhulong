@@ -109,7 +109,12 @@ func (h *Handler) UploadRouteRegistrar() RouteRegistrar {
 func (h *Handler) Install(c *gin.Context) {
 	// Declared before the multipart stream is read so a rejected archive is
 	// still attributable. The target is refined once the algorithm is known.
-	audithttp.Tag(c, ActionAlgorithmInstall, "algorithm:", "Install algorithm")
+	audithttp.Tag(
+		c,
+		ActionAlgorithmInstall,
+		"algorithm:",
+		"Install algorithm",
+	)
 
 	filePart, cleanup, err := ExtractMultipartFile(c.Request, "file")
 	if err != nil {
@@ -148,7 +153,12 @@ func (h *Handler) Install(c *gin.Context) {
 // @Router       /algorithms/{id}/trial [post]
 func (h *Handler) Trial(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionAlgorithmTrial, "algorithm:"+id, "Trial algorithm "+id)
+	audithttp.Tag(
+		c,
+		ActionAlgorithmTrial,
+		"algorithm:"+id,
+		"Trial algorithm "+id,
+	)
 
 	filePart, cleanup, err := ExtractMultipartFile(c.Request, "file")
 	if err != nil {
@@ -229,7 +239,12 @@ func (h *Handler) Get(c *gin.Context) {
 // @Router       /algorithms/{id}/enable [post]
 func (h *Handler) Enable(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionAlgorithmEnable, "algorithm:"+id, "Enable algorithm "+id)
+	audithttp.Tag(
+		c,
+		ActionAlgorithmEnable,
+		"algorithm:"+id,
+		"Enable algorithm "+id,
+	)
 
 	if err := h.service.EnableAlgorithm(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
@@ -249,7 +264,12 @@ func (h *Handler) Enable(c *gin.Context) {
 // @Router       /algorithms/{id}/disable [post]
 func (h *Handler) Disable(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionAlgorithmDisable, "algorithm:"+id, "Disable algorithm "+id)
+	audithttp.Tag(
+		c,
+		ActionAlgorithmDisable,
+		"algorithm:"+id,
+		"Disable algorithm "+id,
+	)
 
 	if err := h.service.DisableAlgorithm(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
@@ -270,7 +290,12 @@ func (h *Handler) Disable(c *gin.Context) {
 // @Router       /algorithms/{id}/reset [post]
 func (h *Handler) Reset(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionAlgorithmReset, "algorithm:"+id, "Reset algorithm "+id)
+	audithttp.Tag(
+		c,
+		ActionAlgorithmReset,
+		"algorithm:"+id,
+		"Reset algorithm "+id,
+	)
 
 	if err := h.service.ResetAlgorithm(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
@@ -315,7 +340,12 @@ func (h *Handler) GetDeletionImpact(c *gin.Context) {
 // @Router       /algorithms/{id} [delete]
 func (h *Handler) Delete(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionAlgorithmDelete, "algorithm:"+id, "Delete algorithm "+id)
+	audithttp.Tag(
+		c,
+		ActionAlgorithmDelete,
+		"algorithm:"+id,
+		"Delete algorithm "+id,
+	)
 
 	// 卸载前先取一次影响面，写进审计详情。
 	//

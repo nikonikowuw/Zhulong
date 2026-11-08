@@ -77,11 +77,21 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 	cleanup := func() {
 		_ = os.Remove(temp.Name())
 	}
+	success := false
+	defer func() {
+		if !success {
+			_ = temp.Close()
+			cleanup()
+		}
+	}()
 
 	writer := bufio.NewWriterSize(temp, 1<<20)
-	if _, err := fmt.Fprintf(writer, "P6\n%d %d\n255\n", width, height); err != nil {
-		_ = temp.Close()
-		cleanup()
+	if _, err := fmt.Fprintf(
+		writer,
+		"P6\n%d %d\n255\n",
+		width,
+		height,
+	); err != nil {
 		return "", nil, fmt.Errorf("write ppm header: %w", err)
 	}
 
@@ -95,7 +105,7 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			rowOffset := 0
 			pixOffset := concrete.PixOffset(bounds.Min.X, y)
-			for x := 0; x < width; x++ {
+			for x := range width {
 				i := pixOffset + x*4
 				row[rowOffset] = concrete.Pix[i]
 				row[rowOffset+1] = concrete.Pix[i+1]
@@ -103,8 +113,6 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 				rowOffset += 3
 			}
 			if _, err := writer.Write(row); err != nil {
-				_ = temp.Close()
-				cleanup()
 				return "", nil, fmt.Errorf("write ppm row: %w", err)
 			}
 		}
@@ -112,7 +120,7 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			rowOffset := 0
 			pixOffset := concrete.PixOffset(bounds.Min.X, y)
-			for x := 0; x < width; x++ {
+			for x := range width {
 				i := pixOffset + x*4
 				row[rowOffset] = concrete.Pix[i]
 				row[rowOffset+1] = concrete.Pix[i+1]
@@ -120,8 +128,6 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 				rowOffset += 3
 			}
 			if _, err := writer.Write(row); err != nil {
-				_ = temp.Close()
-				cleanup()
 				return "", nil, fmt.Errorf("write ppm row: %w", err)
 			}
 		}
@@ -129,7 +135,7 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			rowOffset := 0
 			yi := concrete.YOffset(bounds.Min.X, y)
-			for x := 0; x < width; x++ {
+			for x := range width {
 				ci := concrete.COffset(bounds.Min.X+x, y)
 				r, g, b := color.YCbCrToRGB(concrete.Y[yi+x], concrete.Cb[ci], concrete.Cr[ci])
 				row[rowOffset] = r
@@ -138,8 +144,6 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 				rowOffset += 3
 			}
 			if _, err := writer.Write(row); err != nil {
-				_ = temp.Close()
-				cleanup()
 				return "", nil, fmt.Errorf("write ppm row: %w", err)
 			}
 		}
@@ -154,22 +158,18 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 				rowOffset += 3
 			}
 			if _, err := writer.Write(row); err != nil {
-				_ = temp.Close()
-				cleanup()
 				return "", nil, fmt.Errorf("write ppm row: %w", err)
 			}
 		}
 	}
 	if err := writer.Flush(); err != nil {
-		_ = temp.Close()
-		cleanup()
 		return "", nil, fmt.Errorf("flush ppm: %w", err)
 	}
 	if err := temp.Close(); err != nil {
-		cleanup()
 		return "", nil, fmt.Errorf("close ppm: %w", err)
 	}
 
+	success = true
 	return temp.Name(), cleanup, nil
 }
 
@@ -188,18 +188,19 @@ func (t *trialImagePPM) Close() {
 	}
 }
 
+func readImageData(r io.Reader) ([]byte, error) {
+	if bp, ok := r.(interface{ Bytes() []byte }); ok {
+		return bp.Bytes(), nil
+	}
+	return io.ReadAll(r)
+}
+
 // writeTrialImagePPM decodes an incoming JPEG or PNG image stream, verifies
 // dimensions, and serializes it to a temporary PPM P6 file for trial inference.
 func writeTrialImagePPM(r io.Reader) (*trialImagePPM, error) {
-	var data []byte
-	if bp, ok := r.(interface{ Bytes() []byte }); ok {
-		data = bp.Bytes()
-	} else {
-		var err error
-		data, err = io.ReadAll(r)
-		if err != nil {
-			return nil, fmt.Errorf("%w: failed to read image data: %v", ErrInvalidImageFile, err)
-		}
+	data, err := readImageData(r)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read image data: %v", ErrInvalidImageFile, err)
 	}
 
 	// 1. Inspect image config first to reject huge images before allocating full pixel buffers.

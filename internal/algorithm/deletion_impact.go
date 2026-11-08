@@ -43,7 +43,10 @@ type DeletionImpact struct {
 }
 
 // HasEvidence 报告是否存在会失去归属的历史证据。
-func (i DeletionImpact) HasEvidence() bool {
+func (i *DeletionImpact) HasEvidence() bool {
+	if i == nil {
+		return false
+	}
 	return i.RecognitionCount > 0 || i.AlarmCount > 0 || i.CaptureCount > 0
 }
 

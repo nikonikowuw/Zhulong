@@ -98,25 +98,27 @@ func SaveUploadStreamWithLimit(r io.Reader, tempDir string, limit int64) (string
 	if err != nil {
 		return "", fmt.Errorf("create temp upload file: %w", err)
 	}
-	defer tmpFile.Close()
+	tmpPath := tmpFile.Name()
+	success := false
+	defer func() {
+		_ = tmpFile.Close()
+		if !success {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
 	limited := io.LimitReader(r, limit+1)
 	written, err := io.Copy(tmpFile, limited)
 	if err != nil {
-		if rmErr := os.Remove(tmpFile.Name()); rmErr != nil && !os.IsNotExist(rmErr) {
-			// clean up attempt on copy error
-		}
 		return "", fmt.Errorf("copy upload stream: %w", err)
 	}
 
 	if written > limit {
-		if rmErr := os.Remove(tmpFile.Name()); rmErr != nil && !os.IsNotExist(rmErr) {
-			// clean up attempt on overflow
-		}
 		return "", ErrFileTooLarge
 	}
 
-	return tmpFile.Name(), nil
+	success = true
+	return tmpPath, nil
 }
 
 // ExtractArchive extracts a .tar.gz or .zip file into destDir with Zip-Slip, bomb, and permission protection.
@@ -320,7 +322,12 @@ func isZipSlipPath(relPath string) bool {
 func ExtractMultipartFile(r *http.Request, fieldName string) (io.ReadCloser, func(), error) {
 	reader, err := r.MultipartReader()
 	if err != nil {
-		return nil, nil, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Missing upload file", err)
+		return nil, nil, httputil.NewError(
+			http.StatusBadRequest,
+			"INVALID_FILE",
+			"Missing upload file",
+			err,
+		)
 	}
 
 	for {
@@ -338,7 +345,12 @@ func ExtractMultipartFile(r *http.Request, fieldName string) (io.ReadCloser, fun
 					err,
 				)
 			}
-			return nil, nil, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Failed to read multipart stream", err)
+			return nil, nil, httputil.NewError(
+				http.StatusBadRequest,
+				"INVALID_FILE",
+				"Failed to read multipart stream",
+				err,
+			)
 		}
 
 		if part.FormName() != fieldName {
@@ -349,5 +361,10 @@ func ExtractMultipartFile(r *http.Request, fieldName string) (io.ReadCloser, fun
 		return part, func() { _ = part.Close() }, nil
 	}
 
-	return nil, nil, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Missing upload file", nil)
+	return nil, nil, httputil.NewError(
+		http.StatusBadRequest,
+		"INVALID_FILE",
+		"Missing upload file",
+		nil,
+	)
 }
