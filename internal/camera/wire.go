@@ -101,8 +101,8 @@ func packFrame(pkt engine.Packet, seq uint32) ([]byte, WireHeader) {
 	header := WireHeader{
 		Version:    WireProtocolVersion,
 		Codec:      wireCodec(pkt.Codec),
-		FrameClass: wireFrameClass(pkt),
-		Flags:      wireFlags(pkt),
+		FrameClass: wireFrameClass(pkt.FrameClass, pkt.KeyFrame),
+		Flags:      wireFlags(pkt.Flags, pkt.KeyFrame),
 		PTSUS:      pkt.PtsUS,
 		DTSUS:      pkt.DtsUS,
 		Seq:        seq,
@@ -145,8 +145,8 @@ func wireCodec(codec engine.Codec) byte {
 	}
 }
 
-func wireFrameClass(pkt engine.Packet) byte {
-	switch pkt.FrameClass {
+func wireFrameClass(class engine.FrameClass, keyFrame bool) byte {
+	switch class {
 	case engine.FrameIDR:
 		return WireFrameIDR
 	case engine.FrameNonReference:
@@ -156,31 +156,31 @@ func wireFrameClass(pkt engine.Packet) byte {
 	default:
 		// 旧版原生库不填 frame_class：退回按 key_frame 判定，
 		// 其余一律视为参考帧（保守，绝不把不可丢的帧标成可丢）
-		if pkt.KeyFrame {
+		if keyFrame {
 			return WireFrameIDR
 		}
 		return WireFramePredictive
 	}
 }
 
-func wireFlags(pkt engine.Packet) byte {
-	var flags byte
-	if pkt.KeyFrame {
-		flags |= WireFlagKeyFrame
+func wireFlags(flags engine.PacketFlag, keyFrame bool) byte {
+	var out byte
+	if keyFrame {
+		out |= WireFlagKeyFrame
 	}
-	if pkt.Flags.Has(engine.PacketFlagDiscontinuity) {
-		flags |= WireFlagDiscontinuity
+	if flags.Has(engine.PacketFlagDiscontinuity) {
+		out |= WireFlagDiscontinuity
 	}
-	if pkt.Flags.Has(engine.PacketFlagParameterSetsInjected) {
-		flags |= WireFlagParamInjected
+	if flags.Has(engine.PacketFlagParameterSetsInjected) {
+		out |= WireFlagParamInjected
 	}
-	if pkt.Flags.Has(engine.PacketFlagTimestampSynthetic) {
-		flags |= WireFlagTimestampSynthetic
+	if flags.Has(engine.PacketFlagTimestampSynthetic) {
+		out |= WireFlagTimestampSynthetic
 	}
-	if pkt.Flags.Has(engine.PacketFlagDtsSynthetic) {
-		flags |= WireFlagDtsSynthetic
+	if flags.Has(engine.PacketFlagDtsSynthetic) {
+		out |= WireFlagDtsSynthetic
 	}
-	return flags
+	return out
 }
 
 // UnpackPacket 解析 ZLM2 二进制推流消息，返回头部与 Payload 切片。

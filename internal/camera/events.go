@@ -1,10 +1,12 @@
 package camera
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,11 +38,36 @@ type EventMessage struct {
 	Sequence uint64    `json:"sequence"`
 }
 
+// FormatSSE formats an EventMessage as valid SSE lines.
+func (msg *EventMessage) FormatSSE() ([]byte, error) {
+	dataBytes, err := json.Marshal(msg.Data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal SSE data: %w", err)
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("event: ")
+	buf.WriteString(string(msg.Event))
+	if msg.Sequence > 0 {
+		buf.WriteString("\nid: ")
+		buf.WriteString(strconv.FormatUint(msg.Sequence, 10))
+	}
+	buf.WriteString("\ndata: ")
+	buf.Write(dataBytes)
+	buf.WriteString("\n\n")
+	return buf.Bytes(), nil
+}
+
 // ClientSubscription represents a connected SSE client session.
 type ClientSubscription struct {
 	ch     chan *EventMessage
 	id     uint64
 	closed atomic.Bool
+}
+
+// Channel returns the receive-only channel for event messages.
+func (s *ClientSubscription) Channel() <-chan *EventMessage {
+	return s.ch
 }
 
 // EventHub manages SSE client subscribers, sequence generation, and thread-safe event broadcasting.
@@ -233,21 +260,3 @@ func (h *EventHub) Close() error {
 
 // Ensure interface compliance
 var _ io.Closer = (*EventHub)(nil)
-
-// Channel returns the receive-only channel for event messages.
-func (s *ClientSubscription) Channel() <-chan *EventMessage {
-	return s.ch
-}
-
-// FormatSSE formats an EventMessage as valid SSE lines.
-func (msg *EventMessage) FormatSSE() ([]byte, error) {
-	dataBytes, err := json.Marshal(msg.Data)
-	if err != nil {
-		return nil, fmt.Errorf("marshal SSE data: %w", err)
-	}
-
-	if msg.Sequence > 0 {
-		return []byte(fmt.Sprintf("event: %s\nid: %d\ndata: %s\n\n", msg.Event, msg.Sequence, dataBytes)), nil
-	}
-	return []byte(fmt.Sprintf("event: %s\ndata: %s\n\n", msg.Event, dataBytes)), nil
-}

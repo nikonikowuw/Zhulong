@@ -43,7 +43,13 @@ type MediaStream interface {
 
 // MediaEngine 抽象媒体拉流与连接池底座。
 type MediaEngine interface {
-	AcquireStream(ctx context.Context, uri string, consumerID uint64, kind engine.ConsumerKind, options engine.StreamOptions) (MediaStream, error)
+	AcquireStream(
+		ctx context.Context,
+		uri string,
+		consumerID uint64,
+		kind engine.ConsumerKind,
+		options engine.StreamOptions,
+	) (MediaStream, error)
 }
 
 // EngineMediaAdapter 将 *engine.Engine 适配为 MediaEngine 接口。
@@ -66,7 +72,12 @@ func (a *EngineMediaAdapter) AcquireStream(
 	if a.engine == nil {
 		return nil, engine.ErrNotRunning
 	}
-	s, err := a.engine.Acquire(ctx, uri, engine.Consumer{ID: consumerID, Kind: kind}, options)
+	s, err := a.engine.Acquire(
+		ctx,
+		uri,
+		engine.Consumer{ID: consumerID, Kind: kind},
+		options,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +123,7 @@ func (s *streamAdapter) SetPublishRate(ctx context.Context, fps uint32) error {
 func (s *streamAdapter) SetView(ctx context.Context, crop *region.Rect) (region.ViewState, error) {
 	var view *engine.ViewRect
 	if crop != nil {
-		view = &engine.ViewRect{crop[0], crop[1], crop[2], crop[3]}
+		view = (*engine.ViewRect)(crop)
 	}
 	state, err := s.stream.SetView(ctx, view)
 	if err != nil {

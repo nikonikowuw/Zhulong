@@ -153,7 +153,9 @@ func TestAudioStreamWSDeliversFrames(t *testing.T) {
 	if err := json.Unmarshal(data, &info); err != nil {
 		t.Fatalf("decode audio_info failed: %v", err)
 	}
-	if !info.HasAudio || info.Codec != "pcma" || info.SampleRate != 8000 || info.Channels != 1 {
+	matchesAudioSpec := info.HasAudio && info.Codec == "pcma" &&
+		info.SampleRate == 8000 && info.Channels == 1
+	if !matchesAudioSpec {
 		t.Fatalf("unexpected audio_info: %s", string(data))
 	}
 

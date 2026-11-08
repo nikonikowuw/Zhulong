@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,6 +73,17 @@ type StreamHub struct {
 	nextConsumerID     atomic.Uint64
 	mu                 sync.Mutex
 	closed             bool
+}
+
+// AcquiredAudioStream 是音频通道专用的流引用与元数据快照。
+type AcquiredAudioStream struct {
+	Stream MediaStream
+	Info   engine.AudioInfo
+}
+
+type streamTarget struct {
+	RawURI    string
+	Transport engine.Transport
 }
 
 // aiStreamRef 表示一路相机的 AI 分析流（ConsumerAI 物理拉流 + FrameBroker）。
@@ -221,6 +233,7 @@ func NewStreamHub(
 		aiStreams:          make(map[string]*aiStreamRef),
 		aiSubscribers:      make(map[string]map[string]struct{}),
 		recoveries:         make(map[string]*aiRecovery),
+		warmOrder:          []string{},
 		warmStreamCap:      defaultMaxWarmStreamDispatchers,
 		reconnectMinDelay:  defaultReconnectMinDelay,
 		reconnectMaxDelay:  defaultReconnectMaxDelay,
@@ -261,14 +274,27 @@ func (h *StreamHub) recordPacketActivity(cameraID, role string) {
 	}
 	var wasAbnormal bool
 	if st, ok := h.registry.GetState(cameraID); ok && st != nil {
-		streamAbnormal := st.Streams != nil && st.Streams[role] != nil &&
-			(st.Streams[role].Health != HealthStateOnline || st.Streams[role].Session == SessionStateReconnecting || st.Streams[role].Session == SessionStateError)
-		if st.Health != HealthStateOnline || st.Session == SessionStateReconnecting || st.Session == SessionStateError || streamAbnormal {
-			wasAbnormal = true
+		cameraAbnormal := st.Health != HealthStateOnline ||
+			st.Session == SessionStateReconnecting ||
+			st.Session == SessionStateError
+
+		var streamAbnormal bool
+		if st.Streams != nil && st.Streams[role] != nil {
+			stream := st.Streams[role]
+			streamAbnormal = stream.Health != HealthStateOnline ||
+				stream.Session == SessionStateReconnecting ||
+				stream.Session == SessionStateError
 		}
+
+		wasAbnormal = cameraAbnormal || streamAbnormal
 	}
 
-	state := h.registry.RecordStreamSuccess(cameraID, 0, role, EvidencePacketActivity)
+	state := h.registry.RecordStreamSuccess(
+		cameraID,
+		0,
+		role,
+		EvidencePacketActivity,
+	)
 	if wasAbnormal && state != nil {
 		h.broadcastState(state)
 	}
@@ -288,14 +314,9 @@ func (h *StreamHub) GetOrCreateDispatcher(ctx context.Context, cameraID, role st
 		h.mu.Unlock()
 		return nil, ErrStreamHubClosed
 	}
-	if d, ok := h.dispatchers[key]; ok {
-		d.mu.Lock()
-		isClosed := d.closed
-		d.mu.Unlock()
-		if !isClosed {
-			h.mu.Unlock()
-			return d, nil
-		}
+	if d, ok := h.dispatchers[key]; ok && !d.IsClosed() {
+		h.mu.Unlock()
+		return d, nil
 	}
 	h.mu.Unlock()
 
@@ -306,33 +327,24 @@ func (h *StreamHub) GetOrCreateDispatcher(ctx context.Context, cameraID, role st
 			h.mu.Unlock()
 			return nil, ErrStreamHubClosed
 		}
-		if d, ok := h.dispatchers[key]; ok {
-			d.mu.Lock()
-			isClosed := d.closed
-			d.mu.Unlock()
-			if !isClosed {
-				h.mu.Unlock()
-				return d, nil
-			}
+		if d, ok := h.dispatchers[key]; ok && !d.IsClosed() {
+			h.mu.Unlock()
+			return d, nil
 		}
 		h.mu.Unlock()
 
-		return h.createDispatcher(ctx, cameraID, role, key)
+		return h.createDispatcher(
+			ctx,
+			cameraID,
+			role,
+			key,
+		)
 	})
 
 	if err != nil {
 		return nil, err
 	}
 	return val.(*StreamDispatcher), nil
-}
-
-// streamTarget 是一路相机流解析后的拉流目标。
-//
-// 抽出来是因为视频分发器与音频通道都要走「查相机 → 选 role → 解密 URI → 定传输协议」
-// 这同一段；复制两份的代价不是多几十行，而是某天只改了其中一份。
-type streamTarget struct {
-	RawURI    string
-	Transport engine.Transport
 }
 
 func (h *StreamHub) resolveStreamTarget(ctx context.Context, cameraID, role string) (streamTarget, error) {
@@ -377,9 +389,15 @@ func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key st
 	}
 
 	consumerID := h.nextConsumerID.Add(1)
-	mediaStream, err := h.engine.AcquireStream(ctx, target.RawURI, consumerID, engine.ConsumerPreview, engine.StreamOptions{
-		Transport: target.Transport,
-	})
+	mediaStream, err := h.engine.AcquireStream(
+		ctx,
+		target.RawURI,
+		consumerID,
+		engine.ConsumerPreview,
+		engine.StreamOptions{
+			Transport: target.Transport,
+		},
+	)
 	if err != nil {
 		h.logger.Warn("acquire media stream failed",
 			zap.String("camera_id", cameraID),
@@ -401,7 +419,15 @@ func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key st
 	}
 
 	pumpCtx, cancelPump := context.WithCancel(context.Background())
-	dispatcher := NewStreamDispatcher(h, cameraID, role, mediaStream, sub, cancelPump, h.logger)
+	dispatcher := NewStreamDispatcher(StreamDispatcherConfig{
+		Hub:        h,
+		CameraID:   cameraID,
+		Role:       role,
+		Stream:     mediaStream,
+		Sub:        sub,
+		CancelPump: cancelPump,
+		Logger:     h.logger,
+	})
 
 	// 4. 并发二次检查并登记
 	h.mu.Lock()
@@ -411,15 +437,10 @@ func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key st
 		return nil, ErrStreamHubClosed
 	}
 
-	if existing, ok := h.dispatchers[key]; ok {
-		existing.mu.Lock()
-		isClosed := existing.closed
-		existing.mu.Unlock()
-		if !isClosed {
-			h.mu.Unlock()
-			dispatcher.Close() // 丢弃多余创建的分发器
-			return existing, nil
-		}
+	if existing, ok := h.dispatchers[key]; ok && !existing.IsClosed() {
+		h.mu.Unlock()
+		dispatcher.Close() // 丢弃多余创建的分发器
+		return existing, nil
 	}
 
 	h.dispatchers[key] = dispatcher
@@ -443,12 +464,6 @@ func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key st
 	return dispatcher, nil
 }
 
-// AcquiredAudioStream 是音频通道专用的流引用与元数据快照。
-type AcquiredAudioStream struct {
-	Stream MediaStream
-	Info   engine.AudioInfo
-}
-
 // AcquireAudioStream 为一条按需音频通道获取独立流引用。
 //
 // ⚠️ 刻意不复用视频分发器的 MediaStream：那个句柄上已经挂着视频订阅，而单句柄单订阅
@@ -462,9 +477,15 @@ func (h *StreamHub) AcquireAudioStream(ctx context.Context, cameraID, role strin
 	}
 
 	consumerID := h.nextConsumerID.Add(1)
-	mediaStream, err := h.engine.AcquireStream(ctx, target.RawURI, consumerID, engine.ConsumerPreview, engine.StreamOptions{
-		Transport: target.Transport,
-	})
+	mediaStream, err := h.engine.AcquireStream(
+		ctx,
+		target.RawURI,
+		consumerID,
+		engine.ConsumerPreview,
+		engine.StreamOptions{
+			Transport: target.Transport,
+		},
+	)
 	if err != nil {
 		h.logger.Warn("acquire audio media stream failed",
 			zap.String("camera_id", cameraID),
@@ -562,12 +583,7 @@ func (h *StreamHub) markStreamActive(cameraID, role string) {
 
 // dropWarmLocked 从空闲集合中移除指定 key，要求持有 h.mu。
 func (h *StreamHub) dropWarmLocked(key string) {
-	for index, existing := range h.warmOrder {
-		if existing == key {
-			h.warmOrder = append(h.warmOrder[:index], h.warmOrder[index+1:]...)
-			return
-		}
-	}
+	h.warmOrder = slices.DeleteFunc(h.warmOrder, func(k string) bool { return k == key })
 }
 
 // WarmStreams 返回当前处于空闲热保留窗口的流数量。
@@ -602,7 +618,7 @@ func (h *StreamHub) AICameraIDs() []string {
 		}
 		ids = append(ids, cameraID)
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	return ids
 }
 
@@ -669,44 +685,21 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 		}
 		h.mu.Unlock()
 
-		cam, err := h.store.GetByID(ctx, cameraID)
+		target, err := h.resolveStreamTarget(ctx, cameraID, StreamRoleMain)
 		if err != nil {
 			return "", err
 		}
-		if cam == nil {
-			return "", ErrCameraNotFound
-		}
-		if !cam.Enabled {
-			return "", ErrCameraDisabled
-		}
-
-		role := StreamRoleMain
-		var targetStream *CameraStream
-		for _, s := range cam.Streams {
-			if s.Role == role {
-				targetStream = &s
-				break
-			}
-		}
-		if targetStream == nil {
-			return "", ErrCameraStreamNotFound
-		}
-
-		rawBytes, err := h.cipher.Decrypt(targetStream.EncryptedURI, MakeAAD(cameraID, role))
-		if err != nil {
-			return "", fmt.Errorf("decrypt stream uri: %w", err)
-		}
-		rawURI := string(rawBytes)
-
-		transport := engine.TransportTCP
-		if targetStream.Transport == "udp" {
-			transport = engine.TransportUDP
-		}
 
 		consumerID := h.nextConsumerID.Add(1)
-		mediaStream, err := h.engine.AcquireStream(ctx, rawURI, consumerID, engine.ConsumerAI, engine.StreamOptions{
-			Transport: transport,
-		})
+		mediaStream, err := h.engine.AcquireStream(
+			ctx,
+			target.RawURI,
+			consumerID,
+			engine.ConsumerAI,
+			engine.StreamOptions{
+				Transport: target.Transport,
+			},
+		)
 		if err != nil {
 			return "", err
 		}
@@ -780,7 +773,7 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 		h.aiStreams[cameraID] = ref
 		var newState *CameraStateInfo
 		if h.registry != nil {
-			newState = h.registry.UpdateSessionState(cameraID, role, SessionStateRunning)
+			newState = h.registry.UpdateSessionState(cameraID, StreamRoleMain, SessionStateRunning)
 		}
 		h.mu.Unlock()
 
@@ -791,7 +784,12 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 		// 先注册再启动消费者：注册之前没有任何路径能拿到 ref，
 		// 消费者一跑起来就必须能读到正确的窗口快照。
 		if consumeCtx != nil {
-			go h.consumeAIResults(consumeCtx, cameraID, ref, aiSub)
+			go h.consumeAIResults(
+				consumeCtx,
+				cameraID,
+				ref,
+				aiSub,
+			)
 		}
 
 		return path, nil
@@ -825,30 +823,38 @@ func (h *StreamHub) ReleaseAIStreamSubscriber(cameraID, subscriberID string) {
 	var toClose MediaStream
 
 	h.mu.Lock()
-	if subs, ok := h.aiSubscribers[cameraID]; ok {
-		delete(subs, subscriberID)
-		if len(subs) == 0 {
-			delete(h.aiSubscribers, cameraID)
-			// 没人再要这一路流：立刻停掉在跑的重连，别为已停用的任务持续拉流。
-			if rec, ok := h.recoveries[cameraID]; ok {
-				rec.cancel()
-				delete(h.recoveries, cameraID)
-			}
-			if ref, ok := h.aiStreams[cameraID]; ok {
-				delete(h.aiStreams, cameraID)
-				toClose = ref.stream
-				if ref.cancel != nil {
-					ref.cancel()
-				}
-				if ref.aiSub != nil {
-					_ = ref.aiSub.Close()
-				}
-			}
+	subs, ok := h.aiSubscribers[cameraID]
+	if !ok {
+		h.mu.Unlock()
+		return
+	}
+
+	delete(subs, subscriberID)
+	if len(subs) > 0 {
+		h.mu.Unlock()
+		return
+	}
+
+	delete(h.aiSubscribers, cameraID)
+	// 没人再要这一路流：立刻停掉在跑的重连，别为已停用的任务持续拉流。
+	if rec, ok := h.recoveries[cameraID]; ok {
+		rec.cancel()
+		delete(h.recoveries, cameraID)
+	}
+	if ref, ok := h.aiStreams[cameraID]; ok {
+		delete(h.aiStreams, cameraID)
+		toClose = ref.stream
+		if ref.cancel != nil {
+			ref.cancel()
+		}
+		if ref.aiSub != nil {
+			_ = ref.aiSub.Close()
 		}
 	}
+
 	var newState *CameraStateInfo
 	if toClose != nil && h.registry != nil {
-		hasDispatcher := false
+		var hasDispatcher bool
 		for _, role := range []string{StreamRoleMain, StreamRoleSub} {
 			if _, ok := h.dispatchers[cameraID+":"+role]; ok {
 				hasDispatcher = true
@@ -866,8 +872,9 @@ func (h *StreamHub) ReleaseAIStreamSubscriber(cameraID, subscriberID string) {
 		// 上一任的窗口会变成别人的默认值（而且是静默的）。
 		clearCtx, clearCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer clearCancel()
-		if _, err := toClose.SetView(clearCtx, nil); err != nil &&
-			!errors.Is(err, engine.ErrNotFound) && !errors.Is(err, engine.ErrStreamNotReady) {
+		_, err := toClose.SetView(clearCtx, nil)
+		isIgnorable := errors.Is(err, engine.ErrNotFound) || errors.Is(err, engine.ErrStreamNotReady)
+		if err != nil && !isIgnorable {
 			h.logger.Warn("clear AI view before release failed",
 				zap.String("camera_id", cameraID), zap.Error(err))
 		}
@@ -976,7 +983,10 @@ func (h *StreamHub) applyTaskCrop(ctx context.Context, cameraID string, ref *aiS
 //   - 先在锁内取 ref 再在锁外调用原生接口 —— 与 Snapshot 一致；把原生调用留在锁内
 //     会让一次统计查询阻塞所有相机的流操作。
 //   - 第二个返回值是客户端**总数**，可能大于 len(clients)（截断）。
-func (h *StreamHub) AIStreamBrokerStats(ctx context.Context, cameraID string) ([]engine.BrokerClientStats, uint32, error) {
+func (h *StreamHub) AIStreamBrokerStats(
+	ctx context.Context,
+	cameraID string,
+) ([]engine.BrokerClientStats, uint32, error) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -1000,7 +1010,11 @@ func (h *StreamHub) AIStreamBrokerStats(ctx context.Context, cameraID string) ([
 //     默默拉流会引来无法解释的带宽消耗与运维困惑。
 //   - 本调用同步执行 JPEG 编码（RK3568 1080p 约 35~60ms），必须在独立 goroutine
 //     中调用，绝不能阻塞 AI 结果消费 goroutine。
-func (h *StreamHub) Snapshot(ctx context.Context, cameraID string, options engine.SnapshotOptions) ([]engine.SnapshotImage, error) {
+func (h *StreamHub) Snapshot(
+	ctx context.Context,
+	cameraID string,
+	options engine.SnapshotOptions,
+) ([]engine.SnapshotImage, error) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -1031,10 +1045,7 @@ func (h *StreamHub) Close() error {
 	}
 	h.closed = true
 
-	list := make([]*StreamDispatcher, 0, len(h.dispatchers))
-	for _, d := range h.dispatchers {
-		list = append(list, d)
-	}
+	list := slices.Collect(maps.Values(h.dispatchers))
 	h.dispatchers = make(map[string]*StreamDispatcher)
 
 	// 先停重连：否则停机过程中仍会有协程去 acquire 新流。
@@ -1043,13 +1054,10 @@ func (h *StreamHub) Close() error {
 	}
 	h.recoveries = make(map[string]*aiRecovery)
 
-	aiList := make([]*aiStreamRef, 0, len(h.aiStreams))
-	for _, ref := range h.aiStreams {
-		aiList = append(aiList, ref)
-	}
+	aiList := slices.Collect(maps.Values(h.aiStreams))
 	h.aiStreams = make(map[string]*aiStreamRef)
 	h.aiSubscribers = make(map[string]map[string]struct{})
-	h.warmOrder = nil
+	h.warmOrder = []string{}
 	h.mu.Unlock()
 
 	for _, d := range list {
@@ -1108,23 +1116,29 @@ func (h *StreamHub) handleAIStreamFailure(cameraID string, err error) {
 	h.scheduleAIRecovery(cameraID)
 }
 
-func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, ref *aiStreamRef, sub *engine.AIResultSubscription) {
+func (h *StreamHub) consumeAIResults(
+	ctx context.Context,
+	cameraID string,
+	ref *aiStreamRef,
+	sub *engine.AIResultSubscription,
+) {
 	defer sub.Close()
 	for {
 		data, err := sub.Next(ctx)
 		if err != nil {
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, engine.ErrClosed) {
-				// 错误可能来自上一代流：重连或任务同步已经重建了新流时，
-				// 一条迟到的旧错误不得把刚建好的新流拆掉。
-				if !h.aiSubscriptionIsCurrent(cameraID, sub) {
-					h.logger.Debug("ignoring failure from a superseded AI stream subscription",
-						zap.String("camera_id", cameraID), zap.Error(err))
-					return
-				}
-				h.logger.Warn("ai stream failed",
-					zap.String("camera_id", cameraID), zap.Error(err))
-				h.handleAIStreamFailure(cameraID, err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, engine.ErrClosed) {
+				return
 			}
+			// 错误可能来自上一代流：重连或任务同步已经重建了新流时，
+			// 一条迟到的旧错误不得把刚建好的新流拆掉。
+			if !h.aiSubscriptionIsCurrent(cameraID, sub) {
+				h.logger.Debug("ignoring failure from a superseded AI stream subscription",
+					zap.String("camera_id", cameraID), zap.Error(err))
+				return
+			}
+			h.logger.Warn("ai stream failed",
+				zap.String("camera_id", cameraID), zap.Error(err))
+			h.handleAIStreamFailure(cameraID, err)
 			return
 		}
 

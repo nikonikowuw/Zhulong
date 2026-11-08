@@ -149,11 +149,11 @@ func TestWireProtocolFlagMapping(t *testing.T) {
 		name string
 		bit  byte
 	}{
-		{"keyframe", WireFlagKeyFrame},
-		{"discontinuity", WireFlagDiscontinuity},
-		{"parameter sets injected", WireFlagParamInjected},
-		{"synthetic timestamp", WireFlagTimestampSynthetic},
-		{"synthetic DTS", WireFlagDtsSynthetic},
+		{name: "keyframe", bit: WireFlagKeyFrame},
+		{name: "discontinuity", bit: WireFlagDiscontinuity},
+		{name: "parameter sets injected", bit: WireFlagParamInjected},
+		{name: "synthetic timestamp", bit: WireFlagTimestampSynthetic},
+		{name: "synthetic DTS", bit: WireFlagDtsSynthetic},
 	} {
 		if header.Flags&flag.bit == 0 {
 			t.Errorf("expected %s flag to be set, flags=%#x", flag.name, header.Flags)

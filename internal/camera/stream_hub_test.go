@@ -169,7 +169,10 @@ func (s *mockMediaStream) GetView(ctx context.Context) (region.ViewState, error)
 	return s.view, nil
 }
 
-func (s *mockMediaStream) Snapshot(ctx context.Context, options engine.SnapshotOptions) ([]engine.SnapshotImage, error) {
+func (s *mockMediaStream) Snapshot(
+	ctx context.Context,
+	options engine.SnapshotOptions,
+) ([]engine.SnapshotImage, error) {
 	return nil, engine.ErrSnapshotUnavailable
 }
 
@@ -322,7 +325,10 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 
 	// 验证状态机切换为 running
 	info, ok := registry.GetState(camID)
-	if !ok || info == nil || info.Streams["main"] == nil || info.Streams["main"].Session != SessionStateRunning {
+	hasRunningStream := ok && info != nil &&
+		info.Streams["main"] != nil &&
+		info.Streams["main"].Session == SessionStateRunning
+	if !hasRunningStream {
 		t.Fatalf("expected SessionStateRunning, got %v", info)
 	}
 
@@ -385,7 +391,10 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 	deadline = time.After(time.Second)
 	for {
 		info, ok = registry.GetState(camID)
-		if ok && info != nil && info.Streams["main"] != nil && info.Streams["main"].Session == SessionStateIdle {
+		hasIdleStream := ok && info != nil &&
+			info.Streams["main"] != nil &&
+			info.Streams["main"].Session == SessionStateIdle
+		if hasIdleStream {
 			break
 		}
 		select {
@@ -452,13 +461,19 @@ func TestStreamDispatcherWarmStreamReuseWithinIdleWindow(t *testing.T) {
 	disp.RegisterClient(second)
 
 	info, ok := registry.GetState(camID)
-	if !ok || info == nil || info.Streams["main"] == nil || info.Streams["main"].Session != SessionStateRunning {
+	hasRunningStream := ok && info != nil &&
+		info.Streams["main"] != nil &&
+		info.Streams["main"].Session == SessionStateRunning
+	if !hasRunningStream {
 		t.Fatalf("expected SessionStateRunning after warm reconnect, got %v", info)
 	}
 }
 
 func TestStreamDispatcherGOPCacheInstantPlayback(t *testing.T) {
-	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	disp := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam_test",
+		Role:     "main",
+	})
 	defer disp.Close()
 
 	// 1. 发送一帧关键帧
@@ -553,7 +568,10 @@ func TestStreamDispatcherGOPCacheInstantPlayback(t *testing.T) {
 // 验证当 WritePump 异步写出补发的首个关键帧时，markFrameWritten 绝不回滚已锚定在 GOP 末帧的进度。
 // 否则后续实时帧一到，就会因「实时帧 DTS - 补发首帧 DTS > 500ms」被误判为 lag 并清空整个 GOP，导致秒开失效。
 func TestStreamDispatcherGOPPrimingProgressNotRewoundByMarkFrameWritten(t *testing.T) {
-	disp := NewStreamDispatcher(nil, "cam_test_priming", "main", nil, nil, nil, zap.NewNop())
+	disp := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam_test_priming",
+		Role:     "main",
+	})
 	defer disp.Close()
 
 	// 1. 发送 2 秒长的 GOP：首帧 IDR (10,000 us)，尾帧 P (2,000,000 us)
@@ -622,7 +640,10 @@ func TestStreamDispatcherGOPPrimingProgressNotRewoundByMarkFrameWritten(t *testi
 // TestStreamDispatcherGOPCacheResetsOnNewIDR 验证新 GOP 到来时缓存被替换，
 // 而不是把两个 GOP 拼在一起（那会让新客户端收到跨 GOP 的断链帧）。
 func TestStreamDispatcherGOPCacheResetsOnNewIDR(t *testing.T) {
-	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	disp := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam_test",
+		Role:     "main",
+	})
 	defer disp.Close()
 
 	broadcast := func(ptsUS int64, key bool) {
@@ -683,7 +704,10 @@ func TestStreamDispatcherGOPCacheResetsOnNewIDR(t *testing.T) {
 //   - 队列溢出时整段丢弃并降级为「只等关键帧」，关键帧到来后自动接上；
 //   - 绝不因慢而踢掉客户端 —— 踢掉只会在弱网上制造重连风暴。
 func TestStreamDispatcherBackpressureResync(t *testing.T) {
-	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	disp := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam_test",
+		Role:     "main",
+	})
 	defer disp.Close()
 
 	mark := func(ptsUS int64, key bool) engine.Packet {
@@ -748,7 +772,10 @@ func TestStreamDispatcherBackpressureResync(t *testing.T) {
 }
 
 func TestStreamDispatcherLagBudgetTracksWriteProgress(t *testing.T) {
-	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	disp := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam_test",
+		Role:     "main",
+	})
 	defer disp.Close()
 
 	client := &StreamClient{
@@ -789,7 +816,10 @@ func TestStreamDispatcherLagBudgetTracksWriteProgress(t *testing.T) {
 }
 
 func TestStreamDispatcherLagBudgetAdvancesOnSuccessfulWrites(t *testing.T) {
-	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	disp := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam_test",
+		Role:     "main",
+	})
 	defer disp.Close()
 
 	client := &StreamClient{
@@ -834,7 +864,10 @@ func TestStreamDispatcherLagBudgetAdvancesOnSuccessfulWrites(t *testing.T) {
 }
 
 func TestStreamDispatcherGOPCacheFrameLimitMatchesClientQueue(t *testing.T) {
-	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	disp := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam_test",
+		Role:     "main",
+	})
 	defer disp.Close()
 
 	for i := 0; i <= gopCacheMaxFrames; i++ {
@@ -1071,7 +1104,14 @@ func TestStreamDispatcherPacketActivityThrottledReporting(t *testing.T) {
 	pumpCtx, cancelPump := context.WithCancel(context.Background())
 	defer cancelPump()
 
-	disp := NewStreamDispatcher(hub, camID, "main", mockStream, mockStream.source, cancelPump, zap.NewNop())
+	disp := NewStreamDispatcher(StreamDispatcherConfig{
+		Hub:        hub,
+		CameraID:   camID,
+		Role:       "main",
+		Stream:     mockStream,
+		Sub:        mockStream.source,
+		CancelPump: cancelPump,
+	})
 	defer disp.Close()
 
 	go disp.RunPumpLoop(pumpCtx)
@@ -1510,7 +1550,11 @@ func TestStreamHubWarmStreamCapReleasesOldest(t *testing.T) {
 	cameraIDs := []string{"cam-1", "cam-2", "cam-3"}
 	dispatchers := make([]*StreamDispatcher, 0, len(cameraIDs))
 	for _, cameraID := range cameraIDs {
-		disp := NewStreamDispatcher(hub, cameraID, StreamRoleMain, nil, nil, nil, zap.NewNop())
+		disp := NewStreamDispatcher(StreamDispatcherConfig{
+			Hub:      hub,
+			CameraID: cameraID,
+			Role:     StreamRoleMain,
+		})
 		hub.mu.Lock()
 		hub.dispatchers[cameraID+":"+StreamRoleMain] = disp
 		hub.mu.Unlock()

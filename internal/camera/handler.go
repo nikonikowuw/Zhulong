@@ -100,7 +100,12 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Router       /cameras [post]
 func (h *Handler) Create(c *gin.Context) {
 	// Declared before binding so a rejected payload is still attributable.
-	audithttp.Tag(c, audit.ActionCameraCreate, "camera", "Create camera")
+	audithttp.Tag(
+		c,
+		audit.ActionCameraCreate,
+		"camera",
+		"Create camera",
+	)
 
 	var req CreateCameraRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -140,7 +145,12 @@ func (h *Handler) List(c *gin.Context) {
 		return
 	}
 
-	httputil.PaginatedSuccess(c, cameras, total, window)
+	httputil.PaginatedSuccess(
+		c,
+		cameras,
+		total,
+		window,
+	)
 }
 
 // Get godoc
@@ -197,7 +207,12 @@ func (h *Handler) Update(c *gin.Context) {
 	// The route serves both update and toggle, and the distinction depends on
 	// the request body. Declare update first so a bind failure is still
 	// auditable, then refine the action once the body is known.
-	audithttp.Tag(c, audit.ActionCameraUpdate, "camera:"+id, "")
+	audithttp.Tag(
+		c,
+		audit.ActionCameraUpdate,
+		"camera:"+id,
+		"",
+	)
 
 	var req UpdateCameraRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -205,7 +220,8 @@ func (h *Handler) Update(c *gin.Context) {
 		return
 	}
 
-	if req.Enabled != nil && req.Name == nil && req.MainStream == nil && req.SubStream == nil {
+	isToggleOnly := req.Enabled != nil && req.Name == nil && req.MainStream == nil && req.SubStream == nil
+	if isToggleOnly {
 		audithttp.TagAction(c, audit.ActionCameraToggle)
 	}
 	audithttp.TagDetail(c, updateAuditDetail(req))
@@ -228,7 +244,12 @@ func (h *Handler) Update(c *gin.Context) {
 // @Router       /cameras/{id} [delete]
 func (h *Handler) Delete(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, audit.ActionCameraDelete, "camera:"+id, "Delete camera "+id)
+	audithttp.Tag(
+		c,
+		audit.ActionCameraDelete,
+		"camera:"+id,
+		"Delete camera "+id,
+	)
 
 	if err := h.service.Delete(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
@@ -268,7 +289,12 @@ func (h *Handler) Diagnose(c *gin.Context) {
 // @Router       /cameras/{id}/ai-stats [get]
 func (h *Handler) AIStreamStats(c *gin.Context) {
 	if h.streamHub == nil {
-		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_HUB_NOT_INITIALIZED", "Stream hub not available", nil))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindInternal,
+			"STREAM_HUB_NOT_INITIALIZED",
+			"Stream hub not available",
+			nil,
+		))
 		return
 	}
 
@@ -320,10 +346,20 @@ func (h *Handler) Events(c *gin.Context) {
 	sub, snapshotMsg, err := h.hub.Subscribe()
 	if err != nil {
 		if errors.Is(err, ErrSSEMaxClientsReached) {
-			httputil.WriteError(c, apperr.New(apperr.KindRateLimited, "TOO_MANY_CONNECTIONS", "Too many active SSE connections", err))
+			httputil.WriteError(c, apperr.New(
+				apperr.KindRateLimited,
+				"TOO_MANY_CONNECTIONS",
+				"Too many active SSE connections",
+				err,
+			))
 			return
 		}
-		httputil.WriteError(c, apperr.New(apperr.KindInternal, "SSE_ERROR", "Failed to initiate SSE session", err))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindInternal,
+			"SSE_ERROR",
+			"Failed to initiate SSE session",
+			err,
+		))
 		return
 	}
 	defer h.hub.Unsubscribe(sub)
@@ -337,14 +373,24 @@ func (h *Handler) Events(c *gin.Context) {
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAMING_UNSUPPORTED", "Streaming unsupported", nil))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindInternal,
+			"STREAMING_UNSUPPORTED",
+			"Streaming unsupported",
+			nil,
+		))
 		return
 	}
 
 	// 1. Send initial snapshot
 	snapshotBytes, err := snapshotMsg.FormatSSE()
 	if err != nil {
-		httputil.WriteError(c, apperr.New(apperr.KindInternal, "SSE_ERROR", "Failed to format initial SSE snapshot", err))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindInternal,
+			"SSE_ERROR",
+			"Failed to format initial SSE snapshot",
+			err,
+		))
 		return
 	}
 	if _, err := c.Writer.Write(snapshotBytes); err != nil {
@@ -362,7 +408,7 @@ func (h *Handler) Events(c *gin.Context) {
 			return
 		case <-authTicker.C:
 			if h.sessionVal != nil {
-				token := ""
+				var token string
 				if cookie, err := c.Request.Cookie("zhulong_session"); err == nil {
 					token = cookie.Value
 				}
@@ -394,7 +440,12 @@ func (h *Handler) Events(c *gin.Context) {
 // @Router       /cameras/{id}/streams/{role}/ws [get]
 func (h *Handler) StreamWS(c *gin.Context) {
 	if h.streamHub == nil {
-		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_HUB_NOT_INITIALIZED", "Stream hub not available", nil))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindInternal,
+			"STREAM_HUB_NOT_INITIALIZED",
+			"Stream hub not available",
+			nil,
+		))
 		return
 	}
 
@@ -423,7 +474,13 @@ func (h *Handler) StreamWS(c *gin.Context) {
 	// 此处尚未注册客户端、也未启动写协程：GOP 补发还在后面，连接上只有本协程在写，
 	// 因此既不会与补发交错，也不需要锁。老前端按 `instanceof ArrayBuffer` 判据忽略
 	// 文本帧，协议版本与二进制布局都没有变化。
-	h.writeStreamInfo(c, conn, disp, cameraID, role)
+	h.writeStreamInfo(streamInfoParams{
+		ctx:      c.Request.Context(),
+		conn:     conn,
+		disp:     disp,
+		cameraID: cameraID,
+		role:     role,
+	})
 
 	// 4. 创建客户端会话并登记
 	client := NewStreamClient(conn, disp, h.logger)
@@ -441,37 +498,70 @@ func (h *Handler) StreamWS(c *gin.Context) {
 func writeStreamAcquireError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrCameraNotFound):
-		httputil.WriteError(c, apperr.New(apperr.KindNotFound, "CAMERA_NOT_FOUND", "Camera not found", err))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindNotFound,
+			"CAMERA_NOT_FOUND",
+			"Camera not found",
+			err,
+		))
 	case errors.Is(err, ErrCameraDisabled):
-		httputil.WriteError(c, apperr.New(apperr.KindPermissionDenied, "CAMERA_DISABLED", "Camera is disabled", err))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindPermissionDenied,
+			"CAMERA_DISABLED",
+			"Camera is disabled",
+			err,
+		))
 	case errors.Is(err, ErrCameraStreamNotFound):
-		httputil.WriteError(c, apperr.New(apperr.KindNotFound, "STREAM_NOT_FOUND", "Camera stream not found", err))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindNotFound,
+			"STREAM_NOT_FOUND",
+			"Camera stream not found",
+			err,
+		))
 	case errors.Is(err, ErrStreamHubClosed):
-		httputil.WriteError(c, apperr.New(apperr.KindUnavailable, "STREAM_HUB_CLOSED", "Stream hub is shutting down", err))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindUnavailable,
+			"STREAM_HUB_CLOSED",
+			"Stream hub is shutting down",
+			err,
+		))
 	default:
-		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_ACQUIRE_FAILED", "Failed to acquire camera stream", err))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindInternal,
+			"STREAM_ACQUIRE_FAILED",
+			"Failed to acquire camera stream",
+			err,
+		))
 	}
+}
+
+type streamInfoParams struct {
+	ctx      context.Context
+	conn     *websocket.Conn
+	disp     *StreamDispatcher
+	cameraID string
+	role     string
 }
 
 // writeStreamInfo 写出预览 WS 的一次性能力帧。
 //
 // 写失败只记日志：能力帧丢失的后果是「前端听不到声音」，而让整条预览断掉
 // 会把「没声音」升级成「黑屏」，与 I5（任一环不支持都退化为无声视频）相反。
-func (h *Handler) writeStreamInfo(c *gin.Context, conn *websocket.Conn, disp *StreamDispatcher, cameraID, role string) {
+func (h *Handler) writeStreamInfo(params streamInfoParams) {
 	message := StreamInfoMessage{
 		Type:     StreamFrameTypeInfo,
 		Version:  int(WireProtocolVersion),
-		CameraID: cameraID,
-		Role:     role,
-		Audio:    disp.AudioCapability(c.Request.Context()),
+		CameraID: params.cameraID,
+		Role:     params.role,
+		Audio:    params.disp.AudioCapability(params.ctx),
 	}
 	payload, err := json.Marshal(message)
 	if err != nil {
 		h.logger.Debug("marshal stream info failed", zap.Error(err))
 		return
 	}
-	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+	_ = params.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	if err := params.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 		h.logger.Debug("write stream info failed", zap.Error(err))
 	}
 }
@@ -491,7 +581,12 @@ func (h *Handler) writeStreamInfo(c *gin.Context, conn *websocket.Conn, disp *St
 // @Router       /cameras/{id}/streams/{role}/audio/ws [get]
 func (h *Handler) StreamAudioWS(c *gin.Context) {
 	if h.streamHub == nil {
-		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_HUB_NOT_INITIALIZED", "Stream hub not available", nil))
+		httputil.WriteError(c, apperr.New(
+			apperr.KindInternal,
+			"STREAM_HUB_NOT_INITIALIZED",
+			"Stream hub not available",
+			nil,
+		))
 		return
 	}
 
@@ -562,7 +657,16 @@ func (h *Handler) StreamAudioWS(c *gin.Context) {
 		return
 	}
 
-	channel := NewAudioChannel(h.audio, conn, acquired.Stream, sub, sessionKey, cameraID, role, h.logger)
+	channel := NewAudioChannel(AudioChannelConfig{
+		Registry: h.audio,
+		Conn:     conn,
+		Stream:   acquired.Stream,
+		Sub:      sub,
+		Key:      sessionKey,
+		CameraID: cameraID,
+		Role:     role,
+		Logger:   h.logger,
+	})
 
 	previous, err := h.audio.Open(sessionKey, channel)
 	if err != nil {

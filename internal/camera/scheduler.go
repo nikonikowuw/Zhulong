@@ -225,28 +225,30 @@ func (s *HealthScheduler) monitorActiveStreams() {
 			}
 
 			// If last packet is older than 4s, trigger timeout
-			if streamState.LastCheckedAt != nil && now.Sub(*streamState.LastCheckedAt) > DefaultActivePacketTimeout {
-				s.logger.Warn("active stream packet timeout detected",
-					zap.String("camera_id", camState.CameraID),
-					zap.String("role", role),
-					zap.Duration("elapsed", now.Sub(*streamState.LastCheckedAt)),
-				)
-				newState := s.registry.RecordStreamFailure(StreamFailureParams{
-					CameraID:         camState.CameraID,
-					Role:             role,
-					Reason:           "packet_timeout",
-					ErrorMessage:     "no video packets received for >4s",
-					ExpectedRevision: camState.Revision,
-					IsMediaSession:   true,
-				})
-				s.hub.BroadcastChange(newState)
+			if streamState.LastCheckedAt == nil || now.Sub(*streamState.LastCheckedAt) <= DefaultActivePacketTimeout {
+				continue
 			}
+
+			s.logger.Warn("active stream packet timeout detected",
+				zap.String("camera_id", camState.CameraID),
+				zap.String("role", role),
+				zap.Duration("elapsed", now.Sub(*streamState.LastCheckedAt)),
+			)
+			newState := s.registry.RecordStreamFailure(StreamFailureParams{
+				CameraID:         camState.CameraID,
+				Role:             role,
+				Reason:           "packet_timeout",
+				ErrorMessage:     "no video packets received for >4s",
+				ExpectedRevision: camState.Revision,
+				IsMediaSession:   true,
+			})
+			s.hub.BroadcastChange(newState)
 		}
 	}
 }
 
 func (s *HealthScheduler) checkStreamAsync(cam *Camera, stream *CameraStream) {
-	key := fmt.Sprintf("%s:%s", cam.ID, stream.Role)
+	key := cam.ID + ":" + stream.Role
 
 	s.inFlightMu.Lock()
 	if s.inFlight[key] {
@@ -279,9 +281,10 @@ func (s *HealthScheduler) checkStreamAsync(cam *Camera, stream *CameraStream) {
 
 func (s *HealthScheduler) checkStream(ctx context.Context, cam *Camera, stream *CameraStream) {
 	// Only execute Describe probe on idle streams (active streams are monitored via packet activity)
-	state, ok := s.registry.GetState(cam.ID)
-	if ok && state.Streams[stream.Role] != nil && state.Streams[stream.Role].Session == SessionStateRunning {
-		return
+	if state, ok := s.registry.GetState(cam.ID); ok && state.Streams != nil {
+		if st := state.Streams[stream.Role]; st != nil && st.Session == SessionStateRunning {
+			return
+		}
 	}
 
 	// Only RTSP sources have an endpoint to DESCRIBE. A GB28181 channel is reachable
@@ -356,7 +359,12 @@ func (s *HealthScheduler) checkStream(ctx context.Context, cam *Camera, stream *
 	}
 
 	if res != nil && res.StatusCode == 200 {
-		newState := s.registry.RecordStreamSuccess(cam.ID, cam.Revision, stream.Role, EvidenceRTSPDescribe)
+		newState := s.registry.RecordStreamSuccess(
+			cam.ID,
+			cam.Revision,
+			stream.Role,
+			EvidenceRTSPDescribe,
+		)
 		s.hub.BroadcastChange(newState)
 	}
 }

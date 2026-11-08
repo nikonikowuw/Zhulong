@@ -8,16 +8,19 @@ type StreamResponse struct {
 	CreatedAt    time.Time        `json:"createdAt"`
 	FPS          *float64         `json:"fps"`
 	RuntimeState *StreamStateInfo `json:"runtimeState,omitempty"`
-	RTSPURL      string           `json:"rtspUrl"` // Complete RTSP URL for frontend playback and display
-	Transport    string           `json:"transport"`
-	Codec        string           `json:"codec"`
-	Host         string           `json:"host"` // Target host (IP or domain) for display and search; empty when the URI cannot be resolved or decrypted
-	FPSString    string           `json:"fpsString"`
-	Protocol     string           `json:"protocol"`
-	Role         string           `json:"role"`
-	Width        int              `json:"width"`
-	Height       int              `json:"height"`
-	ID           int64            `json:"id"`
+	// RTSPURL is the complete RTSP URL for frontend playback and display.
+	RTSPURL   string `json:"rtspUrl"`
+	Transport string `json:"transport"`
+	Codec     string `json:"codec"`
+	// Host is the target host (IP or domain) for display and search;
+	// empty when the URI cannot be resolved or decrypted.
+	Host      string `json:"host"`
+	FPSString string `json:"fpsString"`
+	Protocol  string `json:"protocol"`
+	Role      string `json:"role"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	ID        int64  `json:"id"`
 }
 
 // CameraResponse represents public camera status and stream information in API responses.

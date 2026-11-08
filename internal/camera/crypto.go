@@ -69,7 +69,12 @@ func (c *gcmCipher) Encrypt(plaintext []byte, aad string) ([]byte, error) {
 	result[0] = CipherVersionV1
 	result = append(result, nonce...)
 
-	result = c.aead.Seal(result, nonce, plaintext, []byte(aad))
+	result = c.aead.Seal(
+		result,
+		nonce,
+		plaintext,
+		[]byte(aad),
+	)
 	return result, nil
 }
 
@@ -88,7 +93,12 @@ func (c *gcmCipher) Decrypt(ciphertext []byte, aad string) ([]byte, error) {
 	nonce := ciphertext[1 : 1+NonceLength]
 	encryptedData := ciphertext[1+NonceLength:]
 
-	plaintext, err := c.aead.Open(nil, nonce, encryptedData, []byte(aad))
+	plaintext, err := c.aead.Open(
+		nil,
+		nonce,
+		encryptedData,
+		[]byte(aad),
+	)
 	if err != nil {
 		return nil, ErrDecryptionFailed
 	}
@@ -117,18 +127,18 @@ func (km *KeyManager) KeyPath() string {
 func (km *KeyManager) InitOrLoadKey(hasExistingData bool) (Cipher, error) {
 	info, err := os.Lstat(km.keyPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			if hasExistingData {
-				return nil, ErrKeyMissingWithExistingData
-			}
-			return km.generateAndSaveKey()
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("stat camera key: %w", err)
 		}
-		return nil, fmt.Errorf("stat camera key: %w", err)
+		if hasExistingData {
+			return nil, ErrKeyMissingWithExistingData
+		}
+		return km.generateAndSaveKey()
 	}
 
 	// Disallow symlinks, pipes, dirs, or non-regular files
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("camera key at %s is not a regular file", km.keyPath)
+		return nil, fmt.Errorf("camera key at %q is not a regular file", km.keyPath)
 	}
 
 	// Verify file permissions on non-Windows platforms
@@ -200,5 +210,5 @@ func (km *KeyManager) generateAndSaveKey() (Cipher, error) {
 
 // MakeAAD constructs standard Additional Authenticated Data for camera stream encryption.
 func MakeAAD(cameraID, role string) string {
-	return fmt.Sprintf("v1:%s:%s", cameraID, role)
+	return "v1:" + cameraID + ":" + role
 }

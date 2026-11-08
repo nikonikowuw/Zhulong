@@ -61,10 +61,21 @@ func cropRect(x1, y1, x2, y2 float64) *region.Rect {
 }
 
 // newCropTestHub 构造一个只关心 AI 流视图的 Hub。
-func newCropTestHub(t *testing.T, engine MediaEngine, provider TaskCropProvider) (*StreamHub, CameraStore, *LazyCipher, string, func()) {
+func newCropTestHub(
+	t *testing.T,
+	engine MediaEngine,
+	provider TaskCropProvider,
+) (*StreamHub, CameraStore, *LazyCipher, string, func()) {
 	t.Helper()
 	store, cipher, camID, cleanup := setupTestStoreAndCipher(t)
-	hub := NewStreamHub(engine, store, cipher, nil, nil, zap.NewNop())
+	hub := NewStreamHub(
+		engine,
+		store,
+		cipher,
+		nil,
+		nil,
+		zap.NewNop(),
+	)
 	if provider != nil {
 		hub.SetTaskCropProvider(provider)
 	}

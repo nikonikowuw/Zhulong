@@ -113,14 +113,14 @@ func ParseAndNormalizeRTSP(raw string, transport string) (*StreamConnectionInfo,
 		return nil, ErrEmptyHost
 	}
 
-	// Canonicalize hostname (lowercase)
 	hostname = strings.ToLower(hostname)
 
 	portStr := parsed.Port()
 	port := 554
 	if portStr != "" {
 		p, err := strconv.Atoi(portStr)
-		if err != nil || p <= 0 || p > 65535 {
+		isInvalidPort := err != nil || p <= 0 || p > 65535
+		if isInvalidPort {
 			return nil, ErrInvalidPort
 		}
 		port = p
@@ -190,8 +190,8 @@ func IsGB28181ID(id string) bool {
 	if len(id) != 20 {
 		return false
 	}
-	for _, b := range []byte(id) {
-		if b < '0' || b > '9' {
+	for i := 0; i < len(id); i++ {
+		if id[i] < '0' || id[i] > '9' {
 			return false
 		}
 	}

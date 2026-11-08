@@ -65,7 +65,11 @@ func NewDescribeClient() *DescribeClient {
 }
 
 // Describe performs a single-connection, bounded RTSP DESCRIBE exchange with optional Digest/Basic authentication.
-func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInfo, timeout time.Duration) (*DescribeResult, error) {
+func (c *DescribeClient) Describe(
+	ctx context.Context,
+	info *StreamConnectionInfo,
+	timeout time.Duration,
+) (*DescribeResult, error) {
 	if info == nil {
 		return nil, errors.New("nil stream connection info")
 	}
@@ -98,7 +102,7 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(dialCtx.Err(), context.DeadlineExceeded) {
 			return nil, ErrRTSPTimeout
 		}
-		return nil, fmt.Errorf("connect to RTSP server %s: %w", hostPort, err)
+		return nil, fmt.Errorf("connect to RTSP server %q: %w", hostPort, err)
 	}
 	defer conn.Close()
 
@@ -115,13 +119,17 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 		}
 	}()
 
-	reader := bufio.NewReaderSize(conn, 8192)
-	writer := bufio.NewWriter(conn)
-
-	cseq := 1
+	sess := &describeSession{
+		client: c,
+		w:      bufio.NewWriter(conn),
+		r:      bufio.NewReaderSize(conn, 8192),
+		info:   info,
+		cseq:   1,
+		nc:     1,
+	}
 
 	// Request 1: Initial DESCRIBE without credentials
-	resp, err := c.sendDescribe(writer, reader, info.CleanURI, cseq, "")
+	resp, err := sess.send("")
 	if err != nil {
 		if dialCtx.Err() != nil {
 			if errors.Is(dialCtx.Err(), context.DeadlineExceeded) {
@@ -132,20 +140,20 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 		return nil, err
 	}
 
-	if resp.statusCode == 200 {
+	switch {
+	case resp.statusCode == 200:
 		return c.parseAndVerifySDP(resp.body)
-	}
-
-	if resp.statusCode >= 300 && resp.statusCode < 400 {
+	case resp.statusCode >= 300 && resp.statusCode < 400:
 		return nil, ErrRedirectNotAllowed
-	}
-
-	if resp.statusCode == 404 {
+	case resp.statusCode == 404:
 		return nil, ErrStreamNotFound
-	}
-
-	if resp.statusCode != 401 {
-		return nil, fmt.Errorf("%w: status %d %s", ErrRTSPProtocolViolation, resp.statusCode, resp.statusText)
+	case resp.statusCode != 401:
+		return nil, fmt.Errorf(
+			"%w: status %d %s",
+			ErrRTSPProtocolViolation,
+			resp.statusCode,
+			resp.statusText,
+		)
 	}
 
 	// Received 401: inspect challenges
@@ -163,8 +171,7 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 		return nil, fmt.Errorf("%w: %v", ErrNoSupportedAuthChallenge, err)
 	}
 
-	cseq++
-	nc := 1
+	sess.cseq++
 	cnonce, err := GenerateCnonce()
 	if err != nil {
 		return nil, err
@@ -176,7 +183,7 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 		URI:       info.CleanURI,
 		Username:  info.Username,
 		Password:  info.Password,
-		NC:        nc,
+		NC:        sess.nc,
 		Cnonce:    cnonce,
 	})
 	if err != nil {
@@ -184,38 +191,41 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 	}
 
 	// Request 2: DESCRIBE with credentials
-	resp2, err := c.sendDescribe(writer, reader, info.CleanURI, cseq, authHeader)
+	resp2, err := sess.send(authHeader)
 	if err != nil {
 		return nil, err
 	}
 
-	if resp2.statusCode == 200 {
+	switch {
+	case resp2.statusCode == 200:
 		return c.parseAndVerifySDP(resp2.body)
-	}
-
-	if resp2.statusCode == 401 {
+	case resp2.statusCode == 401:
 		// Check for stale=true nonce refresh (Single allowed stale retry: Request 3)
-		retriedChallenges := resp2.headers["www-authenticate"]
-		return c.retryStaleDescribe(writer, reader, info, retriedChallenges, cseq+1, nc+1)
-	}
-
-	if resp2.statusCode == 404 {
+		return sess.retryStale(resp2.headers["www-authenticate"])
+	case resp2.statusCode == 404:
 		return nil, ErrStreamNotFound
-	}
-	if resp2.statusCode >= 300 && resp2.statusCode < 400 {
+	case resp2.statusCode >= 300 && resp2.statusCode < 400:
 		return nil, ErrRedirectNotAllowed
+	default:
+		return nil, fmt.Errorf(
+			"%w: status %d %s",
+			ErrRTSPProtocolViolation,
+			resp2.statusCode,
+			resp2.statusText,
+		)
 	}
-
-	return nil, fmt.Errorf("%w: status %d %s", ErrRTSPProtocolViolation, resp2.statusCode, resp2.statusText)
 }
 
-func (c *DescribeClient) retryStaleDescribe(
-	w *bufio.Writer,
-	r *bufio.Reader,
-	info *StreamConnectionInfo,
-	challenges []string,
-	cseq, nc int,
-) (*DescribeResult, error) {
+type describeSession struct {
+	client *DescribeClient
+	w      *bufio.Writer
+	r      *bufio.Reader
+	info   *StreamConnectionInfo
+	cseq   int
+	nc     int
+}
+
+func (s *describeSession) retryStale(challenges []string) (*DescribeResult, error) {
 	if len(challenges) == 0 {
 		return nil, ErrAuthRejected
 	}
@@ -237,51 +247,54 @@ func (c *DescribeClient) retryStaleDescribe(
 		return nil, err
 	}
 
+	s.nc++
 	staleAuthHeader, err := BuildAuthorizationHeader(AuthorizationParams{
 		Challenge: staleChal,
 		Method:    "DESCRIBE",
-		URI:       info.CleanURI,
-		Username:  info.Username,
-		Password:  info.Password,
-		NC:        nc,
+		URI:       s.info.CleanURI,
+		Username:  s.info.Username,
+		Password:  s.info.Password,
+		NC:        s.nc,
 		Cnonce:    cnonce,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	resp3, err := c.sendDescribe(w, r, info.CleanURI, cseq, staleAuthHeader)
+	s.cseq++
+	resp3, err := s.send(staleAuthHeader)
 	if err != nil {
 		return nil, err
 	}
 	if resp3.statusCode == 200 {
-		return c.parseAndVerifySDP(resp3.body)
+		return s.client.parseAndVerifySDP(resp3.body)
 	}
 
 	return nil, ErrAuthRejected
 }
 
-func (c *DescribeClient) sendDescribe(
-	w *bufio.Writer,
-	r *bufio.Reader,
-	cleanURI string,
-	cseq int,
-	authHeader string,
-) (*rtspResponse, error) {
-	reqText := fmt.Sprintf("DESCRIBE %s RTSP/1.0\r\nCSeq: %d\r\nAccept: application/sdp\r\nUser-Agent: Zhulong/1.0\r\n", cleanURI, cseq)
+func (s *describeSession) send(authHeader string) (*rtspResponse, error) {
+	var b strings.Builder
+	b.WriteString("DESCRIBE ")
+	b.WriteString(s.info.CleanURI)
+	b.WriteString(" RTSP/1.0\r\nCSeq: ")
+	b.WriteString(strconv.Itoa(s.cseq))
+	b.WriteString("\r\nAccept: application/sdp\r\nUser-Agent: Zhulong/1.0\r\n")
 	if authHeader != "" {
-		reqText += fmt.Sprintf("Authorization: %s\r\n", authHeader)
+		b.WriteString("Authorization: ")
+		b.WriteString(authHeader)
+		b.WriteString("\r\n")
 	}
-	reqText += "\r\n"
+	b.WriteString("\r\n")
 
-	if _, err := w.WriteString(reqText); err != nil {
+	if _, err := s.w.WriteString(b.String()); err != nil {
 		return nil, fmt.Errorf("write RTSP request: %w", err)
 	}
-	if err := w.Flush(); err != nil {
+	if err := s.w.Flush(); err != nil {
 		return nil, fmt.Errorf("flush RTSP request: %w", err)
 	}
 
-	return c.readResponse(r, cseq)
+	return s.client.readResponse(s.r, s.cseq)
 }
 
 func (c *DescribeClient) readResponse(r *bufio.Reader, expectedCSeq int) (*rtspResponse, error) {
@@ -357,7 +370,12 @@ func (c *DescribeClient) readResponse(r *bufio.Reader, expectedCSeq int) (*rtspR
 	}
 
 	if respCSeq != expectedCSeq {
-		return nil, fmt.Errorf("%w: expected %d, got %d", ErrCSeqMismatch, expectedCSeq, respCSeq)
+		return nil, fmt.Errorf(
+			"%w: expected %d, got %d",
+			ErrCSeqMismatch,
+			expectedCSeq,
+			respCSeq,
+		)
 	}
 
 	// 3. Read body
@@ -365,7 +383,7 @@ func (c *DescribeClient) readResponse(r *bufio.Reader, expectedCSeq int) (*rtspR
 		return nil, ErrBodyLimitExceeded
 	}
 
-	var body []byte
+	body := []byte{}
 	if contentLength > 0 {
 		body = make([]byte, contentLength)
 		if _, err := io.ReadFull(r, body); err != nil {

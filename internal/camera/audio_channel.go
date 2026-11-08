@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -133,10 +135,7 @@ func (r *AudioChannelRegistry) Remove(key string, channel *AudioChannel) {
 // 先快照再逐个关闭：Close 会回头调用 Remove 改表，直接在持锁遍历里关会自锁。
 func (r *AudioChannelRegistry) CloseAll() {
 	r.mu.Lock()
-	channels := make([]*AudioChannel, 0, len(r.bySession))
-	for _, channel := range r.bySession {
-		channels = append(channels, channel)
-	}
+	channels := slices.Collect(maps.Values(r.bySession))
 	r.mu.Unlock()
 
 	for _, channel := range channels {
@@ -175,28 +174,34 @@ type AudioChannel struct {
 	closed  atomic.Bool
 }
 
+// AudioChannelConfig 配置音频通道。
+type AudioChannelConfig struct {
+	Registry *AudioChannelRegistry
+	Conn     *websocket.Conn
+	Stream   MediaStream
+	Sub      PacketSource
+	Key      string
+	CameraID string
+	Role     string
+	Logger   *zap.Logger
+}
+
 // NewAudioChannel 构造一条音频通道。订阅与流引用由调用方注入所有权：
 // 通道关闭时会先同步排空订阅，再释放流。
-func NewAudioChannel(
-	registry *AudioChannelRegistry,
-	conn *websocket.Conn,
-	stream MediaStream,
-	sub PacketSource,
-	key, cameraID, role string,
-	logger *zap.Logger,
-) *AudioChannel {
+func NewAudioChannel(cfg AudioChannelConfig) *AudioChannel {
+	logger := cfg.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &AudioChannel{
-		registry: registry,
+		registry: cfg.Registry,
 		logger:   logger,
-		conn:     conn,
-		stream:   stream,
-		sub:      sub,
-		key:      key,
-		cameraID: cameraID,
-		role:     role,
+		conn:     cfg.Conn,
+		stream:   cfg.Stream,
+		sub:      cfg.Sub,
+		key:      cfg.Key,
+		cameraID: cfg.CameraID,
+		role:     cfg.Role,
 		send:     make(chan []byte, audioChannelQueueFrames),
 		done:     make(chan struct{}),
 	}
@@ -355,13 +360,14 @@ func (c *AudioChannel) closeWithReason(code int, reason string) {
 // 背压单独成码：前端需要知道「是我太慢」而不是「服务端坏了」，
 // 否则它会立刻重连，然后再次被背压踢掉，变成肉眼可见的抖动循环。
 func audioCloseCodeFor(err error) int {
-	if errors.Is(err, engine.ErrBackpressure) {
+	switch {
+	case errors.Is(err, engine.ErrBackpressure):
 		return AudioCloseBackpressure
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, engine.ErrClosed) {
+	case errors.Is(err, context.Canceled), errors.Is(err, engine.ErrClosed):
 		return websocket.CloseNormalClosure
+	default:
+		return AudioCloseInternal
 	}
-	return AudioCloseInternal
 }
 
 func audioCloseReason(err error) string {

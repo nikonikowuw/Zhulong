@@ -63,7 +63,7 @@ func PackAudioPacket(pkt engine.Packet, seq uint32) []byte {
 	buf := make([]byte, AudioWireHeaderSize+len(pkt.Data))
 	binary.BigEndian.PutUint32(buf[0:4], WireMagicZLA1)
 	buf[4] = byte(pkt.Codec)
-	buf[5] = audioWireFlags(pkt)
+	buf[5] = audioWireFlags(pkt.Flags)
 	// buf[6:8] reserved，make() 已置零
 	binary.BigEndian.PutUint32(buf[8:12], seq)
 	binary.BigEndian.PutUint64(buf[12:20], uint64(pkt.PtsUS))
@@ -88,15 +88,15 @@ func UnpackAudioPacket(data []byte) (AudioWireHeader, []byte, error) {
 	return header, data[AudioWireHeaderSize:], nil
 }
 
-func audioWireFlags(pkt engine.Packet) byte {
-	var flags byte
-	if pkt.Flags.Has(engine.PacketFlagDiscontinuity) {
-		flags |= AudioWireFlagDiscontinuity
+func audioWireFlags(flags engine.PacketFlag) byte {
+	var out byte
+	if flags.Has(engine.PacketFlagDiscontinuity) {
+		out |= AudioWireFlagDiscontinuity
 	}
-	if pkt.Flags.Has(engine.PacketFlagTimestampSynthetic) {
-		flags |= AudioWireFlagTimestampSynthetic
+	if flags.Has(engine.PacketFlagTimestampSynthetic) {
+		out |= AudioWireFlagTimestampSynthetic
 	}
-	return flags
+	return out
 }
 
 // 音频通道的文本帧。三种帧共用 type 字段区分，二进制帧不带 type。

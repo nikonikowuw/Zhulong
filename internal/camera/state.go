@@ -44,6 +44,16 @@ type CameraStateInfo struct {
 	Stale         bool                        `json:"stale"`
 }
 
+// StreamFailureParams bundles parameters for recording stream failures in StateRegistry.
+type StreamFailureParams struct {
+	CameraID         string
+	Role             string
+	Reason           string
+	ErrorMessage     string
+	ExpectedRevision int64
+	IsMediaSession   bool
+}
+
 // StateRegistry provides a thread-safe in-memory cache and state manager for camera runtime states.
 type StateRegistry struct {
 	states map[string]*CameraStateInfo
@@ -138,7 +148,12 @@ func (r *StateRegistry) getOrCreateStreamLocked(state *CameraStateInfo, role str
 
 // RecordStreamSuccess records a successful health check or packet arrival for a stream and updates the aggregated camera state.
 // If expectedRevision > 0 and the camera's current revision does not match, the stale probe result is ignored.
-func (r *StateRegistry) RecordStreamSuccess(cameraID string, expectedRevision int64, role, evidenceType string) *CameraStateInfo {
+func (r *StateRegistry) RecordStreamSuccess(
+	cameraID string,
+	expectedRevision int64,
+	role string,
+	evidenceType string,
+) *CameraStateInfo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -163,22 +178,13 @@ func (r *StateRegistry) RecordStreamSuccess(cameraID string, expectedRevision in
 
 	// 收到真实的视频包到达证据，证明媒体会话活跃运行中。
 	// 若之前处于 reconnecting（如偶发包超时）或 error，恢复为 running。
-	if evidenceType == EvidencePacketActivity && (stream.Session == SessionStateReconnecting || stream.Session == SessionStateError) {
+	isRecoveringSession := stream.Session == SessionStateReconnecting || stream.Session == SessionStateError
+	if evidenceType == EvidencePacketActivity && isRecoveringSession {
 		stream.Session = SessionStateRunning
 	}
 
 	r.aggregateCameraStateLocked(state, now)
 	return r.cloneState(state)
-}
-
-// StreamFailureParams bundles parameters for recording stream failures in StateRegistry.
-type StreamFailureParams struct {
-	CameraID         string
-	Role             string
-	Reason           string
-	ErrorMessage     string
-	ExpectedRevision int64
-	IsMediaSession   bool
 }
 
 // RecordStreamFailure records a check or media failure for a stream.
@@ -287,8 +293,8 @@ func (r *StateRegistry) aggregateCameraStateLocked(state *CameraStateInfo, now t
 	state.Reason = mainStream.Reason
 
 	// Substream status influences degraded flag
-	state.Degraded = hasSub && mainStream.Health == HealthStateOnline &&
-		(subStream.Health == HealthStateOffline || subStream.Health == HealthStateError)
+	subUnhealthy := hasSub && (subStream.Health == HealthStateOffline || subStream.Health == HealthStateError)
+	state.Degraded = mainStream.Health == HealthStateOnline && subUnhealthy
 }
 
 func (r *StateRegistry) cloneState(s *CameraStateInfo) *CameraStateInfo {

@@ -50,7 +50,12 @@ func (s *ProbeService) ValidateStreams(
 	timeout time.Duration,
 ) (mainRes *StreamProbeResult, subRes *StreamProbeResult, err error) {
 	if mainInfo == nil {
-		return nil, nil, apperr.New(apperr.KindInvalid, "CAMERA_INVALID_PARAM", "Main stream configuration is required", nil)
+		return nil, nil, apperr.New(
+			apperr.KindInvalid,
+			"CAMERA_INVALID_PARAM",
+			"Main stream configuration is required",
+			nil,
+		)
 	}
 
 	if timeout <= 0 {
@@ -108,7 +113,12 @@ func (s *ProbeService) probeSingleStream(ctx context.Context, info *StreamConnec
 
 	// Validate dimensions
 	if infoResult.Width <= 0 || infoResult.Height <= 0 {
-		return nil, fmt.Errorf("%w: invalid dimensions %dx%d", ErrUnsupportedVideoFormat, infoResult.Width, infoResult.Height)
+		return nil, fmt.Errorf(
+			"%w: invalid dimensions %dx%d",
+			ErrUnsupportedVideoFormat,
+			infoResult.Width,
+			infoResult.Height,
+		)
 	}
 
 	// Validate codec
@@ -140,38 +150,40 @@ func (s *ProbeService) probeSingleStream(ctx context.Context, info *StreamConnec
 }
 
 func (s *ProbeService) mapProbeError(err error, role string) error {
-	if errors.Is(err, context.DeadlineExceeded) {
+	errStr := strings.ToLower(err.Error())
+	isAuthError := strings.Contains(errStr, "auth") ||
+		strings.Contains(errStr, "401") ||
+		strings.Contains(errStr, "credentials")
+	isUnsupported := errors.Is(err, ErrUnsupportedVideoFormat) || strings.Contains(errStr, "unsupported")
+
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
 		return apperr.New(
 			apperr.KindInvalid,
 			"CAMERA_CONNECT_TIMEOUT",
 			fmt.Sprintf("Connection to %s stream timed out", role),
 			err,
 		)
-	}
-
-	errStr := strings.ToLower(err.Error())
-	if strings.Contains(errStr, "auth") || strings.Contains(errStr, "401") || strings.Contains(errStr, "credentials") {
+	case isAuthError:
 		return apperr.New(
 			apperr.KindInvalid,
 			"CAMERA_AUTH_FAILED",
 			fmt.Sprintf("Authentication failed for %s stream", role),
 			err,
 		)
-	}
-
-	if errors.Is(err, ErrUnsupportedVideoFormat) || strings.Contains(errStr, "unsupported") {
+	case isUnsupported:
 		return apperr.New(
 			apperr.KindInvalid,
 			"CAMERA_UNSUPPORTED",
 			fmt.Sprintf("Unsupported video format or dimensions for %s stream", role),
 			err,
 		)
+	default:
+		return apperr.New(
+			apperr.KindInvalid,
+			"CAMERA_PROBE_FAILED",
+			fmt.Sprintf("Failed to probe %s stream: connection or stream error", role),
+			err,
+		)
 	}
-
-	return apperr.New(
-		apperr.KindInvalid,
-		"CAMERA_PROBE_FAILED",
-		fmt.Sprintf("Failed to probe %s stream: connection or stream error", role),
-		err,
-	)
 }

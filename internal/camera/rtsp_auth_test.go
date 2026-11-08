@@ -6,7 +6,8 @@ import (
 )
 
 func TestNormalizeChallengeHeader(t *testing.T) {
-	input := `Digest REALM="TestRealm", NONCE="dcd98b7102dd2f0e8b11d0f600bfb0c093", QOP="auth, auth-int", OPAQUE="", ALGORITHM=MD5`
+	input := `Digest REALM="TestRealm", NONCE="dcd98b7102dd2f0e8b11d0f600bfb0c093", ` +
+		`QOP="auth, auth-int", OPAQUE="", ALGORITHM=MD5`
 	norm, hadEmptyOpaque, err := NormalizeChallengeHeader(input)
 	if err != nil {
 		t.Fatalf("NormalizeChallengeHeader failed: %v", err)

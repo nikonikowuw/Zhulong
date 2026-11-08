@@ -34,7 +34,7 @@ type Camera struct {
 	UpdatedAt time.Time      `gorm:"column:updated_at" json:"updatedAt"`
 	ID        string         `gorm:"primaryKey;column:id" json:"id"`
 	Name      string         `gorm:"column:name;not null" json:"name"`
-	Streams   []CameraStream `gorm:"foreignKey:CameraID;references:ID;constraint:OnDelete:CASCADE" json:"streams,omitempty"`
+	Streams   []CameraStream `gorm:"foreignKey:CameraID;constraint:OnDelete:CASCADE" json:"streams,omitempty"`
 	Revision  int64          `gorm:"column:revision;not null;default:1" json:"revision"`
 	Enabled   bool           `gorm:"column:enabled;not null;default:true" json:"enabled"`
 }

@@ -13,7 +13,10 @@ import (
 // newTestDispatcher 构造一个只用于分发策略测试的 dispatcher。
 // stream / sub / hub 在这几条路径上均不被访问，留空即可。
 func newTestDispatcher(gop []outFrame) *StreamDispatcher {
-	d := NewStreamDispatcher(nil, "cam-1", StreamRoleMain, nil, nil, nil, zap.NewNop())
+	d := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam-1",
+		Role:     StreamRoleMain,
+	})
 	d.gop = gopCache{frames: gop, complete: true}
 	for _, frame := range gop {
 		d.gop.bytes += len(frame.data)
@@ -149,7 +152,11 @@ func TestAudioCapabilityWaitsForStreamReady(t *testing.T) {
 		SampleRate: 8000,
 		Channels:   1,
 	}
-	d := NewStreamDispatcher(nil, "cam-1", StreamRoleMain, stream, nil, nil, zap.NewNop())
+	d := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam-1",
+		Role:     StreamRoleMain,
+		Stream:   stream,
+	})
 
 	started := time.Now()
 	capability := d.AudioCapability(context.Background())
@@ -172,7 +179,11 @@ func TestAudioCapabilityWaitsForStreamReady(t *testing.T) {
 // 真的查不到时仍要给出 present=false + reason，且不超过预算。
 func TestAudioCapabilityReportsUnavailableAfterBudget(t *testing.T) {
 	stream := &lateAudioStream{failures: 1 << 30}
-	d := NewStreamDispatcher(nil, "cam-1", StreamRoleMain, stream, nil, nil, zap.NewNop())
+	d := NewStreamDispatcher(StreamDispatcherConfig{
+		CameraID: "cam-1",
+		Role:     StreamRoleMain,
+		Stream:   stream,
+	})
 
 	budget := 80 * time.Millisecond
 	started := time.Now()

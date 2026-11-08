@@ -2,6 +2,8 @@ package camera
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +56,27 @@ type gopCache struct {
 	complete bool // 从 IDR 起无缺口；false 表示已因超限退化，不得用于补齐
 }
 
+// DispatchCounters 是单路预览分发器的累计观测计数快照。
+type DispatchCounters struct {
+	KeyframeInjected uint64 // 参数集注入次数
+	LagResyncs       uint64 // 因超出时间预算触发的重同步
+	QueueResyncs     uint64 // 因发送队列溢出触发的重同步
+	ResyncSkips      uint64 // 重同步期间被跳过的非关键帧
+	GOPTruncations   uint64 // GOP 缓存超限退化次数（相机 GOP 过长的信号）
+	Subscribers      int
+}
+
+// StreamDispatcherConfig 配置单流分发器。
+type StreamDispatcherConfig struct {
+	Hub        *StreamHub
+	CameraID   string
+	Role       string
+	Stream     MediaStream
+	Sub        PacketSource
+	CancelPump context.CancelFunc
+	Logger     *zap.Logger
+}
+
 // StreamDispatcher 负责单路摄像机流的拉流消费、GOP 缓存与 Web 客户端扇出。
 type StreamDispatcher struct {
 	stream           MediaStream
@@ -98,30 +121,29 @@ type StreamDispatcher struct {
 const capabilityReadyTimeout = 2 * time.Second
 
 // NewStreamDispatcher 构造单流分发器。
-func NewStreamDispatcher(
-	hub *StreamHub,
-	cameraID string,
-	role string,
-	stream MediaStream,
-	sub PacketSource,
-	cancelPump context.CancelFunc,
-	logger *zap.Logger,
-) *StreamDispatcher {
+func NewStreamDispatcher(cfg StreamDispatcherConfig) *StreamDispatcher {
+	logger := cfg.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &StreamDispatcher{
-		hub:         hub,
-		cameraID:    cameraID,
-		role:        role,
-		logger:      logger,
-		subscribers: make(map[*StreamClient]struct{}),
-		stream:      stream,
-		sub:         sub,
-		cancelPump:  cancelPump,
-
+		hub:            cfg.Hub,
+		cameraID:       cfg.CameraID,
+		role:           cfg.Role,
+		logger:         logger,
+		subscribers:    make(map[*StreamClient]struct{}),
+		stream:         cfg.Stream,
+		sub:            cfg.Sub,
+		cancelPump:     cfg.CancelPump,
 		idleCloseDelay: defaultIdleCloseDelay,
 	}
+}
+
+// IsClosed 报告分发器是否已被关闭。
+func (d *StreamDispatcher) IsClosed() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.closed
 }
 
 // AudioCapability 查询该路流的音频能力，供预览 WebSocket 的一次性能力帧使用。
@@ -196,7 +218,7 @@ func (d *StreamDispatcher) RegisterClient(client *StreamClient) {
 		return
 	}
 
-	primed := 0
+	var primed int
 	client.needsKey = true
 	// wasIdle 表示本客户端是在空闲热保留窗口内回来的：需要把会话状态翻回 running。
 	// （首次建流时状态由 RunPumpLoop 负责，不能在这里重复广播。）
@@ -507,16 +529,6 @@ func (d *StreamDispatcher) drainLocked(client *StreamClient) {
 	}
 }
 
-// DispatchCounters 是单路预览分发器的累计观测计数快照。
-type DispatchCounters struct {
-	KeyframeInjected uint64 // 参数集注入次数
-	LagResyncs       uint64 // 因超出时间预算触发的重同步
-	QueueResyncs     uint64 // 因发送队列溢出触发的重同步
-	ResyncSkips      uint64 // 重同步期间被跳过的非关键帧
-	GOPTruncations   uint64 // GOP 缓存超限退化次数（相机 GOP 过长的信号）
-	Subscribers      int
-}
-
 // Counters 返回当前计数快照（无锁，relaxed 读取）。
 func (d *StreamDispatcher) Counters() DispatchCounters {
 	d.mu.Lock()
@@ -605,10 +617,7 @@ func (d *StreamDispatcher) Close() {
 			d.cancelPump()
 		}
 
-		clients := make([]*StreamClient, 0, len(d.subscribers))
-		for c := range d.subscribers {
-			clients = append(clients, c)
-		}
+		clients := slices.Collect(maps.Keys(d.subscribers))
 		d.subscribers = nil
 		clear(d.gop.frames)
 		d.gop.frames = nil

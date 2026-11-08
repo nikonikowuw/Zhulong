@@ -209,7 +209,10 @@ func TestDescribeClientRejectsRedirect(t *testing.T) {
 		defer conn.Close()
 		r := bufio.NewReader(conn)
 		_, _, cseq, _, _ := readMockRTSPRequest(r)
-		resp := fmt.Sprintf("RTSP/1.0 302 Moved Temporarily\r\nCSeq: %s\r\nLocation: rtsp://127.0.0.1:8554/other\r\nContent-Length: 0\r\n\r\n", cseq)
+		resp := fmt.Sprintf(
+			"RTSP/1.0 302 Moved Temporarily\r\nCSeq: %s\r\nLocation: rtsp://127.0.0.1:8554/other\r\nContent-Length: 0\r\n\r\n",
+			cseq,
+		)
 		_, _ = conn.Write([]byte(resp))
 	})
 	defer cleanup()

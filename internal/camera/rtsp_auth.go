@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/icholy/digest"
@@ -61,16 +62,17 @@ func NormalizeChallengeHeader(header string) (normalized string, hadEmptyOpaque 
 	prefix := header[:idx]
 	params := strings.TrimSpace(header[idx+1:])
 
-	lowerPrefix := strings.ToLower(prefix)
-	if lowerPrefix == "basic" {
+	switch strings.ToLower(prefix) {
+	case "basic":
 		return "Basic " + params, false, nil
-	}
-	if lowerPrefix != "digest" {
+	case "digest":
+		// Continue to digest normalization
+	default:
 		return header, false, nil
 	}
 
 	// Tokenize parameters by comma, respecting quoted strings
-	var parts []string
+	parts := []string{}
 	var current strings.Builder
 	var inQuote, escaped bool
 
@@ -108,7 +110,7 @@ func NormalizeChallengeHeader(header string) (normalized string, hadEmptyOpaque 
 		}
 	}
 
-	var normParts []string
+	normParts := []string{}
 	for _, part := range parts {
 		before, after, ok := strings.Cut(part, "=")
 		if !ok {
@@ -127,7 +129,7 @@ func NormalizeChallengeHeader(header string) (normalized string, hadEmptyOpaque 
 		if key == "qop" && strings.HasPrefix(val, `"`) && strings.HasSuffix(val, `"`) {
 			inner := strings.Trim(val, `"`)
 			tokens := strings.Split(inner, ",")
-			var cleanTokens []string
+			cleanTokens := []string{}
 			for _, tok := range tokens {
 				t := strings.TrimSpace(tok)
 				if t != "" {
@@ -164,7 +166,9 @@ func SelectBestChallenge(challenges []string) (*ParsedChallenge, error) {
 			continue
 		}
 
-		if strings.HasPrefix(strings.ToLower(normHeader), "basic ") {
+		lowerNorm := strings.ToLower(normHeader)
+		switch {
+		case strings.HasPrefix(lowerNorm, "basic "):
 			if fallbackBasic == nil {
 				fallbackBasic = &ParsedChallenge{
 					Type:         AuthTypeBasic,
@@ -172,9 +176,7 @@ func SelectBestChallenge(challenges []string) (*ParsedChallenge, error) {
 				}
 			}
 			continue
-		}
-
-		if strings.HasPrefix(strings.ToLower(normHeader), "digest ") {
+		case strings.HasPrefix(lowerNorm, "digest "):
 			chal, err := digest.ParseChallenge(normHeader)
 			if err != nil {
 				continue
@@ -189,20 +191,18 @@ func SelectBestChallenge(challenges []string) (*ParsedChallenge, error) {
 			if strings.HasSuffix(alg, "-SESS") {
 				continue
 			}
-			if alg != "MD5" && alg != "SHA-256" && alg != "SHA256" {
+			switch alg {
+			case "MD5", "SHA-256", "SHA256":
+			default:
 				continue
 			}
 
 			// Validate QOP if present
 			if len(chal.QOP) > 0 {
-				var hasSupportedQOP bool
-				for _, q := range chal.QOP {
+				hasSupportedQOP := slices.ContainsFunc(chal.QOP, func(q string) bool {
 					qClean := strings.ToLower(strings.TrimSpace(q))
-					if qClean == "auth" || qClean == "auth-int" {
-						hasSupportedQOP = true
-						break
-					}
-				}
+					return qClean == "auth" || qClean == "auth-int"
+				})
 				if !hasSupportedQOP {
 					continue
 				}
@@ -298,6 +298,6 @@ func BuildAuthorizationHeader(params AuthorizationParams) (string, error) {
 		return headerVal, nil
 
 	default:
-		return "", fmt.Errorf("unsupported auth type %v", params.Challenge.Type)
+		return "", fmt.Errorf("unsupported auth type %q", params.Challenge.Type)
 	}
 }

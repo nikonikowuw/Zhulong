@@ -94,8 +94,10 @@ func TestAIStreamStatsHandler(t *testing.T) {
 		t.Fatalf("want 2 clients, got %d", len(envelope.Data.Clients))
 	}
 	first := envelope.Data.Clients[0]
-	if first.ClientID != 1 || first.Name != "face_recognition" || first.InFlight != 2 ||
-		first.MaxInFlight != 2 || first.DeliveredFrames != 1500 || first.DroppedFrames != 37 {
+	hasExpectedMeta := first.ClientID == 1 && first.Name == "face_recognition"
+	hasExpectedInFlight := first.InFlight == 2 && first.MaxInFlight == 2
+	hasExpectedCounters := first.DeliveredFrames == 1500 && first.DroppedFrames == 37
+	if !hasExpectedMeta || !hasExpectedInFlight || !hasExpectedCounters {
 		t.Fatalf("first client counters not mapped 1:1: %+v", first)
 	}
 }

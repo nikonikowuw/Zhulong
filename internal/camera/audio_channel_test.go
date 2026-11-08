@@ -128,8 +128,10 @@ func TestAudioRegistryRejectsBeyondLimit(t *testing.T) {
 	registry := NewAudioChannelRegistry(zap.NewNop())
 	registry.max = 2
 
-	for i := 0; i < 2; i++ {
-		if _, err := registry.Open(fmt.Sprintf("session-%d", i), newTestAudioChannel(registry, fmt.Sprintf("s%d", i))); err != nil {
+	for i := range 2 {
+		sessID := fmt.Sprintf("session-%d", i)
+		ch := newTestAudioChannel(registry, fmt.Sprintf("s%d", i))
+		if _, err := registry.Open(sessID, ch); err != nil {
 			t.Fatalf("open %d failed: %v", i, err)
 		}
 	}
@@ -154,7 +156,7 @@ func TestAudioRegistryConcurrentAccess(t *testing.T) {
 	registry := NewAudioChannelRegistry(zap.NewNop())
 
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -223,7 +225,7 @@ func TestAudioChannelBackpressureClosesOnlyThisChannel(t *testing.T) {
 	defer cancel()
 	go channel.Pump(ctx)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		source.packets <- engine.Packet{
 			TrackType: engine.TrackAudio,
 			Codec:     engine.CodecPCMA,

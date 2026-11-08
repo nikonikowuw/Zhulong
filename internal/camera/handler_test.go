@@ -20,7 +20,10 @@ import (
 	"go.uber.org/zap"
 )
 
-func setupTestCameraApp(t *testing.T, middlewares ...gin.HandlerFunc) (*gin.Engine, *CameraService, *EventHub, *mockMediaEngine, func()) {
+func setupTestCameraApp(
+	t *testing.T,
+	middlewares ...gin.HandlerFunc,
+) (*gin.Engine, *CameraService, *EventHub, *mockMediaEngine, func()) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -123,7 +126,10 @@ func TestCameraHandlerCRUD(t *testing.T) {
 		t.Fatalf("expected streams in get response: %+v", getResp)
 	}
 	if !strings.Contains(getResp.Data.Streams[0].RTSPURL, "admin:pass123") {
-		t.Fatalf("expected complete plaintext RTSP URL with credentials in API response, got: %s", getResp.Data.Streams[0].RTSPURL)
+		t.Fatalf(
+			"expected complete plaintext RTSP URL with credentials in API response, got: %s",
+			getResp.Data.Streams[0].RTSPURL,
+		)
 	}
 
 	// 2b. List Cameras (must provide complete RTSP URL for frontend display)

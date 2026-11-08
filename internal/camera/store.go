@@ -23,6 +23,7 @@ type UpdateCameraParams struct {
 	Enabled          *bool
 	ID               string
 	Streams          []CameraStream
+	UpdateStreams    bool
 	ExpectedRevision int64
 }
 
@@ -190,7 +191,7 @@ func (s *gormCameraStore) Update(ctx context.Context, params UpdateCameraParams)
 			return ErrRevisionConflict
 		}
 
-		if params.Streams != nil {
+		if params.UpdateStreams {
 			if _, err := gorm.G[CameraStream](tx).Where("camera_id = ?", params.ID).Delete(ctx); err != nil {
 				return fmt.Errorf("delete old camera streams: %w", err)
 			}

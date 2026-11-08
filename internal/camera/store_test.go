@@ -123,6 +123,7 @@ func TestCameraStoreCRUD(t *testing.T) {
 		ExpectedRevision: 999,
 		Name:             &newName,
 		Streams:          updatedStreams,
+		UpdateStreams:    true,
 	})
 	if err != ErrRevisionConflict {
 		t.Fatalf("expected ErrRevisionConflict on wrong revision, got %v", err)
@@ -134,6 +135,7 @@ func TestCameraStoreCRUD(t *testing.T) {
 		ExpectedRevision: 1,
 		Name:             &newName,
 		Streams:          updatedStreams,
+		UpdateStreams:    true,
 	})
 	if err != nil {
 		t.Fatalf("Update with revision 1 failed: %v", err)

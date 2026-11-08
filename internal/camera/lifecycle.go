@@ -69,12 +69,13 @@ func NewLifecycleManager(
 	streamHub *StreamHub,
 ) *LifecycleManager {
 	return &LifecycleManager{
-		store:      store,
-		keyMgr:     keyMgr,
-		lazyCipher: lazyCipher,
-		scheduler:  scheduler,
-		hub:        hub,
-		streamHub:  streamHub,
+		extraProbes: []EncryptedDataProbe{},
+		store:       store,
+		keyMgr:      keyMgr,
+		lazyCipher:  lazyCipher,
+		scheduler:   scheduler,
+		hub:         hub,
+		streamHub:   streamHub,
 	}
 }
 
