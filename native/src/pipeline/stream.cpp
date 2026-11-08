@@ -44,9 +44,11 @@ namespace {
  * 总字节上限是主约束：只限块数时，16 块 × 4MB = 64MB 会被一路流长期占住。
  * 8MB 足以覆盖 60 包队列里绝大多数复用，又不至于让板端内存被空池吃掉。
  */
-constexpr size_t kMaxPooledBuffers = 16;
-constexpr size_t kMaxPooledCapacity = 4u * 1024u * 1024u;
-constexpr size_t kMaxPooledBytes = 8u * 1024u * 1024u;
+constexpr size_t max_pooled_buffers = 16;
+constexpr size_t max_pooled_capacity = 4u * 1024u * 1024u;
+constexpr size_t max_pooled_bytes = 8u * 1024u * 1024u;
+constexpr int32_t default_video_time_base_num = 1;
+constexpr int32_t default_video_time_base_den = 90000;
 }
 
 DecodeSession::DecodeSession(uint64_t stream_id, Video video_meta,
@@ -75,12 +77,12 @@ std::vector<uint8_t> DecodeSession::acquire_buffer(size_t size) {
 
 void DecodeSession::recycle_buffer(std::vector<uint8_t> &&buffer) noexcept {
     const size_t capacity = buffer.capacity();
-    if (capacity == 0 || capacity > kMaxPooledCapacity) return;
+    if (capacity == 0 || capacity > max_pooled_capacity) return;
     buffer.clear();
     std::lock_guard<std::mutex> lock(pool_mutex_);
     // ⚠️ 形参 buffer 在函数体局部对象（含上面的 lock）之后析构，因此这里提前 return
     //    释放的是锁外的内存，不会持锁触发堆分配器。改成移动进局部变量再 return 就会破掉这点。
-    if (buffer_pool_.size() >= kMaxPooledBuffers || pooled_bytes_ + capacity > kMaxPooledBytes) {
+    if (buffer_pool_.size() >= max_pooled_buffers || pooled_bytes_ + capacity > max_pooled_bytes) {
         return;
     }
     // ⚠️ 本函数在解码线程入口的热路径上且是 noexcept：池扩容失败只放弃这一次复用
@@ -187,7 +189,7 @@ size_t DecodeSession::packet_queue_size() const {
     return packet_queue_.size();
 }
 
-DecodeCounters DecodeSession::counters() const {
+DecodeCounters DecodeSession::counters() const noexcept {
     DecodeCounters snapshot;
     snapshot.decoder_unavailable_drops = decoder_unavailable_drops_.load(std::memory_order_relaxed);
     snapshot.keyframe_gate_drops = keyframe_gate_drops_.load(std::memory_order_relaxed);
@@ -231,8 +233,8 @@ void DecodeSession::decode_loop() noexcept {
 
 void DecodeSession::decode_loop_body() {
     using SteadyClock = std::chrono::steady_clock;
-    constexpr auto kInitialRetryDelay = std::chrono::milliseconds(250);
-    constexpr auto kMaxRetryDelay = std::chrono::milliseconds(5000);
+    constexpr auto initial_retry_delay = std::chrono::milliseconds(250);
+    constexpr auto max_retry_delay = std::chrono::milliseconds(5000);
 
     IDecodeNode::Ptr decoder;
     uint64_t decoder_generation = 0;
@@ -241,7 +243,7 @@ void DecodeSession::decode_loop_body() {
     bool need_keyframe = true;
     // 解码器创建失败退避：硬件/软件解码器初始化昂贵，失败时不能每包重试
     auto next_create_attempt = SteadyClock::time_point::min();
-    auto retry_delay = kInitialRetryDelay;
+    auto retry_delay = initial_retry_delay;
 
     auto create_or_get_decoder = [&](int32_t codec_hint, int32_t tb_num, int32_t tb_den) -> IDecodeNode * {
         if (decoder) return decoder.get();
@@ -270,8 +272,10 @@ void DecodeSession::decode_loop_body() {
                 meta = video_meta_;
             }
             selected_codec = meta.view.codec > 0 ? meta.view.codec : codec_hint;
-            const int32_t final_tb_num = tb_num > 0 ? tb_num : (meta.view.time_base_num > 0 ? meta.view.time_base_num : 1);
-            const int32_t final_tb_den = tb_den > 0 ? tb_den : (meta.view.time_base_den > 0 ? meta.view.time_base_den : 90000);
+            const int32_t final_tb_num =
+                tb_num > 0 ? tb_num : (meta.view.time_base_num > 0 ? meta.view.time_base_num : default_video_time_base_num);
+            const int32_t final_tb_den =
+                tb_den > 0 ? tb_den : (meta.view.time_base_den > 0 ? meta.view.time_base_den : default_video_time_base_den);
 
             if (selected_codec > 0) {
                 decoder = IDecodeNode::create(
@@ -285,11 +289,11 @@ void DecodeSession::decode_loop_body() {
                 );
                 if (decoder) {
                     decoder_generation = generation;
-                    retry_delay = kInitialRetryDelay;
+                    retry_delay = initial_retry_delay;
                     need_keyframe = true;
                 } else {
                     next_create_attempt = SteadyClock::now() + retry_delay;
-                    retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
+                    retry_delay = std::min(retry_delay * 2, max_retry_delay);
                     ZL_LOGW(stream_id_, "pipeline.stream", "decoder_create_failed retry_delay_ms=%lld",
                         static_cast<long long>(retry_delay.count()));
                 }
@@ -305,7 +309,7 @@ void DecodeSession::decode_loop_body() {
                 return nullptr;
             }
             next_create_attempt = SteadyClock::now() + retry_delay;
-            retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
+            retry_delay = std::min(retry_delay * 2, max_retry_delay);
             ZL_LOGW(stream_id_, "pipeline.stream", "decoder_create_failed retry_delay_ms=%lld",
                 static_cast<long long>(retry_delay.count()));
         } catch (...) {
@@ -319,7 +323,7 @@ void DecodeSession::decode_loop_body() {
                 return nullptr;
             }
             next_create_attempt = SteadyClock::now() + retry_delay;
-            retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
+            retry_delay = std::min(retry_delay * 2, max_retry_delay);
             ZL_LOGW(stream_id_, "pipeline.stream", "decoder_create_failed retry_delay_ms=%lld",
                 static_cast<long long>(retry_delay.count()));
         }
@@ -344,7 +348,7 @@ void DecodeSession::decode_loop_body() {
     };
 
     // 尝试前置初始化解码器（若此时已有 extradata）
-    create_or_get_decoder(0, 1, 90000);
+    create_or_get_decoder(0, default_video_time_base_num, default_video_time_base_den);
 
     while (active_.load(std::memory_order_relaxed) && !packet_queue_.is_cancelled()) {
         QueuedPacket pkt;
@@ -481,7 +485,7 @@ void Stream::join() {
     }
 }
 
-bool Stream::has_ai_consumer() const {
+bool Stream::has_ai_consumer() const noexcept {
     for (const auto &entry : consumers) {
         if (entry.second == Zhulong_CONSUMER_AI) {
             return true;
@@ -558,7 +562,7 @@ bool Stream::has_active_decoder() const {
     return session && session->is_active();
 }
 
-uint64_t Stream::callback_exception_count() const {
+uint64_t Stream::callback_exception_count() const noexcept {
     return callback_exceptions_.load(std::memory_order_relaxed);
 }
 

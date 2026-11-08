@@ -30,9 +30,9 @@ namespace zhulong {
 
 /** @brief 队列溢出策略枚举 */
 enum class OverflowStrategy {
-    BLOCK = 0,       /**< 阻塞等待队列空位 (适用于关键帧与高可靠分发) */
-    DROP_OLDEST = 1, /**< 丢弃队列头部最旧数据 (适用于实时 AI 帧队列，确保低延迟消费最新画面) */
-    DROP_NEWEST = 2  /**< 丢弃当前新数据 (队列满时拒绝新入队，由上层触发拥塞重同步) */
+    block = 0,       /**< 阻塞等待队列空位 (适用于关键帧与高可靠分发) */
+    drop_oldest = 1, /**< 丢弃队列头部最旧数据 (适用于实时 AI 帧队列，确保低延迟消费最新画面) */
+    drop_newest = 2  /**< 丢弃当前新数据 (队列满时拒绝新入队，由上层触发拥塞重同步) */
 };
 
 /**
@@ -47,7 +47,7 @@ public:
      * @param capacity 队列容量上限 (必须大于 0)
      * @param strategy 满载时的溢出淘汰策略
      */
-    explicit BoundedQueue(size_t capacity, OverflowStrategy strategy = OverflowStrategy::BLOCK)
+    explicit BoundedQueue(size_t capacity, OverflowStrategy strategy = OverflowStrategy::block)
         : capacity_(capacity > 0 ? capacity : 1), strategy_(strategy) {}
 
     /** @brief 析构函数，自动触发取消并唤醒所有等待线程 */
@@ -98,12 +98,12 @@ public:
             if (cancelled_) return false;
 
             if (queue_.size() >= capacity_) {
-                if (strategy_ == OverflowStrategy::DROP_OLDEST) {
+                if (strategy_ == OverflowStrategy::drop_oldest) {
                     discarded = std::move(queue_.front());
                     queue_.pop_front();
-                } else if (strategy_ == OverflowStrategy::DROP_NEWEST) {
+                } else if (strategy_ == OverflowStrategy::drop_newest) {
                     return false;
-                } else { // BLOCK
+                } else { // block
                     not_full_.wait(lock, [this] {
                         return cancelled_ || queue_.size() < capacity_;
                     });
@@ -222,7 +222,7 @@ public:
     }
 
     /** @brief 获取队列的最大容量配置 */
-    size_t capacity() const {
+    size_t capacity() const noexcept {
         return capacity_;
     }
 
@@ -235,12 +235,12 @@ private:
             if (cancelled_) return false;
 
             if (queue_.size() >= capacity_) {
-                if (strategy_ == OverflowStrategy::DROP_OLDEST) {
+                if (strategy_ == OverflowStrategy::drop_oldest) {
                     discarded = std::move(queue_.front());
                     queue_.pop_front();
-                } else if (strategy_ == OverflowStrategy::DROP_NEWEST) {
+                } else if (strategy_ == OverflowStrategy::drop_newest) {
                     return false;
-                } else { // BLOCK
+                } else { // block
                     not_full_.wait(lock, [this] {
                         return cancelled_ || queue_.size() < capacity_;
                     });

@@ -83,7 +83,7 @@ void FramePublisher::push_frame(HardwareFrame::ConstPtr frame) {
     HardwareFrame::ConstPtr evicted_frame;
     {
         std::lock_guard<std::mutex> lock(latest_mutex_);
-        if (history_frames_.size() >= kHistoryCapacity) {
+        if (history_frames_.size() >= history_capacity) {
             evicted_frame = std::move(history_frames_.front());
             history_frames_.pop_front();
         }
@@ -182,7 +182,7 @@ void FramePublisher::publish_once(std::chrono::steady_clock::time_point &next_du
         if (motion_detector_.detect(*frame, snapshot.window, motion_res)) {
             motion_info.has_motion = motion_res.has_motion ? 1U : 0U;
             motion_info.motion_box_count = motion_res.box_count;
-            std::copy_n(motion_res.boxes, motion_res.box_count, motion_info.motion_boxes);
+            std::copy_n(motion_res.boxes.begin(), motion_res.box_count, motion_info.motion_boxes);
         }
         if (!broker_->publish_frame(*frame, snapshot.window, motion_info, crop_,
                                     snapshot.capture_time_ms)) {

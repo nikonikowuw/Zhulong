@@ -9,7 +9,7 @@
  *    detect() 全程只做内存读写。
  * 3. 全屏光照跳变保护（Anti-flash / Scene change）：单帧变化面积占比超阈值时判定为
  *    环境光突变（红外夜视切换、自动曝光跳档），重置参考底图并抑制误报。
- * 4. 持续运动保持（hold-off）：从「有运动」滑到「静止」后继续保持 MOTION_HOLD_FRAMES
+ * 4. 持续运动保持（hold-off）：从「有运动」滑到「静止」后继续保持 motion_hold_frames
  *    帧放行，覆盖「人/车站住不动就不该立刻判定目标消失」的场景。
  * 5. 宏块聚类：16×9 个 20×20 宏块做 8-连通域聚合，输出最多 4 个归一化外接矩形。
  *
@@ -25,6 +25,7 @@
 #include "common/view_window.hpp"
 
 #include <Zhulong/frame.hpp>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -44,7 +45,7 @@ struct MotionResult {
      */
     bool has_motion{true};
     uint32_t box_count{0};                                          /**< 有效外接框数量（0 ~ MAX_IPC_MOTION_BOXES） */
-    ipc::IpcMotionBox boxes[ipc::MAX_IPC_MOTION_BOXES]{};           /**< 归一化外接矩形列表 */
+    std::array<ipc::IpcMotionBox, ipc::MAX_IPC_MOTION_BOXES> boxes{}; /**< 归一化外接矩形列表 */
 };
 
 /**
@@ -55,20 +56,21 @@ struct MotionResult {
  */
 class MotionDetector {
 public:
-    static constexpr int GRID_WIDTH = 320;
-    static constexpr int GRID_HEIGHT = 180;
-    static constexpr size_t GRID_SIZE = static_cast<size_t>(GRID_WIDTH) * GRID_HEIGHT;
+    static constexpr int grid_width = 320;
+    static constexpr int grid_height = 180;
+    static constexpr size_t grid_size = static_cast<size_t>(grid_width) * grid_height;
 
-    static constexpr int BLOCK_X_COUNT = 16;
-    static constexpr int BLOCK_Y_COUNT = 9;
-    static constexpr size_t BLOCK_COUNT = static_cast<size_t>(BLOCK_X_COUNT) * BLOCK_Y_COUNT;
-    static constexpr int BLOCK_WIDTH = GRID_WIDTH / BLOCK_X_COUNT;   // 20
-    static constexpr int BLOCK_HEIGHT = GRID_HEIGHT / BLOCK_Y_COUNT; // 20
+    static constexpr int block_x_count = 16;
+    static constexpr int block_y_count = 9;
+    static constexpr size_t block_count = static_cast<size_t>(block_x_count) * block_y_count;
+    static constexpr int block_width = grid_width / block_x_count;   // 20
+    static constexpr int block_height = grid_height / block_y_count; // 20
 
-    static constexpr int DIFF_THRESHOLD = 25;         /**< 灰度差分阈值 (0-255) */
-    static constexpr int BLOCK_ACTIVE_THRESH = 10;    /**< 宏块内最小活跃像素数 (2.5%) */
-    static constexpr int MIN_ACTIVE_PIXELS = 30;      /**< 全屏最小运动像素数门槛 (~0.05%) */
-    static constexpr float MAX_ACTIVE_RATIO = 0.70f;  /**< 光照突变全屏占比门槛 (PRD R1: 70%) */
+    static constexpr int diff_threshold = 25;         /**< 灰度差分阈值 (0-255) */
+    static constexpr int block_active_thresh = 10;    /**< 宏块内最小活跃像素数 (2.5%) */
+    static constexpr int min_active_pixels = 30;      /**< 全屏最小运动像素数门槛 (~0.05%) */
+    static constexpr float max_active_ratio = 0.70f;  /**< 光照突变全屏占比门槛 (PRD R1: 70%) */
+    static constexpr uint32_t min_view_dimension = 16; /**< 画面/窗口最小有效宽高门槛 */
 
     /**
      * @brief 运动停止后继续放行推理的帧数（@5fps 约 2 秒）
@@ -76,20 +78,22 @@ public:
      * 逐帧差分是瞬时判据：被摄主体站住一帧就会判成静止。若不 hold，
      * 「人站着不动 → 目标消失」会持续抖动。
      */
-    static constexpr uint32_t MOTION_HOLD_FRAMES = 10;
+    static constexpr uint32_t motion_hold_frames = 10;
 
     /**
      * @brief 画面持续静止时强制放行心跳巡检的帧数间隔（@5fps 约 10 秒）
      *
      * 解决长时间静止导致静态目标检出丢失或微动漏检的问题。
      */
-    static constexpr uint32_t MOTION_HEARTBEAT_FRAMES = 50;
+    static constexpr uint32_t motion_heartbeat_frames = 50;
 
     MotionDetector();
     ~MotionDetector() = default;
 
     MotionDetector(const MotionDetector&) = delete;
     MotionDetector& operator=(const MotionDetector&) = delete;
+    MotionDetector(MotionDetector&&) = delete;
+    MotionDetector& operator=(MotionDetector&&) = delete;
 
     /**
      * @brief 重置检测器内部参考背景（在流切换、断流重连或跳帧后调用）
@@ -106,7 +110,7 @@ public:
      * @param[out] out_result 检测结果
      * @return true 成功执行检测；false 输入非法或格式不支持（调用方必须降级放行）
      */
-    bool detect(const HardwareFrame& frame, MotionResult& out_result);
+    bool detect(const HardwareFrame& frame, MotionResult& out_result) noexcept;
 
     /**
      * @brief 在 AI 分析视图窗口内执行运动检测
@@ -114,10 +118,10 @@ public:
      * `view.active == false` 时等价于全幅检测。窗口越界/尺寸过小时返回 false（fail-open）。
      * 网格仍是固定的 320×180，只是采样源变成窗口内部——窗口越小，单点覆盖的源像素越少。
      */
-    bool detect(const HardwareFrame& frame, const ViewWindow& view, MotionResult& out_result);
+    bool detect(const HardwareFrame& frame, const ViewWindow& view, MotionResult& out_result) noexcept;
 
 private:
-    bool sample_y_plane(const HardwareFrame& frame, const ViewWindow& view, uint8_t* out_grid);
+    bool sample_y_plane(const HardwareFrame& frame, const ViewWindow& view, uint8_t* out_grid) noexcept;
 
     /** @brief 宏块连通域（聚类中间结果，栈上数组承载，不进堆） */
     struct Component {

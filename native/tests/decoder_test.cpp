@@ -114,7 +114,7 @@ int main() {
         // 1. BoundedQueue 基础容量、Drop-Oldest 与协作式取消测试
         // ====================================================================
         {
-            BoundedQueue<int> q(3, OverflowStrategy::DROP_OLDEST);
+            BoundedQueue<int> q(3, OverflowStrategy::drop_oldest);
             CHECK(q.capacity() == 3 || q.size() == 0);
 
             CHECK(q.push(10));
@@ -150,7 +150,7 @@ int main() {
 
         // clear() 只清空元素，不改变取消标记，且不会“复活”已取消队列
         {
-            BoundedQueue<int> q(4, OverflowStrategy::DROP_NEWEST);
+            BoundedQueue<int> q(4, OverflowStrategy::drop_newest);
             CHECK(q.push(1));
             CHECK(q.push(2));
             q.clear();
@@ -170,7 +170,7 @@ int main() {
                 explicit NonDefaultConstructible(int v) : value(v) {}
                 NonDefaultConstructible() = delete;
             };
-            BoundedQueue<NonDefaultConstructible> ndc_q(2, OverflowStrategy::DROP_OLDEST);
+            BoundedQueue<NonDefaultConstructible> ndc_q(2, OverflowStrategy::drop_oldest);
             CHECK(ndc_q.push(NonDefaultConstructible(1)));
             CHECK(ndc_q.push(NonDefaultConstructible(2)));
             CHECK(ndc_q.push(NonDefaultConstructible(3))); // 淘汰 1

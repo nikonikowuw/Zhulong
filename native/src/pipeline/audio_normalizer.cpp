@@ -8,6 +8,9 @@
 namespace zhulong {
 namespace {
 
+/** @brief 每秒微秒数 */
+constexpr int64_t microseconds_per_second = 1000000;
+
 /** @brief 单个 AAC 帧的采样数（AAC-LC 缺省 1024；LD 为 960，缺 PTS 时按缺省推算） */
 constexpr int64_t aac_frame_samples = 1024;
 
@@ -20,28 +23,30 @@ constexpr int64_t rtp_half_period = 1LL << 31;
 
 } // namespace
 
-AudioNormalizer::AudioNormalizer() {
-    update_metadata(0, 8000, 1, 1, 8000);
+AudioNormalizer::AudioNormalizer() noexcept {
+    update_metadata(0, default_sample_rate, default_channels,
+                    default_time_base_num, default_time_base_den);
 }
 
 void AudioNormalizer::update_metadata(int32_t codec, int32_t sample_rate, int32_t channels,
-                                     int32_t time_base_num, int32_t time_base_den) {
+                                     int32_t time_base_num, int32_t time_base_den) noexcept {
     codec_ = codec;
-    sample_rate_ = sample_rate > 0 ? sample_rate : 8000;
-    channels_ = channels > 0 ? channels : 1;
-    time_base_num_ = time_base_num > 0 ? time_base_num : 1;
-    time_base_den_ = time_base_den > 0 ? time_base_den : 8000;
+    sample_rate_ = sample_rate > 0 ? sample_rate : default_sample_rate;
+    channels_ = channels > 0 ? channels : default_channels;
+    time_base_num_ = time_base_num > 0 ? time_base_num : default_time_base_num;
+    time_base_den_ = time_base_den > 0 ? time_base_den : default_time_base_den;
     rtp_half_period_us_ = rescale_to_microseconds(rtp_half_period, time_base_num_, time_base_den_);
     rtp_full_period_us_ = rescale_to_microseconds(rtp_tick_period, time_base_num_, time_base_den_);
 }
 
-int64_t AudioNormalizer::rescale_to_microseconds(int64_t ticks, int32_t num, int32_t den) {
+int64_t AudioNormalizer::rescale_to_microseconds(int64_t ticks, int32_t num, int32_t den) noexcept {
     if (den <= 0) return 0;
 #if defined(__SIZEOF_INT128__)
-    const __int128_t scaled = static_cast<__int128_t>(ticks) * 1000000 * num;
+    const __int128_t scaled = static_cast<__int128_t>(ticks) * microseconds_per_second * num;
     return static_cast<int64_t>(scaled / den);
 #else
-    return static_cast<int64_t>(static_cast<long double>(ticks) * 1000000.0L * num / den);
+    return static_cast<int64_t>(static_cast<long double>(ticks) *
+                                static_cast<long double>(microseconds_per_second) * num / den);
 #endif
 }
 
@@ -50,7 +55,7 @@ Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
                                               int64_t video_origin_arrival_us,
                                               int64_t video_shift_us,
                                               uint64_t video_discontinuity_gen,
-                                              int64_t audio_arrival_us) {
+                                              int64_t audio_arrival_us) noexcept {
     // 1. 若视频原点尚未建立，丢弃音频包并计数，杜绝音频先行构造悬空基准
     if (!video_origin_ready) {
         ++dropped_before_origin_;
@@ -79,10 +84,10 @@ Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
         // 缺失 PTS 时按格式步长递推
         int64_t step_us = 0;
         if (codec_ == Zhulong_CODEC_AAC) {
-            step_us = aac_frame_samples * 1000000 / sample_rate_;
+            step_us = aac_frame_samples * microseconds_per_second / sample_rate_;
         } else {
             // PCMA / PCMU: 每采样 1 字节
-            step_us = static_cast<int64_t>(in.size) * 1000000 / sample_rate_;
+            step_us = static_cast<int64_t>(in.size) * microseconds_per_second / sample_rate_;
         }
         if (step_us <= 0) step_us = default_audio_step_us; // 默认 20ms
 

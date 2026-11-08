@@ -83,7 +83,13 @@ struct Engine {
     std::atomic<uint32_t> active_decode_sessions_{0}; /**< 处于解码状态的物理解码流计数 */
     std::atomic<uint32_t> rejected_requests_{0};      /**< 累计被拒绝的拉流请求计数 */
 
+    Engine() = default;
     ~Engine();
+
+    Engine(const Engine &) = delete;
+    Engine &operator=(const Engine &) = delete;
+    Engine(Engine &&) = delete;
+    Engine &operator=(Engine &&) = delete;
 
     /** @brief 配置全局解码策略 */
     void configure_decode(const Zhulong_decode_policy_t &policy);

@@ -49,6 +49,8 @@ public:
 
     FramePublisher(const FramePublisher&) = delete;
     FramePublisher& operator=(const FramePublisher&) = delete;
+    FramePublisher(FramePublisher&&) = delete;
+    FramePublisher& operator=(FramePublisher&&) = delete;
 
     /** @brief 启动帧发布后台线程 */
     void start();
@@ -112,8 +114,7 @@ private:
     // 抓拍用的历史帧环形缓存：容量固定为 4 帧（在 720p/1080p 解码池 10/16 帧限制下，
     // 兼顾实测 1~4 帧回传延迟与解码器缓冲安全冗余）。
     // ⚠️ mutable + mutex：查询接口是 const，但需要加锁读取。
-    static constexpr size_t kHistoryCapacity = 4;
-    static constexpr size_t history_capacity = kHistoryCapacity;
+    static constexpr size_t history_capacity = 4;
     mutable std::mutex latest_mutex_;
     std::deque<HardwareFrame::ConstPtr> history_frames_;
 

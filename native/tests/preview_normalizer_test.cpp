@@ -50,12 +50,6 @@ void TestAvcConfigurationRecord() {
     Check(zhulong::has_complete_parameter_sets(
               Zhulong_CODEC_H264, parameter_sets.data(), parameter_sets.size()),
           "avcC SPS/PPS should be extracted into Annex B");
-    // 兼容别名验证
-    Check(zhulong::ToAnnexB(Zhulong_CODEC_H264, avcc, sizeof(avcc)) == parameter_sets,
-          "ToAnnexB alias must match to_annex_b");
-    Check(zhulong::HasCompleteParameterSets(
-              Zhulong_CODEC_H264, parameter_sets.data(), parameter_sets.size()),
-          "HasCompleteParameterSets alias must match has_complete_parameter_sets");
 
     zhulong::PreviewNormalizer normalizer;
     normalizer.update_metadata(Zhulong_CODEC_H264, avcc, sizeof(avcc), 1, 25);

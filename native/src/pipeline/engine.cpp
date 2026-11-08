@@ -158,7 +158,7 @@ void Engine::reap() noexcept {
 
 void Engine::reap_once() {
     // 兜底唤醒上限：即使出现未预期的状态变化，最迟 1 秒内重新扫描
-    constexpr auto kMaxSleep = std::chrono::seconds(1);
+    constexpr auto max_reaper_sleep = std::chrono::seconds(1);
 
     // 先记录唤醒纪元再扫描：扫描之后发生的任何变更都会让下面的等待立即返回
     uint64_t seen_epoch = 0;
@@ -200,8 +200,8 @@ void Engine::reap_once() {
     }
 
     const auto now = Clock::now();
-    const auto deadline = earliest == Clock::time_point::max() ? now + kMaxSleep
-                                                               : std::min(earliest, now + kMaxSleep);
+    const auto deadline = earliest == Clock::time_point::max() ? now + max_reaper_sleep
+                                                               : std::min(earliest, now + max_reaper_sleep);
     std::unique_lock<std::mutex> timer(timer_mutex);
     timer_wakeup.wait_until(timer, deadline, [this, seen_epoch] {
         return reaper_stop.load() || wake_epoch != seen_epoch;
@@ -640,6 +640,12 @@ Video Engine::probe(const std::string &url, const Options &options) {
     struct Registration {
         Engine &engine;
         Cancellation *cancellation;
+        Registration(Engine &eng, Cancellation *cancel) noexcept
+            : engine(eng), cancellation(cancel) {}
+        Registration(const Registration &) = delete;
+        Registration &operator=(const Registration &) = delete;
+        Registration(Registration &&) = delete;
+        Registration &operator=(Registration &&) = delete;
         ~Registration() {
             std::lock_guard<std::mutex> lock(engine.probe_mutex);
             engine.probes.erase(cancellation);

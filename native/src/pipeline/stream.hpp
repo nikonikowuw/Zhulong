@@ -84,6 +84,11 @@ public:
     /** @brief 析构函数，请求停止并汇合解码工作线程 */
     ~DecodeSession();
 
+    DecodeSession(const DecodeSession &) = delete;
+    DecodeSession &operator=(const DecodeSession &) = delete;
+    DecodeSession(DecodeSession &&) = delete;
+    DecodeSession &operator=(DecodeSession &&) = delete;
+
     /** @brief 协作式停止并唤醒队列 */
     void request_stop();
 
@@ -125,7 +130,7 @@ public:
     size_t packet_queue_size() const;
 
     /** @brief 获取累计丢包与重同步计数快照 (无锁，relaxed 读取) */
-    DecodeCounters counters() const;
+    DecodeCounters counters() const noexcept;
 
     /** @brief 检查当前会话是否处于活跃状态 */
     bool is_active() const;
@@ -166,13 +171,16 @@ private:
     Zhulong_decode_policy_t policy_{Zhulong_DECODE_BACKEND_AUTO, 1, 0};
     std::function<void(Zhulong_status_t)> on_fatal_error_{nullptr};
 
+    static constexpr size_t packet_queue_capacity = 60;
+    static constexpr size_t frame_queue_capacity = 3;
+
     /**
      * 包队列按**包数**限容，不按字节：60 个条目本身不保证 60KB。
      * 实际占用 = 60 × 单包大小（RTSP 常见 1~64KB，最大受 FFmpeg 单包限制），
      * 与缓冲池的 8MB 上限相互独立，写内存预算时两者要一起算。
      */
-    BoundedQueue<QueuedPacket> packet_queue_{60, OverflowStrategy::DROP_NEWEST};
-    BoundedQueue<HardwareFrame::ConstPtr> frame_queue_{3, OverflowStrategy::DROP_OLDEST};
+    BoundedQueue<QueuedPacket> packet_queue_{packet_queue_capacity, OverflowStrategy::drop_newest};
+    BoundedQueue<HardwareFrame::ConstPtr> frame_queue_{frame_queue_capacity, OverflowStrategy::drop_oldest};
     std::thread worker_;
 };
 
@@ -225,6 +233,11 @@ struct Stream {
     /** @brief 析构函数，停止并汇合所有工作线程 */
     ~Stream();
 
+    Stream(const Stream &) = delete;
+    Stream &operator=(const Stream &) = delete;
+    Stream(Stream &&) = delete;
+    Stream &operator=(Stream &&) = delete;
+
     /** @brief 启动流拉取后台 Worker 线程 */
     void start();
 
@@ -271,7 +284,7 @@ struct Stream {
     void dispatch_audio(const Zhulong_packet_view &packet);
 
     /** @brief 检查当前是否有 AI 消费者 (⚠️ 调用方必须持有 Engine::control) */
-    bool has_ai_consumer() const;
+    bool has_ai_consumer() const noexcept;
 
     /**
      * @brief 根据当前消费者列表动态调整解码会话启停
@@ -307,7 +320,7 @@ struct Stream {
     bool has_active_decoder() const;
 
     /** @brief 获取被隔离的订阅者回调异常累计次数 (无锁，relaxed 读取) */
-    uint64_t callback_exception_count() const;
+    uint64_t callback_exception_count() const noexcept;
 
     // =========================================================================
     // AI 分析视图（任务级裁剪窗口）

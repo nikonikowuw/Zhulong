@@ -14,6 +14,7 @@
 #include "pipeline/preview_normalizer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -22,19 +23,35 @@ namespace zhulong {
 
 namespace {
 
-/** 前向时间轴跳变容忍上限：超过即视为不连续（相机重启 / RTSP 会话重建） */
-constexpr int64_t k_max_forward_jump_us = 5LL * 1000 * 1000;
+/** 每秒微秒数 */
+constexpr int64_t microseconds_per_second = 1000000;
 
-constexpr uint8_t k_annex_b_start_code[] = {0, 0, 0, 1};
+/** 前向时间轴跳变容忍上限：超过即视为不连续（相机重启 / RTSP 会话重建） */
+constexpr int64_t max_forward_jump_us = 5LL * microseconds_per_second;
+
+constexpr std::array<uint8_t, 4> annex_b_start_code{0, 0, 0, 1};
+
+// H.264 (AVC) NAL 单元类型
+constexpr int32_t h264_nal_non_idr_slice = 1;
+constexpr int32_t h264_nal_idr_slice = 5;
+constexpr uint8_t h264_nal_sps = 7;
+constexpr uint8_t h264_nal_pps = 8;
+
+// H.265 (HEVC) NAL 单元类型
+constexpr int32_t hevc_nal_radl_r = 9;
+constexpr int32_t hevc_nal_cra_nut = 21;
+constexpr uint8_t hevc_nal_vps = 32;
+constexpr uint8_t hevc_nal_sps = 33;
+constexpr uint8_t hevc_nal_pps = 34;
 
 #if defined(__SIZEOF_INT128__)
 // __int128 是 GCC/Clang 扩展而非 ISO C++ 类型，-Wpedantic 会为此逐行告警。
 // __extension__ 在这里显式声明「扩展是有意为之」，让 -Wpedantic 继续对其它
 // 真正可疑的写法发声，而不是被这一处噪声淹没。
-__extension__ typedef __int128 wide_time_delta;
+__extension__ using wide_time_delta = __int128;
 #endif
 
-int64_t saturating_add(int64_t left, int64_t right) {
+constexpr int64_t saturating_add(int64_t left, int64_t right) noexcept {
     if (right > 0 && left > std::numeric_limits<int64_t>::max() - right) {
         return std::numeric_limits<int64_t>::max();
     }
@@ -44,26 +61,26 @@ int64_t saturating_add(int64_t left, int64_t right) {
     return left + right;
 }
 
-int64_t next_timestamp(int64_t value) {
+constexpr int64_t next_timestamp(int64_t value) noexcept {
     return value == std::numeric_limits<int64_t>::max() ? value : value + 1;
 }
 
-bool is_forward_jump(int64_t current, int64_t previous) {
-    return previous <= std::numeric_limits<int64_t>::max() - k_max_forward_jump_us &&
-           current > previous + k_max_forward_jump_us;
+constexpr bool is_forward_jump(int64_t current, int64_t previous) noexcept {
+    return previous <= std::numeric_limits<int64_t>::max() - max_forward_jump_us &&
+           current > previous + max_forward_jump_us;
 }
 
-bool is_backward_jump(int64_t current, int64_t previous) {
-    return previous >= std::numeric_limits<int64_t>::min() + k_max_forward_jump_us &&
-           current < previous - k_max_forward_jump_us;
+constexpr bool is_backward_jump(int64_t current, int64_t previous) noexcept {
+    return previous >= std::numeric_limits<int64_t>::min() + max_forward_jump_us &&
+           current < previous - max_forward_jump_us;
 }
 
 void append_nal(const uint8_t *nal, size_t length, std::vector<uint8_t> &out) {
-    out.insert(out.end(), k_annex_b_start_code, k_annex_b_start_code + 4);
+    out.insert(out.end(), annex_b_start_code.begin(), annex_b_start_code.end());
     out.insert(out.end(), nal, nal + length);
 }
 
-uint16_t read_u16(const uint8_t *data) {
+constexpr uint16_t read_u16(const uint8_t *data) noexcept {
     return static_cast<uint16_t>((static_cast<uint16_t>(data[0]) << 8) | data[1]);
 }
 
@@ -119,7 +136,7 @@ bool parse_hevc_configuration(const uint8_t *data, size_t size,
             const uint32_t nal_length = read_u16(data + offset);
             offset += 2;
             if (nal_length == 0 || nal_length > size - offset) return false;
-            if (nal_type >= 32 && nal_type <= 34) {
+            if (nal_type >= hevc_nal_vps && nal_type <= hevc_nal_pps) {
                 append_nal(data + offset, nal_length, out);
             }
             offset += nal_length;
@@ -216,7 +233,7 @@ std::vector<uint8_t> to_annex_b(int32_t codec, const uint8_t *extradata, size_t 
                                                                    : std::vector<uint8_t>{};
 }
 
-bool has_complete_parameter_sets(int32_t codec, const uint8_t *data, size_t size) {
+bool has_complete_parameter_sets(int32_t codec, const uint8_t *data, size_t size) noexcept {
     if (data == nullptr || size == 0) return false;
 
     bool vps = false;
@@ -228,15 +245,15 @@ bool has_complete_parameter_sets(int32_t codec, const uint8_t *data, size_t size
         const uint8_t header = data[offset];
         if (codec == Zhulong_CODEC_H265) {
             switch ((header >> 1) & 0x3f) {
-                case 32: vps = true; break;
-                case 33: sps = true; break;
-                case 34: pps = true; break;
+                case hevc_nal_vps: vps = true; break;
+                case hevc_nal_sps: sps = true; break;
+                case hevc_nal_pps: pps = true; break;
                 default: break;
             }
         } else {
             switch (header & 0x1f) {
-                case 7: sps = true; break;
-                case 8: pps = true; break;
+                case h264_nal_sps: sps = true; break;
+                case h264_nal_pps: pps = true; break;
                 default: break;
             }
         }
@@ -247,7 +264,7 @@ bool has_complete_parameter_sets(int32_t codec, const uint8_t *data, size_t size
     return sps && pps;
 }
 
-bool is_non_reference_frame(int32_t codec, const uint8_t *data, size_t size) {
+bool is_non_reference_frame(int32_t codec, const uint8_t *data, size_t size) noexcept {
     if (data == nullptr || size == 0) return false;
 
     bool saw_slice = false;
@@ -258,15 +275,15 @@ bool is_non_reference_frame(int32_t codec, const uint8_t *data, size_t size) {
         const uint8_t header = data[offset];
         if (codec == Zhulong_CODEC_H265) {
             const int32_t nal_type = (header >> 1) & 0x3f;
-            if (nal_type > 21) return true;   // 参数集 / SEI / 分片头，不是 slice
+            if (nal_type > hevc_nal_cra_nut) return true;   // 参数集 / SEI / 分片头，不是 slice
             saw_slice = true;
             // TRAIL_N(0) TSA_N(2) STSA_N(4) RADL_N(6) RASL_N(8) 为非参考；
             // 1/3/5/7/9 及 BLA/CRA/IDR 全部计入参考。
-            const bool non_reference = nal_type <= 9 && (nal_type % 2 == 0);
+            const bool non_reference = nal_type <= hevc_nal_radl_r && (nal_type % 2 == 0);
             if (!non_reference) saw_reference = true;
         } else {
             const int32_t nal_type = header & 0x1f;
-            if (nal_type != 1 && nal_type != 5) return true;   // 非 slice NAL
+            if (nal_type != h264_nal_non_idr_slice && nal_type != h264_nal_idr_slice) return true;   // 非 slice NAL
             saw_slice = true;
             if (((header >> 5) & 0x03) != 0) saw_reference = true;   // nal_ref_idc != 0
         }
@@ -280,18 +297,18 @@ void PreviewNormalizer::update_metadata(int32_t codec, const uint8_t *extradata,
                                         size_t extradata_size, int32_t time_base_num,
                                         int32_t time_base_den) {
     codec_ = codec;
-    time_base_num_ = time_base_num > 0 ? time_base_num : 1;
-    time_base_den_ = time_base_den > 0 ? time_base_den : 90000;
+    time_base_num_ = time_base_num > 0 ? time_base_num : default_time_base_num;
+    time_base_den_ = time_base_den > 0 ? time_base_den : default_time_base_den;
     parameter_sets_ = to_annex_b(codec, extradata, extradata_size);
 }
 
 int64_t PreviewNormalizer::rescale_delta_to_microseconds(int64_t ticks, int64_t origin,
-                                                           int32_t num, int32_t den) {
-    if (den <= 0) den = 90000;
-    if (num <= 0) num = 1;
+                                                           int32_t num, int32_t den) noexcept {
+    if (den <= 0) den = default_time_base_den;
+    if (num <= 0) num = default_time_base_num;
 #if defined(__SIZEOF_INT128__)
     const wide_time_delta delta = static_cast<wide_time_delta>(ticks) - origin;
-    const wide_time_delta scaled = delta * num * 1000000 / den;
+    const wide_time_delta scaled = delta * num * microseconds_per_second / den;
     if (scaled > std::numeric_limits<int64_t>::max()) {
         return std::numeric_limits<int64_t>::max();
     }
@@ -301,7 +318,8 @@ int64_t PreviewNormalizer::rescale_delta_to_microseconds(int64_t ticks, int64_t 
     return static_cast<int64_t>(scaled);
 #else
     const long double delta = static_cast<long double>(ticks) - origin;
-    const long double scaled = delta * num * 1000000.0L / den;
+    const long double scaled =
+        delta * num * static_cast<long double>(microseconds_per_second) / den;
     if (scaled > std::numeric_limits<int64_t>::max()) {
         return std::numeric_limits<int64_t>::max();
     }

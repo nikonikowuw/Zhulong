@@ -36,6 +36,8 @@ public:
     ~InCallbackGuard() noexcept;
     InCallbackGuard(const InCallbackGuard&) = delete;
     InCallbackGuard& operator=(const InCallbackGuard&) = delete;
+    InCallbackGuard(InCallbackGuard&&) = delete;
+    InCallbackGuard& operator=(InCallbackGuard&&) = delete;
 
 private:
     bool previous_{false};
@@ -49,7 +51,6 @@ private:
 class SubscriptionBase {
 public:
     SubscriptionBase() = default;
-    virtual ~SubscriptionBase() = default;
 
     SubscriptionBase(const SubscriptionBase&) = delete;
     SubscriptionBase& operator=(const SubscriptionBase&) = delete;
@@ -69,12 +70,8 @@ public:
         return enabled_;
     }
 
-    /** @brief 兼容性查询方法 */
-    bool enabled() const {
-        return is_enabled();
-    }
-
 protected:
+    ~SubscriptionBase() = default;
     /**
      * @brief 模板化回调执行包装器：处理快速持锁、锁外调用、TLS 防重入与异常时安全排空
      */

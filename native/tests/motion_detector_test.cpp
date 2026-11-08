@@ -171,7 +171,7 @@ void test_micro_noise_filtered() {
     std::cout << "[PASS] test_micro_noise_filtered" << std::endl;
 }
 
-// hold-off：运动消失后必须继续放行 MOTION_HOLD_FRAMES 帧，避免「站着不动 = 目标消失」
+// hold-off：运动消失后必须继续放行 motion_hold_frames 帧，避免「站着不动 = 目标消失」
 void test_motion_hold_off() {
     MotionDetector detector;
     auto still = create_dummy_nv12(1920, 1080, 50);
@@ -184,7 +184,7 @@ void test_motion_hold_off() {
     assert(res.has_motion);
 
     // 运动结束：静止帧在保持期内仍然放行（无外接框），之后才真正判静
-    for (uint32_t i = 0; i < MotionDetector::MOTION_HOLD_FRAMES; ++i) {
+    for (uint32_t i = 0; i < MotionDetector::motion_hold_frames; ++i) {
         auto after = create_dummy_nv12(1920, 1080, 50);
         paint_y_rect(after, 600, 400, 800, 600, 220);
         assert(detector.detect(after, res));
@@ -236,8 +236,8 @@ void test_still_heartbeat_keepalive() {
     assert(detector.detect(moving, res));
     assert(res.has_motion);
 
-    // 画面停止运动，进入保持期 (MOTION_HOLD_FRAMES = 10)
-    for (uint32_t i = 0; i < MotionDetector::MOTION_HOLD_FRAMES; ++i) {
+    // 画面停止运动，进入保持期 (motion_hold_frames = 10)
+    for (uint32_t i = 0; i < MotionDetector::motion_hold_frames; ++i) {
         auto after = create_dummy_nv12(1920, 1080, 50);
         paint_y_rect(after, 600, 400, 800, 600, 220);
         assert(detector.detect(after, res));
@@ -247,7 +247,7 @@ void test_still_heartbeat_keepalive() {
 
     // 正式进入纯静止期：持续送入静止帧
     // 第 1 ~ 49 帧静止：必须维持 has_motion == false
-    for (uint32_t i = 1; i < MotionDetector::MOTION_HEARTBEAT_FRAMES; ++i) {
+    for (uint32_t i = 1; i < MotionDetector::motion_heartbeat_frames; ++i) {
         auto still = create_dummy_nv12(1920, 1080, 50);
         paint_y_rect(still, 600, 400, 800, 600, 220);
         assert(detector.detect(still, res));
@@ -270,7 +270,7 @@ void test_still_heartbeat_keepalive() {
     assert(res.box_count == 0);
 
     // 验证第二次心跳：再送 48 帧静止（累积 1 + 48 = 49 帧静止），仍为 false
-    for (uint32_t i = 0; i < MotionDetector::MOTION_HEARTBEAT_FRAMES - 2; ++i) {
+    for (uint32_t i = 0; i < MotionDetector::motion_heartbeat_frames - 2; ++i) {
         auto still = create_dummy_nv12(1920, 1080, 50);
         paint_y_rect(still, 600, 400, 800, 600, 220);
         assert(detector.detect(still, res));

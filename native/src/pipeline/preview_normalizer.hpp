@@ -58,7 +58,7 @@ std::vector<uint8_t> to_annex_b(int32_t codec, const uint8_t *extradata, size_t 
  * @param size 载荷长度
  * @return true 表示已完整具备，无需注入
  */
-bool has_complete_parameter_sets(int32_t codec, const uint8_t *data, size_t size);
+bool has_complete_parameter_sets(int32_t codec, const uint8_t *data, size_t size) noexcept;
 
 /**
  * @brief 判断一个非关键帧是否为非参考帧（可安全丢弃）
@@ -71,24 +71,16 @@ bool has_complete_parameter_sets(int32_t codec, const uint8_t *data, size_t size
  * @param size 载荷长度
  * @return true 表示可安全丢弃
  */
-bool is_non_reference_frame(int32_t codec, const uint8_t *data, size_t size);
-
-// 兼容别名 (对齐 naming-guidelines §4 规范化)
-inline std::vector<uint8_t> ToAnnexB(int32_t codec, const uint8_t *extradata, size_t size) {
-    return to_annex_b(codec, extradata, size);
-}
-inline bool HasCompleteParameterSets(int32_t codec, const uint8_t *data, size_t size) {
-    return has_complete_parameter_sets(codec, data, size);
-}
-inline bool IsNonReferenceFrame(int32_t codec, const uint8_t *data, size_t size) {
-    return is_non_reference_frame(codec, data, size);
-}
+bool is_non_reference_frame(int32_t codec, const uint8_t *data, size_t size) noexcept;
 
 /**
  * @brief 预览契约整形器
  */
 class PreviewNormalizer {
 public:
+    static constexpr int32_t default_time_base_num = 1;
+    static constexpr int32_t default_time_base_den = 90000;
+
     PreviewNormalizer() = default;
 
     // ⚠️ 本类**故意没有** reset()：时间轴只能单向前进，重锚点是 normalize() 内部的
@@ -121,31 +113,31 @@ public:
     Zhulong_packet_view normalize(const Zhulong_packet_view &in);
 
     /** @brief 当前 GOP 序号（仅诊断与测试使用） */
-    uint32_t gop_id() const { return gop_id_; }
+    uint32_t gop_id() const noexcept { return gop_id_; }
 
     /** @brief 参数集注入累计次数（仅诊断与测试使用） */
-    uint64_t injected_count() const { return injected_count_; }
+    uint64_t injected_count() const noexcept { return injected_count_; }
 
     /** @brief 时间轴跳变累计次数（仅诊断与测试使用） */
-    uint64_t discontinuity_count() const { return discontinuity_count_; }
+    uint64_t discontinuity_count() const noexcept { return discontinuity_count_; }
 
     /** @brief 视频原点是否已建立（供 AudioNormalizer 查询） */
-    bool origin_ready() const { return origin_set_; }
+    bool origin_ready() const noexcept { return origin_set_; }
 
     /** @brief 当前视频时间轴偏移（微秒，供 AudioNormalizer 逐包读取） */
-    int64_t timestamp_shift_us() const { return timestamp_shift_us_; }
+    int64_t timestamp_shift_us() const noexcept { return timestamp_shift_us_; }
 
     /** @brief 单调递增的不连续代数（discontinuity generation，每次跳变 +1） */
-    uint64_t discontinuity_generation() const { return discontinuity_count_; }
+    uint64_t discontinuity_generation() const noexcept { return discontinuity_count_; }
 
 private:
     /** @brief 将相对源时间戳换算为微秒，使用 128 位中间量防溢出 */
     static int64_t rescale_delta_to_microseconds(int64_t ticks, int64_t origin,
-                                                 int32_t num, int32_t den);
+                                                 int32_t num, int32_t den) noexcept;
 
     int32_t codec_{0};
-    int32_t time_base_num_{1};
-    int32_t time_base_den_{90000};
+    int32_t time_base_num_{default_time_base_num};
+    int32_t time_base_den_{default_time_base_den};
 
     std::vector<uint8_t> parameter_sets_;   /**< Annex B 形式的参数集，仅在 update_metadata 时重建 */
     std::vector<uint8_t> stitch_;           /**< 参数集注入的复用缓冲，避免每关键帧分配 */

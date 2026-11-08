@@ -30,13 +30,18 @@ namespace zhulong {
 
 class AudioNormalizer {
 public:
-    AudioNormalizer();
+    static constexpr int32_t default_sample_rate = 8000;
+    static constexpr int32_t default_channels = 1;
+    static constexpr int32_t default_time_base_num = 1;
+    static constexpr int32_t default_time_base_den = 8000;
+
+    AudioNormalizer() noexcept;
 
     /**
      * @brief 更新音频流元数据配置
      */
     void update_metadata(int32_t codec, int32_t sample_rate, int32_t channels,
-                         int32_t time_base_num, int32_t time_base_den);
+                         int32_t time_base_num, int32_t time_base_den) noexcept;
 
     /**
      * @brief 归一化音频数据包时间戳
@@ -54,25 +59,25 @@ public:
                                   int64_t video_origin_arrival_us,
                                   int64_t video_shift_us,
                                   uint64_t video_discontinuity_gen,
-                                  int64_t audio_arrival_us);
+                                  int64_t audio_arrival_us) noexcept;
 
     /** @brief 因视频原点尚未建立而丢弃的音频包数 */
-    uint64_t dropped_before_origin() const { return dropped_before_origin_; }
+    uint64_t dropped_before_origin() const noexcept { return dropped_before_origin_; }
 
     /** @brief 是否已成功建立音画对齐锚点 */
-    bool anchor_established() const { return anchor_established_; }
+    bool anchor_established() const noexcept { return anchor_established_; }
 
     /** @brief 锚点基准偏移（微秒，base = a - V） */
-    int64_t base_offset_us() const { return base_offset_us_; }
+    int64_t base_offset_us() const noexcept { return base_offset_us_; }
 
 private:
-    static int64_t rescale_to_microseconds(int64_t ticks, int32_t num, int32_t den);
+    static int64_t rescale_to_microseconds(int64_t ticks, int32_t num, int32_t den) noexcept;
 
     int32_t codec_{0};
-    int32_t sample_rate_{8000};
-    int32_t channels_{1};
-    int32_t time_base_num_{1};
-    int32_t time_base_den_{8000};
+    int32_t sample_rate_{default_sample_rate};
+    int32_t channels_{default_channels};
+    int32_t time_base_num_{default_time_base_num};
+    int32_t time_base_den_{default_time_base_den};
     int64_t rtp_half_period_us_{0};
     int64_t rtp_full_period_us_{0};
 
