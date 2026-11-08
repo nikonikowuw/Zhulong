@@ -13,14 +13,11 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Camera } from '@/features/cameras/data/schema'
 import { type ChannelTaskGroup, type Task } from '../data/schema'
 import { useChannelTasks } from '../hooks/use-channel-tasks'
-import { useUpdateTask } from '../hooks/use-tasks'
-import { ChannelTasksView } from './channel-tasks-view'
 import { createTasksColumns } from './tasks-columns'
 import { useTasksContext } from './tasks-provider'
 import { TasksTableDetail } from './tasks-table-detail'
@@ -59,19 +56,6 @@ export function TasksTable({
   const [expanded, setExpanded] = useState<ExpandedState>(
     defaultExpanded ? true : {}
   )
-
-  // 双视角：通道聚合卡片 （业务主视角） ⇋ 二级展开表格
-  const viewMode: 'channel' | 'table' =
-    search.view === 'table' ? 'table' : 'channel'
-
-  const handleViewModeChange = (mode: 'channel' | 'table') => {
-    navigate({
-      search: (prev) => ({
-        ...prev,
-        view: mode === 'channel' ? undefined : mode,
-      }),
-    })
-  }
 
   const allChannelGroups = useChannelTasks(cameras, algorithms, tasks)
 
@@ -178,8 +162,6 @@ export function TasksTable({
     [channelGroups]
   )
 
-  const updateMutation = useUpdateTask()
-
   const handleOpenChannelConfig = useCallback(
     (cameraId?: string) => {
       setCurrentRow(null)
@@ -188,27 +170,6 @@ export function TasksTable({
       setOpen('channelTask')
     },
     [setCurrentRow, setTargetCameraId, setTargetAlgorithmId, setOpen]
-  )
-
-  const handleToggleChannelTask = useCallback(
-    (task: Task) => {
-      updateMutation.mutate(
-        { id: task.id, data: { enabled: !task.enabled } },
-        {
-          onSuccess: () => {
-            toast.success(
-              !task.enabled
-                ? t('table.channelResumed', '通道分析任务已恢复运行')
-                : t('table.channelPaused', '通道分析任务已暂停')
-            )
-          },
-          onError: () => {
-            toast.error(t('table.toggleError', '更新任务状态失败'))
-          },
-        }
-      )
-    },
-    [updateMutation, t]
   )
 
   const handleDeleteChannelTask = useCallback(
@@ -267,32 +228,21 @@ export function TasksTable({
     <div className='flex flex-1 flex-col gap-4'>
       <TasksTableToolbar
         table={table}
-        viewMode={viewMode}
         configuredCount={configuredGroups.length}
         cameraOptions={cameraOptions}
         algorithmOptions={algorithmOptions}
         statusOptions={statusOptions}
-        onViewModeChange={handleViewModeChange}
       />
 
-      {viewMode === 'channel' ? (
-        <ChannelTasksView
-          groups={channelGroups}
-          onConfigureCamera={handleOpenChannelConfig}
-          onToggleChannelTask={handleToggleChannelTask}
-          onDeleteChannelTask={handleDeleteChannelTask}
-        />
-      ) : (
-        <TasksTableDetail
-          table={table}
-          columnCount={columns.length}
-          isLoading={isLoading}
-          isError={isError}
-          onRetry={onRetry}
-          isFiltered={isFiltered}
-          onOpenChannelConfig={handleOpenChannelConfig}
-        />
-      )}
+      <TasksTableDetail
+        table={table}
+        columnCount={columns.length}
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={onRetry}
+        isFiltered={isFiltered}
+        onOpenChannelConfig={handleOpenChannelConfig}
+      />
     </div>
   )
 }

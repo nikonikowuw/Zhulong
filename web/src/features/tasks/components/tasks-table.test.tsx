@@ -119,8 +119,7 @@ function TasksTableHarness({
         isLoading={false}
         isError={false}
         onRetry={vi.fn()}
-        // 明细表格视图（默认是通道聚合卡片视图）
-        search={{ view: 'table' }}
+        search={{}}
         navigate={vi.fn()}
         defaultExpanded={defaultExpanded}
       />

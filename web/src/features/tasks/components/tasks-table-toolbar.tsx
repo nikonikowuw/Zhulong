@@ -1,9 +1,8 @@
 import { type Table as TanstackTable } from '@tanstack/react-table'
-import { ChevronDown, ChevronUp, LayoutGrid, List } from 'lucide-react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { DataTableToolbar } from '@/components/data-table'
-import { ViewModeSwitch } from '@/components/view-mode-switch'
 import { type ChannelTaskGroup } from '../data/schema'
 
 export interface FacetedOption {
@@ -13,34 +12,20 @@ export interface FacetedOption {
 
 export interface TasksTableToolbarProps {
   table: TanstackTable<ChannelTaskGroup>
-  viewMode: 'channel' | 'table'
   /** 明细视图下可展开的通道数量：为 0 时不渲染「展开全部」。 */
   configuredCount: number
   cameraOptions: FacetedOption[]
   algorithmOptions: FacetedOption[]
   statusOptions: FacetedOption[]
-  onViewModeChange: (mode: 'channel' | 'table') => void
 }
 
-const VIEW_MODE_OPTIONS = [
-  {
-    value: 'channel',
-    label: 'views.channel',
-    fallback: '通道视图',
-    icon: LayoutGrid,
-  },
-  { value: 'table', label: 'views.table', fallback: '明细视图', icon: List },
-] as const
-
-/** 列表工具条：搜索、分面筛选、展开全部与视图切换。 */
+/** 列表工具条：搜索、分面筛选与展开/折叠全部。 */
 export function TasksTableToolbar({
   table,
-  viewMode,
   configuredCount,
   cameraOptions,
   algorithmOptions,
   statusOptions,
-  onViewModeChange,
 }: TasksTableToolbarProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
 
@@ -81,7 +66,7 @@ export function TasksTableToolbar({
       </div>
 
       <div className='flex items-center gap-2'>
-        {viewMode === 'table' && configuredCount > 0 && (
+        {configuredCount > 0 && (
           <Button
             variant='outline'
             size='sm'
@@ -101,15 +86,6 @@ export function TasksTableToolbar({
             )}
           </Button>
         )}
-
-        <ViewModeSwitch
-          value={viewMode}
-          onChange={onViewModeChange}
-          options={VIEW_MODE_OPTIONS.map((option) => ({
-            ...option,
-            label: t(option.label, option.fallback),
-          }))}
-        />
       </div>
     </div>
   )
