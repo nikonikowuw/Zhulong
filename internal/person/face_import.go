@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	// Format decoders registered for image.DecodeConfig support in face import processing.
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
@@ -149,12 +150,23 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 
 	s.logger.Info("executing face import job", zap.String("jobId", job.ID))
 
-	entries, extractedDir, err := s.unpackFaceImport(ctx, job.ID, meta, updater)
+	entries, extractedDir, err := s.unpackFaceImport(
+		ctx,
+		job.ID,
+		meta,
+		updater,
+	)
 	if err != nil {
 		return err
 	}
 
-	result, galleryItems, err := s.processFaceImportEntries(ctx, job.ID, extractedDir, entries, updater)
+	result, galleryItems, err := s.processFaceImportEntries(
+		ctx,
+		job.ID,
+		extractedDir,
+		entries,
+		updater,
+	)
 	if err != nil {
 		return err
 	}
@@ -416,7 +428,9 @@ func loadAndValidateFaceImage(baseDir, imgRelPath string) ([]byte, *faceProcessE
 	if err != nil {
 		return nil, &faceProcessError{code: "CORRUPT_OR_OVERSIZED_IMAGE", message: "图片损坏或格式不支持"}
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > maxImageDimension || cfg.Height > maxImageDimension {
+	isInvalidDimension := cfg.Width <= 0 || cfg.Height <= 0 ||
+		cfg.Width > maxImageDimension || cfg.Height > maxImageDimension
+	if isInvalidDimension {
 		return nil, &faceProcessError{
 			code: "CORRUPT_OR_OVERSIZED_IMAGE",
 			message: fmt.Sprintf(
@@ -656,13 +670,13 @@ func safeExtractZip(zipPath, destDir string) error {
 
 		rc, err := f.Open()
 		if err != nil {
-			return fmt.Errorf("open zip file %s: %w", f.Name, err)
+			return fmt.Errorf("open zip file %q: %w", f.Name, err)
 		}
 
 		out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode()|0600)
 		if err != nil {
 			rc.Close()
-			return fmt.Errorf("create target %s: %w", targetPath, err)
+			return fmt.Errorf("create target %q: %w", targetPath, err)
 		}
 
 		remainingAllowed := maxDecompressedBytes - totalExtracted
@@ -678,7 +692,7 @@ func safeExtractZip(zipPath, destDir string) error {
 		rc.Close()
 
 		if copyErr != nil {
-			return fmt.Errorf("extract %s: %w", f.Name, copyErr)
+			return fmt.Errorf("extract %q: %w", f.Name, copyErr)
 		}
 		if written > remainingAllowed {
 			return ErrZipBomb
@@ -816,7 +830,7 @@ func scanImagesFallback(destDir string) ([]faceImportEntry, error) {
 		}
 
 		ext := strings.ToLower(filepath.Ext(info.Name()))
-		if ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp" {
+		if _, ok := allowedFaceImageExts[ext]; !ok {
 			return nil
 		}
 
@@ -870,7 +884,8 @@ func isAlphaNumOrDash(s string) bool {
 		isDigit := r >= '0' && r <= '9'
 		isLower := r >= 'a' && r <= 'z'
 		isUpper := r >= 'A' && r <= 'Z'
-		if !isDigit && !isLower && !isUpper && r != '-' {
+		isAlphaNum := isDigit || isLower || isUpper
+		if !isAlphaNum && r != '-' {
 			return false
 		}
 	}
@@ -979,6 +994,13 @@ func (s *Service) GetFaceImportJob(ctx context.Context, jobID string) (*asyncjob
 	return job, nil
 }
 
+func isStaticDiagnosticMessage(msg string) bool {
+	hasParens := strings.Contains(msg, "(")
+	hasColon := strings.Contains(msg, ": ")
+	hasQuotes := strings.Contains(msg, "\"") || strings.Contains(msg, "“")
+	return !hasParens && !hasColon && !hasQuotes
+}
+
 // GetFaceImportFailedReportCSV generates a CSV diagnostic report for failed rows.
 // When an Accept-Language header (or locale) is provided, static diagnostic messages
 // are localized to match the caller's language.
@@ -1002,38 +1024,47 @@ func (s *Service) GetFaceImportFailedReportCSV(
 		return nil, fmt.Errorf("write csv header: %w", err)
 	}
 
-	if job.ResultJSON != "" && job.ResultJSON != "{}" {
-		var res FaceImportResult
-		if err := json.Unmarshal([]byte(job.ResultJSON), &res); err == nil {
-			locale := "zh-Hans"
-			if len(acceptLanguages) > 0 && acceptLanguages[0] != "" {
-				locale = httputil.ResolveLocale(acceptLanguages[0])
+	if job.ResultJSON == "" || job.ResultJSON == "{}" {
+		w.Flush()
+		if err := w.Error(); err != nil {
+			return nil, fmt.Errorf("flush csv writer: %w", err)
+		}
+		return buf.Bytes(), nil
+	}
+
+	var res FaceImportResult
+	if err := json.Unmarshal([]byte(job.ResultJSON), &res); err != nil {
+		w.Flush()
+		if err := w.Error(); err != nil {
+			return nil, fmt.Errorf("flush csv writer: %w", err)
+		}
+		return buf.Bytes(), nil
+	}
+
+	locale := "zh-Hans"
+	if len(acceptLanguages) > 0 && acceptLanguages[0] != "" {
+		locale = httputil.ResolveLocale(acceptLanguages[0])
+	}
+	for _, item := range res.FailedItems {
+		msg := item.Message
+		if localized, ok := httputil.LookupMessage(item.ErrorCode, locale); ok && localized != "" {
+			if isStaticDiagnosticMessage(item.Message) {
+				msg = localized
 			}
-			for _, item := range res.FailedItems {
-				msg := item.Message
-				if localized, ok := httputil.LookupMessage(item.ErrorCode, locale); ok && localized != "" {
-					if !strings.Contains(item.Message, "(") &&
-						!strings.Contains(item.Message, ": ") &&
-						!strings.Contains(item.Message, "\"") &&
-						!strings.Contains(item.Message, "“") {
-						msg = localized
-					}
-				}
-				if err := w.Write([]string{
-					strconv.Itoa(item.Line),
-					item.FilePath,
-					item.Name,
-					item.PersonID,
-					item.ErrorCode,
-					msg,
-				}); err != nil {
-					s.logger.Warn("failed to write failed-report row",
-						zap.String("jobId", jobID),
-						zap.Error(err),
-					)
-					break
-				}
-			}
+		}
+		if err := w.Write([]string{
+			strconv.Itoa(item.Line),
+			item.FilePath,
+			item.Name,
+			item.PersonID,
+			item.ErrorCode,
+			msg,
+		}); err != nil {
+			s.logger.Warn("failed to write failed-report row",
+				zap.String("jobId", jobID),
+				zap.Error(err),
+			)
+			break
 		}
 	}
 

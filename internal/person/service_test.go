@@ -1311,7 +1311,11 @@ func TestListPersonsSearchTreatsWildcardsAsText(t *testing.T) {
 		{search: "A_B", want: []string{"A_B"}},
 		{search: "502", want: []string{"502员工"}},
 	} {
-		got, total, err := svc.ListPersons(ctx, 20, 0, tc.search, "")
+		got, total, err := svc.ListPersons(ctx, ListPersonsParams{
+			Limit:  20,
+			Offset: 0,
+			Search: tc.search,
+		})
 		if err != nil {
 			t.Fatalf("ListPersons(%q) failed: %v", tc.search, err)
 		}

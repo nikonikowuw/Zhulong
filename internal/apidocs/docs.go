@@ -7766,7 +7766,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "host": {
-                    "description": "Target host (IP or domain) for display and search; empty when the URI cannot be resolved or decrypted",
+                    "description": "Host is the target host (IP or domain) for display and search;\nempty when the URI cannot be resolved or decrypted.",
                     "type": "string"
                 },
                 "id": {
@@ -7779,7 +7779,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "rtspUrl": {
-                    "description": "Complete RTSP URL for frontend playback and display",
+                    "description": "RTSPURL is the complete RTSP URL for frontend playback and display.",
                     "type": "string"
                 },
                 "runtimeState": {

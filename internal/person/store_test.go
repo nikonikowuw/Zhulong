@@ -88,7 +88,10 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 	}
 
 	// 4.1 Test ListPersons (paginated) and the gallery page reader
-	pList, total, err := store.ListPersons(ctx, 10, 0, "", "")
+	pList, total, err := store.ListPersons(ctx, person.ListPersonsParams{
+		Limit:  10,
+		Offset: 0,
+	})
 	if err != nil {
 		t.Fatalf("ListPersons failed: %v", err)
 	}
@@ -97,14 +100,22 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 	}
 
 	// 4.1.1 Test ListPersons faceStatus filtering
-	enrolledList, enrolledTotal, err := store.ListPersons(ctx, 10, 0, "", "enrolled")
+	enrolledList, enrolledTotal, err := store.ListPersons(ctx, person.ListPersonsParams{
+		Limit:      10,
+		Offset:     0,
+		FaceStatus: "enrolled",
+	})
 	if err != nil {
 		t.Fatalf("ListPersons enrolled failed: %v", err)
 	}
 	if enrolledTotal != 1 || len(enrolledList) != 1 {
 		t.Fatalf("expected enrolled 1, got total=%d len=%d", enrolledTotal, len(enrolledList))
 	}
-	missingList, missingTotal, err := store.ListPersons(ctx, 10, 0, "", "missing")
+	missingList, missingTotal, err := store.ListPersons(ctx, person.ListPersonsParams{
+		Limit:      10,
+		Offset:     0,
+		FaceStatus: "missing",
+	})
 	if err != nil {
 		t.Fatalf("ListPersons missing failed: %v", err)
 	}

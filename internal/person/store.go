@@ -32,6 +32,27 @@ var (
 	ErrNilFace   = errors.New("face is nil")
 )
 
+// Store handles SQLite persistence for the personnel and face gallery domain.
+type Store struct {
+	dbProvider database.DBProvider
+}
+
+// NewStore creates a new Store instance.
+func NewStore(dbProvider database.DBProvider) *Store {
+	return &Store{dbProvider: dbProvider}
+}
+
+func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
+	if s.dbProvider == nil {
+		return nil, ErrDatabaseClosed
+	}
+	db := s.dbProvider.DB()
+	if db == nil {
+		return nil, ErrDatabaseClosed
+	}
+	return db.WithContext(ctx), nil
+}
+
 // clampPagination applies the shared page bounds as a second line of defence
 // for callers that reach the store without going through a handler.
 //
@@ -62,29 +83,13 @@ func normalizeTimestamp(t, fallback time.Time) time.Time {
 // views render thumbnails from image_path alone. Every path that preloads faces shares
 // it, so the column list has a single definition.
 func preloadFaceSummary(pb gorm.PreloadBuilder) error {
-	pb.Select("id", "person_id", "image_path", "created_at")
+	pb.Select(
+		"id",
+		"person_id",
+		"image_path",
+		"created_at",
+	)
 	return nil
-}
-
-// Store handles SQLite persistence for the personnel and face gallery domain.
-type Store struct {
-	dbProvider database.DBProvider
-}
-
-// NewStore creates a new Store instance.
-func NewStore(dbProvider database.DBProvider) *Store {
-	return &Store{dbProvider: dbProvider}
-}
-
-func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
-	if s.dbProvider == nil {
-		return nil, ErrDatabaseClosed
-	}
-	db := s.dbProvider.DB()
-	if db == nil {
-		return nil, ErrDatabaseClosed
-	}
-	return db.WithContext(ctx), nil
 }
 
 // CreatePerson inserts a new Person record. It reports ErrDuplicateID or
@@ -239,8 +244,16 @@ func (s *Store) GetPersonMeta(ctx context.Context, id string) (*Person, error) {
 	return &p, nil
 }
 
+// ListPersonsParams contains pagination and filtering options for ListPersons.
+type ListPersonsParams struct {
+	Limit      int
+	Offset     int
+	Search     string
+	FaceStatus string
+}
+
 // ListPersons returns paginated persons with associated Face templates, optionally filtered by keyword and faceStatus.
-func (s *Store) ListPersons(ctx context.Context, limit, offset int, search, faceStatus string) ([]Person, int64, error) {
+func (s *Store) ListPersons(ctx context.Context, params ListPersonsParams) ([]Person, int64, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -250,7 +263,7 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search, face
 	// filter is optional, so the chain is opened once here and the predicate is added
 	// below only when a keyword was supplied.
 	g := gorm.G[Person](db).Scopes()
-	search = strings.TrimSpace(search)
+	search := strings.TrimSpace(params.Search)
 	if search != "" {
 		// The keyword is data, not a pattern: % and _ must match themselves instead of
 		// turning a search for "50%" into a full-table wildcard.
@@ -259,7 +272,7 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search, face
 			likePattern, likePattern)
 	}
 
-	switch strings.ToLower(strings.TrimSpace(faceStatus)) {
+	switch strings.ToLower(strings.TrimSpace(params.FaceStatus)) {
 	case "enrolled":
 		g = g.Where("EXISTS (SELECT 1 FROM person_faces WHERE person_faces.person_id = persons.id)")
 	case "missing":
@@ -271,7 +284,7 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search, face
 		return nil, 0, fmt.Errorf("count persons: %w", err)
 	}
 
-	limit, offset = clampPagination(limit, offset)
+	limit, offset := clampPagination(params.Limit, params.Offset)
 
 	list, err := g.Preload("Faces", preloadFaceSummary).Order("created_at ASC, id ASC").
 		Limit(limit).
@@ -559,7 +572,7 @@ func (s *Store) AddFaceWithLimit(ctx context.Context, face *Face, limit int) (bo
 	}
 	face.CreatedAt = normalizeTimestamp(face.CreatedAt, time.Now())
 
-	isPrimary := false
+	var isPrimary bool
 	err = db.Transaction(func(tx *gorm.DB) error {
 		p, err := gorm.G[Person](tx).Where("id = ?", face.PersonRowID).First(ctx)
 		if err != nil {
@@ -615,7 +628,7 @@ func (s *Store) ReplaceFaces(ctx context.Context, personRowID string, face *Face
 	}
 	face.CreatedAt = normalizeTimestamp(face.CreatedAt, time.Now())
 
-	var removed []Face
+	removed := []Face{}
 	err = db.Transaction(func(tx *gorm.DB) error {
 		_, err := gorm.G[Person](tx).Where("id = ?", personRowID).First(ctx)
 		if err != nil {
@@ -663,7 +676,7 @@ func (s *Store) ClearFaces(ctx context.Context, personRowID string) ([]Face, err
 		return nil, err
 	}
 
-	var removed []Face
+	removed := []Face{}
 	err = db.Transaction(func(tx *gorm.DB) error {
 		_, err := gorm.G[Person](tx).Where("id = ?", personRowID).First(ctx)
 		if err != nil {
@@ -794,6 +807,9 @@ func (s *Store) ListSearchFaceItems(ctx context.Context) ([]SearchFaceItem, erro
 	if err := searchFaceQuery(db).Find(&items).Error; err != nil {
 		return nil, fmt.Errorf("list search face items: %w", err)
 	}
+	if items == nil {
+		items = []SearchFaceItem{}
+	}
 	return items, nil
 }
 
@@ -812,6 +828,9 @@ func (s *Store) ListSearchFaceItemsPaged(ctx context.Context, limit, offset int)
 		Find(&items).Error
 	if err != nil {
 		return nil, fmt.Errorf("list search face items paged: %w", err)
+	}
+	if items == nil {
+		items = []SearchFaceItem{}
 	}
 	return items, nil
 }

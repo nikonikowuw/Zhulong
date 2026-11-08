@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	// Format decoders registered for image.DecodeConfig support in face enrollment and search.
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
@@ -232,12 +233,22 @@ func storeError(err error, notFoundCode, notFoundMessage, operation string) erro
 // personLookupError maps a failed person lookup, the most common store failure in
 // this service.
 func personLookupError(err error, operation string) error {
-	return storeError(err, "PERSON_NOT_FOUND", "Person not found", operation)
+	return storeError(
+		err,
+		"PERSON_NOT_FOUND",
+		"Person not found",
+		operation,
+	)
 }
 
 // faceLookupError maps a failed face lookup.
 func faceLookupError(err error, operation string) error {
-	return storeError(err, "FACE_NOT_FOUND", "Face not found", operation)
+	return storeError(
+		err,
+		"FACE_NOT_FOUND",
+		"Face not found",
+		operation,
+	)
 }
 
 // CreatePerson creates a new person profile.
@@ -285,18 +296,8 @@ func (s *Service) GetPerson(ctx context.Context, id string) (*Person, error) {
 }
 
 // ListPersons returns one page of person profiles plus the total row count.
-func (s *Service) ListPersons(
-	ctx context.Context,
-	limit, offset int,
-	search, faceStatus string,
-) ([]Person, int64, error) {
-	list, total, err := s.store.ListPersons(
-		ctx,
-		limit,
-		offset,
-		search,
-		faceStatus,
-	)
+func (s *Service) ListPersons(ctx context.Context, params ListPersonsParams) ([]Person, int64, error) {
+	list, total, err := s.store.ListPersons(ctx, params)
 	if err != nil {
 		return nil, 0, apperr.Internal("DATABASE_ERROR", "Failed to list persons", err)
 	}
@@ -310,8 +311,8 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 		return nil, personLookupError(err, "Failed to get person")
 	}
 
-	nameChanged := false
-	personIDChanged := false
+	var nameChanged bool
+	var personIDChanged bool
 
 	// person_id is the business key external systems correlate on. If not yet assigned (nil or empty),
 	// it can be bound. Once assigned, attempts to change it are rejected with PERSON_ID_IMMUTABLE.
@@ -414,7 +415,7 @@ func (s *Service) publishPersonFaces(ctx context.Context, p *Person) {
 		s.logger.Warn("failed to list faces for gallery re-publish", zap.String("person_id", p.ID), zap.Error(err))
 		return
 	}
-	personID := ""
+	var personID string
 	if p.PersonID != nil {
 		personID = *p.PersonID
 	}
@@ -579,14 +580,16 @@ func (s *Service) faceStorageName(imagePath string) (string, error) {
 	clean := filepath.Clean(imagePath)
 	if filepath.IsAbs(clean) {
 		rel, err := filepath.Rel(filepath.Clean(s.facesDir), clean)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		escapesStorage := rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		if err != nil || escapesStorage {
 			return "", apperr.Invalid("INVALID_IMAGE_PATH", "image path escapes allowed storage directory", nil)
 		}
 		clean = rel
 	}
 
 	for _, segment := range strings.Split(clean, string(filepath.Separator)) {
-		if segment == "" || segment == "." || segment == ".." {
+		isInvalidSegment := segment == "" || segment == "." || segment == ".."
+		if isInvalidSegment {
 			return "", apperr.Invalid("INVALID_IMAGE_PATH", "image path must not contain relative segments", nil)
 		}
 	}
@@ -600,7 +603,10 @@ func (s *Service) faceStorageName(imagePath string) (string, error) {
 // person lookup happened to succeed first.
 func faceFileName(personID, faceID, ext string) (string, error) {
 	name := personID + "_" + faceID + ext
-	if name != filepath.Base(name) || strings.ContainsAny(name, `/:\\`) || strings.ContainsRune(name, '\x00') {
+	isNestedPath := name != filepath.Base(name)
+	hasDelimiters := strings.ContainsAny(name, `/:\\`)
+	hasNUL := strings.ContainsRune(name, '\x00')
+	if isNestedPath || hasDelimiters || hasNUL {
 		return "", apperr.Internal("STORAGE_ERROR", "Failed to compose face image file name", nil)
 	}
 	return name, nil
@@ -705,7 +711,12 @@ func (s *Service) AddFace(ctx context.Context, personID string, file *multipart.
 	}
 	defer src.Close()
 
-	return s.AddFaceWithReader(ctx, personID, file.Filename, src)
+	return s.AddFaceWithReader(
+		ctx,
+		personID,
+		file.Filename,
+		src,
+	)
 }
 
 // AddFaceWithReader saves uploaded image file into data directory and enrolls face template.
@@ -736,7 +747,7 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 		return nil, faceEnrollError(err, personMeta.Name)
 	}
 
-	personIDKey := ""
+	var personIDKey string
 	if personMeta.PersonID != nil {
 		personIDKey = *personMeta.PersonID
 	}
@@ -755,12 +766,13 @@ func NormalizeExternalPersonID(raw string) (string, error) {
 	if len(trimmed) > personExternalIDMaxLen {
 		return "", apperr.Invalid("PERSON_ID_TOO_LONG", "person_id exceeds maximum length of 64 characters", nil)
 	}
-	for i := 0; i < len(trimmed); i++ {
+	for i := range len(trimmed) {
 		b := trimmed[i]
 		if b < 32 || b == 127 {
 			return "", apperr.Invalid("PERSON_ID_INVALID_CHARS", "person_id cannot contain control characters", nil)
 		}
-		if b == '/' || b == '\\' || b == '?' || b == '#' || b == '%' {
+		isURIDelimiter := b == '/' || b == '\\' || b == '?' || b == '#' || b == '%'
+		if isURIDelimiter {
 			return "", apperr.Invalid("PERSON_ID_INVALID_CHARS", "person_id cannot contain URI path or query delimiters", nil)
 		}
 	}
@@ -797,7 +809,8 @@ func (s *Service) enrollFace(ctx context.Context, personMeta *Person, upload Fac
 
 	headerBuf := make([]byte, 512)
 	nHeader, err := io.ReadFull(r, headerBuf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+	isFatalReadErr := err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF)
+	if isFatalReadErr {
 		return nil, "", apperr.Invalid("FILE_READ_FAILED", "Failed to read file content", err)
 	}
 	if nHeader == 0 {
@@ -1185,7 +1198,9 @@ func (s *Service) SearchByImage(
 	if !isSearchableImageFormat(format) {
 		return nil, apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "Only static JPEG, PNG, and WebP are allowed", nil)
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > maxImageDimension || cfg.Height > maxImageDimension {
+	isInvalidDimension := cfg.Width <= 0 || cfg.Height <= 0 ||
+		cfg.Width > maxImageDimension || cfg.Height > maxImageDimension
+	if isInvalidDimension {
 		return nil, apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "Image dimensions exceed the size limit", nil)
 	}
 
@@ -1244,13 +1259,16 @@ func (s *Service) SearchByImage(
 			}
 
 			var sim float32
-			for i := 0; i < faceFeatureDim; i++ {
+			for i := range faceFeatureDim {
 				sim += features[i] * gf[i]
 			}
 			sim = max(-1, min(1, sim))
 
 			existing, ok := bestPerPerson[item.PersonRowID]
-			if !ok || sim > existing.Similarity || (sim == existing.Similarity && item.FaceID < existing.MatchedFaceID) {
+			isNewCandidate := !ok
+			hasHigherSimilarity := sim > existing.Similarity
+			isTieBreakWinner := sim == existing.Similarity && item.FaceID < existing.MatchedFaceID
+			if isNewCandidate || hasHigherSimilarity || isTieBreakWinner {
 				bestPerPerson[item.PersonRowID] = ImageSearchMatchInfo{
 					PersonID:         item.PersonRowID,
 					PersonExternalID: item.PersonExternalID,
@@ -1310,7 +1328,7 @@ func (s *Service) DeleteFace(ctx context.Context, personID, faceID string) error
 
 	s.removeFaceFile(face.ImagePath)
 
-	personIDKey := ""
+	var personIDKey string
 	if person.PersonID != nil {
 		personIDKey = *person.PersonID
 	}
@@ -1330,7 +1348,12 @@ func (s *Service) ListFaces(ctx context.Context, personID string, limit, offset 
 		return nil, 0, personLookupError(err, "Failed to verify person")
 	}
 
-	faces, total, err := s.store.ListFacesByPersonPaged(ctx, personID, limit, offset)
+	faces, total, err := s.store.ListFacesByPersonPaged(
+		ctx,
+		personID,
+		limit,
+		offset,
+	)
 	if err != nil {
 		return nil, 0, apperr.Internal("DATABASE_ERROR", "Failed to list faces", err)
 	}
@@ -1346,7 +1369,7 @@ func (s *Service) GetGallerySyncData(ctx context.Context) ([]GalleryItem, error)
 			return nil, apperr.Internal("DATABASE_ERROR", "Failed to list gallery persons", err)
 		}
 		for _, p := range persons {
-			personID := ""
+			var personID string
 			if p.PersonID != nil {
 				personID = *p.PersonID
 			}
@@ -1754,7 +1777,7 @@ func (s *Service) ExportPersonsManifestCSV(ctx context.Context, search, faceStat
 	usedPaths := make(map[string]int, len(persons))
 
 	for _, p := range persons {
-		personID := ""
+		var personID string
 		if p.PersonID != nil {
 			personID = strings.TrimSpace(*p.PersonID)
 		}

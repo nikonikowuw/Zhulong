@@ -106,7 +106,12 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	window := query.Normalize()
 
-	persons, total, err := h.service.ListPersons(c.Request.Context(), window.PageSize, window.Offset, query.Search, query.FaceStatus)
+	persons, total, err := h.service.ListPersons(c.Request.Context(), ListPersonsParams{
+		Limit:      window.PageSize,
+		Offset:     window.Offset,
+		Search:     query.Search,
+		FaceStatus: query.FaceStatus,
+	})
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -161,7 +166,12 @@ func (h *Handler) Export(c *gin.Context) {
 // @Router       /persons [post]
 func (h *Handler) Create(c *gin.Context) {
 	// Declared before binding so a rejected payload is still attributable.
-	audithttp.Tag(c, ActionPersonCreate, "person:", "Create person")
+	audithttp.Tag(
+		c,
+		ActionPersonCreate,
+		"person:",
+		"Create person",
+	)
 
 	var req CreatePersonRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -215,7 +225,12 @@ func (h *Handler) Get(c *gin.Context) {
 // @Router       /persons/{id} [put]
 func (h *Handler) Update(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionPersonUpdate, "person:"+id, "Update person "+id)
+	audithttp.Tag(
+		c,
+		ActionPersonUpdate,
+		"person:"+id,
+		"Update person "+id,
+	)
 
 	var req UpdatePersonRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -243,7 +258,12 @@ func (h *Handler) Update(c *gin.Context) {
 // @Router       /persons/{id} [delete]
 func (h *Handler) Delete(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionPersonDelete, "person:"+id, "Delete person "+id)
+	audithttp.Tag(
+		c,
+		ActionPersonDelete,
+		"person:"+id,
+		"Delete person "+id,
+	)
 
 	if err := h.service.DeletePerson(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
@@ -302,7 +322,12 @@ func (h *Handler) AddFace(c *gin.Context) {
 	personID := c.Param("id")
 	// The enrollment photo path and features are deliberately excluded from the
 	// detail: only the owning person is named until the face row exists.
-	audithttp.Tag(c, ActionPersonFaceAdd, "person:"+personID, "Add face for person "+personID)
+	audithttp.Tag(
+		c,
+		ActionPersonFaceAdd,
+		"person:"+personID,
+		"Add face for person "+personID,
+	)
 
 	var req AddFaceRequest
 	if err := c.ShouldBind(&req); err != nil {
@@ -359,7 +384,12 @@ func (h *Handler) GetFaceImage(c *gin.Context) {
 func (h *Handler) DeleteFace(c *gin.Context) {
 	personID := c.Param("id")
 	faceID := c.Param("face_id")
-	audithttp.Tag(c, ActionPersonFaceDelete, "face:"+faceID, "Delete face "+faceID)
+	audithttp.Tag(
+		c,
+		ActionPersonFaceDelete,
+		"face:"+faceID,
+		"Delete face "+faceID,
+	)
 
 	if err := h.service.DeleteFace(c.Request.Context(), personID, faceID); err != nil {
 		httputil.WriteError(c, err)
@@ -383,7 +413,12 @@ func (h *Handler) DeleteFace(c *gin.Context) {
 // @Router       /persons/{id}/primary-face [put]
 func (h *Handler) SetPrimaryFace(c *gin.Context) {
 	personID := c.Param("id")
-	audithttp.Tag(c, ActionPersonPrimaryFaceSet, "person:"+personID, "Set primary face for person "+personID)
+	audithttp.Tag(
+		c,
+		ActionPersonPrimaryFaceSet,
+		"person:"+personID,
+		"Set primary face for person "+personID,
+	)
 
 	var req SetPrimaryFaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -412,7 +447,12 @@ func (h *Handler) SetPrimaryFace(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons/import/preview [post]
 func (h *Handler) PreviewImport(c *gin.Context) {
-	audithttp.Tag(c, ActionPersonImportPreview, "persons", "Preview person import")
+	audithttp.Tag(
+		c,
+		ActionPersonImportPreview,
+		"persons",
+		"Preview person import",
+	)
 	file, err := c.FormFile("file")
 	if err != nil {
 		httpImportRequiredError(c, err)
@@ -445,7 +485,12 @@ func (h *Handler) PreviewImport(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons/import/commit [post]
 func (h *Handler) CommitImport(c *gin.Context) {
-	audithttp.Tag(c, ActionPersonImportCommit, "persons", "Commit person import")
+	audithttp.Tag(
+		c,
+		ActionPersonImportCommit,
+		"persons",
+		"Commit person import",
+	)
 	file, err := c.FormFile("file")
 	if err != nil {
 		httpImportRequiredError(c, err)
@@ -486,7 +531,12 @@ func httpImportReadError(c *gin.Context, err error) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons/import-face-jobs [post]
 func (h *Handler) CreateFaceImportJob(c *gin.Context) {
-	audithttp.Tag(c, ActionPersonFaceImportCreate, "job:", "Create face bulk import job")
+	audithttp.Tag(
+		c,
+		ActionPersonFaceImportCreate,
+		"job:",
+		"Create face bulk import job",
+	)
 
 	file, err := c.FormFile("file")
 	if err != nil {
@@ -615,7 +665,12 @@ func parseSearchTopK(c *gin.Context) (int, *httputil.AppError) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons/search-by-image [post]
 func (h *Handler) SearchByImage(c *gin.Context) {
-	audithttp.Tag(c, ActionPersonSearchByImage, "search_by_image", "Search persons by image")
+	audithttp.Tag(
+		c,
+		ActionPersonSearchByImage,
+		"search_by_image",
+		"Search persons by image",
+	)
 
 	threshold, valErr := parseSearchThreshold(c)
 	if valErr != nil {

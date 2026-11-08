@@ -64,7 +64,12 @@ func NewPersonComponents(
 	opts Options,
 ) *PersonComponents {
 	store := NewStore(dbProvider)
-	service := NewService(store, facesDir, logger, opts)
+	service := NewService(
+		store,
+		facesDir,
+		logger,
+		opts,
+	)
 	handler := NewHandler(service, logger)
 	jobHandler := NewFaceImportJobHandler(service)
 

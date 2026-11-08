@@ -277,7 +277,10 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 	jobID := ""
 	for i := 0; i < 50; i++ {
 		time.Sleep(100 * time.Millisecond)
-		jobs, total, _ := svc.store.ListPersons(context.Background(), 10, 0, "", "")
+		jobs, total, _ := svc.store.ListPersons(context.Background(), ListPersonsParams{
+			Limit:  10,
+			Offset: 0,
+		})
 		if total > 0 && len(jobs) > 0 {
 			break
 		}
