@@ -15,6 +15,7 @@
 
 #include <cstring>
 #include <memory>
+#include <optional>
 
 #if defined(__linux__)
 #include <sys/mman.h>
@@ -169,7 +170,7 @@ bool WindowCrop::copy(const HardwareFrame& frame, const ViewWindow& view, uint8_
     // 目标为 DMA 槽位时覆盖整个 CPU 写入窗口；shm（-1）不做。
     platform::ScopedFdSync dst_sync(dst_dma_fd, platform::kDmaSyncWrite);
 
-    std::unique_ptr<platform::ScopedFdSync> src_sync;
+    std::optional<platform::ScopedFdSync> src_sync;
 #if defined(__linux__)
     ScopedMmap mapped;
 #endif
@@ -183,7 +184,7 @@ bool WindowCrop::copy(const HardwareFrame& frame, const ViewWindow& view, uint8_
             if (map_size == 0) {
                 return false;
             }
-            src_sync = std::make_unique<platform::ScopedFdSync>(frame.dma_fd, platform::kDmaSyncRead);
+            src_sync.emplace(frame.dma_fd, platform::kDmaSyncRead);
 #if defined(__linux__)
             base = mapped.open(frame.dma_fd, map_size);
 #endif
