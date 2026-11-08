@@ -13,6 +13,7 @@
 
 #include "alignment/aligner.hpp"
 #include "common/face_association.hpp"
+#include "common/face_image_quality.hpp"
 #include "common/face_quality.hpp"
 #include "common/match_config.hpp"
 #include "common/scene_filter.hpp"
@@ -156,6 +157,11 @@ zhulong_status_t model_unavailable_status(std::string_view base_name) {
 static_assert(std::string_view(zhulong::TARGET_MODEL_EXT) == kModelExtension,
               "本 target 的权重扩展名与 SDK 推理后端不一致：请使用对应后端的 SDK 前缀构建");
 
+// 融合池与特征抽取必须共用同一维度：任何一侧改成 768 维而另一侧没跟着改，症状是
+// 「融合后相似度全部乱掉」而不是编译失败 —— 所以在翻译单元级别钉死。
+static_assert(kFeatureDimension == kFusionFeatureDim,
+              "特征抽取维度必须与跨帧特征融合池维度一致");
+
 // ============================================================================
 // FaceRecognitionPlugin
 // ============================================================================
@@ -217,14 +223,13 @@ std::shared_ptr<zhulong::Session> FaceRecognitionPlugin::lookup_session(const Se
     return it == table.end() ? nullptr : it->second;
 }
 
-bool FaceRecognitionPlugin::build_face_item(
+bool FaceRecognitionPlugin::extract_qualified_face(
     const zhulong::Image& image,
     const FaceDetection& detection,
-    const std::shared_ptr<const std::vector<zhulong::FaceTemplate>>& gallery,
     zhulong::Session& rec_session,
     zhulong::Tensor& rec_input,
     const MatchParams& match_params,
-    zhulong::FaceItem& out_face) {
+    QualifiedFace& out_qualified) const {
     if (!detection.is_real_detection) {
         return false;
     }
@@ -249,27 +254,48 @@ bool FaceRecognitionPlugin::build_face_item(
         return false;
     }
 
-    std::vector<float> probe_features = extractor_.extract(rec_session, rec_input);
+    // 可选流式图像质量门禁（默认关闭；开启后在 512 维特征抽取前拦截严重模糊或欠曝/过曝脸块）
+    if (!passes_face_image_gate(rec_input.data<uint8_t>(),
+                                kFeaturePatchWidth, kFeaturePatchHeight,
+                                affine_determinant(affine_mat),
+                                match_params)) {
+        return false;
+    }
+
+    const std::vector<float> probe_features = extractor_.extract(rec_session, rec_input);
     if (probe_features.size() != kFeatureDimension) {
         return false;
     }
 
-    MatchResult match_result = matcher_.match(probe_features.data(), kFeatureDimension, *gallery,
-                                              match_params.threshold, match_params.top_k);
+    out_qualified.detection = detection;
+    out_qualified.quality_score = quality.quality_score;
+    std::copy(probe_features.begin(), probe_features.end(), out_qualified.probe_features.begin());
+    return true;
+}
 
-    if (match_params.filter_unmatched && !match_result.matched) {
+bool FaceRecognitionPlugin::populate_matched_face_item(
+    const QualifiedFace& qualified,
+    const std::array<float, kFusionFeatureDim>& match_features,
+    bool is_fused,
+    const std::vector<zhulong::FaceTemplate>& gallery,
+    const MatchParams& match_params,
+    zhulong::FaceItem& out_face) const {
+    const MatchResult match_result = matcher_.match(match_features.data(), kFeatureDimension, gallery,
+                                                    match_limits_from(match_params));
+
+    if (!should_emit_face_result(match_result.matched, match_params)) {
         return false;
     }
 
-    out_face.box[0] = detection.face_box[0];
-    out_face.box[1] = detection.face_box[1];
-    out_face.box[2] = detection.face_box[2];
-    out_face.box[3] = detection.face_box[3];
-    out_face.quality = quality.quality_score;
+    out_face.box[0] = qualified.detection.face_box[0];
+    out_face.box[1] = qualified.detection.face_box[1];
+    out_face.box[2] = qualified.detection.face_box[2];
+    out_face.box[3] = qualified.detection.face_box[3];
+    out_face.quality = qualified.quality_score;
 
     out_face.landmarks.clear();
     out_face.landmarks.reserve(kLandmarkCount);
-    for (const auto& point : detection.landmarks) {
+    for (const auto& point : qualified.detection.landmarks) {
         out_face.landmarks.push_back({point.x, point.y});
     }
 
@@ -279,7 +305,7 @@ bool FaceRecognitionPlugin::build_face_item(
     out_face.person_name = std::move(match_result.person_name);
     out_face.matched_face_id = std::move(match_result.matched_face_id);
     out_face.candidates = std::move(match_result.candidates);
-    out_face.is_fused = false;
+    out_face.is_fused = is_fused;
     return true;
 }
 
@@ -320,18 +346,53 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
         return {};
     }
 
-    // 3. 每张人脸：仿射对齐、特征向量与底库比对（一帧只取一次底库快照）
+    // 3. 每张合格人脸：仿射对齐 → 单帧特征抽取 → 按流跨帧特征融合 → 底库比对（一帧只取一次底库快照）
     std::vector<ProcessedFace> processed_faces;
     processed_faces.reserve(face_detections.size());
-    if (rec_session && rec_session->valid()) {
-        const auto gallery = zhulong::GalleryRegistry::instance().snapshot();
+    if (rec_session && rec_session->valid() && !face_detections.empty()) {
+        std::vector<QualifiedFace> qualified_faces;
+        qualified_faces.reserve(face_detections.size());
         zhulong::Tensor rec_input({1, kFeaturePatchHeight, kFeaturePatchWidth, 3}, zhulong::DataType::UINT8);
         for (const auto& detection : face_detections) {
-            ProcessedFace processed;
-            processed.face_box = detection.face_box;
-            if (build_face_item(image, detection, gallery, *rec_session, rec_input,
-                                match_params, processed.item)) {
-                processed_faces.push_back(std::move(processed));
+            QualifiedFace qualified;
+            if (extract_qualified_face(image, detection, *rec_session, rec_input,
+                                       match_params, qualified)) {
+                qualified_faces.push_back(std::move(qualified));
+            }
+        }
+
+        if (!qualified_faces.empty()) {
+            std::vector<FusionFaceObservation> observations;
+            observations.reserve(qualified_faces.size());
+            for (const auto& qf : qualified_faces) {
+                observations.push_back(FusionFaceObservation{&qf.probe_features, qf.quality_score});
+            }
+
+            const std::vector<FusedFaceOutput> fused_outputs =
+                fusion_manager_.fuse_frame(task_context.task_id, observations, match_params);
+            // 契约：与 observations 等长且同序。不等长说明融合池实现被改坏了，宁可本帧不出人脸，
+            // 也不能按下标错配地把 A 的特征贴到 B 的框上。
+            if (fused_outputs.size() != qualified_faces.size()) {
+                return {};
+            }
+
+            const auto gallery = zhulong::GalleryRegistry::instance().snapshot();
+            for (size_t i = 0; i < qualified_faces.size(); ++i) {
+                // 特征不可用（非有限/零模长）时直出只会得到「相似度 0 的伪候选人证据」，
+                // 该脸必须整条丢弃，而不是带着一张假证据进底库比对。
+                if (!fused_outputs[i].valid) {
+                    continue;
+                }
+                ProcessedFace processed;
+                processed.face_box = qualified_faces[i].detection.face_box;
+                if (populate_matched_face_item(qualified_faces[i],
+                                               fused_outputs[i].features,
+                                               fused_outputs[i].is_fused,
+                                               *gallery,
+                                               match_params,
+                                               processed.item)) {
+                    processed_faces.push_back(std::move(processed));
+                }
             }
         }
     }

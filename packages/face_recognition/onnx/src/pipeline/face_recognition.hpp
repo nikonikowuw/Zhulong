@@ -13,10 +13,12 @@
 #include "detection/detector.hpp"
 #include "feature/extractor.hpp"
 #include "matching/matcher.hpp"
+#include "common/face_feature_fusion.hpp"
 #include "common/match_config.hpp"
 
 #include <zhulong/algo.hpp>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -90,6 +92,14 @@ public:
                                                     zhulong::TaskContext& task_context);
 
 private:
+    /** @brief 通过质量门禁并提取完单帧 512 维特征的中间人脸项 */
+    struct QualifiedFace {
+        FaceDetection detection;
+        float quality_score{0.0f};
+        /** 定长特征：融合池与比对器都按固定维度取用，不需要再约定「长度必须恰好 512」 */
+        std::array<float, kFusionFeatureDim> probe_features{};
+    };
+
     /**
      * @brief worker_id → 级联会话（人体 / 特征）
      *
@@ -114,14 +124,21 @@ private:
     /** @brief 取本 worker 的会话副本；无对应会话时返回空指针（调用方按缺失处理） */
     std::shared_ptr<zhulong::Session> lookup_session(const SessionTable& table, uint32_t worker_id);
 
-    /** @brief 单张人脸：对齐 → 特征提取 → 1:N 比对；失败返回 false（该人脸被跳过） */
-    bool build_face_item(const zhulong::Image& image,
-                         const FaceDetection& detection,
-                         const std::shared_ptr<const std::vector<zhulong::FaceTemplate>>& gallery,
-                         zhulong::Session& rec_session,
-                         zhulong::Tensor& rec_input,
-                         const MatchParams& match_params,
-                         zhulong::FaceItem& out_face);
+    /** @brief 单张人脸：质量门禁 → 对齐 → 可选图像门禁 → 单帧特征提取；未达标返回 false */
+    bool extract_qualified_face(const zhulong::Image& image,
+                                const FaceDetection& detection,
+                                zhulong::Session& rec_session,
+                                zhulong::Tensor& rec_input,
+                                const MatchParams& match_params,
+                                QualifiedFace& out_qualified) const;
+
+    /** @brief 用（融合或单帧）512 维单位特征执行 1:N 比对并组装输出项；被过滤时返回 false */
+    bool populate_matched_face_item(const QualifiedFace& qualified,
+                                    const std::array<float, kFusionFeatureDim>& match_features,
+                                    bool is_fused,
+                                    const std::vector<zhulong::FaceTemplate>& gallery,
+                                    const MatchParams& match_params,
+                                    zhulong::FaceItem& out_face) const;
 
     zhulong::Model person_model_;
     zhulong::Model det_model_;
@@ -134,6 +151,7 @@ private:
     FaceDetector detector_;
     FaceFeatureExtractor extractor_;
     Matcher matcher_;
+    TaskFeatureFusionManager fusion_manager_;
     /** @brief 进程级默认算法参数（`--config` / init）；任务级配置在此之上覆盖 */
     MatchParams default_match_params_{};
 };

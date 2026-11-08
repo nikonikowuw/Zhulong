@@ -13,7 +13,7 @@
     "top_k": {
       "type": "integer",
       "title": "Top-K 候选人上限",
-      "description": "候选人返回上限",
+      "description": "按唯一身份 (person_id) 聚合的候选人员返回上限（每人保留最高分代表照片 ID）",
       "minimum": 1,
       "maximum": 20,
       "default": 3
@@ -53,8 +53,68 @@
     "filter_unmatched": {
       "type": "boolean",
       "title": "过滤未识别目标",
-      "description": "仅输出匹配成功的已登记人员 (开启后陌生人不产生结果与抓拍)",
+      "description": "仅输出匹配成功的已登记人员 (开启后陌生人及未通过分差校验的目标不产生结果与抓拍)",
       "default": false
+    },
+    "enable_face_image_gate": {
+      "type": "boolean",
+      "title": "启用人脸图像质量门禁",
+      "description": "在特征提取前检查对齐脸块的清晰度与欠曝/过曝比例（默认关闭，需结合现场光照与镜头离线标定后开启）",
+      "default": false
+    },
+    "min_face_sharpness": {
+      "type": "number",
+      "title": "最小人脸清晰度阈值",
+      "description": "对齐脸块经上采样尺度补偿后的拉普拉斯方差下限（仅在启用图像质量门禁时生效；默认值为占位值，须按现场样本标定）",
+      "minimum": 0.0,
+      "maximum": 100000.0,
+      "default": 30.0
+    },
+    "max_face_underexposure": {
+      "type": "number",
+      "title": "最大欠曝像素占比",
+      "description": "对齐脸块内部亮度 Y < 32 的暗部像素占比上限（仅在启用图像质量门禁时生效；0.0 表示不允许任何暗饱和像素）",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.50
+    },
+    "max_face_overexposure": {
+      "type": "number",
+      "title": "最大过曝像素占比",
+      "description": "对齐脸块内部亮度 Y > 224 的亮部像素占比上限（仅在启用图像质量门禁时生效；0.0 表示不允许任何亮饱和像素）",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.30
+    },
+    "min_match_margin": {
+      "type": "number",
+      "title": "最小身份相似度分差",
+      "description": "第一名与第二名不同身份之间的最小余弦相似度差值（0.0 表示关闭；开启后分差不足的目标按未确认身份拒识）",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.00
+    },
+    "enable_face_feature_fusion": {
+      "type": "boolean",
+      "title": "启用跨帧特征融合",
+      "description": "在单路视频流上下文内对同人连续合格人脸执行质量加权特征融合（默认开启，可提升走近与姿态恢复场景召回率）",
+      "default": true
+    },
+    "fusion_similarity_threshold": {
+      "type": "number",
+      "title": "跨帧特征融合相似度阈值",
+      "description": "判定前后帧属于同一人脸并允许融合的最小 512 维余弦相似度（需同时满足当前融合特征与最高质量锚点特征）",
+      "minimum": 0.45,
+      "maximum": 0.95,
+      "default": 0.62
+    },
+    "fusion_ttl_seconds": {
+      "type": "number",
+      "title": "跨帧融合状态保留时长",
+      "description": "单路特征状态池内未再次观测到同人时的状态过期淘汰秒数",
+      "minimum": 0.5,
+      "maximum": 30.0,
+      "default": 3.0
     }
   },
   "additionalProperties": false

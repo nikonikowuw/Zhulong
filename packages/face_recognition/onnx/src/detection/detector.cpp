@@ -26,9 +26,12 @@ constexpr std::array<int, 5> kPersonFpnStrides{8, 16, 32, 64, 128};
 constexpr int kFaceAnchorsPerCell = 2;
 constexpr int kPersonAnchorsPerCell = 1;
 
-/** @brief 单帧候选框上限：防病态输入把 NMS 拖成 O(n²) */
-constexpr size_t kMaxFaceCandidates = 128;
-constexpr size_t kMaxPersonCandidates = 128;
+/** @brief NMS 前全网格候选保留预算（ONNX 宿主档位：512，防止单人重复 anchor 挤掉其他人脸） */
+constexpr size_t kMaxPreNmsFaceCandidates = 512;
+constexpr size_t kMaxPreNmsPersonCandidates = 512;
+/** @brief NMS 后单帧目标输出上限（同时约束下游每帧 512 维特征提取次数硬上界） */
+constexpr size_t kMaxFaceDetections = 128;
+constexpr size_t kMaxPersonDetections = 128;
 
 /**
  * @brief letterbox + HWC(uint8 RGB) → NCHW(float32) 的一体化检测前处理
@@ -124,8 +127,11 @@ std::vector<FaceDetection> FaceDetector::detect(
     const std::vector<zhulong::Tensor> outputs = session.forward(single_input(std::move(onnx_input)));
     const auto candidates = decode_scrfd_candidates(outputs, kFaceFpnStrides, kFaceAnchorsPerCell,
                                                     model_w, model_h,
-                                                    effective_threshold, nms_threshold_, kMaxFaceCandidates,
-                                                    orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
+                                                    effective_threshold, nms_threshold_,
+                                                    ScrfdDecodeLimits{kMaxPreNmsFaceCandidates,
+                                                                      kMaxFaceDetections},
+                                                    ScrfdLetterbox{params.scale, params.pad_left,
+                                                                   params.pad_top, orig_w, orig_h});
 
     std::vector<FaceDetection> results;
     results.reserve(candidates.size());
@@ -166,8 +172,11 @@ std::vector<PersonBodyDetection> PersonDetector::detect(
     const std::vector<zhulong::Tensor> outputs = session.forward(single_input(std::move(onnx_input)));
     const auto candidates = decode_scrfd_candidates(outputs, kPersonFpnStrides, kPersonAnchorsPerCell,
                                                     model_w, model_h,
-                                                    effective_threshold, nms_threshold_, kMaxPersonCandidates,
-                                                    orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
+                                                    effective_threshold, nms_threshold_,
+                                                    ScrfdDecodeLimits{kMaxPreNmsPersonCandidates,
+                                                                      kMaxPersonDetections},
+                                                    ScrfdLetterbox{params.scale, params.pad_left,
+                                                                   params.pad_top, orig_w, orig_h});
 
     std::vector<PersonBodyDetection> results;
     results.reserve(candidates.size());

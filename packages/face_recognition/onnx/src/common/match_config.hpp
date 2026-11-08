@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstddef>
 #include <exception>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -53,6 +54,61 @@ inline constexpr float kDefaultMinFaceQuality = 0.40f;
 inline constexpr float kMinFaceQualityBound = 0.00f;
 inline constexpr float kMaxFaceQualityBound = 1.00f;
 
+/** @brief 对齐后 RGB 脸块图像门禁开关默认值（默认关闭，需结合现场光照与镜头标定后开启） */
+inline constexpr bool kDefaultEnableFaceImageGate = false;
+
+/** @brief 对齐脸块清晰度下限默认值（占位值，必须结合现场采集标定；显式设上限防止 double->float 窄化溢出） */
+inline constexpr float kDefaultMinFaceSharpness = 30.0f;
+inline constexpr float kMinFaceSharpnessBound = 0.0f;
+inline constexpr float kMaxFaceSharpnessBound = 100000.0f;
+
+/** @brief 对齐脸块欠曝/过曝内部像素占比上限默认值（占位值；0.0 表示不允许任何暗/亮饱和像素） */
+inline constexpr float kDefaultMaxFaceUnderexposure = 0.50f;
+inline constexpr float kDefaultMaxFaceOverexposure = 0.30f;
+inline constexpr float kMinFaceExposureBound = 0.0f;
+inline constexpr float kMaxFaceExposureBound = 1.0f;
+
+/** @brief 不同身份第一、第二名最小相似度分差默认值（0.0 表示关闭分差门禁） */
+inline constexpr float kDefaultMinMatchMargin = 0.00f;
+inline constexpr float kMinMatchMarginBound = 0.0f;
+inline constexpr float kMaxMatchMarginBound = 1.0f;
+
+/** @brief 跨帧特征融合开关默认值（默认开启） */
+inline constexpr bool kDefaultEnableFaceFeatureFusion = true;
+
+/** @brief 跨帧同人特征融合余弦相似度阈值默认值与合法域 */
+inline constexpr float kDefaultFusionSimilarityThreshold = 0.62f;
+inline constexpr float kMinFusionSimilarityThreshold = 0.45f;
+inline constexpr float kMaxFusionSimilarityThreshold = 0.95f;
+
+/** @brief 跨帧特征状态池未命中过期秒数默认值与合法域 */
+inline constexpr float kDefaultFusionTtlSeconds = 3.0f;
+inline constexpr float kMinFusionTtlSeconds = 0.5f;
+inline constexpr float kMaxFusionTtlSeconds = 30.0f;
+
+/**
+ * @brief 判断 JSON 拿到的 `double` 是否落在以 `float` 常量表示的闭区间内
+ *
+ * 判据是「舍入到 float 之后仍然不越界」而不是「double 直接跟 float 比」：JSON 里的 `0.95`
+ * 是 double，而 `kMaxFusionSimilarityThreshold` 是 `0.949999988…`，直接比较会把**合法上界**
+ * 判成越界（1.2e-8 的舍入差，症状是「schema 允许的边界值配不进去，静默回落默认值」）。
+ *
+ * 先做一次 double 域的粗筛再 `static_cast`：超出 float 表示范围的值直接窄化是 UB
+ * （`min_face_sharpness: 1e100` 这类输入必须在这里被挡住，而不是靠调用方小心）。
+ */
+[[nodiscard]] inline bool within_float_bounds(double value, float min_bound, float max_bound) noexcept {
+    if (!std::isfinite(value)) {
+        return false;
+    }
+    const double lo = static_cast<double>(min_bound);
+    const double hi = static_cast<double>(max_bound);
+    if (value < lo - 1.0 || value > hi + 1.0) {
+        return false;
+    }
+    const float narrowed = static_cast<float>(value);
+    return narrowed >= min_bound && narrowed <= max_bound;
+}
+
 /** @brief 一次比对与推理实际生效的参数 */
 struct MatchParams {
     float threshold{kDefaultMatchThreshold};
@@ -62,6 +118,14 @@ struct MatchParams {
     int min_face_size{kDefaultMinFaceSize};
     float min_face_quality{kDefaultMinFaceQuality};
     bool filter_unmatched{false};
+    bool enable_face_image_gate{kDefaultEnableFaceImageGate};
+    float min_face_sharpness{kDefaultMinFaceSharpness};
+    float max_face_underexposure{kDefaultMaxFaceUnderexposure};
+    float max_face_overexposure{kDefaultMaxFaceOverexposure};
+    float min_match_margin{kDefaultMinMatchMargin};
+    bool enable_face_feature_fusion{kDefaultEnableFaceFeatureFusion};
+    float fusion_similarity_threshold{kDefaultFusionSimilarityThreshold};
+    float fusion_ttl_seconds{kDefaultFusionTtlSeconds};
 };
 
 /**
@@ -262,6 +326,62 @@ inline MatchParams resolve_match_params(std::string_view task_json, MatchParams 
     bool filter_unmatched = false;
     if (find_json_bool(json, "filter_unmatched", filter_unmatched)) {
         resolved.filter_unmatched = filter_unmatched;
+    }
+
+    // 8. 对齐脸块图像门禁开关（单一关闭语义）
+    bool enable_face_image_gate = false;
+    if (find_json_bool(json, "enable_face_image_gate", enable_face_image_gate)) {
+        resolved.enable_face_image_gate = enable_face_image_gate;
+    }
+
+    // 9. 对齐脸块清晰度下限（有界区间，阻断 double -> float 窄化溢出 UB）
+    double min_face_sharpness = 0.0;
+    if (find_json_number(json, "min_face_sharpness", min_face_sharpness) &&
+        within_float_bounds(min_face_sharpness, kMinFaceSharpnessBound, kMaxFaceSharpnessBound)) {
+        resolved.min_face_sharpness = static_cast<float>(min_face_sharpness);
+    }
+
+    // 10. 对齐脸块欠曝像素占比上限 [0.0, 1.0]
+    double max_face_underexposure = 0.0;
+    if (find_json_number(json, "max_face_underexposure", max_face_underexposure) &&
+        within_float_bounds(max_face_underexposure, kMinFaceExposureBound, kMaxFaceExposureBound)) {
+        resolved.max_face_underexposure = static_cast<float>(max_face_underexposure);
+    }
+
+    // 11. 对齐脸块过曝像素占比上限 [0.0, 1.0]
+    double max_face_overexposure = 0.0;
+    if (find_json_number(json, "max_face_overexposure", max_face_overexposure) &&
+        within_float_bounds(max_face_overexposure, kMinFaceExposureBound, kMaxFaceExposureBound)) {
+        resolved.max_face_overexposure = static_cast<float>(max_face_overexposure);
+    }
+
+    // 12. 不同身份第一、第二名最小相似度分差 [0.0, 1.0]
+    double min_match_margin = 0.0;
+    if (find_json_number(json, "min_match_margin", min_match_margin) &&
+        within_float_bounds(min_match_margin, kMinMatchMarginBound, kMaxMatchMarginBound)) {
+        resolved.min_match_margin = static_cast<float>(min_match_margin);
+    }
+
+    // 13. 跨帧特征融合开关
+    bool enable_face_feature_fusion = true;
+    if (find_json_bool(json, "enable_face_feature_fusion", enable_face_feature_fusion)) {
+        resolved.enable_face_feature_fusion = enable_face_feature_fusion;
+    }
+
+    // 14. 跨帧同人特征融合相似度阈值 [kMinFusionSimilarityThreshold, kMaxFusionSimilarityThreshold]
+    //     区间边界取自常量本身（而不是再写一遍字面量），避免改常量忘了改解析、两处悄悄漂移
+    double fusion_similarity_threshold = 0.0;
+    if (find_json_number(json, "fusion_similarity_threshold", fusion_similarity_threshold) &&
+        within_float_bounds(fusion_similarity_threshold, kMinFusionSimilarityThreshold,
+                            kMaxFusionSimilarityThreshold)) {
+        resolved.fusion_similarity_threshold = static_cast<float>(fusion_similarity_threshold);
+    }
+
+    // 15. 跨帧特征状态池过期秒数 [kMinFusionTtlSeconds, kMaxFusionTtlSeconds]
+    double fusion_ttl_seconds = 0.0;
+    if (find_json_number(json, "fusion_ttl_seconds", fusion_ttl_seconds) &&
+        within_float_bounds(fusion_ttl_seconds, kMinFusionTtlSeconds, kMaxFusionTtlSeconds)) {
+        resolved.fusion_ttl_seconds = static_cast<float>(fusion_ttl_seconds);
     }
 
     return resolved;

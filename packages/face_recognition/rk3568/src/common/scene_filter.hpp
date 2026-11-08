@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include "common/match_config.hpp"
+
 #include <zhulong/algo.hpp>
 
 #include <cstddef>
@@ -22,6 +24,17 @@
 #include <vector>
 
 namespace zhulong::face {
+
+/**
+ * @brief 判断单张比对后的人脸结果是否应向上游输出（由 `build_face_item` 与 `unit-test` 共用）
+ *
+ * 只看「最终是否命中」一个布尔量：`filter_unmatched` 与 `min_match_margin` 的相互作用
+ * （分差不足 → `matched=false`）已经在 `Matcher::match` 内部结算，这里再做一次模板/字段
+ * 推导只会把两个模块的判据绑在一起。
+ */
+[[nodiscard]] inline bool should_emit_face_result(bool matched, const MatchParams& match_params) noexcept {
+    return !match_params.filter_unmatched || matched;
+}
 
 /**
  * @brief 裁掉没有「已匹配人脸」的人体，并重排场景内的 person_index

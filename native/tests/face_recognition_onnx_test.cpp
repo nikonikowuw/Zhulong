@@ -359,6 +359,59 @@ int main() {
         api.result_release(face_res);
     }
 
+    // 跨帧特征融合 C ABI 契约：独立流 task_id=102 上连续喂同一人两帧 (a1 -> a2)，首帧 is_fused=0，次帧融合激活 is_fused=1；
+    // 随后喂不同人 (b1) 余弦相似度远低于阈值，必须新建独立状态且 is_fused=0，不串脸污染。
+    std::cout << "[5.6] Testing cross-frame feature fusion over C ABI..." << std::endl;
+    {
+        zhulong_task_ctx_h fusion_task = nullptr;
+        rc = api.task_open(worker, 102, &fusion_task);
+        assert(rc == ZHULONG_PLUGIN_OK && fusion_task != nullptr);
+
+        auto run_crop_frame = [&](const PpmImage& img, int64_t ts_us, uint64_t fid) {
+            zhulong_frame_view fview{};
+            fview.frame_id = fid;
+            fview.pts = fid * 40000;
+            fview.timestamp_us = ts_us;
+            fview.format = ZHULONG_PIXEL_FORMAT_RGB24;
+            fview.width = img.width;
+            fview.height = img.height;
+            fview.planes[0] = img.rgb.data();
+            fview.strides[0] = img.width * 3;
+            fview.dma_buf_fd = -1;
+
+            zhulong_inference_result* out = nullptr;
+            zhulong_status_t st = api.process(fusion_task, &fview, &out);
+            assert(st == ZHULONG_PLUGIN_OK && out != nullptr);
+            assert(out->result_type == ZHULONG_RESULT_TYPE_SCENE_STRUCTURE);
+            return out;
+        };
+
+        zhulong_inference_result* r1 = run_crop_frame(ppm_a1, 1000000, 1);
+        const auto* s1 = reinterpret_cast<const zhulong_scene_structure*>(r1->data);
+        assert(s1 != nullptr && s1->face_count >= 1);
+        assert(s1->faces[0].matched == 1);
+        assert(s1->faces[0].is_fused == 0 && "首帧观测不得标记为 is_fused");
+        api.result_release(r1);
+
+        zhulong_inference_result* r2 = run_crop_frame(ppm_a2, 1200000, 2);
+        const auto* s2 = reinterpret_cast<const zhulong_scene_structure*>(r2->data);
+        assert(s2 != nullptr && s2->face_count >= 1);
+        assert(s2->faces[0].matched == 1);
+        assert(s2->faces[0].is_fused == 1 && "同流连续第 2 帧同人特征融合后 is_fused 必须为 1");
+        assert(std::strcmp(s2->faces[0].person_id, "PERSON_A") == 0);
+        api.result_release(r2);
+
+        zhulong_inference_result* r3 = run_crop_frame(ppm_b1, 1400000, 3);
+        const auto* s3 = reinterpret_cast<const zhulong_scene_structure*>(r3->data);
+        assert(s3 != nullptr && s3->face_count >= 1);
+        assert(s3->faces[0].matched == 0 && "不同人特征不得被已有融合池串脸污染");
+        assert(s3->faces[0].is_fused == 0 && "新出现陌生人首帧 is_fused 必须为 0");
+        api.result_release(r3);
+
+        api.task_close(fusion_task);
+        std::cout << "  cross-frame feature fusion C ABI verified (is_fused: 0 -> 1, stranger isolated)" << std::endl;
+    }
+
     api.task_close(task);
     api.worker_destroy(worker);
     api.model_destroy(model);
