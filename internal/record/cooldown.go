@@ -57,7 +57,15 @@ func (cm *CooldownManager) Allow(key string, now time.Time) bool {
 // returns false without updating any timestamps.
 // Otherwise, it records now for all keys and returns true.
 func (cm *CooldownManager) AllowAll(keys []string, now time.Time) bool {
-	if len(keys) == 0 {
+	return cm.AllowAllAndStamp(keys, nil, now)
+}
+
+// AllowAllAndStamp atomically checks checkKeys against the cooldown window;
+// if all checkKeys pass, it stamps both checkKeys and stampOnlyKeys with now.
+// If ANY key in checkKeys is still in cooldown, it returns false without
+// modifying any timestamps (neither checkKeys nor stampOnlyKeys).
+func (cm *CooldownManager) AllowAllAndStamp(checkKeys, stampOnlyKeys []string, now time.Time) bool {
+	if len(checkKeys) == 0 && len(stampOnlyKeys) == 0 {
 		return true
 	}
 	cm.mu.Lock()
@@ -65,22 +73,30 @@ func (cm *CooldownManager) AllowAll(keys []string, now time.Time) bool {
 
 	cm.lazyCleanLocked(now)
 
-	// 过滤空键并去重。键数极少（识别最多 2 个、车辆 2 个），线性扫描比额外
+	// 过滤空键并去重。键数极少（识别最多 2+1 个、车辆 2 个），线性扫描比额外
 	// 维护一张 map 更省 —— 这条路径每帧每个目标都会走一次。
-	validKeys := make([]string, 0, len(keys))
-	for _, k := range keys {
-		if k == "" || slices.Contains(validKeys, k) {
+	validCheck := make([]string, 0, len(checkKeys))
+	for _, k := range checkKeys {
+		if k == "" || slices.Contains(validCheck, k) {
 			continue
 		}
-		validKeys = append(validKeys, k)
+		validCheck = append(validCheck, k)
 	}
 
-	if len(validKeys) == 0 {
+	validStampOnly := make([]string, 0, len(stampOnlyKeys))
+	for _, k := range stampOnlyKeys {
+		if k == "" || slices.Contains(validCheck, k) || slices.Contains(validStampOnly, k) {
+			continue
+		}
+		validStampOnly = append(validStampOnly, k)
+	}
+
+	if len(validCheck) == 0 && len(validStampOnly) == 0 {
 		return true
 	}
 
-	// Atomic check: any key in cooldown causes rejection
-	for _, k := range validKeys {
+	// Atomic check: any checkKey in cooldown causes rejection without side effects
+	for _, k := range validCheck {
 		if lastTime, exists := cm.records[k]; exists {
 			diff := now.Sub(lastTime)
 			if diff >= 0 && diff < cm.cooldown {
@@ -89,8 +105,11 @@ func (cm *CooldownManager) AllowAll(keys []string, now time.Time) bool {
 		}
 	}
 
-	// Atomic update: only when all keys passed
-	for _, k := range validKeys {
+	// Atomic update: only when all checkKeys passed
+	for _, k := range validCheck {
+		cm.records[k] = now
+	}
+	for _, k := range validStampOnly {
 		cm.records[k] = now
 	}
 	return true

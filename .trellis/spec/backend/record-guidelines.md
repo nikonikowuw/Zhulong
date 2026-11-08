@@ -17,7 +17,7 @@ Runner MSG_RESULT
 - **目标跟踪与身份去重契约**：
   - `track_id` 归**宿主独占**：由宿主关联器在 `(camera_id, algorithm_id, kind)` 命名空间内单点生成，语义为「仅进程运行期内可比、进程内单调自增」；算法包内部的跟踪 ID 不得经 IPC 载荷出口。载荷里的 `track_id` 仅用于 `IsFaceCloseup()` 退化判据，不进库、不参与去重键、不回写进模型载荷或事件载荷。
   - **去重键格式**：统一使用 `trk:` 前缀区分身份键与回落键：
-    - 识别：`rec:{camera}:trk:{id}`；有已登记人员时与 `rec:{camera}:person:{person_id}` 组成两级抑制，必须通过原子 `AllowAll` 判定。
+    - 识别：已匹配人员用 `rec:{camera}:trk:{id}` 并与 `rec:{camera}:person:{person_id}` 组成两级抑制，未匹配陌生人用 `rec:{camera}:trk:{id}:unmatched`；通过原子 `AllowAllAndStamp` 判定——允许同一 `track_id` 在冷却期内完成一次 `unmatched → matched` 升级落库，且已匹配通过时原子顺带封锁 `:unmatched` 抑制倒退陌生人。
     - 人体/近景抓拍：`cap:{camera}:person:trk:{id}`；无身份回落时近景用 `face:box`、人体用 `person:box`。
     - 车辆抓拍：`cap:{camera}:vehicle:trk:{id}`；有车牌时与 `cap:{camera}:vehicle:plate:{plate_no}` 组成两级抑制，必须通过原子 `AllowAll` 判定。
     - 通用检测：`cap:{camera}:{label}:trk:{id}`；无身份回落保持 `cap:{camera}:{label}`。

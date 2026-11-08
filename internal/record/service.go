@@ -640,7 +640,8 @@ func (s *Service) filterRecognitions(
 			MatchedFaceID: face.MatchedFaceID,
 			Similarity:    face.Similarity,
 		}
-		if !s.cooldown.AllowAll(recognitionCooldownKeys(f.res.CameraID, trackID, keyFace), f.capturedAt) {
+		checkKeys, stampOnlyKeys := recognitionCooldownPlan(f.res.CameraID, trackID, keyFace)
+		if !s.cooldown.AllowAllAndStamp(checkKeys, stampOnlyKeys, f.capturedAt) {
 			continue
 		}
 

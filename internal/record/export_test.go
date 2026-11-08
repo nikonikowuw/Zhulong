@@ -89,6 +89,7 @@ func NewSnapshotJobWithPTSForTest(
 var (
 	RecognitionCooldownKeyForTest      = recognitionCooldownKey
 	RecognitionCooldownKeysForTest     = recognitionCooldownKeys
+	RecognitionCooldownPlanForTest     = recognitionCooldownPlan
 	PersonCaptureCooldownKeyForTest    = personCaptureCooldownKey
 	FaceCaptureCooldownKeyForTest      = faceCaptureCooldownKey
 	VehicleCaptureCooldownKeyForTest   = vehicleCaptureCooldownKey

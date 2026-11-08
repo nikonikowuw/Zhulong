@@ -357,6 +357,13 @@ func TestTrackDeduplication_CooldownKeyContract(t *testing.T) {
 				expected: "rec:cam_01:trk:12",
 			},
 			{
+				name:     "with positive track ID (unmatched)",
+				cam:      "cam_01",
+				trackID:  12,
+				face:     aitypes.FaceSubItem{Box: [4]float64{0.1, 0.2, 0.3, 0.4}},
+				expected: "rec:cam_01:trk:12:unmatched",
+			},
+			{
 				name:     "fallback to person ID",
 				cam:      "cam_01",
 				trackID:  0,
@@ -464,7 +471,7 @@ func TestTrackDeduplication_CooldownKeyContract(t *testing.T) {
 	})
 }
 
-// TestTrackDeduplication_MultiKeyContract 守住两级抑制键的「无重复」不变量。
+// TestTrackDeduplication_MultiKeyContract 守住两级抑制键的「无重复」不变量与升级计划契约。
 //
 // AllowAll 内部会去重，所以重复键不会表现为 bug，只会表现为白付一次键构造；
 // 真正的契约是「回落键与人员/车牌键同源时必须只出现一次」。
@@ -478,6 +485,32 @@ func TestTrackDeduplication_MultiKeyContract(t *testing.T) {
 		wantTracked := []string{"rec:cam_01:trk:12", "rec:cam_01:person:person_1"}
 		if !slices.Equal(tracked, wantTracked) {
 			t.Errorf("tracked keys = %v, want %v", tracked, wantTracked)
+		}
+
+		checkMatched, stampMatched := record.RecognitionCooldownPlanForTest(
+			"cam_01",
+			12,
+			aitypes.FaceSubItem{Box: [4]float64{0.1, 0.2, 0.3, 0.4}, Matched: true, PersonID: "person_1"},
+		)
+		if !slices.Equal(checkMatched, wantTracked) {
+			t.Errorf("matched plan checkKeys = %v, want %v", checkMatched, wantTracked)
+		}
+		wantStamp := []string{"rec:cam_01:trk:12:unmatched"}
+		if !slices.Equal(stampMatched, wantStamp) {
+			t.Errorf("matched plan stampOnlyKeys = %v, want %v", stampMatched, wantStamp)
+		}
+
+		checkUnmatched, stampUnmatched := record.RecognitionCooldownPlanForTest(
+			"cam_01",
+			12,
+			aitypes.FaceSubItem{Box: [4]float64{0.1, 0.2, 0.3, 0.4}},
+		)
+		wantUnmatchedCheck := []string{"rec:cam_01:trk:12:unmatched"}
+		if !slices.Equal(checkUnmatched, wantUnmatchedCheck) {
+			t.Errorf("unmatched plan checkKeys = %v, want %v", checkUnmatched, wantUnmatchedCheck)
+		}
+		if len(stampUnmatched) != 0 {
+			t.Errorf("unmatched plan stampOnlyKeys = %v, want empty", stampUnmatched)
 		}
 
 		fallback := record.RecognitionCooldownKeysForTest(
@@ -527,4 +560,179 @@ func TestTrackDeduplication_MultiKeyContract(t *testing.T) {
 			t.Errorf("alarm key = %q, want %q", got, want)
 		}
 	})
+}
+
+// TestTrackDeduplication_RecognitionUnmatchedToMatchedUpgrade 验证同轨迹识别升级契约：
+//  1. 同一轨迹在 3s 冷却期内先产出 unmatched 陌生人，后续跨帧融合命中人员时允许升级落库一次；
+//  2. 升级后同一冷却期内后续 matched 与侧脸退化 unmatched 均被抑制；
+//  3. 首帧直接 matched 的轨迹，在冷却期内侧脸退化 unmatched 不会倒退补发陌生人记录；
+//  4. 持续 unmatched 的轨迹，在冷却期内仅产生 1 条陌生人记录；
+//  5. 新轨迹命中已在冷却期内的 person_id 被两级抑制拒绝时，不得误打戳该新轨迹的 :unmatched 键（原子无副作用）。
+func TestTrackDeduplication_RecognitionUnmatchedToMatchedUpgrade(t *testing.T) {
+	store, dbStore, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if err := dbStore.DB().Exec(`INSERT INTO persons (id, name, created_at, updated_at)
+		VALUES ('person_bob', 'Bob', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
+		t.Fatalf("insert person_bob: %v", err)
+	}
+	for _, row := range []struct {
+		faceID, personID, path string
+	}{
+		{"face_alice_01", "person_alice", "faces/alice.jpg"},
+		{"face_bob_01", "person_bob", "faces/bob.jpg"},
+	} {
+		if err := dbStore.DB().Exec(`INSERT INTO person_faces (id, person_id, image_path, feature_vector, created_at)
+			VALUES (?, ?, ?, X'00', CURRENT_TIMESTAMP)`, row.faceID, row.personID, row.path).Error; err != nil {
+			t.Fatalf("insert person_face %s: %v", row.faceID, err)
+		}
+	}
+
+	svc := record.NewService(store, zap.NewNop())
+	svc.SetCooldownWindow(3 * time.Second)
+	baseTime := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+
+	sendPersonFace := func(cam string, dt time.Duration, bodyBox, faceBox [4]float64, face aitypes.FaceSubItem) {
+		t.Helper()
+		face.Box = faceBox
+		res := aitypes.InferenceResult{
+			CameraID:    cam,
+			AlgorithmID: "algo_01",
+			PTS:         int64(dt / time.Millisecond),
+			Timestamp:   baseTime.Add(dt),
+			TaskType:    aitypes.TaskTypePersonStructure,
+			Persons: []aitypes.PersonItem{
+				{
+					BodyBox:   bodyBox,
+					BodyScore: 0.92,
+					Faces:     []aitypes.FaceSubItem{face},
+				},
+			},
+		}
+		if err := svc.ProcessInferenceResult(ctx, res); err != nil {
+			t.Fatalf("ProcessInferenceResult(%s, +%v) failed: %v", cam, dt, err)
+		}
+	}
+
+	// --- 场景 A & B: cam_01 同一轨迹 unmatched -> matched 升级，随后 matched 与退化 unmatched 均被抑制 ---
+	track1Body := [4]float64{0.10, 0.10, 0.30, 0.60}
+	track1Face := [4]float64{0.14, 0.12, 0.26, 0.26}
+
+	// Frame 1 (t=0ms): 远距单帧未达阈值 -> 产生 1 条陌生人记录
+	sendPersonFace("cam_01", 0, track1Body, track1Face, aitypes.FaceSubItem{
+		Quality:    0.68,
+		Matched:    false,
+		Similarity: 0.48,
+	})
+	// Frame 2 (t=300ms): 跨帧特征融合后突破阈值 -> 允许升级，产生 1 条已匹配记录
+	sendPersonFace("cam_01", 300*time.Millisecond, track1Body, track1Face, aitypes.FaceSubItem{
+		Quality:       0.75,
+		Matched:       true,
+		IsFused:       true,
+		PersonID:      "person_alice",
+		PersonName:    "Alice",
+		MatchedFaceID: "face_alice_01",
+		Similarity:    0.58,
+	})
+	// Frame 3 (t=600ms): 继续命中 Alice -> 被 trk + person 冷却抑制
+	sendPersonFace("cam_01", 600*time.Millisecond, track1Body, track1Face, aitypes.FaceSubItem{
+		Quality:       0.78,
+		Matched:       true,
+		IsFused:       true,
+		PersonID:      "person_alice",
+		PersonName:    "Alice",
+		MatchedFaceID: "face_alice_01",
+		Similarity:    0.61,
+	})
+	// Frame 4 (t=900ms): 侧脸质量下降退化回 unmatched -> 已被升级顺带封锁，不补发陌生人
+	sendPersonFace("cam_01", 900*time.Millisecond, track1Body, track1Face, aitypes.FaceSubItem{
+		Quality:    0.55,
+		Matched:    false,
+		Similarity: 0.39,
+	})
+
+	recsCam1, totalCam1, err := svc.ListRecognitions(ctx, record.RecognitionFilter{CameraID: "cam_01"})
+	if err != nil || totalCam1 != 2 || len(recsCam1) != 2 {
+		t.Fatalf("expected 2 recognitions (1 unmatched + 1 upgraded matched) on cam_01, got total=%d len=%d err=%v",
+			totalCam1, len(recsCam1), err)
+	}
+	// ListRecognitions 按 captured_at DESC 返回：recsCam1[0] 为升级后的 matched，recsCam1[1] 为首帧 unmatched
+	if !recsCam1[0].Matched || recsCam1[0].PersonID == nil || *recsCam1[0].PersonID != "person_alice" {
+		t.Fatalf("expected upgraded matched recognition for person_alice, got matched=%v personID=%v",
+			recsCam1[0].Matched, recsCam1[0].PersonID)
+	}
+	if recsCam1[1].Matched || recsCam1[1].PersonID != nil {
+		t.Fatalf("expected initial unmatched recognition, got matched=%v personID=%v",
+			recsCam1[1].Matched, recsCam1[1].PersonID)
+	}
+	if recsCam1[0].TrackID <= 0 || recsCam1[0].TrackID != recsCam1[1].TrackID {
+		t.Fatalf("expected both records to share positive host TrackID, got %d and %d",
+			recsCam1[0].TrackID, recsCam1[1].TrackID)
+	}
+
+	// --- 场景 E: 新轨迹撞上已在冷却期的 person_alice 被拒绝时，不得污染新轨迹的 :unmatched 键 ---
+	trackNewBody := [4]float64{0.65, 0.55, 0.85, 0.95}
+	trackNewFace := [4]float64{0.69, 0.58, 0.81, 0.72}
+	// t=1000ms: 新轨迹误判/重现为 person_alice -> 因 rec:cam_01:person:person_alice 冷却被拒
+	sendPersonFace("cam_01", 1000*time.Millisecond, trackNewBody, trackNewFace, aitypes.FaceSubItem{
+		Quality:       0.72,
+		Matched:       true,
+		PersonID:      "person_alice",
+		PersonName:    "Alice",
+		MatchedFaceID: "face_alice_01",
+		Similarity:    0.55,
+	})
+	// t=1100ms: 该新轨迹回落为 unmatched -> 因上一步被拒未打戳 :unmatched，本条陌生人记录必须正常落库
+	sendPersonFace("cam_01", 1100*time.Millisecond, trackNewBody, trackNewFace, aitypes.FaceSubItem{
+		Quality:    0.66,
+		Matched:    false,
+		Similarity: 0.41,
+	})
+	recsAfterReject, totalAfterReject, err := svc.ListRecognitions(ctx, record.RecognitionFilter{CameraID: "cam_01"})
+	if err != nil || totalAfterReject != 3 || len(recsAfterReject) != 3 {
+		t.Fatalf("expected 3 recognitions after atomic rejection + unmatched on new track, got total=%d err=%v",
+			totalAfterReject, err)
+	}
+	if recsAfterReject[0].Matched || recsAfterReject[0].TrackID == recsCam1[0].TrackID {
+		t.Fatalf("expected new track unmatched record to survive atomic rejection, got matched=%v trackID=%d",
+			recsAfterReject[0].Matched, recsAfterReject[0].TrackID)
+	}
+
+	// --- 场景 C & D: cam_02 上验证纯 matched->unmatched 不倒退，且纯 unmatched->unmatched 不刷屏 ---
+	bobBody := [4]float64{0.10, 0.10, 0.30, 0.60}
+	bobFace := [4]float64{0.14, 0.12, 0.26, 0.26}
+	sendPersonFace("cam_02", 0, bobBody, bobFace, aitypes.FaceSubItem{
+		Quality:       0.88,
+		Matched:       true,
+		PersonID:      "person_bob",
+		PersonName:    "Bob",
+		MatchedFaceID: "face_bob_01",
+		Similarity:    0.79,
+	})
+	// 400ms 后侧脸退化为 unmatched -> 必须被首帧顺带打戳的 :unmatched 抑制
+	sendPersonFace("cam_02", 400*time.Millisecond, bobBody, bobFace, aitypes.FaceSubItem{
+		Quality:    0.54,
+		Matched:    false,
+		Similarity: 0.36,
+	})
+
+	strangerBody := [4]float64{0.60, 0.10, 0.80, 0.60}
+	strangerFace := [4]float64{0.64, 0.12, 0.76, 0.26}
+	sendPersonFace("cam_02", 100*time.Millisecond, strangerBody, strangerFace, aitypes.FaceSubItem{
+		Quality:    0.70,
+		Matched:    false,
+		Similarity: 0.31,
+	})
+	sendPersonFace("cam_02", 500*time.Millisecond, strangerBody, strangerFace, aitypes.FaceSubItem{
+		Quality:    0.72,
+		Matched:    false,
+		Similarity: 0.33,
+	})
+
+	recsCam2, totalCam2, err := svc.ListRecognitions(ctx, record.RecognitionFilter{CameraID: "cam_02"})
+	if err != nil || totalCam2 != 2 || len(recsCam2) != 2 {
+		t.Fatalf("expected 2 recognitions on cam_02 (1 Bob + 1 stranger), got total=%d len=%d err=%v",
+			totalCam2, len(recsCam2), err)
+	}
 }
