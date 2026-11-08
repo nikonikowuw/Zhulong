@@ -149,7 +149,7 @@ func TestAuthService_ConcurrentInitKeepsSingleUser(t *testing.T) {
 	close(start)
 	wait.Wait()
 
-	succeeded := 0
+	var succeeded int
 	for i, err := range errs {
 		switch {
 		case err == nil:
@@ -195,7 +195,7 @@ func TestRateLimiter_ConcurrentReservationsAreBounded(t *testing.T) {
 	wait.Wait()
 	close(admitted)
 
-	reserved := 0
+	var reserved int
 	for attempt := range admitted {
 		reserved++
 		// Every admission is a real failed login here, so it must also consume the
@@ -280,7 +280,10 @@ func TestAuthService_LoginPropagatesUserStoreFailures(t *testing.T) {
 		zap.NewNop(),
 	)
 
-	_, _, err := service.Login(context.Background(), "192.0.2.1", LoginRequest{Username: "admin", Password: "password123"})
+	_, _, err := service.Login(context.Background(), "192.0.2.1", LoginRequest{
+		Username: "admin",
+		Password: "password123",
+	})
 	if !errors.Is(err, cause) || errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("expected wrapped database failure, got %v", err)
 	}

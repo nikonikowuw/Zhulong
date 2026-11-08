@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -67,7 +68,7 @@ func TestGORMUserStore_HasUserAndCreate(t *testing.T) {
 		PasswordHash: "another_hash",
 	}
 	err = userStore.Create(ctx, secondUser)
-	if err != ErrUserAlreadyExists {
+	if !errors.Is(err, ErrUserAlreadyExists) {
 		t.Fatalf("expected ErrUserAlreadyExists, got %v", err)
 	}
 }
@@ -79,11 +80,11 @@ func TestGORMUserStore_GetAndModify(t *testing.T) {
 
 	// Not found checks
 	_, err := userStore.GetByUsername(ctx, "nonexistent")
-	if err != ErrUserNotFound {
+	if !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound, got %v", err)
 	}
 	_, err = userStore.GetByID(ctx, 999)
-	if err != ErrUserNotFound {
+	if !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("expected ErrUserNotFound, got %v", err)
 	}
 

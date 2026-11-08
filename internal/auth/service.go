@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -154,17 +155,12 @@ func (r *RateLimiter) pruneExpiredLocked(now time.Time) {
 	r.lastCleanup = now
 }
 
-// pruneLocked drops the failures that fell outside ip's sliding window. The slice
-// is filtered in place, so tracking an IP does not allocate per attempt.
+// pruneLocked drops the failures that fell outside ip's sliding window.
 func (r *RateLimiter) pruneLocked(ip string, now time.Time) {
 	cutoff := now.Add(-r.window)
-	attempts := r.attempts[ip]
-	valid := attempts[:0]
-	for _, attempt := range attempts {
-		if attempt.After(cutoff) {
-			valid = append(valid, attempt)
-		}
-	}
+	valid := slices.DeleteFunc(r.attempts[ip], func(attempt time.Time) bool {
+		return !attempt.After(cutoff)
+	})
 
 	if len(valid) == 0 {
 		delete(r.attempts, ip)
@@ -275,7 +271,7 @@ func (s *authService) Login(ctx context.Context, clientIP string, req LoginReque
 		return UserResponse{}, "", fmt.Errorf("get user for login: %w", err)
 	}
 
-	passwordHash := ""
+	var passwordHash string
 	if user != nil {
 		passwordHash = user.PasswordHash
 	}
@@ -299,9 +295,10 @@ func (s *authService) Login(ctx context.Context, clientIP string, req LoginReque
 }
 
 func (s *authService) Logout(token string) {
-	if token != "" {
-		s.sessionStore.Delete(token)
+	if token == "" {
+		return
 	}
+	s.sessionStore.Delete(token)
 }
 
 // The store error already names the query, and the handler maps ErrUserNotFound,

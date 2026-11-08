@@ -284,7 +284,7 @@ func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
 
 		// RequireAuth must not renew the cookie it is about to delete, otherwise the
 		// browser receives two conflicting Set-Cookie headers.
-		var issued []*http.Cookie
+		issued := []*http.Cookie{}
 		for _, cookie := range w.Result().Cookies() {
 			if cookie.Name == SessionCookieName {
 				issued = append(issued, cookie)

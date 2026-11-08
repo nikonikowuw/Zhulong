@@ -39,7 +39,12 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		httputil.HandleJSON(h.loginHandler),
 	)
 	// logout clears the cookie itself, so RequireAuth must not re-issue it first.
-	authGroup.POST("/logout", withoutCookieRenewal(), RequireAuth(h.service), h.logoutHandler)
+	authGroup.POST(
+		"/logout",
+		withoutCookieRenewal(),
+		RequireAuth(h.service),
+		h.logoutHandler,
+	)
 	authGroup.GET("/me", RequireAuth(h.service), httputil.Handle(h.meHandler))
 }
 

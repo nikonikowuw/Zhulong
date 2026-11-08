@@ -103,7 +103,7 @@ func TestMemorySessionStore_SlidingExpiration(t *testing.T) {
 func TestMemorySessionStore_Concurrency(t *testing.T) {
 	store := NewMemorySessionStore(1 * time.Hour)
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for id := range 20 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -113,7 +113,7 @@ func TestMemorySessionStore_Concurrency(t *testing.T) {
 			}
 			_, _ = store.Get(token)
 			store.Delete(token)
-		}(i)
+		}(id)
 	}
 	wg.Wait()
 }

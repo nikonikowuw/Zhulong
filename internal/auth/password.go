@@ -16,6 +16,20 @@ const (
 	maxPasswordBytes = 72
 )
 
+// timingEqualizerHash lazily hashes an arbitrary value at DefaultCost. The login
+// path compares against it when the account does not exist, so an unknown
+// username costs the same wall-clock time as a wrong password and the response
+// latency does not reveal whether the username matches.
+var timingEqualizerHash = sync.OnceValue(func() []byte {
+	hash, err := bcrypt.GenerateFromPassword([]byte("zhulong-timing-equalizer"), bcrypt.DefaultCost)
+	if err != nil {
+		// A nil hash makes the fallback comparison fail immediately, which degrades
+		// to plain timing behaviour but never breaks the login path.
+		return nil
+	}
+	return hash
+})
+
 // validateNewPassword enforces the credential policy for a new administrator
 // password. Counting runes keeps the contract identical to the request binding
 // tags, while the byte ceiling is what bcrypt can actually hash: a 64-rune CJK
@@ -41,26 +55,13 @@ func hashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
-// timingEqualizerHash lazily hashes an arbitrary value at DefaultCost. The login
-// path compares against it when the account does not exist, so an unknown
-// username costs the same wall-clock time as a wrong password and the response
-// latency does not reveal whether the username matches.
-var timingEqualizerHash = sync.OnceValue(func() []byte {
-	hash, err := bcrypt.GenerateFromPassword([]byte("zhulong-timing-equalizer"), bcrypt.DefaultCost)
-	if err != nil {
-		// A nil hash makes the fallback comparison fail immediately, which degrades
-		// to plain timing behaviour but never breaks the login path.
-		return nil
-	}
-	return hash
-})
-
 // verifyPassword reports whether password matches the stored hash. An empty hash
 // still runs a full bcrypt comparison against timingEqualizerHash and reports
 // failure, so callers keep one code path for known and unknown accounts.
 func verifyPassword(hash, password string) bool {
-	if hash == "" {
-		hash = string(timingEqualizerHash())
+	hashBytes := []byte(hash)
+	if len(hashBytes) == 0 {
+		hashBytes = timingEqualizerHash()
 	}
-	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+	return bcrypt.CompareHashAndPassword(hashBytes, []byte(password)) == nil
 }
