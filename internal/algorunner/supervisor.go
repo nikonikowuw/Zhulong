@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -203,7 +204,7 @@ func (s *Supervisor) dispatchGallerySync(provider GallerySyncProvider, broadcast
 			s.logger.Warn("failed to fetch gallery sync data for cold-start", zap.Error(err))
 			return
 		}
-		syncID := fmt.Sprintf("sync_%d", time.Now().UnixNano())
+		syncID := "sync_" + strconv.FormatInt(time.Now().UnixNano(), 10)
 		if err := broadcaster.BroadcastSync(ctx, syncID, items); err != nil {
 			s.logger.Warn("failed to broadcast cold-start gallery sync",
 				zap.String("sync_id", syncID),
@@ -242,11 +243,11 @@ func (s *Supervisor) resolveBrokerSocks(
 	algoID string,
 ) ([]string, error) {
 	if resolver == nil {
-		return nil, nil
+		return []string{}, nil
 	}
 	socks, err := resolver.SyncBrokerSubscriptions(ctx, algoID)
 	if err != nil {
-		return nil, fmt.Errorf("resolve broker paths for %s: %w", algoID, err)
+		return nil, fmt.Errorf("resolve broker paths for %q: %w", algoID, err)
 	}
 	return socks, nil
 }
@@ -315,7 +316,10 @@ func (s *Supervisor) processConfigJSON(algoID string) string {
 // backoff storm that looks like a crash loop while the real cause is an
 // obsolete package.
 func IsEntryError(err error) bool {
-	return errors.Is(err, ErrMissingEntry) || errors.Is(err, ErrLegacyEntry) || errors.Is(err, ErrInvalidEntry)
+	isMissing := errors.Is(err, ErrMissingEntry)
+	isLegacy := errors.Is(err, ErrLegacyEntry)
+	isInvalid := errors.Is(err, ErrInvalidEntry)
+	return isMissing || isLegacy || isInvalid
 }
 
 // persistStatus records an algorithm's runtime status on a background path.
@@ -404,7 +408,7 @@ func (s *Supervisor) StartAlgorithm(ctx context.Context, algo PackageMeta) error
 func (s *Supervisor) spawnWatcher(w *workerWatcher) error {
 	cfg, err := s.processConfig(w.algo, w.brokerSocks)
 	if err != nil {
-		return fmt.Errorf("resolve package entry for %s %s: %w", w.algo.ID, w.algo.Version, err)
+		return fmt.Errorf("resolve package entry for %q %q: %w", w.algo.ID, w.algo.Version, err)
 	}
 
 	// Cheap re-check before paying for a fork: if a concurrent caller registered
@@ -467,7 +471,7 @@ func (s *Supervisor) StopAlgorithm(ctx context.Context, algoID string) error {
 	select {
 	case <-w.doneCh:
 	case <-ctx.Done():
-		return fmt.Errorf("wait for algorithm %s to stop: %w", algoID, ctx.Err())
+		return fmt.Errorf("wait for algorithm %q to stop: %w", algoID, ctx.Err())
 	}
 
 	// Only persist DISABLED when this call actually retired its own watcher. If a
@@ -586,7 +590,7 @@ func (s *Supervisor) stopForUpgrade(ctx context.Context, algoID string) error {
 	select {
 	case <-oldWatcher.doneCh:
 	case <-ctx.Done():
-		return fmt.Errorf("wait for algorithm %s to stop: %w", algoID, ctx.Err())
+		return fmt.Errorf("wait for algorithm %q to stop: %w", algoID, ctx.Err())
 	}
 	if stopErr != nil {
 		s.logger.Warn("failed to stop old algorithm process during upgrade",
@@ -605,7 +609,7 @@ func (s *Supervisor) rollbackToOld(ctx context.Context, oldAlgo PackageMeta) err
 	brokerSocks, err := s.resolveBrokerSocks(ctx, s.brokerResolver(), oldAlgo.ID)
 	if err != nil {
 		// 回滚目标同样解析不出 broker 路径：不启动半瘫的回滚进程，向上报错。
-		return fmt.Errorf("resolve broker paths for rollback target %s: %w", oldAlgo.ID, err)
+		return fmt.Errorf("resolve broker paths for rollback target %q: %w", oldAlgo.ID, err)
 	}
 
 	w := newWorkerWatcher(s, oldAlgo, brokerSocks)
@@ -625,7 +629,12 @@ func (s *Supervisor) rollbackToOld(ctx context.Context, oldAlgo PackageMeta) err
 	if s.store == nil {
 		return nil
 	}
-	if err := s.store.RollbackAlgorithmVersion(ctx, oldAlgo.ID, oldAlgo.Version, oldAlgo.PreviousVersion); err != nil {
+	if err := s.store.RollbackAlgorithmVersion(
+		ctx,
+		oldAlgo.ID,
+		oldAlgo.Version,
+		oldAlgo.PreviousVersion,
+	); err != nil {
 		s.logger.Error("failed to persist rolled back algorithm version to db",
 			zap.String("id", oldAlgo.ID),
 			zap.String("version", oldAlgo.Version),

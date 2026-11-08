@@ -85,7 +85,12 @@ type mockBroadcaster struct {
 	err error
 }
 
-func (m *mockBroadcaster) BroadcastAIMessage(ctx context.Context, streamID uint64, msgType uint16, payload []byte) error {
+func (m *mockBroadcaster) BroadcastAIMessage(
+	ctx context.Context,
+	streamID uint64,
+	msgType uint16,
+	payload []byte,
+) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -109,7 +114,11 @@ func TestCreateGallerySyncShards_Empty(t *testing.T) {
 	if err := json.Unmarshal(shards[0], &p); err != nil {
 		t.Fatalf("unmarshal shard payload: %v", err)
 	}
-	if p.SyncID != "sync_empty" || p.ShardIndex != 0 || p.ShardTotal != 1 || len(p.Items) != 0 {
+	wrongSyncID := p.SyncID != "sync_empty"
+	wrongShardIndex := p.ShardIndex != 0
+	wrongShardTotal := p.ShardTotal != 1
+	hasItems := len(p.Items) != 0
+	if wrongSyncID || wrongShardIndex || wrongShardTotal || hasItems {
 		t.Fatalf("unexpected shard payload: %+v", p)
 	}
 }
@@ -168,7 +177,7 @@ func TestCreateGallerySyncShards_RoundTripIntegrity(t *testing.T) {
 		t.Fatalf("CreateGallerySyncShards failed: %v", err)
 	}
 
-	var rebuilt []algorunner.GallerySyncItem
+	rebuilt := []algorunner.GallerySyncItem{}
 	for i, s := range shards {
 		if len(s) > shardBudget {
 			t.Errorf("shard %d exceeds shardBudget: %d bytes", i, len(s))

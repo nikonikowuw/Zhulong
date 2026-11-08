@@ -88,7 +88,7 @@ func removeIfUnchanged(path string, expected fileID) (bool, error) {
 		return false, nil
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("remove stale broker socket %s: %w", path, err)
+		return false, fmt.Errorf("remove stale broker socket %q: %w", path, err)
 	}
 	return true, nil
 }
@@ -148,10 +148,18 @@ func removeAbandonedBrokerSockets() sweepBatch {
 	baseDir := brokerSocketBaseDir()
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
-		return sweepBatch{} // Unreadable dir is not a sweep failure.
+		return sweepBatch{
+			removed:    []string{},
+			unverified: []string{},
+			failures:   []error{},
+		} // Unreadable dir is not a sweep failure.
 	}
 
-	var result sweepBatch
+	result := sweepBatch{
+		removed:    []string{},
+		unverified: []string{},
+		failures:   []error{},
+	}
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasPrefix(name, brokerSocketPrefix) || !strings.HasSuffix(name, brokerSocketSuffix) {
@@ -193,13 +201,17 @@ const (
 // unlinking while mapped would not corrupt them (POSIX semantics keep the mapping
 // alive) but would make a running stream look broken on restart.
 func removeUnheldShmSegments(ctx context.Context, logger *zap.Logger) sweepBatch {
-	var result sweepBatch
+	result := sweepBatch{
+		removed:    []string{},
+		unverified: []string{},
+		failures:   []error{},
+	}
 	entries, err := os.ReadDir(shmRoot)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return result
 		}
-		result.failures = append(result.failures, fmt.Errorf("orphan sweep: read %s: %w", shmRoot, err))
+		result.failures = append(result.failures, fmt.Errorf("orphan sweep: read %q: %w", shmRoot, err))
 		return result
 	}
 
@@ -228,7 +240,7 @@ func removeUnheldShmSegments(ctx context.Context, logger *zap.Logger) sweepBatch
 			continue
 		}
 		if rmErr := os.Remove(full); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			result.failures = append(result.failures, fmt.Errorf("remove leaked shm segment %s: %w", full, rmErr))
+			result.failures = append(result.failures, fmt.Errorf("remove leaked shm segment %q: %w", full, rmErr))
 			continue
 		}
 		result.removed = append(result.removed, full)
@@ -250,12 +262,12 @@ func shmHoldState(path string) (holdState, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return holdNone, nil // Already gone; nothing to decide.
 		}
-		return holdUnknown, fmt.Errorf("stat shm segment %s: %w", path, err)
+		return holdUnknown, fmt.Errorf("stat shm segment %q: %w", path, err)
 	}
 
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
-		return holdUnknown, fmt.Errorf("orphan sweep: read %s: %w", procRoot, err)
+		return holdUnknown, fmt.Errorf("orphan sweep: read %q: %w", procRoot, err)
 	}
 	unknown := false
 	for _, entry := range entries {
@@ -386,7 +398,9 @@ func fdTargetsFile(target string, id fileID, path string) bool {
 // processVanished reports whether err means the process (or its /proc entry)
 // disappeared, as opposed to existing but being unreadable.
 func processVanished(err error) bool {
-	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ESRCH)
+	isNotExist := errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT)
+	isNoProcess := errors.Is(err, syscall.ESRCH)
+	return isNotExist || isNoProcess
 }
 
 // mapsFileContains streams a maps file looking for a mapping of the file
@@ -411,8 +425,5 @@ func mapsFileContains(file *os.File, id fileID) (bool, error) {
 			return true, nil
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
+	return false, scanner.Err()
 }

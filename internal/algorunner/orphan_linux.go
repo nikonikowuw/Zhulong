@@ -52,6 +52,17 @@ var procRoot = "/proc"
 // distinct from a read error: "gone" and "unparseable" lead to opposite decisions.
 var errMalformedProcStat = errors.New("malformed /proc stat line")
 
+func emptyOrphanCleanupReport() OrphanCleanupReport {
+	return OrphanCleanupReport{
+		Killed:            []int{},
+		RemovedSockets:    []string{},
+		RemovedShm:        []string{},
+		Skipped:           []int{},
+		UnverifiedShm:     []string{},
+		UnverifiedSockets: []string{},
+	}
+}
+
 // ReapOrphanRunners terminates runners left behind by a previous host process and
 // reclaims the broker sockets and shared-memory segments they were holding.
 //
@@ -85,7 +96,7 @@ func ReapOrphanRunners(ctx context.Context, algorithmsDir string, logger *zap.Lo
 		logger = zap.NewNop()
 	}
 
-	report := OrphanCleanupReport{}
+	report := emptyOrphanCleanupReport()
 
 	root, err := resolveSweepRoot(algorithmsDir)
 	if err != nil {
@@ -129,7 +140,7 @@ func sweepOrphanProcesses(
 	report *OrphanCleanupReport,
 	logger *zap.Logger,
 ) []error {
-	var failures []error
+	failures := []error{}
 	for _, cand := range candidates {
 		if ctx.Err() != nil {
 			return append(failures, ctx.Err())
@@ -209,7 +220,7 @@ func sweepReapedRunnerSockets(
 	candidates []orphanCandidate,
 	report *OrphanCleanupReport,
 ) []error {
-	var failures []error
+	failures := []error{}
 	for _, cand := range candidates {
 		if ctx.Err() != nil {
 			return failures
@@ -306,7 +317,10 @@ func isPackageEntryPath(exePath, algorithmsRoot string) bool {
 	if len(parts) != 3 {
 		return false
 	}
-	return parts[0] != "." && parts[0] != ".." && parts[0] == parts[2]
+	notCurrentDir := parts[0] != "."
+	notParentDir := parts[0] != ".."
+	matchesID := parts[0] == parts[2]
+	return notCurrentDir && notParentDir && matchesID
 }
 
 // readExePath resolves /proc/<pid>/exe to an absolute path.
@@ -343,7 +357,9 @@ func findOrphanCandidates(algorithmsRoot string) ([]orphanCandidate, error) {
 			continue
 		}
 		pid, convErr := strconv.Atoi(entry.Name())
-		if convErr != nil || pid <= 0 || pid == self {
+		isInvalidPID := convErr != nil || pid <= 0
+		isSelf := pid == self
+		if isInvalidPID || isSelf {
 			continue
 		}
 		exePath, exeErr := readExePath(pid)

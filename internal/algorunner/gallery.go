@@ -77,7 +77,7 @@ func CreateGallerySyncShards(syncID string, items []GallerySyncItem) ([][]byte, 
 	for i, item := range items {
 		encoded, err := json.Marshal(item)
 		if err != nil {
-			return nil, fmt.Errorf("marshal gallery sync item %s: %w", item.FaceID, err)
+			return nil, fmt.Errorf("marshal gallery sync item %q: %w", item.FaceID, err)
 		}
 		itemSizes[i] = len(encoded)
 	}
@@ -115,12 +115,12 @@ func galleryShardOverhead(syncID string) (int, error) {
 // the next item would exceed the budget. Each additional item costs its own bytes
 // plus one comma.
 func packGalleryShards(items []GallerySyncItem, itemSizes []int, overhead int) ([]galleryShardRange, error) {
-	var ranges []galleryShardRange
+	ranges := []galleryShardRange{}
 	start := 0
 	used := 0
 	for i, size := range itemSizes {
 		if overhead+size > shardBudget {
-			return nil, fmt.Errorf("gallery sync item %s exceeds the shard budget (%d bytes > %d)",
+			return nil, fmt.Errorf("gallery sync item %q exceeds the shard budget (%d bytes > %d)",
 				items[i].FaceID, overhead+size, shardBudget)
 		}
 		additional := size
@@ -142,7 +142,12 @@ func marshalGalleryShards(syncID string, items []GallerySyncItem, ranges []galle
 	shardTotal := len(ranges)
 	shards := make([][]byte, 0, shardTotal)
 	for i, r := range ranges {
-		payload, err := marshalGalleryShardPayload(syncID, i, shardTotal, items[r.start:r.end])
+		payload, err := marshalGalleryShardPayload(
+			syncID,
+			i,
+			shardTotal,
+			items[r.start:r.end],
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -196,7 +201,12 @@ func (b *GalleryBroadcaster) BroadcastSync(ctx context.Context, syncID string, i
 		return fmt.Errorf("create gallery sync shards: %w", err)
 	}
 	for i, shard := range shards {
-		if err := b.broadcaster.BroadcastAIMessage(ctx, 0, algoipc.MsgGallerySync, shard); err != nil {
+		if err := b.broadcaster.BroadcastAIMessage(
+			ctx,
+			0,
+			algoipc.MsgGallerySync,
+			shard,
+		); err != nil {
 			return fmt.Errorf("broadcast sync shard %d/%d: %w", i, len(shards), err)
 		}
 	}
@@ -212,7 +222,12 @@ func (b *GalleryBroadcaster) BroadcastUpsert(ctx context.Context, item GalleryUp
 	if err != nil {
 		return fmt.Errorf("marshal gallery upsert: %w", err)
 	}
-	return b.broadcaster.BroadcastAIMessage(ctx, 0, algoipc.MsgGalleryUpsert, payload)
+	return b.broadcaster.BroadcastAIMessage(
+		ctx,
+		0,
+		algoipc.MsgGalleryUpsert,
+		payload,
+	)
 }
 
 // BroadcastDelete broadcasts face or person deletion.
@@ -224,5 +239,10 @@ func (b *GalleryBroadcaster) BroadcastDelete(ctx context.Context, faceID, person
 	if err != nil {
 		return fmt.Errorf("marshal gallery delete: %w", err)
 	}
-	return b.broadcaster.BroadcastAIMessage(ctx, 0, algoipc.MsgGalleryDelete, payload)
+	return b.broadcaster.BroadcastAIMessage(
+		ctx,
+		0,
+		algoipc.MsgGalleryDelete,
+		payload,
+	)
 }

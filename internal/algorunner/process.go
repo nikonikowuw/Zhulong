@@ -310,7 +310,9 @@ func closeFileBestEffort(file *os.File) {
 	if file == nil {
 		return
 	}
-	_ = file.Close() // best effort: nothing left to flush, no decision depends on it
+	if err := file.Close(); err != nil {
+		// best effort: nothing left to flush, no decision depends on it
+	}
 }
 
 // Start launches the runner subprocess with environment injection and output logging.
@@ -422,7 +424,12 @@ func (p *RunnerProcess) failStart() {
 
 // close closes every pipe end of a spawn.
 func (pipes *runnerPipes) close() {
-	closePipes(pipes.stdoutR, pipes.stdoutW, pipes.stderrR, pipes.stderrW)
+	closePipes(
+		pipes.stdoutR,
+		pipes.stdoutW,
+		pipes.stderrR,
+		pipes.stderrW,
+	)
 }
 
 // watchExit reaps the child and records how it ended. It runs on the goroutine

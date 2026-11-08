@@ -15,13 +15,13 @@ func LoadDotEnv(filePath string) (map[string]string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return make(map[string]string), nil
+			return map[string]string{}, nil
 		}
 		return nil, err
 	}
 	defer file.Close()
 
-	env := make(map[string]string)
+	env := map[string]string{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

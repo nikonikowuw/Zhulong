@@ -115,21 +115,21 @@ func ResolveEntry(pkgDir, id string) (string, error) {
 	legacy := filepath.Join(pkgDir, LegacyEntryFileName)
 	switch _, legacyErr := os.Lstat(legacy); {
 	case legacyErr == nil:
-		return "", fmt.Errorf("%w: %s", ErrLegacyEntry, legacy)
+		return "", fmt.Errorf("%w: %q", ErrLegacyEntry, legacy)
 	case !errors.Is(legacyErr, fs.ErrNotExist):
-		return "", fmt.Errorf("inspect legacy entry %s: %w", legacy, legacyErr)
+		return "", fmt.Errorf("inspect legacy entry %q: %w", legacy, legacyErr)
 	}
 
 	entry := filepath.Join(pkgDir, id)
 	info, err := os.Lstat(entry)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("%w: %s", ErrMissingEntry, entry)
+			return "", fmt.Errorf("%w: %q", ErrMissingEntry, entry)
 		}
-		return "", fmt.Errorf("inspect package entry %s: %w", entry, err)
+		return "", fmt.Errorf("inspect package entry %q: %w", entry, err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%w: %s (mode %s)", ErrInvalidEntry, entry, info.Mode())
+		return "", fmt.Errorf("%w: %q (mode %s)", ErrInvalidEntry, entry, info.Mode())
 	}
 	return entry, nil
 }

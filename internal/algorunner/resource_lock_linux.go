@@ -160,10 +160,10 @@ func uniqueDirsByID(dirs []string) (map[fileID]string, error) {
 		}
 		var st syscall.Stat_t
 		if err := syscall.Stat(dir, &st); err != nil {
-			return nil, fmt.Errorf("broker lock: %s: %w", dir, err)
+			return nil, fmt.Errorf("broker lock: %q: %w", dir, err)
 		}
 		if st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
-			return nil, fmt.Errorf("broker lock: %s is not a directory", dir)
+			return nil, fmt.Errorf("broker lock: %q is not a directory", dir)
 		}
 		id := fileIDFromStat(&st)
 		if _, exists := byID[id]; !exists {
@@ -185,7 +185,7 @@ func compareFileIDs(a, b fileID) int {
 func (l *brokerResourceLock) acquireOne(path string, mode lockMode) error {
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("broker lock: open %s: %w", path, err)
+		return fmt.Errorf("broker lock: open %q: %w", path, err)
 	}
 
 	flags := syscall.LOCK_EX
@@ -194,7 +194,7 @@ func (l *brokerResourceLock) acquireOne(path string, mode lockMode) error {
 	}
 	if err := syscall.Flock(int(file.Fd()), flags); err != nil {
 		closeFileBestEffort(file)
-		return fmt.Errorf("broker lock: %s: %w", path, err)
+		return fmt.Errorf("broker lock: %q: %w", path, err)
 	}
 
 	l.files = append(l.files, file)
@@ -212,7 +212,9 @@ func (l *brokerResourceLock) release() {
 		return
 	}
 	for i := len(l.files) - 1; i >= 0; i-- {
-		_ = syscall.Flock(int(l.files[i].Fd()), syscall.LOCK_UN) // best effort: close() releases it anyway
+		if err := syscall.Flock(int(l.files[i].Fd()), syscall.LOCK_UN); err != nil {
+			// best effort: close() releases the advisory flock anyway
+		}
 		closeFileBestEffort(l.files[i])
 	}
 	l.files = nil

@@ -104,9 +104,7 @@ func NewRecoveryStateMachine(opts RecoveryOptions) *RecoveryStateMachine {
 // observable delays are 1s, 2s, 4s; the 8s tier (shift=3) is UNREACHABLE under
 // this quota because crash 4 trips the breaker instead of scheduling 8s. The
 // ladder describes the formula's shape, not a guarantee that every tier runs.
-func (sm *RecoveryStateMachine) RecordCrash(
-	now time.Time,
-) (shouldRestart bool, delay time.Duration, circuitBroken bool) {
+func (sm *RecoveryStateMachine) RecordCrash(now time.Time) (shouldRestart bool, delay time.Duration, circuitBroken bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -152,7 +150,7 @@ func (sm *RecoveryStateMachine) CheckStableReset(uptime time.Duration) bool {
 	defer sm.mu.Unlock()
 
 	if uptime >= sm.opts.StableRunningThreshold {
-		sm.crashHistory = nil
+		sm.crashHistory = []time.Time{}
 		sm.circuitTripped = false
 		return true
 	}
@@ -163,7 +161,7 @@ func (sm *RecoveryStateMachine) CheckStableReset(uptime time.Duration) bool {
 func (sm *RecoveryStateMachine) Reset() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	sm.crashHistory = nil
+	sm.crashHistory = []time.Time{}
 	sm.circuitTripped = false
 }
 

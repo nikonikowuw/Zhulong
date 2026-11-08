@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 	"go.uber.org/zap"
@@ -48,16 +49,39 @@ func NewTaskConfigBroadcaster(broadcaster AIMessageBroadcaster, logger *zap.Logg
 // stream whose broker is gone must not stop the other streams from receiving
 // their configuration. The aggregated error is returned so the caller can log it
 // once per algorithm instead of once per stream.
-func (b *TaskConfigBroadcaster) BroadcastAlgorithm(ctx context.Context, algorithmID string, configs map[uint64]string) error {
-	return b.broadcast(ctx, algorithmID, configs, algoipc.MsgTaskConfig)
+func (b *TaskConfigBroadcaster) BroadcastAlgorithm(
+	ctx context.Context,
+	algorithmID string,
+	configs map[uint64]string,
+) error {
+	return b.broadcast(
+		ctx,
+		algorithmID,
+		configs,
+		algoipc.MsgTaskConfig,
+	)
 }
 
 // BroadcastRegions sends complete snapshots; {} explicitly clears all regions.
-func (b *TaskConfigBroadcaster) BroadcastRegions(ctx context.Context, algorithmID string, configs map[uint64]string) error {
-	return b.broadcast(ctx, algorithmID, configs, algoipc.MsgTaskRegions)
+func (b *TaskConfigBroadcaster) BroadcastRegions(
+	ctx context.Context,
+	algorithmID string,
+	configs map[uint64]string,
+) error {
+	return b.broadcast(
+		ctx,
+		algorithmID,
+		configs,
+		algoipc.MsgTaskRegions,
+	)
 }
 
-func (b *TaskConfigBroadcaster) broadcast(ctx context.Context, algorithmID string, configs map[uint64]string, msgType uint16) error {
+func (b *TaskConfigBroadcaster) broadcast(
+	ctx context.Context,
+	algorithmID string,
+	configs map[uint64]string,
+	msgType uint16,
+) error {
 	if b.broadcaster == nil || len(configs) == 0 {
 		return nil
 	}
@@ -68,7 +92,7 @@ func (b *TaskConfigBroadcaster) broadcast(ctx context.Context, algorithmID strin
 	for streamID := range configs {
 		streamIDs = append(streamIDs, streamID)
 	}
-	sortUint64(streamIDs)
+	slices.Sort(streamIDs)
 
 	var firstErr error
 	for _, streamID := range streamIDs {
@@ -97,7 +121,12 @@ func (b *TaskConfigBroadcaster) broadcast(ctx context.Context, algorithmID strin
 			}
 			continue
 		}
-		if err := b.broadcaster.BroadcastAIMessage(ctx, streamID, msgType, payload); err != nil {
+		if err := b.broadcaster.BroadcastAIMessage(
+			ctx,
+			streamID,
+			msgType,
+			payload,
+		); err != nil {
 			err = fmt.Errorf("broadcast task config for stream %d: %w", streamID, err)
 			b.logger.Warn("failed to broadcast task config",
 				zap.String("algorithm_id", algorithmID),
@@ -110,15 +139,4 @@ func (b *TaskConfigBroadcaster) broadcast(ctx context.Context, algorithmID strin
 		}
 	}
 	return firstErr
-}
-
-// sortUint64 is a tiny insertion sort: the slice is one entry per subscribed
-// stream (single digits in practice), so pulling in sort.Slice would cost more
-// indirection than it saves.
-func sortUint64(values []uint64) {
-	for i := 1; i < len(values); i++ {
-		for j := i; j > 0 && values[j] < values[j-1]; j-- {
-			values[j], values[j-1] = values[j-1], values[j]
-		}
-	}
 }
