@@ -84,8 +84,21 @@ func NewComponents(opts Options) Components {
 
 	signer := NewEmptyURLSigner()
 	store := NewStore(opts.DBProvider, opts.Cipher)
-	dispatcher := NewDispatcher(store, signer, opts.MediaService, opts.Config, logger)
-	service := NewService(store, dispatcher, signer, opts.MediaService, opts.Config, logger)
+	dispatcher := NewDispatcher(
+		store,
+		signer,
+		opts.MediaService,
+		opts.Config,
+		logger,
+	)
+	service := NewService(
+		store,
+		dispatcher,
+		signer,
+		opts.MediaService,
+		opts.Config,
+		logger,
+	)
 	handler := NewHandler(service, store, logger)
 	signedMediaHandler := NewSignedMediaHandler(signer, opts.MediaHandler, logger)
 

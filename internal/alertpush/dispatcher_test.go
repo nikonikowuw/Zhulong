@@ -56,8 +56,20 @@ func TestDispatcherFaultIsolation(t *testing.T) {
 	fastSender := &mockSender{}
 	slowSender := &mockSender{delay: 2 * time.Second}
 
-	fastWorker := newDestinationWorker(&AlertDestination{ID: "fast", ChannelType: ChannelTypeWebhook}, fastSender, DestinationFilter{}, "fp1", zap.NewNop())
-	slowWorker := newDestinationWorker(&AlertDestination{ID: "slow", ChannelType: ChannelTypeWebhook}, slowSender, DestinationFilter{}, "fp2", zap.NewNop())
+	fastWorker := newDestinationWorker(
+		&AlertDestination{ID: "fast", ChannelType: ChannelTypeWebhook},
+		fastSender,
+		DestinationFilter{},
+		"fp1",
+		zap.NewNop(),
+	)
+	slowWorker := newDestinationWorker(
+		&AlertDestination{ID: "slow", ChannelType: ChannelTypeWebhook},
+		slowSender,
+		DestinationFilter{},
+		"fp2",
+		zap.NewNop(),
+	)
 
 	d.mu.Lock()
 	d.workers["fast"] = fastWorker
@@ -95,7 +107,13 @@ func TestDispatcherQueueDropOldest(t *testing.T) {
 
 	// 不启动 worker 消费，纯测试队列填满丢最旧
 	sender := &mockSender{}
-	w := newDestinationWorker(&AlertDestination{ID: "drop_test", ChannelType: ChannelTypeWebhook}, sender, DestinationFilter{}, "fp", zap.NewNop())
+	w := newDestinationWorker(
+		&AlertDestination{ID: "drop_test", ChannelType: ChannelTypeWebhook},
+		sender,
+		DestinationFilter{},
+		"fp",
+		zap.NewNop(),
+	)
 
 	d.mu.Lock()
 	d.workers["drop_test"] = w

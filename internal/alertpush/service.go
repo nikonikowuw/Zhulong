@@ -31,8 +31,25 @@ type Service struct {
 	logger     *zap.Logger
 }
 
+// UpdateParams contains mutable fields for updating an alert destination.
+type UpdateParams struct {
+	Name       *string
+	ImageMode  *string
+	ConfigJSON *string
+	FilterJSON *string
+	SecretRaw  any
+	ClientID   *string
+}
+
 // NewService creates a new alertpush Service instance.
-func NewService(store *Store, dispatcher *Dispatcher, signer *URLSigner, media MediaReader, cfg Config, logger *zap.Logger) *Service {
+func NewService(
+	store *Store,
+	dispatcher *Dispatcher,
+	signer *URLSigner,
+	media MediaReader,
+	cfg Config,
+	logger *zap.Logger,
+) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -86,24 +103,24 @@ func (s *Service) Create(ctx context.Context, dest *AlertDestination, secretRaw 
 }
 
 // Update updates an existing destination.
-func (s *Service) Update(ctx context.Context, existing *AlertDestination, name *string, imageMode *string, configJSON *string, filterJSON *string, secretRaw any, clientID *string) error {
-	if name != nil && strings.TrimSpace(*name) != "" {
-		existing.Name = strings.TrimSpace(*name)
+func (s *Service) Update(ctx context.Context, existing *AlertDestination, params UpdateParams) error {
+	if params.Name != nil && strings.TrimSpace(*params.Name) != "" {
+		existing.Name = strings.TrimSpace(*params.Name)
 	}
-	if imageMode != nil && strings.TrimSpace(*imageMode) != "" {
-		existing.ImageMode = strings.TrimSpace(*imageMode)
+	if params.ImageMode != nil && strings.TrimSpace(*params.ImageMode) != "" {
+		existing.ImageMode = strings.TrimSpace(*params.ImageMode)
 	}
-	if configJSON != nil && strings.TrimSpace(*configJSON) != "" {
-		existing.ConfigJSON = strings.TrimSpace(*configJSON)
+	if params.ConfigJSON != nil && strings.TrimSpace(*params.ConfigJSON) != "" {
+		existing.ConfigJSON = strings.TrimSpace(*params.ConfigJSON)
 	}
-	if filterJSON != nil && strings.TrimSpace(*filterJSON) != "" {
-		existing.FilterJSON = strings.TrimSpace(*filterJSON)
+	if params.FilterJSON != nil && strings.TrimSpace(*params.FilterJSON) != "" {
+		existing.FilterJSON = strings.TrimSpace(*params.FilterJSON)
 	}
 
 	if existing.ChannelType == ChannelTypeMQTT {
 		targetClientID := ""
-		if clientID != nil && strings.TrimSpace(*clientID) != "" {
-			targetClientID = strings.TrimSpace(*clientID)
+		if params.ClientID != nil && strings.TrimSpace(*params.ClientID) != "" {
+			targetClientID = strings.TrimSpace(*params.ClientID)
 		} else {
 			targetClientID = "z" + existing.ID[4:]
 		}
@@ -122,8 +139,8 @@ func (s *Service) Update(ctx context.Context, existing *AlertDestination, name *
 		return err
 	}
 
-	if secretRaw != nil {
-		ciphertext, err := s.store.EncryptSecret(existing.ID, secretRaw)
+	if params.SecretRaw != nil {
+		ciphertext, err := s.store.EncryptSecret(existing.ID, params.SecretRaw)
 		if err != nil {
 			return fmt.Errorf("encrypt secret: %w", err)
 		}
@@ -275,11 +292,12 @@ func (s *Service) validateDestination(dest *AlertDestination) error {
 	}
 
 	// Validate protocol x image_mode matrix
-	if dest.ChannelType == ChannelTypeWebhook {
+	switch dest.ChannelType {
+	case ChannelTypeWebhook:
 		if dest.ImageMode != ImageModeURL && dest.ImageMode != ImageModeMultipart {
 			return ErrInvalidImageMode
 		}
-	} else if dest.ChannelType == ChannelTypeMQTT {
+	case ChannelTypeMQTT:
 		if dest.ImageMode != ImageModeURL && dest.ImageMode != ImageModeBase64 {
 			return ErrInvalidImageMode
 		}

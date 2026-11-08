@@ -109,7 +109,10 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 	if len(existing) >= MaxDestinations {
-		httputil.WriteError(c, apperr.Invalid(CodeAlertDestinationConfigInvalid, "Maximum destination limit (32) reached", nil))
+		httputil.WriteError(
+			c,
+			apperr.Invalid(CodeAlertDestinationConfigInvalid, "Maximum destination limit (32) reached", nil),
+		)
 		return
 	}
 
@@ -169,13 +172,13 @@ func (h *Handler) Update(c *gin.Context) {
 		return
 	}
 
-	configJSON, filterJSON, secretRaw, clientID, err := h.parseUpdateRequest(existing, req)
+	params, err := h.parseUpdateRequest(existing, req)
 	if err != nil {
 		h.writeValidationError(c, err)
 		return
 	}
 
-	if err := h.service.Update(ctx, existing, req.Name, req.ImageMode, configJSON, filterJSON, secretRaw, clientID); err != nil {
+	if err := h.service.Update(ctx, existing, params); err != nil {
 		if errors.Is(err, ErrDestinationNameConflict) || errors.Is(err, ErrClientIDConflict) {
 			httputil.WriteError(c, apperr.Conflict(CodeAlertDestinationNameConflict, "Name or MQTT ClientID conflict", err))
 			return
@@ -313,7 +316,10 @@ func (h *Handler) Test(c *gin.Context) {
 	})
 }
 
-func (h *Handler) resolveTestTarget(ctx context.Context, req TestAlertDestinationRequest) (*AlertDestination, any, error) {
+func (h *Handler) resolveTestTarget(
+	ctx context.Context,
+	req TestAlertDestinationRequest,
+) (*AlertDestination, any, error) {
 	if req.ID != "" {
 		existing, err := h.store.GetByID(ctx, req.ID)
 		if err != nil {
@@ -546,11 +552,14 @@ func (h *Handler) parseCreateRequest(req CreateAlertDestinationRequest) (*AlertD
 	return nil, nil, ErrInvalidChannelType
 }
 
-func (h *Handler) parseUpdateRequest(existing *AlertDestination, req UpdateAlertDestinationRequest) (*string, *string, any, *string, error) {
-	var configJSON *string
-	var filterJSON *string
-	var secretRaw any
-	var clientID *string
+func (h *Handler) parseUpdateRequest(
+	existing *AlertDestination,
+	req UpdateAlertDestinationRequest,
+) (UpdateParams, error) {
+	params := UpdateParams{
+		Name:      req.Name,
+		ImageMode: req.ImageMode,
+	}
 
 	if req.Filter != nil {
 		filter := DestinationFilter{
@@ -560,7 +569,7 @@ func (h *Handler) parseUpdateRequest(existing *AlertDestination, req UpdateAlert
 		}
 		fb, _ := json.Marshal(filter)
 		fs := string(fb)
-		filterJSON = &fs
+		params.FilterJSON = &fs
 	}
 
 	if existing.ChannelType == ChannelTypeWebhook {
@@ -572,7 +581,7 @@ func (h *Handler) parseUpdateRequest(existing *AlertDestination, req UpdateAlert
 			if req.Config.URL != "" {
 				u, err := url.Parse(req.Config.URL)
 				if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
-					return nil, nil, nil, nil, errors.New("webhook url must be http or https without userinfo")
+					return UpdateParams{}, errors.New("webhook url must be http or https without userinfo")
 				}
 				curSec.URL = req.Config.URL
 			}
@@ -597,7 +606,7 @@ func (h *Handler) parseUpdateRequest(existing *AlertDestination, req UpdateAlert
 			if req.Secret.Headers != nil {
 				for hk := range req.Secret.Headers {
 					if IsReservedHeader(hk) {
-						return nil, nil, nil, nil, ErrReservedHeaderUsed
+						return UpdateParams{}, ErrReservedHeaderUsed
 					}
 				}
 				curSec.Headers = req.Secret.Headers
@@ -605,27 +614,28 @@ func (h *Handler) parseUpdateRequest(existing *AlertDestination, req UpdateAlert
 		}
 
 		// Normalize by auth_type
-		if curCfg.AuthType == AuthTypeNone {
+		switch curCfg.AuthType {
+		case AuthTypeNone:
 			curSec.Token = ""
 			curSec.Username = ""
 			curSec.Password = ""
-		} else if curCfg.AuthType == AuthTypeBearer {
+		case AuthTypeBearer:
 			if strings.TrimSpace(curSec.Token) == "" {
-				return nil, nil, nil, nil, errors.New("token required for bearer auth")
+				return UpdateParams{}, errors.New("token required for bearer auth")
 			}
 			curSec.Username = ""
 			curSec.Password = ""
-		} else if curCfg.AuthType == AuthTypeBasic {
+		case AuthTypeBasic:
 			if strings.TrimSpace(curSec.Username) == "" || strings.TrimSpace(curSec.Password) == "" {
-				return nil, nil, nil, nil, errors.New("username and password required for basic auth")
+				return UpdateParams{}, errors.New("username and password required for basic auth")
 			}
 			curSec.Token = ""
 		}
 
 		cb, _ := json.Marshal(curCfg)
 		cs := string(cb)
-		configJSON = &cs
-		secretRaw = curSec
+		params.ConfigJSON = &cs
+		params.SecretRaw = curSec
 	} else if existing.ChannelType == ChannelTypeMQTT {
 		var curCfg MQTTConfig
 		_ = json.Unmarshal([]byte(existing.ConfigJSON), &curCfg)
@@ -640,7 +650,7 @@ func (h *Handler) parseUpdateRequest(existing *AlertDestination, req UpdateAlert
 			}
 			if req.Config.Topic != "" {
 				if strings.ContainsAny(req.Config.Topic, "+#") {
-					return nil, nil, nil, nil, errors.New("mqtt topic must not contain wildcards")
+					return UpdateParams{}, errors.New("mqtt topic must not contain wildcards")
 				}
 				curCfg.Topic = req.Config.Topic
 			}
@@ -654,7 +664,7 @@ func (h *Handler) parseUpdateRequest(existing *AlertDestination, req UpdateAlert
 
 			if req.Config.ClientID != "" {
 				cID := req.Config.ClientID
-				clientID = &cID
+				params.ClientID = &cID
 			}
 		}
 
@@ -664,11 +674,11 @@ func (h *Handler) parseUpdateRequest(existing *AlertDestination, req UpdateAlert
 
 		cb, _ := json.Marshal(curCfg)
 		cs := string(cb)
-		configJSON = &cs
-		secretRaw = curSec
+		params.ConfigJSON = &cs
+		params.SecretRaw = curSec
 	}
 
-	return configJSON, filterJSON, secretRaw, clientID, nil
+	return params, nil
 }
 
 func (h *Handler) toResponse(dest *AlertDestination, status AlertDestinationStatus) (AlertDestinationResponse, error) {

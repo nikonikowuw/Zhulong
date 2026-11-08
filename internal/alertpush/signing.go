@@ -76,9 +76,11 @@ func (s *URLSigner) IsConfigured() bool {
 // InitSignerFromDataDir loads media_url.key from dataDir or generates a new one atomically, populating the signer.
 func InitSignerFromDataDir(signer *URLSigner, dataDir string) error {
 	keyPath := filepath.Join(dataDir, SigningKeyFileName)
-	if data, err := os.ReadFile(keyPath); err == nil {
+	data, err := os.ReadFile(keyPath)
+	if err == nil {
 		return signer.SetKey(data)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	}
+	if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read signing key: %w", err)
 	}
 

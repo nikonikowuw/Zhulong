@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -44,7 +45,13 @@ type destinationWorker struct {
 	logger        *zap.Logger
 }
 
-func newDestinationWorker(dest *AlertDestination, sender Sender, filter DestinationFilter, fingerprint string, logger *zap.Logger) *destinationWorker {
+func newDestinationWorker(
+	dest *AlertDestination,
+	sender Sender,
+	filter DestinationFilter,
+	fingerprint string,
+	logger *zap.Logger,
+) *destinationWorker {
 	w := &destinationWorker{
 		id:          dest.ID,
 		name:        dest.Name,
@@ -58,11 +65,11 @@ func newDestinationWorker(dest *AlertDestination, sender Sender, filter Destinat
 		logger:      logger.With(zap.String("destination_id", dest.ID)),
 	}
 
+	initialState := StateUnverified
 	if dest.ChannelType == ChannelTypeMQTT {
-		w.state.Store(StateConnecting)
-	} else {
-		w.state.Store(StateUnverified)
+		initialState = StateConnecting
 	}
+	w.state.Store(initialState)
 	w.lastError.Store("")
 	return w
 }
@@ -391,7 +398,13 @@ func (d *Dispatcher) reconcile() {
 			continue
 		}
 
-		w := newDestinationWorker(dest, sender, filter, fp, d.logger)
+		w := newDestinationWorker(
+			dest,
+			sender,
+			filter,
+			fp,
+			d.logger,
+		)
 		d.workers[dest.ID] = w
 		toStart = append(toStart, w)
 	}
@@ -423,7 +436,16 @@ func computeFingerprint(dest *AlertDestination) string {
 	}
 
 	h := sha256.New()
-	h.Write([]byte(dest.ChannelType + "|" + dest.ImageMode + "|" + clientID + "|" + dest.ConfigJSON + "|" + dest.FilterJSON + "|"))
+	for _, part := range []string{
+		dest.ChannelType,
+		dest.ImageMode,
+		clientID,
+		dest.ConfigJSON,
+		dest.FilterJSON,
+	} {
+		_, _ = io.WriteString(h, part)
+		_, _ = io.WriteString(h, "|")
+	}
 	h.Write(dest.SecretCiphertext)
 	return hex.EncodeToString(h.Sum(nil))
 }

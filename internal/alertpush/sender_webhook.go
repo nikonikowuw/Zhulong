@@ -179,18 +179,36 @@ func (s *WebhookSender) buildRequest(ctx context.Context, ev record.AlarmEvent) 
 func (s *WebhookSender) buildJSONRequest(payload AlarmPayload, ev record.AlarmEvent) (*http.Request, func(), error) {
 	if s.opts.Signer != nil && s.opts.PublicBaseURL != "" {
 		if ev.ImageReady && ev.ImagePath != "" {
-			if u, err := GenerateSignedURL(s.opts.PublicBaseURL, s.opts.Signer, ev.ImagePath, s.opts.SignedURLTTL); err == nil {
+			u, err := GenerateSignedURL(
+				s.opts.PublicBaseURL,
+				s.opts.Signer,
+				ev.ImagePath,
+				s.opts.SignedURLTTL,
+			)
+			if err == nil {
 				payload.ImageURL = &u
 				payload.ImageReady = true
 			}
 		}
 		if ev.CropReady && ev.CropPath != "" {
-			if u, err := GenerateSignedURL(s.opts.PublicBaseURL, s.opts.Signer, ev.CropPath, s.opts.SignedURLTTL); err == nil {
+			u, err := GenerateSignedURL(
+				s.opts.PublicBaseURL,
+				s.opts.Signer,
+				ev.CropPath,
+				s.opts.SignedURLTTL,
+			)
+			if err == nil {
 				payload.CropURL = &u
 			}
 		}
 		if payload.Face != nil && ev.Face != nil && ev.Face.GalleryImagePath != "" {
-			if u, err := GenerateSignedURL(s.opts.PublicBaseURL, s.opts.Signer, ev.Face.GalleryImagePath, s.opts.SignedURLTTL); err == nil {
+			u, err := GenerateSignedURL(
+				s.opts.PublicBaseURL,
+				s.opts.Signer,
+				ev.Face.GalleryImagePath,
+				s.opts.SignedURLTTL,
+			)
+			if err == nil {
 				payload.Face.GalleryURL = &u
 			}
 		}
@@ -210,22 +228,25 @@ func (s *WebhookSender) buildJSONRequest(payload AlarmPayload, ev record.AlarmEv
 	return req, nil, nil
 }
 
-func (s *WebhookSender) buildMultipartRequest(ctx context.Context, payload AlarmPayload, ev record.AlarmEvent) (*http.Request, func(), error) {
+func (s *WebhookSender) buildMultipartRequest(
+	ctx context.Context,
+	payload AlarmPayload,
+	ev record.AlarmEvent,
+) (*http.Request, func(), error) {
 	var file *os.File
-	var cleanup = func() {
+	cleanup := func() {
 		if file != nil {
 			_ = file.Close()
 		}
 	}
 
-	var hasImage = false
+	var hasImage bool
 	if ev.ImageReady && ev.ImagePath != "" && s.opts.Media != nil {
-		f, info, err := s.opts.Media.OpenContent(ctx, ev.ImagePath)
+		f, _, err := s.opts.Media.OpenContent(ctx, ev.ImagePath)
 		if err == nil {
 			file = f
 			hasImage = true
 			payload.ImageReady = true
-			_ = info
 		} else {
 			s.logger.Warn("failed to open snapshot file for multipart payload",
 				zap.String("path", ev.ImagePath),

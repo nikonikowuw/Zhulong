@@ -99,7 +99,10 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 		clientOpts.SetPassword(opts.Password)
 	}
 
-	if strings.HasPrefix(opts.Broker, "ssl://") || strings.HasPrefix(opts.Broker, "tls://") || strings.HasPrefix(opts.Broker, "tcps://") {
+	isSecureScheme := strings.HasPrefix(opts.Broker, "ssl://") ||
+		strings.HasPrefix(opts.Broker, "tls://") ||
+		strings.HasPrefix(opts.Broker, "tcps://")
+	if isSecureScheme {
 		clientOpts.SetTLSConfig(&tls.Config{
 			InsecureSkipVerify: opts.TLSSkipVerify,
 		})
@@ -176,23 +179,44 @@ func (s *MQTTSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 	payload := BuildAlarmPayload(ev, resolveDeviceID(s.opts.Identity))
 
 	// Format image based on configured ImageMode
-	if s.opts.ImageMode == ImageModeBase64 {
+	switch s.opts.ImageMode {
+	case ImageModeBase64:
 		s.attachBase64Image(ctx, &payload, ev)
-	} else if s.opts.ImageMode == ImageModeURL && s.opts.Signer != nil && s.opts.PublicBaseURL != "" {
-		if ev.ImageReady && ev.ImagePath != "" {
-			if u, err := GenerateSignedURL(s.opts.PublicBaseURL, s.opts.Signer, ev.ImagePath, s.opts.SignedURLTTL); err == nil {
-				payload.ImageURL = &u
-				payload.ImageReady = true
+	case ImageModeURL:
+		if s.opts.Signer != nil && s.opts.PublicBaseURL != "" {
+			if ev.ImageReady && ev.ImagePath != "" {
+				u, err := GenerateSignedURL(
+					s.opts.PublicBaseURL,
+					s.opts.Signer,
+					ev.ImagePath,
+					s.opts.SignedURLTTL,
+				)
+				if err == nil {
+					payload.ImageURL = &u
+					payload.ImageReady = true
+				}
 			}
-		}
-		if ev.CropReady && ev.CropPath != "" {
-			if u, err := GenerateSignedURL(s.opts.PublicBaseURL, s.opts.Signer, ev.CropPath, s.opts.SignedURLTTL); err == nil {
-				payload.CropURL = &u
+			if ev.CropReady && ev.CropPath != "" {
+				u, err := GenerateSignedURL(
+					s.opts.PublicBaseURL,
+					s.opts.Signer,
+					ev.CropPath,
+					s.opts.SignedURLTTL,
+				)
+				if err == nil {
+					payload.CropURL = &u
+				}
 			}
-		}
-		if payload.Face != nil && ev.Face != nil && ev.Face.GalleryImagePath != "" {
-			if u, err := GenerateSignedURL(s.opts.PublicBaseURL, s.opts.Signer, ev.Face.GalleryImagePath, s.opts.SignedURLTTL); err == nil {
-				payload.Face.GalleryURL = &u
+			if payload.Face != nil && ev.Face != nil && ev.Face.GalleryImagePath != "" {
+				u, err := GenerateSignedURL(
+					s.opts.PublicBaseURL,
+					s.opts.Signer,
+					ev.Face.GalleryImagePath,
+					s.opts.SignedURLTTL,
+				)
+				if err == nil {
+					payload.Face.GalleryURL = &u
+				}
 			}
 		}
 	}

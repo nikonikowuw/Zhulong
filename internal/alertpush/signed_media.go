@@ -68,7 +68,10 @@ func (h *SignedMediaHandler) ServeSignedMedia(c *gin.Context) {
 	sig := c.Query("sig")
 
 	if expStr == "" || sig == "" {
-		httputil.WriteError(c, apperr.PermissionDenied(CodeMediaURLInvalid, "Missing signature or expiration parameters", nil))
+		httputil.WriteError(
+			c,
+			apperr.PermissionDenied(CodeMediaURLInvalid, "Missing signature or expiration parameters", nil),
+		)
 		return
 	}
 

@@ -128,12 +128,8 @@ func (s *Store) Create(ctx context.Context, dest *AlertDestination) error {
 	dest.CreatedAt = now
 	dest.UpdatedAt = now
 	if err := db.Create(dest).Error; err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "ux_alert_destinations_name") || strings.Contains(errStr, "alert_destinations.name") {
-			return ErrDestinationNameConflict
-		}
-		if strings.Contains(errStr, "ux_alert_destinations_mqtt_client_id") || strings.Contains(errStr, "alert_destinations.mqtt_client_id") {
-			return ErrClientIDConflict
+		if conflictErr := classifyStoreConflict(err); conflictErr != nil {
+			return conflictErr
 		}
 		return fmt.Errorf("create alert destination: %w", err)
 	}
@@ -149,20 +145,42 @@ func (s *Store) Update(ctx context.Context, dest *AlertDestination) error {
 	dest.UpdatedAt = time.Now().UTC()
 	result := db.Model(&AlertDestination{}).
 		Where("id = ?", dest.ID).
-		Select("name", "channel_type", "enabled", "image_mode", "mqtt_client_id", "config_json", "secret_ciphertext", "filter_json", "updated_at").
+		Select(
+			"name",
+			"channel_type",
+			"enabled",
+			"image_mode",
+			"mqtt_client_id",
+			"config_json",
+			"secret_ciphertext",
+			"filter_json",
+			"updated_at",
+		).
 		Updates(dest)
 	if result.Error != nil {
-		errStr := result.Error.Error()
-		if strings.Contains(errStr, "ux_alert_destinations_name") || strings.Contains(errStr, "alert_destinations.name") {
-			return ErrDestinationNameConflict
-		}
-		if strings.Contains(errStr, "ux_alert_destinations_mqtt_client_id") || strings.Contains(errStr, "alert_destinations.mqtt_client_id") {
-			return ErrClientIDConflict
+		if conflictErr := classifyStoreConflict(result.Error); conflictErr != nil {
+			return conflictErr
 		}
 		return fmt.Errorf("update alert destination: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
 		return ErrDestinationNotFound
+	}
+	return nil
+}
+
+func classifyStoreConflict(err error) error {
+	if err == nil {
+		return nil
+	}
+	errStr := err.Error()
+	if strings.Contains(errStr, "ux_alert_destinations_name") ||
+		strings.Contains(errStr, "alert_destinations.name") {
+		return ErrDestinationNameConflict
+	}
+	if strings.Contains(errStr, "ux_alert_destinations_mqtt_client_id") ||
+		strings.Contains(errStr, "alert_destinations.mqtt_client_id") {
+		return ErrClientIDConflict
 	}
 	return nil
 }

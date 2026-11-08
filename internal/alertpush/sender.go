@@ -203,12 +203,8 @@ func GenerateSignedURL(publicBaseURL string, signer *URLSigner, relPath string, 
 		return "", err
 	}
 	q := u.Query()
-	q.Set("exp", strconvFormatInt(exp))
+	q.Set("exp", strconv.FormatInt(exp, 10))
 	q.Set("sig", sig)
 	u.RawQuery = q.Encode()
 	return u.String(), nil
-}
-
-func strconvFormatInt(i int64) string {
-	return strconv.FormatInt(i, 10)
 }
