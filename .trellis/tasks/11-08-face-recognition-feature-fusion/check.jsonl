@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/native/index.md", "reason": "核查原生层异常隔离、有界容器与构建门禁"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "核查 onnx/rk3568 双 target 一致性(§5.5)与流式上下文边界"}
+{"file": ".trellis/spec/backend/index.md", "reason": "核查 Go 模块内聚、-race 竞态门禁与文档同步"}
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "核查识别去重键格式契约(§1)与代码/测试一致性"}

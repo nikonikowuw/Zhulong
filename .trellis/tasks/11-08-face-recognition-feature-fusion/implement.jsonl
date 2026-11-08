@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/native/index.md", "reason": "原生层总览、开发前检查清单与 CTest 质量基线"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法包 Stage 分层(§4.1)、Worker/TaskContext 语义、包内单测与多档位零漂移(§5.5)"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Go 后端开发前检查清单与 native wrapper 测试规范"}
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "感知记录目标跟踪与识别两级抑制键契约(§1)"}
