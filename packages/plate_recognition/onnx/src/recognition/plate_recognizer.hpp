@@ -1,6 +1,9 @@
 #pragma once
 
+#include "common/plate_semantics.hpp"
+
 #include <zhulong/algo.hpp>
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -16,21 +19,30 @@ constexpr int kRecognitionWidth = 168;
 constexpr int kRecognitionHeight = 48;
 
 /**
- * @brief 车牌像素格式 / 层数语义（对应检测模型的 class 索引）
- */
-enum class PlateLineLayout : int32_t {
-    SingleLine = 0, /**< 单层车牌 */
-    DoubleLine = 1, /**< 双层车牌 */
-    NewEnergy = 2,  /**< 新能源车牌（仍按单层采样，只是字符位更多） */
-};
-
-/**
  * @brief 一个模型输入像素对应的原图采样坐标（像素中心语义）
  */
 struct PlateSamplePoint {
     float fx{0.0f};
     float fy{0.0f};
 };
+
+/**
+ * @brief 帧视图是否可被识别器采样
+ *
+ * 抽成独立纯函数的原因：这是唯一能在**不建会话、不加载模型**的前提下验证的防御层，
+ * 而「非法帧视图」在真机上恰恰是最难复现的一类输入（负 stride 的底朝上缓冲、缺 UV
+ * 平面的 NV12）。写在 recognize() 里就只能靠「跑一遍模型看结果对不对」间接验证，
+ * 而 recognize 的第一道守卫是 Session —— 会话一旦无效，后面的检查一行都执行不到。
+ *
+ * 拒绝集必须与检测侧一致：SDK 的 `ops::letterbox` 只吃 RGB24/BGR24/YUV420P/NV12，
+ * 其余（RGBA32/UNKNOWN）返回 NOT_SUPPORTED。识别侧若「自作多情」地按 3 字节步长
+ * 去采 RGBA32，会得到整幅串色的输入，而检测侧早已返回空 —— 那是只有日志才能解释的
+ * 「有的相机永远识别不出来」。
+ *
+ * @param raw 帧视图（只读借用）
+ * @return true 采样路径可安全执行；false 调用方必须直接返回空结果
+ */
+bool frame_view_supported(const zhulong_frame_view& raw) noexcept;
 
 /**
  * @brief 计算识别模型输入像素 (x, y) 在原始帧上的采样坐标
@@ -50,11 +62,11 @@ struct PlateSamplePoint {
  * @param crop_y 车牌框左上角 y（原图像素，可为小数）
  * @param crop_w 车牌框宽度（原图像素）
  * @param crop_h 车牌框高度（原图像素）
- * @param plate_type 车牌层数语义（0=单层, 1=双层, 其他=按单层采样）
+ * @param kind 车牌层数语义（只有 DoubleLine 会走切块重拼，其余按单层采样）
  */
 PlateSamplePoint plate_sample_point(int x, int y, int target_w, int target_h,
                                     float crop_x, float crop_y, float crop_w, float crop_h,
-                                    int32_t plate_type);
+                                    PlateKind kind);
 
 /**
  * @brief 单块车牌的识别结果
@@ -63,7 +75,7 @@ struct RecognizedPlate {
     std::string plate_number;
     std::string plate_color;
     float score{0.0f};
-    int32_t plate_type{0}; /**< 0=单层, 1=双层, 2=新能源... */
+    PlateKind kind{PlateKind::SingleLine};
 };
 
 /**
@@ -77,7 +89,7 @@ public:
         zhulong::Session& session,
         const zhulong_frame_view& raw,
         const std::array<float, 4>& box,
-        int32_t class_id
+        PlateKind kind
     );
 };
 

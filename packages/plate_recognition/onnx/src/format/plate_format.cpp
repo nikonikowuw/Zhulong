@@ -22,9 +22,12 @@ constexpr std::size_t kEnvoySerialDigits = 6;
 /**
  * @brief 解码 UTF-8 为码点序列
  *
- * 只做「结构上合法」的判定：拒绝被截断的序列、非法的续字节与超出 Unicode
- * 范围的码点。码点级别比较是本文件唯一可靠的字符比较方式（汉字 3 字节，
+ * 拒绝被截断的序列、非法的续字节、**过长编码（overlong）**、代理区码点与超出
+ * Unicode 范围的码点。码点级别比较是本文件唯一可靠的字符比较方式（汉字 3 字节，
  * 逐字节比较既难读又容易踩子串误匹配）。
+ *
+ * overlong 必须在这里挡掉：`C0 80` 与 `00` 都是 U+0000，若放它过去，后面所有
+ * 「首字符是省简称 / 第 2 位是字母」的判断都建立在一个被错误编码的字节串上。
  */
 bool decode_utf8(const std::string& text, std::vector<uint32_t>& codepoints) {
     codepoints.clear();
@@ -35,21 +38,25 @@ bool decode_utf8(const std::string& text, std::vector<uint32_t>& codepoints) {
         const unsigned char lead = static_cast<unsigned char>(text[index]);
         uint32_t codepoint = 0;
         std::size_t continuation = 0;
+        uint32_t min_codepoint = 0; // 该长度的最短合法编码，用于拦 overlong
         if (lead < 0x80) {
             codepoint = lead;
         } else if ((lead & 0xE0) == 0xC0) {
             codepoint = lead & 0x1FU;
             continuation = 1;
+            min_codepoint = 0x80;
         } else if ((lead & 0xF0) == 0xE0) {
             codepoint = lead & 0x0FU;
             continuation = 2;
+            min_codepoint = 0x800;
         } else if ((lead & 0xF8) == 0xF0) {
             codepoint = lead & 0x07U;
             continuation = 3;
+            min_codepoint = 0x10000;
         } else {
             return false;
         }
-        if (index + continuation >= text.size() && continuation != 0) {
+        if (index + continuation >= text.size()) {
             return false;
         }
         for (std::size_t k = 1; k <= continuation; ++k) {
@@ -59,7 +66,8 @@ bool decode_utf8(const std::string& text, std::vector<uint32_t>& codepoints) {
             }
             codepoint = (codepoint << 6) | (next & 0x3FU);
         }
-        if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+        if (codepoint < min_codepoint || codepoint > 0x10FFFF ||
+            (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
             return false;
         }
         codepoints.push_back(codepoint);
@@ -77,7 +85,7 @@ uint32_t codepoint_of(const char* utf8) {
     return codepoints.front();
 }
 
-/** @brief 从字符表区间取出码点集合（省份 / 特殊尾字） */
+/** @brief 从字符表区间取出码点集合（省份 / 尾字） */
 std::vector<uint32_t> codepoints_in_range(std::size_t first, std::size_t last) {
     std::vector<uint32_t> result;
     if (last >= kNumPlateChars || first > last) {
@@ -99,9 +107,19 @@ const std::vector<uint32_t>& province_codepoints() {
     return values;
 }
 
-const std::vector<uint32_t>& special_codepoints() {
-    static const std::vector<uint32_t> values =
-        codepoints_in_range(kFirstSpecialIndex, kLastSpecialIndex);
+/**
+ * @brief 合法尾字码点集合（特殊尾字 ∪ 额外尾字）
+ *
+ * 两段都来自 `plate_charset.hpp`，不另抄一份字面量：字符表扩容而校验没跟上，
+ * 表现是「模型认得、永远报不出来」，且不会编译失败。
+ */
+const std::vector<uint32_t>& suffix_codepoints() {
+    static const std::vector<uint32_t> values = [] {
+        std::vector<uint32_t> merged = codepoints_in_range(kFirstSpecialIndex, kLastSpecialIndex);
+        const std::vector<uint32_t> extra = codepoints_in_range(kFirstExtraSuffixIndex, kLastExtraSuffixIndex);
+        merged.insert(merged.end(), extra.begin(), extra.end());
+        return merged;
+    }();
     return values;
 }
 
@@ -178,18 +196,18 @@ PlateFormatProblem check_structure(const std::vector<uint32_t>& codepoints) {
         if (is_digit(codepoints[i]) || is_sequence_letter(codepoints[i])) {
             continue;
         }
-        if (is_last && contains(special_codepoints(), codepoints[i])) {
+        if (is_last && contains(suffix_codepoints(), codepoints[i])) {
             continue;
         }
         return PlateFormatProblem::BadCharacter;
     }
 
-    // 8 位只可能是三种：小型新能源（第 3 位 D/F）、大型新能源（末位 D/F）、挂车等特殊尾字牌
+    // 8 位只可能是三种：小型新能源（第 3 位 D/F）、大型新能源（末位 D/F）、挂车等尾字牌
     if (codepoints.size() == kMaxPlateCodepoints) {
         const bool third_is_flag = is_new_energy_letter(codepoints[2]);
         const bool last_is_flag = is_new_energy_letter(codepoints.back());
-        const bool last_is_special = contains(special_codepoints(), codepoints.back());
-        if (!third_is_flag && !last_is_flag && !last_is_special) {
+        const bool last_is_suffix = contains(suffix_codepoints(), codepoints.back());
+        if (!third_is_flag && !last_is_flag && !last_is_suffix) {
             return PlateFormatProblem::BadNewEnergyLayout;
         }
     }

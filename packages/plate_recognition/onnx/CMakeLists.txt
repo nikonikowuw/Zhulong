@@ -16,7 +16,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(ZhulongAlgoSDK 1.0 REQUIRED)
 
-find_package(Threads REQUIRED)
+# 警告是**产品代码**的门禁：仓库 native 侧统一 -Wall -Wextra -Wpedantic，包独立构建时
+# 不能因为「没有宿主 CMakeLists 替我加」就默默变成零警告检查。
+# （不做 -Werror：第三方 SDK 头的警告不该阻断包作者，盯 warnings 数量即可。）
+set(ZHULONG_PLATE_WARNINGS
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic>
+)
 
 # 产品代码（算法类本体）：包可执行文件与 devtest 共用，避免两份实现。
 add_library(plate_recognition_core OBJECT
@@ -26,6 +31,7 @@ add_library(plate_recognition_core OBJECT
     src/pipeline/plate_recognition.cpp
 )
 target_compile_definitions(plate_recognition_core PRIVATE ZHULONG_PLUGIN_BUILD)
+target_compile_options(plate_recognition_core PRIVATE ${ZHULONG_PLATE_WARNINGS})
 target_include_directories(plate_recognition_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -36,6 +42,7 @@ add_executable(plate_recognition
     src/main.cpp
     $<TARGET_OBJECTS:plate_recognition_core>
 )
+target_compile_options(plate_recognition PRIVATE ${ZHULONG_PLATE_WARNINGS})
 target_include_directories(plate_recognition PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -49,9 +56,22 @@ add_executable(plate_recognition_devtest EXCLUDE_FROM_ALL
     $<TARGET_OBJECTS:plate_recognition_core>
 )
 target_compile_definitions(plate_recognition_devtest PRIVATE ZHULONG_PLUGIN_BUILD)
+# ⚠️ -UNDEBUG：devtest 里还有 assert()（第三方 stb 与将来新增的断言），RelWithDebInfo 的
+#    NDEBUG 会把它们整块编译掉。仓库 native 侧为此专门有一条 ASSERT_TEST_TARGETS 纪律；
+#    本包自己的断言走 tests/plate_unit_checks.hpp 的 PLATE_CHECK（不依赖 NDEBUG），
+#    -UNDEBUG 是给「后来者顺手写的 assert」兜底。
+target_compile_options(plate_recognition_devtest PRIVATE
+    ${ZHULONG_PLATE_WARNINGS}
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>
+)
 target_include_directories(plate_recognition_devtest PRIVATE
-    ${ZhulongAlgoSDK_DEV_DIR}/stb
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+# stb 以 SYSTEM 引入：它的告警不是本包的，不该淹没产品代码的 -Wall 输出
+# （SYSTEM 头里的告警被抑制，我们自己的 TU 仍然按 -Wall -Wextra -Wpedantic 检查）。
+target_include_directories(plate_recognition_devtest SYSTEM PRIVATE
+    ${ZhulongAlgoSDK_DEV_DIR}/stb
 )
 # 链接顺序由 Zhulong::AlgoRuntime 的 INTERFACE_LINK_LIBRARIES 保证（第三方运行时排在后面）
 target_link_libraries(plate_recognition_devtest PRIVATE Zhulong::AlgoRuntime)

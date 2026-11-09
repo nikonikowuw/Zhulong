@@ -28,8 +28,13 @@ namespace zhulong::plate {
  *   [1, 31]   31 个省级简称（京…新）
  *   [32, 41]  特殊尾字（学 警 港 澳 挂 使 领 民 航 危）
  *   [42, 51]  数字 0-9
- *   [52, 77]  字母 A-Z（不含 I/O，号码中不使用）
- *   [78, ...] 额外汉字（险 品 等，随训练集扩展）
+ *   [52, 75]  字母 A-Z（不含 I/O，号码中不使用）
+ *   [76, 77]  额外尾字（险 品）
+ *
+ * ⚠️ 尾字分区（[32,41] ∪ [76,77]）是**结构校验的合法末位**。模型能解出某个类目、
+ *    而校验永远否决它，等于把训练集里真实存在的类目静默丢掉（少报一块真牌，且
+ *    除 ZHULONG_PLATE_DEBUG 外没有任何信号）。所以字符表扩容时，务必把新增的尾字
+ *    放进 [kFirstExtraSuffixIndex, kLastExtraSuffixIndex]，两处同源。
  */
 inline constexpr const char* kPlateNames[] = {
     "#", "京", "沪", "津", "渝", "冀", "晋", "蒙", "辽", "吉", "黑",
@@ -52,6 +57,9 @@ inline constexpr std::size_t kLastProvinceIndex = 31;
 /** @brief 特殊尾字区间 [kFirstSpecialIndex, kLastSpecialIndex] */
 inline constexpr std::size_t kFirstSpecialIndex = 32;
 inline constexpr std::size_t kLastSpecialIndex = 41;
+/** @brief 额外尾字区间 [kFirstExtraSuffixIndex, kLastExtraSuffixIndex]（训练集扩展的合法尾字） */
+inline constexpr std::size_t kFirstExtraSuffixIndex = 76;
+inline constexpr std::size_t kLastExtraSuffixIndex = 77;
 
 static_assert(std::string_view{kPlateNames[kBlankCharIndex]} == "#");
 static_assert(std::string_view{kPlateNames[kFirstProvinceIndex]} == "京");
@@ -60,6 +68,10 @@ static_assert(std::string_view{kPlateNames[kFirstSpecialIndex]} == "学");
 static_assert(std::string_view{kPlateNames[kLastSpecialIndex]} == "危");
 // 分区之后必须是数字 0，否则说明有人往表中间插了字符而没更新分区常量
 static_assert(std::string_view{kPlateNames[kLastSpecialIndex + 1]} == "0");
+static_assert(std::string_view{kPlateNames[kFirstExtraSuffixIndex]} == "险");
+static_assert(std::string_view{kPlateNames[kLastExtraSuffixIndex]} == "品");
+// 额外尾字区间必须一直延伸到表尾：往后追加字符会同时改变「合法尾字」的语义
+static_assert(kLastExtraSuffixIndex + 1 == kNumPlateChars);
 
 /** @brief 颜色分类类别表（顺序即模型类别顺序） */
 inline constexpr const char* kColorNames[] = {"黑色", "蓝色", "绿色", "白色", "黄色"};

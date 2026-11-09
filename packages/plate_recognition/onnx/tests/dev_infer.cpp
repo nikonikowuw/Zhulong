@@ -6,23 +6,26 @@
  *   - `add_executable(... EXCLUDE_FROM_ALL)`，不进安装规则，物理上进不了算法包归档；
  *   - 依赖 stb（header-only），产品代码零依赖。
  *
- * 与宿主黑盒验包（`zhulong_algo_runner --verify-plugin`）的分工：
+ * 与宿主黑盒验包（`<manifest.id> --verify`）的分工：
  *   - 验包证明「ABI 生命周期通、能跑出结果」，但它不含图像库，只能吃 PPM 或合成帧；
  *   - 本工具给开发者一张**画好的图**，用眼睛判断框和号码对不对，跨 target 不比数值
  *     （量化不同，结果本就不同）。
  *
+ * 纯逻辑断言（采样坐标 / 号牌结构 / 帧视图守卫）与仓库 native 金标测试共用
+ * `tests/plate_unit_checks.hpp`，不在这里复制第二份。
+ *
  * 用法（在包目录内）：
  *     make test
- *     ./build/<id>_devtest --sample sample.jpg --out build/out/result.jpg
+ *     ./build/plate_recognition_devtest --sample sample.jpg --out build/out/result.jpg
  *
- * 输出：`result.jpg`（vehicle/plate/face 框与标签）+ stdout 明细表。
+ * 输出：`result.jpg`（vehicle/plate 框）+ stdout 明细表；纯逻辑断言有任何一条失败时
+ *       退出码非 0（**不再依赖 assert**：RelWithDebInfo 的 -DNDEBUG 会把断言整块编译掉）。
  */
 
 #include <zhulong/algo.hpp>
 
-#include "format/plate_format.hpp"
 #include "pipeline/plate_recognition.hpp"
-#include "recognition/plate_recognizer.hpp"
+#include "plate_unit_checks.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -30,10 +33,10 @@
 #include "stb_image_write.h"
 
 #include <chrono>
-#include <cmath>
-#include <cassert>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -69,7 +72,8 @@ void draw_box(uint8_t* canvas, int width, int height, const float box[4], uint8_
 
     const auto put = [&](int x, int y) {
         if (x < 0 || y < 0 || x >= width || y >= height) return;
-        uint8_t* pixel = canvas + (static_cast<size_t>(y) * width + x) * 3;
+        uint8_t* pixel = canvas + (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+                                   static_cast<std::size_t>(x)) * 3;
         pixel[0] = r;
         pixel[1] = g;
         pixel[2] = b;
@@ -86,12 +90,12 @@ void draw_box(uint8_t* canvas, int width, int height, const float box[4], uint8_
     }
 }
 
-void print_table(const std::string& sample, const char* result_type_name, uint32_t count,
+void print_table(const std::string& sample, const char* result_type_name, std::size_t count,
                  double cost_ms, const std::vector<DetailRow>& rows) {
     std::printf("\n=== dev infer ===\n");
     std::printf("sample      : %s\n", sample.c_str());
     std::printf("result_type : %s\n", result_type_name);
-    std::printf("count       : %u\n", count);
+    std::printf("count       : %zu\n", count);
     std::printf("cost_ms     : %.2f\n", cost_ms);
     if (rows.empty()) {
         std::printf("(no rows)\n");
@@ -104,103 +108,16 @@ void print_table(const std::string& sample, const char* result_type_name, uint32
     }
 }
 
-void run_internal_unit_tests() {
-    using namespace zhulong::plate;
-
-    // 1. 双层车牌切块重拼的坐标映射单测
-    constexpr int kTargetW = kRecognitionWidth;
-    constexpr int kTargetH = kRecognitionHeight;
-    const float crop_x = 100.0f;
-    const float crop_y = 200.0f;
-    const float crop_w = static_cast<float>(kTargetW);
-    const float crop_h = static_cast<float>(kTargetH);
-
-    const auto single = [&](int x, int y) {
-        return plate_sample_point(x, y, kTargetW, kTargetH, crop_x, crop_y,
-                                  crop_w, crop_h,
-                                  static_cast<int32_t>(PlateLineLayout::SingleLine));
-    };
-    const auto double_line = [&](int x, int y) {
-        return plate_sample_point(x, y, kTargetW, kTargetH, crop_x, crop_y,
-                                  crop_w, crop_h,
-                                  static_cast<int32_t>(PlateLineLayout::DoubleLine));
-    };
-    const auto new_energy = [&](int x, int y) {
-        return plate_sample_point(x, y, kTargetW, kTargetH, crop_x, crop_y,
-                                  crop_w, crop_h,
-                                  static_cast<int32_t>(PlateLineLayout::NewEnergy));
-    };
-
-    // 单层恒等映射
-    for (int y = 0; y < kTargetH; y += 7) {
-        for (int x = 0; x < kTargetW; x += 13) {
-            const auto point = single(x, y);
-            assert(std::fabs(point.fx - (crop_x + static_cast<float>(x))) < 1e-4f);
-            assert(std::fabs(point.fy - (crop_y + static_cast<float>(y))) < 1e-4f);
-        }
-    }
-    const auto energy_point = new_energy(10, 10);
-    const auto single_point = single(10, 10);
-    assert(std::fabs(energy_point.fx - single_point.fx) < 1e-4f);
-    assert(std::fabs(energy_point.fy - single_point.fy) < 1e-4f);
-
-    constexpr float kPixelCenter = 0.5f;
-    const float upper_band_end = crop_y + crop_h * 5.0f / 12.0f;
-    const float lower_band_start = crop_y + crop_h / 3.0f;
-    for (int y = 0; y < kTargetH; y += 5) {
-        assert(double_line(0, y).fy < upper_band_end);
-        assert(double_line(kTargetW / 2 - 1, y).fy < upper_band_end);
-        assert(double_line(kTargetW / 2, y).fy >= lower_band_start - kPixelCenter);
-        assert(double_line(kTargetW - 1, y).fy >= lower_band_start - kPixelCenter);
-        assert(double_line(kTargetW - 1, y).fy < crop_y + crop_h);
-    }
-
-    // 2. 号码结构规则校验
-    assert(validate_plate_number("豫B2V9L7").valid);
-    assert(validate_plate_number("辽DU4356").valid);
-    assert(validate_plate_number("京A12345").valid);
-    assert(validate_plate_number("粤AD12345").valid);
-    assert(validate_plate_number("粤AF12345").valid);
-    assert(validate_plate_number("京A12345D").valid);
-    assert(validate_plate_number("京A12345F").valid);
-    assert(validate_plate_number("京A1234警").valid);
-    assert(validate_plate_number("粤B1234学").valid);
-    assert(validate_plate_number("冀B1234挂").valid);
-    assert(validate_plate_number("使123456").valid);
-    assert(validate_plate_number("领123456").valid);
-
-    assert(validate_plate_number("").problem == PlateFormatProblem::BadLength);
-    assert(validate_plate_number("京A12").problem == PlateFormatProblem::BadLength);
-    assert(validate_plate_number("京A12345678").problem == PlateFormatProblem::BadLength);
-    assert(validate_plate_number("美A12345").problem == PlateFormatProblem::BadProvince);
-    assert(validate_plate_number("京I12345").problem == PlateFormatProblem::BadAuthority);
-    assert(validate_plate_number("京O12345").problem == PlateFormatProblem::BadAuthority);
-    assert(validate_plate_number("京A1学345").problem == PlateFormatProblem::BadCharacter);
-    assert(validate_plate_number("京A123456").problem == PlateFormatProblem::BadNewEnergyLayout);
-    assert(validate_plate_number("\xE4\xBA").problem == PlateFormatProblem::InvalidUtf8);
-
-    // 3. 负 stride 显式拒绝
-    PlateRecognizer recognizer;
-    zhulong::Session session;
-    zhulong_frame_view bad_stride_frame;
-    std::memset(&bad_stride_frame, 0, sizeof(bad_stride_frame));
-    uint8_t dummy[100] = {0};
-    bad_stride_frame.planes[0] = dummy;
-    bad_stride_frame.width = 100;
-    bad_stride_frame.height = 100;
-    bad_stride_frame.format = ZHULONG_PIXEL_FORMAT_RGB24;
-    bad_stride_frame.strides[0] = -300;
-    const auto bad_result = recognizer.recognize(session, bad_stride_frame, {0.1f, 0.1f, 0.5f, 0.5f}, 0);
-    assert(bad_result.plate_number.empty());
-
-    std::printf("[✓] plate algorithm internal unit asserts passed\n");
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
-    // 运行算法内部纯函数单测（坐标映射、号牌结构、负 stride 防护）
-    run_internal_unit_tests();
+    // 纯逻辑自查先跑：坐标映射、号牌结构、帧视图守卫（不加载模型、不建会话）
+    const int pure_failures = zhulong::plate::test::run_pure_unit_checks();
+    if (pure_failures == 0) {
+        std::printf("[✓] plate algorithm pure checks passed\n");
+    } else {
+        std::fprintf(stderr, "[✗] plate algorithm pure checks failed: %d\n", pure_failures);
+    }
 
     std::string sample_path = "sample.jpg";
     std::string output_path = "build/out/result.jpg";
@@ -227,7 +144,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "failed to decode sample %s: %s\n", sample_path.c_str(), stbi_failure_reason());
         return 1;
     }
-    const size_t pixel_bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
+    const std::size_t pixel_bytes =
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3;
     std::vector<uint8_t> canvas(pixels, pixels + pixel_bytes);
     stbi_image_free(pixels);
 
@@ -287,13 +205,12 @@ int main(int argc, char** argv) {
     }
 
     const char* result_type_name = "vehicle_structure";
-    const uint32_t count = static_cast<uint32_t>(vehicles.size());
-    print_table(sample_path, result_type_name, count, cost_ms, rows);
+    print_table(sample_path, result_type_name, vehicles.size(), cost_ms, rows);
     std::printf("result written: %s\n", output_path.c_str());
 
     if (stbi_write_jpg(output_path.c_str(), width, height, 3, canvas.data(), 92) == 0) {
         std::fprintf(stderr, "failed to write %s\n", output_path.c_str());
         return 1;
     }
-    return 0;
+    return pure_failures == 0 ? 0 : 1;
 }

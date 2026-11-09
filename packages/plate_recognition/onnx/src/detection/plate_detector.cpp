@@ -1,8 +1,13 @@
 #include "plate_detector.hpp"
 
+#include "common/runner_log.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace zhulong::plate {
@@ -14,6 +19,16 @@ constexpr int kModelInputSize = 640;
 
 /// 输出通道数上限：4 个框分量 + 类别分；超出即判定该张量不是检测头输出
 constexpr int64_t kMaxOutputChannels = 256;
+
+/**
+ * @brief NMS 前的候选上限
+ *
+ * `zhulong::ops::nms` 是逐框贪心的 O(N²)（`native/src/algorithm/runtime/detection_postprocess.cpp`）。
+ * schema 允许把置信度阈值调到 0.1，而 640 输入有 8400 个锚点 —— 低阈值下活下来的候选
+ * 足以让单帧 NMS 从微秒级涨到几十毫秒。留 top-K 与 ultralytics 的 `max_nms` 同构：
+ * 只截候选池，不改变「被截掉的框本来也进不了结果」这一事实（final NMS 只留极少数）。
+ */
+constexpr std::size_t kMaxCandidatesBeforeNms = 300;
 
 /**
  * @brief YOLOv8 检测头输出的形状解释
@@ -61,9 +76,18 @@ OutputLayout resolve_output_layout(const std::vector<int64_t>& shape) {
     return layout;
 }
 
+/** @brief 把超限的类别数写成一次告警（宿主日志可解析，见 common/runner_log.hpp） */
+void report_head_mismatch(int channels) {
+    char detail[96];
+    const int written = std::snprintf(detail, sizeof(detail), "channels=%d classes=%d", channels, channels - 4);
+    log_warning("plate_recognition", "detection output is not a plate head",
+                written > 0 ? std::string_view(detail) : std::string_view{});
+}
+
 } // namespace
 
-std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, const zhulong::Image& image) {
+std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session,
+                                                     const zhulong::Image& image) const {
     const auto& raw = image.raw_view();
     if (raw.planes[0] == nullptr || raw.width <= 0 || raw.height <= 0) {
         return {};
@@ -82,7 +106,8 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
     if (zhulong::ops::letterbox(image, letterboxed, params) != ZHULONG_PLUGIN_OK) {
         return {};
     }
-    if (letterboxed.element_count() < static_cast<size_t>(kModelInputSize) * kModelInputSize * 3) {
+    constexpr std::size_t kExpectedElements = static_cast<std::size_t>(kModelInputSize) * kModelInputSize * 3;
+    if (letterboxed.element_count() < kExpectedElements) {
         return {};
     }
 
@@ -103,9 +128,10 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
     float* plane_g = destination + kPlane;
     float* plane_b = destination + kPlane * 2;
     for (int i = 0; i < kPlane; ++i) {
-        plane_r[i] = static_cast<float>(source[i * 3 + 0]) / 255.0f;
-        plane_g[i] = static_cast<float>(source[i * 3 + 1]) / 255.0f;
-        plane_b[i] = static_cast<float>(source[i * 3 + 2]) / 255.0f;
+        const std::size_t offset = static_cast<std::size_t>(i) * 3;
+        plane_r[i] = static_cast<float>(source[offset + 0]) / 255.0f;
+        plane_g[i] = static_cast<float>(source[offset + 1]) / 255.0f;
+        plane_b[i] = static_cast<float>(source[offset + 2]) / 255.0f;
     }
     std::vector<zhulong::Tensor> outputs = session.forward({model_input});
 
@@ -119,7 +145,15 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
     if (!layout.valid || layout.channels < 5) {
         return {}; // 不是 YOLOv8 检测头输出（例如推理后端返回了别的张量）
     }
-    if (output.element_count() < static_cast<size_t>(layout.channels) * layout.num_anchors) {
+    // 类别数越界 = 加载的不是车牌检测头（如 80 类 COCO 权重）。继续按 (cx, cy, w, h) 解析
+    // 会产出位置离谱、置信度却「看着正常」的框，比返回空危险得多，因此就地失败。
+    if (layout.channels - 4 > kMaxPlateClasses) {
+        if (!head_mismatch_reported_.exchange(true, std::memory_order_relaxed)) {
+            report_head_mismatch(layout.channels);
+        }
+        return {};
+    }
+    if (output.element_count() < static_cast<std::size_t>(layout.channels) * static_cast<std::size_t>(layout.num_anchors)) {
         return {};
     }
     const float* data = output.data<float>();
@@ -134,13 +168,15 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
     const float orig_h = static_cast<float>(raw.height);
 
     std::vector<zhulong::Detection> candidates;
-    candidates.reserve(32);
+    candidates.reserve(64);
 
     for (int i = 0; i < layout.num_anchors; ++i) {
         const auto at = [&](int channel) -> float {
             return layout.channel_first
-                       ? data[static_cast<size_t>(channel) * layout.num_anchors + i]
-                       : data[static_cast<size_t>(i) * layout.channels + channel];
+                       ? data[static_cast<std::size_t>(channel) * static_cast<std::size_t>(layout.num_anchors) +
+                              static_cast<std::size_t>(i)]
+                       : data[static_cast<std::size_t>(i) * static_cast<std::size_t>(layout.channels) +
+                              static_cast<std::size_t>(channel)];
         };
 
         float score = at(4);
@@ -171,12 +207,23 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
             continue;
         }
         detection.confidence = score;
-        detection.class_id = best_channel - 4; // 0=单层, 1=双层, 2=新能源（由模型类别决定）
+        detection.class_id = best_channel - 4;
         candidates.push_back(std::move(detection));
     }
 
     if (candidates.empty()) {
         return {};
+    }
+
+    // 3.5 候选池截断：见 kMaxCandidatesBeforeNms。被截掉的框在 NMS 后本来也留不下
+    //     （同一目标的高分框必然先被保留），这里只是不让 O(N²) 吃到全部 8400 个锚点。
+    if (candidates.size() > kMaxCandidatesBeforeNms) {
+        const auto keep = static_cast<std::ptrdiff_t>(kMaxCandidatesBeforeNms);
+        std::partial_sort(candidates.begin(), candidates.begin() + keep, candidates.end(),
+                          [](const zhulong::Detection& lhs, const zhulong::Detection& rhs) {
+                              return lhs.confidence > rhs.confidence;
+                          });
+        candidates.resize(kMaxCandidatesBeforeNms);
     }
 
     // 4. NMS：复用平台算子，避免在算法包里维护第二份 IoU/抑制实现（语义与原实现一致：
@@ -187,11 +234,11 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
     results.reserve(kept.size());
     for (const auto& detection : kept) {
         PlateBoxDetection box;
-        for (int k = 0; k < 4; ++k) {
+        for (std::size_t k = 0; k < box.box.size(); ++k) {
             box.box[k] = detection.box[k];
         }
         box.score = detection.confidence;
-        box.class_id = detection.class_id;
+        box.kind = plate_kind_from_index(detection.class_id);
         results.push_back(box);
     }
     return results;

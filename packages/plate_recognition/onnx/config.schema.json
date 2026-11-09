@@ -5,17 +5,17 @@
   "properties": {
     "confidence_threshold": {
       "type": "number",
-      "minimum": 0.1,
+      "exclusiveMinimum": 0,
       "maximum": 1.0,
       "default": 0.35,
-      "description": "车牌检测置信度阈值"
+      "description": "车牌检测置信度阈值。区间 (0, 1] 与 src/common/plate_defaults.hpp 一致，越界回落默认值"
     },
     "nms_threshold": {
       "type": "number",
-      "minimum": 0.1,
-      "maximum": 0.9,
+      "exclusiveMinimum": 0,
+      "maximum": 1.0,
       "default": 0.45,
-      "description": "NMS 重叠抑制阈值"
+      "description": "NMS 重叠抑制阈值。区间 (0, 1] 与 src/common/plate_defaults.hpp 一致，越界回落默认值"
     }
   }
 }

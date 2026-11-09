@@ -1,20 +1,20 @@
 #include "plate_recognition.hpp"
 
+#include "common/plate_defaults.hpp"
+#include "common/runner_log.hpp"
 #include "format/plate_format.hpp"
 
 #include <zhulong/algo.hpp>
 
 #include <dlfcn.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
-#include <cstring>
-#include <fstream>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -22,9 +22,21 @@ namespace zhulong::plate {
 
 namespace {
 
-/** @brief config.schema.json 声明的默认阈值（schema 与代码必须同步） */
-constexpr float kDefaultConfidenceThreshold = 0.35f;
-constexpr float kDefaultNmsThreshold = 0.45f;
+/** @brief 诊断日志的 module 字段（宿主按它归组；只允许 [A-Za-z0-9_.-]） */
+constexpr const char* kLogModule = "plate_recognition";
+
+/**
+ * @brief 路径是否为**普通文件**
+ *
+ * 刻意不用 `std::ifstream(path).good()`：Linux 上 open() 对目录同样成功，`good()` 为真，
+ * 于是「models/plate_detect.onnx 是个目录」会被当成找到模型，最终由 Model::load 报
+ * NOT_SUPPORTED —— 把一个一眼可辨的布局错误伪装成「后端不支持」。
+ * 也刻意不引 `<filesystem>`：交叉工具链的最小依赖是刻意维持的（见 native/src/common/path_utils.hpp）。
+ */
+bool is_regular_file(const std::string& path) {
+    struct stat info {};
+    return ::stat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode);
+}
 
 /**
  * @brief 当前进程自身所在目录（不含结尾斜杠）；取不到时返回空串
@@ -82,7 +94,7 @@ std::string resolve_model_path(const std::string& rel_path) {
     const std::string module_dir = executable_directory();
     if (!module_dir.empty()) {
         const std::string candidate = module_dir + "/" + rel_path;
-        if (std::ifstream(candidate).good()) {
+        if (is_regular_file(candidate)) {
             return candidate;
         }
     }
@@ -91,7 +103,7 @@ std::string resolve_model_path(const std::string& rel_path) {
         const char* env_dir = std::getenv(env_name);
         if (env_dir != nullptr && env_dir[0] != '\0') {
             const std::string candidate = std::string(env_dir) + "/" + rel_path;
-            if (std::ifstream(candidate).good()) {
+            if (is_regular_file(candidate)) {
                 return candidate;
             }
         }
@@ -105,14 +117,11 @@ std::string resolve_model_path(const std::string& rel_path) {
                                "../../packages/plate_recognition/onnx/",
                                "../packages/plate_recognition/onnx/"}) {
         const std::string candidate = std::string(prefix) + rel_path;
-        if (std::ifstream(candidate).good()) {
+        if (is_regular_file(candidate)) {
             return candidate;
         }
     }
 
-    if (std::ifstream(rel_path).good()) {
-        return rel_path;
-    }
     return rel_path;
 }
 
@@ -123,8 +132,7 @@ std::string resolve_model_path(const std::string& rel_path) {
  * 它按设计拒绝一切真实模型路径）；文件不存在 = NOT_FOUND。
  */
 zhulong_status_t model_unavailable_status(const std::string& resolved_path) {
-    return std::ifstream(resolved_path).good() ? ZHULONG_PLUGIN_ERR_NOT_SUPPORTED
-                                               : ZHULONG_PLUGIN_ERR_NOT_FOUND;
+    return is_regular_file(resolved_path) ? ZHULONG_PLUGIN_ERR_NOT_SUPPORTED : ZHULONG_PLUGIN_ERR_NOT_FOUND;
 }
 
 /**
@@ -132,6 +140,10 @@ zhulong_status_t model_unavailable_status(const std::string& resolved_path) {
  *
  * 刻意不引入 JSON 依赖：算法包必须保持零第三方依赖，可被任意宿主加载。
  * 匹配 `"key"` 后取第一个 `:` 之后的数值，非法或缺失时返回 false。
+ *
+ * ⚠️ 不校验 JSON 类型：`"confidence_threshold": "0.5"`（字符串）同样会被 strtod 接受。
+ *    这是零依赖换来的刻意取舍 —— 键名与语义的权威声明属于 config.schema.json，
+ *    宿主在下发前就该按 schema 校验过；本函数只负责「拿不到/拿不准就用默认值」。
  */
 bool json_number_field(const std::string& json, const std::string& key, double& out) {
     const std::string quoted_key = "\"" + key + "\"";
@@ -154,27 +166,29 @@ bool json_number_field(const std::string& json, const std::string& key, double& 
     return true;
 }
 
+/** @brief 值是否落在阈值可接受区间（与 config.schema.json 的区间一致） */
+bool threshold_in_range(double value) noexcept {
+    return value > kThresholdMinExclusive && value <= kThresholdMaxInclusive;
+}
+
 /**
  * @brief 解析单个阈值：config_json 优先，其次同义环境变量，最后 schema 默认值
  *
  * `.env` 注入的环境变量名取自 .trellis/spec/backend/algorithm-guidelines.md §3
  * （CONFIDENCE_THRESHOLD / NMS_THRESHOLD），使「声明了可调参数」与「真的能调」对齐。
+ * 越界值回落默认值而不是报错：宿主与包分开交付，版本偏斜真实存在。
  */
 float resolve_threshold(const std::string& config_json, const char* config_key, const char* env_key,
                         float default_value) {
     double value = 0.0;
     if (json_number_field(config_json, config_key, value)) {
-        // 落到 (0, 1] 之外视为配置错误，回落默认值而不是悄悄改变检测行为
-        if (value > 0.0 && value <= 1.0) {
-            return static_cast<float>(value);
-        }
-        return default_value;
+        return threshold_in_range(value) ? static_cast<float>(value) : default_value;
     }
     if (const char* env_value = std::getenv(env_key); env_value != nullptr && env_value[0] != '\0') {
         char* end = nullptr;
         errno = 0;
         const double parsed = std::strtod(env_value, &end);
-        if (end != env_value && errno != ERANGE && std::isfinite(parsed) && parsed > 0.0 && parsed <= 1.0) {
+        if (end != env_value && errno != ERANGE && std::isfinite(parsed) && threshold_in_range(parsed)) {
             return static_cast<float>(parsed);
         }
     }
@@ -183,131 +197,141 @@ float resolve_threshold(const std::string& config_json, const char* config_key, 
 
 } // namespace
 
-    zhulong_status_t PlateRecognitionPlugin::init(const std::string& config_json)
-    {
-        detector_.set_confidence_threshold(
-            resolve_threshold(config_json, "confidence_threshold", "CONFIDENCE_THRESHOLD", kDefaultConfidenceThreshold));
-        detector_.set_nms_threshold(
-            resolve_threshold(config_json, "nms_threshold", "NMS_THRESHOLD", kDefaultNmsThreshold));
+zhulong_status_t PlateRecognitionPlugin::init(const std::string& config_json) {
+    detector_.set_confidence_threshold(resolve_threshold(config_json, "confidence_threshold",
+                                                         "CONFIDENCE_THRESHOLD", kDefaultConfidenceThreshold));
+    detector_.set_nms_threshold(
+        resolve_threshold(config_json, "nms_threshold", "NMS_THRESHOLD", kDefaultNmsThreshold));
 
-        // 本 target 只打包 ONNX 权重：扩展名是常量，不再由编译期后端宏或运行期探测决定。
-        const std::string detection_model = "models/plate_detect.onnx";
-        const std::string recognition_model = "models/plate_rec_color.onnx";
-        const std::string resolved_detection = resolve_model_path(detection_model);
-        const std::string resolved_recognition = resolve_model_path(recognition_model);
+    // 本 target 只打包 ONNX 权重：扩展名是常量，不再由编译期后端宏或运行期探测决定。
+    const std::string resolved_detection = resolve_model_path("models/plate_detect.onnx");
+    const std::string resolved_recognition = resolve_model_path("models/plate_rec_color.onnx");
 
-        det_model_ = zhulong::Model::load(resolved_detection);
-        if (!det_model_.valid()) {
-            return model_unavailable_status(resolved_detection);
-        }
-        rec_model_ = zhulong::Model::load(resolved_recognition);
-        if (!rec_model_.valid()) {
-            return model_unavailable_status(resolved_recognition);
-        }
-
-        return ZHULONG_PLUGIN_OK;
+    det_model_ = zhulong::Model::load(resolved_detection);
+    if (!det_model_.valid()) {
+        return model_unavailable_status(resolved_detection);
+    }
+    rec_model_ = zhulong::Model::load(resolved_recognition);
+    if (!rec_model_.valid()) {
+        return model_unavailable_status(resolved_recognition);
     }
 
-    zhulong::Session PlateRecognitionPlugin::create_session(uint32_t worker_id)
+    return ZHULONG_PLUGIN_OK;
+}
+
+zhulong::Session PlateRecognitionPlugin::create_session(uint32_t worker_id) {
+    if (!det_model_.valid()) {
+        return zhulong::Session();
+    }
+
+    // 会话创建（ONNX 的 arena 准备 / RKNN 的 dup_context）可能耗时几十毫秒：一律在锁外做，
+    // 否则每新开一路流都会阻塞所有在跑的 Worker 去查自己的识别会话。
+    zhulong::Session det_session = det_model_.create_session(worker_id);
+    if (!det_session.valid()) {
+        return zhulong::Session();
+    }
+
+    zhulong::Session rec_session = rec_model_.create_session(worker_id);
+    if (!rec_session.valid()) {
+        // 级联模型会话创建失败时整体失败，严禁静默降级导致假活
+        return zhulong::Session();
+    }
+
+    auto shared_rec_session = std::make_shared<zhulong::Session>(std::move(rec_session));
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
-        if (!det_model_.valid()) {
-            return zhulong::Session();
-        }
-        zhulong::Session det_session = det_model_.create_session(worker_id);
-        if (!det_session.valid()) {
-            return zhulong::Session();
-        }
-
-        if (rec_model_.valid()) {
-            zhulong::Session rec_session = rec_model_.create_session(worker_id);
-            if (!rec_session.valid()) {
-                // 级联模型会话创建失败时整体失败，严禁静默降级导致假活
-                return zhulong::Session();
-            }
-            rec_sessions_[worker_id] = std::move(rec_session);
-        }
-
-        return det_session;
+        rec_sessions_[worker_id] = std::move(shared_rec_session);
     }
 
-    std::vector<zhulong::VehicleItem> PlateRecognitionPlugin::detect_vehicles(
-        zhulong::Session& session, const zhulong::Image& image, zhulong::TaskContext& task_context)
+    return det_session;
+}
+
+std::vector<zhulong::VehicleItem> PlateRecognitionPlugin::detect_vehicles(
+    zhulong::Session& session, const zhulong::Image& image, zhulong::TaskContext& task_context) {
+    // 本包不消费任务级配置（阈值是进程级通道，见 algo-plugin-contract.md「两层配置通道」）；
+    // 参数由 SDK 契约固定，签名保留。
+    (void)task_context;
+
+    if (!session.valid()) {
+        return {};
+    }
+    const uint32_t worker_id = session.worker_id();
+
+    // ⚠️ 取的是 shared_ptr 的副本：出锁后即使同一 worker_id 被重新赋值（重连/热更新），
+    //    我们手里的会话也仍然活着。裸指针版本在那种时序下会让另一个线程踩到已析构对象。
+    std::shared_ptr<zhulong::Session> rec_session;
     {
-        const uint32_t worker_id = session.worker_id();
-
-        // ⚠️ 指针只在本函数内使用：unordered_map 重哈希不会失效元素引用（节点稳定），
-        //    但 Session 本身是 Worker 独占的，绝不可跨线程共享该指针所指对象。
-        zhulong::Session* rec_session = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(session_mutex_);
-            const auto it = rec_sessions_.find(worker_id);
-            if (it != rec_sessions_.end()) {
-                rec_session = &it->second;
-            }
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        const auto it = rec_sessions_.find(worker_id);
+        if (it != rec_sessions_.end()) {
+            rec_session = it->second;
         }
-
-        // 1. 车牌检测
-        const std::vector<PlateBoxDetection> detections = detector_.detect(session, image);
-        if (detections.empty()) {
-            return {};
-        }
-
-        // 2. 逐块识别并构造结构化输出（退化语义：车身框即车牌框，见 algo.hpp VehicleItem）
-        const auto& raw = image.raw_view();
-        std::vector<zhulong::VehicleItem> vehicles;
-        vehicles.reserve(detections.size());
-
-        for (const auto& detection : detections) {
-            RecognizedPlate recognized;
-            if (rec_session != nullptr && rec_session->valid()) {
-                recognized = recognizer_.recognize(*rec_session, raw, detection.box, detection.class_id);
-            }
-
-            // ⚠️ 识别失败（框太糊、字符位不足、CTC 全空白）时**不产出**该车牌：
-            //    宿主 internal/record 会为 plates 为空且 track_id==0 的目标按框坐标
-            //    生成抓拍去重键，而退化模式没有跟踪 ID，框抖动会让去重键持续变化并
-            //    产生抓拍洪泛。宁可少报一块「读不出来的车牌」，也不制造无界证据。
-            if (recognized.plate_number.empty()) {
-                continue;
-            }
-
-            // 号牌结构无条件合法性校验：拦截无法在现实中成立的畸形/噪点字符序列
-            const PlateFormatVerdict verdict = validate_plate_number(recognized.plate_number);
-            if (!verdict.valid) {
-                if (const char* debug_env = std::getenv("ZHULONG_PLATE_DEBUG"); debug_env != nullptr && debug_env[0] == '1') {
-                    std::fprintf(stderr, "[plate_recognition] rejected invalid plate '%s' (reason: %s)\n",
-                                 recognized.plate_number.c_str(),
-                                 plate_format_problem_name(verdict.problem));
-                }
-                continue;
-            }
-
-            zhulong::VehicleItem vehicle;
-            vehicle.track_id = 0; // 退化模式：无车辆跟踪
-            for (size_t k = 0; k < 4; ++k) {
-                vehicle.vehicle_box[k] = detection.box[k];
-            }
-            // 退化语义下「车」就是车牌框：vehicle_score 取**车牌检测**置信度，
-            // 而 plate.score 是字符识别置信度，二者语义不同、不可互换。
-            vehicle.vehicle_score = detection.score;
-            vehicle.vehicle_type = "unknown";
-            vehicle.vehicle_color = "";
-
-            zhulong::PlateItem plate;
-            for (size_t k = 0; k < 4; ++k) {
-                plate.box[k] = detection.box[k];
-            }
-            plate.score = recognized.score;
-            plate.plate_number = std::move(recognized.plate_number);
-            plate.plate_color = std::move(recognized.plate_color);
-            plate.plate_type = recognized.plate_type;
-
-            vehicle.plates.push_back(std::move(plate));
-            vehicles.push_back(std::move(vehicle));
-        }
-
-        return vehicles;
     }
+
+    // 1. 车牌检测
+    const std::vector<PlateBoxDetection> detections = detector_.detect(session, image);
+    if (detections.empty()) {
+        return {};
+    }
+
+    // 2. 逐块识别并构造结构化输出（退化语义：车身框即车牌框，见 algo.hpp VehicleItem）
+    const auto& raw = image.raw_view();
+    std::vector<zhulong::VehicleItem> vehicles;
+    vehicles.reserve(detections.size());
+
+    for (const auto& detection : detections) {
+        RecognizedPlate recognized;
+        if (rec_session != nullptr && rec_session->valid()) {
+            recognized = recognizer_.recognize(*rec_session, raw, detection.box, detection.kind);
+        }
+
+        // ⚠️ 识别失败（框太糊、字符位不足、CTC 全空白）时**不产出**该车牌：
+        //    宿主 internal/record 会为 plates 为空且 track_id==0 的目标按框坐标
+        //    生成抓拍去重键，而退化模式没有跟踪 ID，框抖动会让去重键持续变化并
+        //    产生抓拍洪泛。宁可少报一块「读不出来的车牌」，也不制造无界证据。
+        if (recognized.plate_number.empty()) {
+            continue;
+        }
+
+        // 号牌结构无条件合法性校验：拦截无法在现实中成立的畸形/噪点字符序列
+        const PlateFormatVerdict verdict = validate_plate_number(recognized.plate_number);
+        if (!verdict.valid) {
+            if (const char* debug_env = std::getenv("ZHULONG_PLATE_DEBUG");
+                debug_env != nullptr && debug_env[0] == '1') {
+                // 走宿主可解析的原生日志行：裸 fprintf(stderr) 在运维侧会被整行丢弃
+                // （见 algo-plugin-contract.md §5.0.2）。
+                const std::string detail =
+                    recognized.plate_number + " (" + plate_format_problem_name(verdict.problem) + ")";
+                log_debug(kLogModule, "rejected invalid plate", detail);
+            }
+            continue;
+        }
+
+        zhulong::VehicleItem vehicle;
+        vehicle.track_id = 0; // 退化模式：无车辆跟踪
+        for (std::size_t k = 0; k < detection.box.size(); ++k) {
+            vehicle.vehicle_box[k] = detection.box[k];
+        }
+        // 退化语义下「车」就是车牌框：vehicle_score 取**车牌检测**置信度，
+        // 而 plate.score 是字符识别置信度，二者语义不同、不可互换。
+        vehicle.vehicle_score = detection.score;
+        vehicle.vehicle_type = "unknown";
+        vehicle.vehicle_color = "";
+
+        zhulong::PlateItem plate;
+        for (std::size_t k = 0; k < detection.box.size(); ++k) {
+            plate.box[k] = detection.box[k];
+        }
+        plate.score = recognized.score;
+        plate.plate_number = std::move(recognized.plate_number);
+        plate.plate_color = std::move(recognized.plate_color);
+        plate.plate_type = static_cast<int32_t>(recognized.kind);
+
+        vehicle.plates.push_back(std::move(plate));
+        vehicles.push_back(std::move(vehicle));
+    }
+
+    return vehicles;
+}
 
 } // namespace zhulong::plate

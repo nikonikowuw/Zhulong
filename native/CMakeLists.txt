@@ -731,6 +731,36 @@ if(BUILD_TESTING)
         set_tests_properties(ZhulongFaceRecognitionOnnx PROPERTIES TIMEOUT 20)
     endif()
 
+    # 车牌包的 ONNX 金标回归（fixture 图 → 真实权重 → 号码/颜色逐字断言）。
+    #
+    # ⚠️ 这是**唯一**会跑车牌的自动门禁：包内 `make test` 的产物是给人看的 result.jpg，
+    #    没有任何机器结论。源文件全在包内（src/ + tests/），这里只给它编一份可执行文件；
+    #    `ASSERT_TEST_TARGETS` 会为本目标补 -UNDEBUG（本用例全靠 assert）。
+    #    只注册在 onnx 档位：包里只有 .onnx 权重，rknn 构建没有可加载的模型。
+    if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
+        set(ZHULONG_PLATE_IMPL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx)
+        add_executable(ZhulongPlateRecognitionPluginTests
+            tests/plate_recognition_onnx_test.cpp
+            ${ZHULONG_PLATE_IMPL_DIR}/src/detection/plate_detector.cpp
+            ${ZHULONG_PLATE_IMPL_DIR}/src/recognition/plate_recognizer.cpp
+            ${ZHULONG_PLATE_IMPL_DIR}/src/format/plate_format.cpp
+            ${ZHULONG_PLATE_IMPL_DIR}/src/pipeline/plate_recognition.cpp
+        )
+        target_compile_features(ZhulongPlateRecognitionPluginTests PRIVATE cxx_std_17)
+        target_compile_definitions(ZhulongPlateRecognitionPluginTests PRIVATE
+            ZHULONG_PLATE_PKG_DIR="${ZHULONG_PLATE_IMPL_DIR}")
+        target_include_directories(ZhulongPlateRecognitionPluginTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+            ${ZHULONG_PLATE_IMPL_DIR}/src
+            ${ZHULONG_PLATE_IMPL_DIR}/tests
+        )
+        target_link_libraries(ZhulongPlateRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
+        add_test(NAME ZhulongPlateRecognitionPlugin
+                 COMMAND ZhulongPlateRecognitionPluginTests
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/onnx/plate_sample.ppm)
+        set_tests_properties(ZhulongPlateRecognitionPlugin PROPERTIES TIMEOUT 30)
+    endif()
+
     # ⚠️ MPP 手工镜像 ↔ 厂商头一致性（编译期断言）。
     #    native/src/common/mpp/mpp_api_types.hpp 是手写镜像（不依赖厂商 SDK 也能编译），
     #    而仓库内带着 vendored 头（native/vendor/mpp/include/rockchip）。两边一旦漂移，
