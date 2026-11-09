@@ -144,6 +144,32 @@ public:
     const std::vector<int64_t>& shape() const noexcept { return dims_; }
 
     /**
+     * @brief 重新指定张量形状（要求元素总数保持严格一致）
+     *
+     * @param new_dims 新形状维度列表
+     * @throw std::invalid_argument 元素总数不一致或任一新维度 <= 0
+     * @throw std::length_error 元素数溢出 size_t
+     */
+    void reshape(std::vector<int64_t> new_dims) {
+        size_t new_total = 0;
+        if (!new_dims.empty()) {
+            new_total = 1;
+            for (auto d : new_dims) {
+                if (d <= 0) throw std::invalid_argument("tensor dimensions must be positive");
+                const size_t dimension = static_cast<size_t>(d);
+                if (new_total > std::numeric_limits<size_t>::max() / dimension) {
+                    throw std::length_error("tensor element count overflows size_t");
+                }
+                new_total *= dimension;
+            }
+        }
+        if (new_total != element_count()) {
+            throw std::invalid_argument("tensor reshape element count mismatch");
+        }
+        dims_ = std::move(new_dims);
+    }
+
+    /**
      * @brief 获取张量元素数据类型
      */
     DataType dtype() const noexcept { return dtype_; }

@@ -104,7 +104,7 @@ if (rknn_init(&probe, path, 0, 0, nullptr) == RKNN_SUCC) {
 
 ### 2.6 动态 shape 与失败元数据（会话级事务）
 
-- shape 切换时用 `rknn_set_input_shapes`，随后同时查询 `RKNN_QUERY_CURRENT_INPUT_ATTR` 与 `RKNN_QUERY_CURRENT_OUTPUT_ATTR`。`current_input_attrs/current_output_attrs/current_input_shapes` 归 Worker 会话所有，**不修改共享 `RknnModelAsset`**。
+- shape 切换时用 `rknn_set_input_shapes`，随后同时查询 `RKNN_QUERY_CURRENT_INPUT_ATTR` 与 `RKNN_QUERY_CURRENT_OUTPUT_ATTR`。`current_input_attrs/current_output_attrs/current_input_shapes` 归 Worker 会话所有，**不修改共享 `RknnModelAsset`**。当模型输入定义为 4 维且 `dims[0] == 1` 时，若上游传入 3 维单帧张量（如 `[H, W, C]`），后端在调用 `rknn_set_input_shapes` 与校验 DMA/fmt 时自动规范化补齐 batch 维度为 1，杜绝底层报 `dims = [H, W, C]` 维度不足错误。
 - 调用 shape API 前将 `shapes_set = false`；成功切换后立即释放旧 DMA 注册，再查询候选属性。只有输入、输出属性全部合法才提交候选并置 `shapes_set = true`。查询失败后请求旧 shape，也必须重新配置，不能命中已失效的旧缓存。
 - SDK 返回 `RKNN_SUCC` 不代表属性合法：rank 必须在 `1..RKNN_MAX_DIMS`，每个维度、`n_elems`、`size` 非零，维度乘积无 uint32 溢出且等于 `n_elems`。非法属性返回 `ZHULONG_PLUGIN_ERR_INTERNAL`，**不得**把查询返回的 0 再映射为 `OK`。
 - 任一 `forward` 失败（包括空会话）清空 `outputs`；不得运行使用部分刷新/加载期尺寸的 DMA 绑定。

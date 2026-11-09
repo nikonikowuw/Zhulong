@@ -157,6 +157,40 @@ int main() {
     assert(pixels[3] == 0 && pixels[4] == 255 && pixels[5] == 0);
     assert(pixels[6] == 0 && pixels[7] == 0 && pixels[8] == 255);
 
+    // Pre-allocated 4D {1, H, W, 3} tensor is reused in-place by letterbox.
+    zhulong::Tensor letterbox_4d({1, 2, 2, 3}, zhulong::DataType::UINT8);
+    const void* const original_ptr = letterbox_4d.raw_data();
+    rc = run_letterbox(*vision_backend, padded_bgr.data(), 2, 2, 8,
+                       ZHULONG_PIXEL_FORMAT_BGR24, ZHULONG_PIXEL_FORMAT_RGB24,
+                       2, 2, letterbox_4d, &params);
+    assert(rc == ZHULONG_PLUGIN_OK);
+    assert(letterbox_4d.shape() == std::vector<int64_t>({1, 2, 2, 3}));
+    assert(letterbox_4d.raw_data() == original_ptr);
+    assert(letterbox_4d.data<uint8_t>()[0] == 255 && letterbox_4d.data<uint8_t>()[1] == 0 && letterbox_4d.data<uint8_t>()[2] == 0);
+
+    // Test Tensor::reshape
+    zhulong::Tensor reshape_tensor({2, 3, 4}, zhulong::DataType::UINT8);
+    assert(reshape_tensor.element_count() == 24);
+    reshape_tensor.reshape({1, 2, 3, 4});
+    assert(reshape_tensor.shape() == std::vector<int64_t>({1, 2, 3, 4}));
+    assert(reshape_tensor.element_count() == 24);
+    reshape_tensor.reshape({24});
+    assert(reshape_tensor.shape() == std::vector<int64_t>({24}));
+    bool threw_mismatch = false;
+    try {
+        reshape_tensor.reshape({25});
+    } catch (const std::invalid_argument&) {
+        threw_mismatch = true;
+    }
+    assert(threw_mismatch);
+    bool threw_invalid_dim = false;
+    try {
+        reshape_tensor.reshape({-1, 24});
+    } catch (const std::invalid_argument&) {
+        threw_invalid_dim = true;
+    }
+    assert(threw_invalid_dim);
+
     // Zero stride remains compatible with tightly packed legacy callers; target format conversion works.
     const uint8_t rgb_pixel[] = {10, 20, 30};
     rc = run_letterbox(*vision_backend, rgb_pixel, 1, 1, 0,

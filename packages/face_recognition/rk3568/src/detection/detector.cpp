@@ -41,7 +41,13 @@ bool preprocess_detector_input(const zhulong::Image& image, int model_width, int
     out_params.target_width = model_width;
     out_params.target_height = model_height;
     out_params.target_format = ZHULONG_PIXEL_FORMAT_RGB24;
-    return zhulong::ops::letterbox(image, out_hwc, out_params) == ZHULONG_PLUGIN_OK;
+    if (zhulong::ops::letterbox(image, out_hwc, out_params) != ZHULONG_PLUGIN_OK) {
+        return false;
+    }
+    if (out_hwc.shape().size() == 3) {
+        out_hwc.reshape({1, out_hwc.shape()[0], out_hwc.shape()[1], out_hwc.shape()[2]});
+    }
+    return true;
 }
 
 /**

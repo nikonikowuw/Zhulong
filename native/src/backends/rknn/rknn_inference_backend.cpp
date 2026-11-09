@@ -87,10 +87,10 @@ bool valid_tensor_attr(const rknn_tensor_attr& attr) noexcept {
 
 rknn_tensor_format input_format(const Tensor& input, rknn_tensor_format model_format) noexcept {
     const auto& shape = input.shape();
-    if (shape.size() == 4 && shape[3] <= 4) {
+    if ((shape.size() == 4 && shape[3] <= 4) || (shape.size() == 3 && shape[2] <= 4)) {
         return RKNN_TENSOR_NHWC;
     }
-    if (shape.size() == 4 && shape[1] <= 4) {
+    if ((shape.size() == 4 && shape[1] <= 4) || (shape.size() == 3 && shape[0] <= 4)) {
         return RKNN_TENSOR_NCHW;
     }
     return model_format;
@@ -99,22 +99,40 @@ rknn_tensor_format input_format(const Tensor& input, rknn_tensor_format model_fo
 // Tensor 没有物理 stride/容量字段，不能把 packed 内存当带 padding 的原生张量透传。
 bool packed_dma_compatible(const Tensor& input, const rknn_tensor_attr& attr) noexcept {
     const auto& shape = input.shape();
-    if (shape.size() != attr.n_dims || (attr.fmt != RKNN_TENSOR_NHWC && attr.fmt != RKNN_TENSOR_NCHW) ||
+    const bool dims_match = (shape.size() == attr.n_dims) ||
+        (attr.n_dims == 4 && attr.dims[0] == 1 && shape.size() == 3);
+    if (!dims_match || (attr.fmt != RKNN_TENSOR_NHWC && attr.fmt != RKNN_TENSOR_NCHW) ||
         attr.size_with_stride != attr.size) {
         return false;
     }
-    for (size_t d = 0; d < shape.size(); ++d) {
-        if (shape[d] != attr.dims[d]) {
-            return false;
+    if (shape.size() == attr.n_dims) {
+        for (size_t d = 0; d < shape.size(); ++d) {
+            if (shape[d] != attr.dims[d]) {
+                return false;
+            }
+        }
+    } else {
+        // shape.size() == 3, attr.n_dims == 4, attr.dims[0] == 1
+        for (size_t d = 0; d < 3; ++d) {
+            if (shape[d] != attr.dims[d + 1]) {
+                return false;
+            }
         }
     }
-    if (shape.size() != 4) {
+    if (attr.n_dims != 4) {
         return attr.w_stride == 0 && attr.h_stride == 0;
     }
     const uint32_t width = attr.dims[attr.fmt == RKNN_TENSOR_NHWC ? 2 : 3];
     const uint32_t height = attr.dims[attr.fmt == RKNN_TENSOR_NHWC ? 1 : 2];
     return (attr.w_stride == 0 || attr.w_stride == width) &&
            (attr.h_stride == 0 || attr.h_stride == height);
+}
+
+std::vector<int64_t> normalize_input_shape(const std::vector<int64_t>& shape, const rknn_tensor_attr& attr) {
+    if (attr.n_dims == 4 && attr.dims[0] == 1 && shape.size() == 3) {
+        return {1, shape[0], shape[1], shape[2]};
+    }
+    return shape;
 }
 
 } // namespace
@@ -333,7 +351,7 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
             bool shape_changed = !state->shapes_set || (state->current_input_shapes.size() != inputs.size());
             if (!shape_changed) {
                 for (size_t i = 0; i < inputs.size(); ++i) {
-                    if (inputs[i].shape() != state->current_input_shapes[i]) {
+                    if (normalize_input_shape(inputs[i].shape(), asset.input_attrs[i]) != state->current_input_shapes[i]) {
                         shape_changed = true;
                         break;
                     }
@@ -350,10 +368,10 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
                     // ⚠️ 必须保留 original tensor name（如 "input.1"）
                     std::snprintf(set_attr.name, sizeof(set_attr.name), "%s", asset.input_attrs[i].name);
 
-                    const auto& shape = in.shape();
-                    set_attr.n_dims = static_cast<uint32_t>(shape.size());
-                    for (size_t d = 0; d < shape.size(); ++d) {
-                        set_attr.dims[d] = static_cast<uint32_t>(shape[d]);
+                    const auto norm_shape = normalize_input_shape(in.shape(), asset.input_attrs[i]);
+                    set_attr.n_dims = static_cast<uint32_t>(norm_shape.size());
+                    for (size_t d = 0; d < norm_shape.size(); ++d) {
+                        set_attr.dims[d] = static_cast<uint32_t>(norm_shape[d]);
                     }
 
                     set_attr.fmt = input_format(in, asset.input_attrs[i].fmt);
@@ -363,8 +381,8 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
                 // 先备好可抛异常的候选元数据；SDK 一旦切换，旧 shape 缓存立即失效。
                 std::vector<std::vector<int64_t>> next_shapes;
                 next_shapes.reserve(inputs.size());
-                for (const auto& input : inputs) {
-                    next_shapes.push_back(input.shape());
+                for (uint32_t i = 0; i < asset.io_num.n_input; ++i) {
+                    next_shapes.push_back(normalize_input_shape(inputs[i].shape(), asset.input_attrs[i]));
                 }
                 std::vector<rknn_tensor_attr> next_inputs(asset.io_num.n_input);
                 std::vector<rknn_tensor_attr> next_outputs(asset.io_num.n_output);

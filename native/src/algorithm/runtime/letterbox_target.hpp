@@ -41,7 +41,13 @@ inline LetterboxTargetAction letterbox_target_action(const Tensor& dst,
                                                      std::size_t required_bytes) noexcept {
     const bool dma_reusable = dst.dma_buf_fd() >= 0 && dst.raw_data() != nullptr &&
                               dst.byte_size() >= required_bytes;
-    const bool shape_matches = dst.dtype() == DataType::UINT8 && dst.shape() == target_shape;
+    const bool shape_matches = dst.dtype() == DataType::UINT8 &&
+        (dst.shape() == target_shape ||
+         (dst.shape().size() == 4 && dst.shape()[0] == 1 &&
+          target_shape.size() == 3 &&
+          dst.shape()[1] == target_shape[0] &&
+          dst.shape()[2] == target_shape[1] &&
+          dst.shape()[3] == target_shape[2]));
     if (dma_reusable) {
         return shape_matches ? LetterboxTargetAction::reuse : LetterboxTargetAction::rebind_dma;
     }

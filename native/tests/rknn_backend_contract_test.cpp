@@ -266,6 +266,38 @@ void test_dynamic_shapes_and_worker_isolation() {
     require(fixture.state().current_input_attrs[0].dims[1] == 16, "second worker cannot change first worker metadata");
 }
 
+void test_dynamic_unbatched_3d_input_expanded_to_4d() {
+    BackendFixture fixture(input_attr(), true);
+    // 3D unbatched input {8, 8, 3} on a dynamic 4D model [1, H, W, 3]
+    Tensor input_3d({8, 8, 3}, DataType::UINT8);
+    require(fixture.forward(input_3d) == ZHULONG_PLUGIN_OK, "unbatched 3D input accepted by dynamic 4D model");
+    require(fixture.state().current_input_attrs[0].n_dims == 4, "dynamic shape reconfiguration normalizes to 4D");
+    require(fixture.state().current_input_attrs[0].dims[0] == 1 &&
+            fixture.state().current_input_attrs[0].dims[1] == 8 &&
+            fixture.state().current_input_attrs[0].dims[2] == 8 &&
+            fixture.state().current_input_attrs[0].dims[3] == 3,
+            "normalized shape matches batch-1 4D layout");
+    require(fixture.fake.last_host_input.fmt == RKNN_TENSOR_NHWC, "3D HWC input mapped to NHWC");
+    require(fixture.outputs[0].shape() == std::vector<int64_t>{8}, "outputs properly generated");
+
+    // Dynamic shape switch with 3D input
+    Tensor input_3d_large({16, 16, 3}, DataType::UINT8);
+    require(fixture.forward(input_3d_large) == ZHULONG_PLUGIN_OK, "dynamic shape switch with 3D input accepted");
+    require(fixture.state().current_input_attrs[0].dims[1] == 16 &&
+            fixture.state().current_input_attrs[0].dims[2] == 16,
+            "reconfigured to new dimensions");
+
+    // DMA buffer with 3D shape is also accepted
+    require(fixture.forward(Tensor::from_dma_buf(42, {16, 16, 3}, DataType::UINT8)) == ZHULONG_PLUGIN_OK,
+            "DMA buffer with 3D shape accepted");
+    require(fixture.fake.last_binding.n_dims == 4 &&
+            fixture.fake.last_binding.dims[0] == 1 &&
+            fixture.fake.last_binding.dims[1] == 16 &&
+            fixture.fake.last_binding.dims[2] == 16 &&
+            fixture.fake.last_binding.dims[3] == 3,
+            "DMA binding receives normalized 4D dims");
+}
+
 void test_invalid_current_metadata_and_retry() {
     const MalformedAttr faults[]{MalformedAttr::zero_rank, MalformedAttr::excessive_rank,
                                 MalformedAttr::zero_dim, MalformedAttr::zero_size, MalformedAttr::wrong_count};
@@ -542,6 +574,7 @@ int main() {
         {"host_conversion_and_mode_switch", test_host_conversion_and_mode_switch},
         {"dtype_rebind_and_rollback", test_dtype_rebind_and_rollback},
         {"dynamic_shapes_and_worker_isolation", test_dynamic_shapes_and_worker_isolation},
+        {"dynamic_unbatched_3d_input_expanded_to_4d", test_dynamic_unbatched_3d_input_expanded_to_4d},
         {"invalid_current_metadata_and_retry", test_invalid_current_metadata_and_retry},
         {"sdk_uint32_boundaries", test_sdk_uint32_boundaries},
         {"matching_shape_oversized_bytes", test_matching_shape_oversized_bytes},
