@@ -65,11 +65,32 @@ func (w *ScheduleWorker) Start() {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		ticker := time.NewTicker(w.checkInterval)
-		defer ticker.Stop()
 
 		// Prime the status map on startup
 		w.tick()
+
+		// Align to the next checkInterval wall-clock boundary to eliminate phase lag
+		now := w.nowFunc()
+		intervalNano := w.checkInterval.Nanoseconds()
+		if intervalNano > 0 {
+			remainder := now.UnixNano() % intervalNano
+			alignDelay := time.Duration(intervalNano - remainder)
+			if alignDelay < 100*time.Millisecond {
+				alignDelay += w.checkInterval
+			}
+
+			timer := time.NewTimer(alignDelay)
+			select {
+			case <-stopCh:
+				timer.Stop()
+				return
+			case <-timer.C:
+				w.tick()
+			}
+		}
+
+		ticker := time.NewTicker(w.checkInterval)
+		defer ticker.Stop()
 
 		for {
 			select {
