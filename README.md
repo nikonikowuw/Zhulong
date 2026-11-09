@@ -251,8 +251,11 @@ CMake 3.31.6、Go 1.27.1）。Darwin 链接路径保留但未经 macOS 验证。
 # 宿主交叉产物（板端）：一个档位同时含 RKNN 推理与 RGA 前处理
 make cross-board          # → build/targets/rk3568-rknn-rga/Zhulong
 
-# 算法包交叉产物：RKNN / RGA 真正落地的地方（SDK 前缀 + 包归档）
-make pkg-rk3568           # 默认 rga 前处理；PKG_VISION=cpu 出对照档位
+# 板端 SDK 交叉安装（供算法包交叉构建使用）
+make sdk-cross-install    # 默认 rga 前处理；CROSS_SDK_VISION=cpu 出对照档位
+
+# 算法包独立在各包目录下编译打包（以 face_recognition 为例）
+make -C packages/face_recognition package TARGET=rk3568
 
 # 底层入口（任意档位/任意 profile）
 make cross CROSS_TARGET=<档位名>

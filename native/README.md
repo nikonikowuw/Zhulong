@@ -84,8 +84,11 @@ and CMake fails closed rather than silently linking a stub.
 # RGA preprocessing in libZhulongAlgoRuntime (the host binary itself links neither).
 make cross-board          # → build/targets/rk3568-rknn-rga/Zhulong
 
-# Algorithm package (where RKNN/RGA actually land): SDK prefix + package archive.
-make pkg-rk3568           # rga preprocessing by default; PKG_VISION=cpu for the control
+# Board aarch64 SDK prefix installation (for independent algorithm package builds):
+make sdk-cross-install    # rga preprocessing by default; CROSS_SDK_VISION=cpu for the control
+
+# Algorithm package built independently from within its package directory:
+make -C packages/face_recognition package TARGET=rk3568
 
 # Low-level entries (any tag / any external profile):
 make cross CROSS_TARGET=<tag>

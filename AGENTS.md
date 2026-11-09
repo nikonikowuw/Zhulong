@@ -27,8 +27,8 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 - `make go-check` 刻意限定在 `./cmd/... ./internal/...`，以免 `./...` 递归进 `web/node_modules` 里的 Go 示例文件。
 - 交叉编译需要 `CROSS_PROFILE` + `CROSS_OUTPUT`，产物必须在 `build/targets/<name>/` 下；
   交叉**只允许编译，不允许执行测试**。板端快捷入口：
-  - `make cross-board`：宿主二进制（默认 `CROSS_BOARD=rk3568-rknn-rga`，含 RKNN + RGA 的 SDK 前缀）
-  - `make pkg-rk3568`：算法包（SDK 前缀 + 包归档；`PKG_VISION=cpu` 出对照档位）
+  - `make cross-board`：宿主二进制（默认 `CROSS_BOARD=rk3568-rknn-rga`）
+  - `make sdk-cross-install`：生成板端 aarch64 SDK 前缀（默认 `build/sdk/rk3568`，含 RKNN + RGA 运行时；算法包在各包目录独立编译打包）
   - `make cross CROSS_TARGET=<档位名>`：底层入口；任意 profile 仍走
     `make native-cross-build CROSS_PROFILE=... CROSS_OUTPUT=...`
 

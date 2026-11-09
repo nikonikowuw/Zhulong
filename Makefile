@@ -23,7 +23,7 @@ BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)
 
-.PHONY: all build go-build check frontend-install frontend-build frontend-check webui-dist-check native-deps native-configure native-build native-test native-cross-build cross cross-board pkg-rk3568 sdk-install sdk-dist sdk-clean-check board-check api-docs go-check pkg-drift-check smoke run web-dev dev-backend dev-frontend dev
+.PHONY: all build go-build check frontend-install frontend-build frontend-check webui-dist-check native-deps native-configure native-build native-test native-cross-build cross cross-board sdk-cross-install sdk-install sdk-dist sdk-clean-check board-check api-docs go-check pkg-drift-check smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -158,7 +158,7 @@ native-cross-build:
 #   make cross-board                     → build/targets/rk3568-rknn-rga/Zhulong（板端宿主）
 #   make cross-board CROSS_BOARD=rk3568-rknn      （对照档位：视觉前处理走 CPU）
 #   make cross CROSS_TARGET=<档位名>      （底层入口，接受 native/profiles/*.json 任意档位）
-#   make pkg-rk3568                      → 交叉出 RKNN+RGA 算法包（SDK 前缀 + 包归档）
+#   make sdk-cross-install               → 安装 aarch64 (RK3568) SDK 前缀（供算法包交叉构建）
 #
 # ⚠️ 两类目标都显式清空 INFERENCE_BACKEND：交叉档位的后端只能来自 profile JSON。
 #    否则 shell 里遗留的 ZHULONG_INFERENCE_BACKEND=onnx 会经 NATIVE_BUILD 覆盖 rknn 选择，
@@ -196,37 +196,21 @@ cross-board:
 		"$$(du -h "build/targets/$(CROSS_BOARD)/Zhulong" | cut -f1)" \
 		"build/targets/$(CROSS_BOARD)/Zhulong"
 
-# 算法包：RKNN 与 RGA 真正落地的交付物。
-# SDK 前缀必须与档位**同源**：libZhulongAlgoRuntime 是按档位编的，拿 rknn 档位的前缀
-# 去装 rga 档位的包会得到「编译通过但前处理静默走 CPU」的产物（NEEDED 里没有 librga.so.2）。
+# ── 板端交叉 SDK 前缀：供独立算法包工程交叉构建使用 ──────────────────────────
+# SDK 前缀必须与档位同源：libZhulongAlgoRuntime 是按档位编的。
 # 默认档位是 rk3568-rknn-rga（板端两个硬件后端都要）；PKG_VISION=cpu 走 rk3568-rknn 对照档位。
-PKG_SDK_PREFIX ?= build/sdk/rk3568
-PKG_RKNN_ROOT ?= native/vendor/rknpu2
-PKG_RGA_ROOT ?= native/vendor/rga
-PKG_ALGO ?= packages/face_recognition
-PKG_VISION ?= rga
-PKG_PROFILE := $(if $(filter rga,$(PKG_VISION)),rk3568-rknn-rga,rk3568-rknn)
-PKG_RGA_ARG := $(if $(filter rga,$(PKG_VISION)),--rga-root "$(PKG_RGA_ROOT)",)
+CROSS_SDK_PREFIX ?= build/sdk/rk3568
+CROSS_SDK_VISION ?= rga
+CROSS_SDK_PROFILE := $(if $(filter cpu,$(CROSS_SDK_VISION)),rk3568-rknn,rk3568-rknn-rga)
 
-pkg-rk3568:
-	@test -d "$(PKG_ALGO)/scripts" || { echo "错误: 算法包目录不存在: $(PKG_ALGO)" >&2; exit 1; }
-	@echo "[1/3] 交叉构建 Native（档位 $(PKG_PROFILE)）"
+sdk-cross-install:
+	@echo "[1/2] 交叉构建 Native（档位 $(CROSS_SDK_PROFILE)）"
 	@env -u ZHULONG_INFERENCE_BACKEND python3 native/scripts/build.py \
-		--profile "native/profiles/$(PKG_PROFILE).json" build
-	@echo "[2/3] 安装 aarch64 SDK 前缀 → $(PKG_SDK_PREFIX)"
-	@rm -rf "$(PKG_SDK_PREFIX)"
-	@$(CMAKE) --install "build/native/cross-$(PKG_PROFILE)" --prefix "$(PKG_SDK_PREFIX)" > /dev/null
-	@echo "[3/3] 交叉出包（RKNN_ROOT=$(PKG_RKNN_ROOT)）"
-	@cache="$(PKG_ALGO)/rk3568/build/CMakeCache.txt"; \
-	if [ -f "$$cache" ] && ! grep -qF "cross-$(PKG_PROFILE)/toolchain.cmake" "$$cache"; then \
-		echo "    工具链档位已变（$(PKG_PROFILE)），清掉包构建缓存以免复用旧 toolchain"; \
-		rm -rf "$(PKG_ALGO)/rk3568/build"; \
-	fi
-	@env -u ZHULONG_INFERENCE_BACKEND python3 $(PKG_ALGO)/scripts/build_package.py --target rk3568 \
-		--sdk-prefix "$(PKG_SDK_PREFIX)" \
-		--toolchain "build/native/cross-$(PKG_PROFILE)/toolchain.cmake" \
-		--rknn-root "$(PKG_RKNN_ROOT)" $(PKG_RGA_ARG)
-	@printf '[✓] 档位=%s 前处理=%s\n' "$(PKG_PROFILE)" "$(PKG_VISION)"
+		--profile "native/profiles/$(CROSS_SDK_PROFILE).json" build
+	@echo "[2/2] 安装 aarch64 SDK 前缀 → $(CROSS_SDK_PREFIX)"
+	@rm -rf "$(CROSS_SDK_PREFIX)"
+	@$(CMAKE) --install "build/native/cross-$(CROSS_SDK_PROFILE)" --prefix "$(CROSS_SDK_PREFIX)" > /dev/null
+	@printf '[✓] aarch64 SDK 前缀已安装: %s (档位: %s)\n' "$(CROSS_SDK_PREFIX)" "$(CROSS_SDK_PROFILE)"
 
 # 多 target 算法包的源码漂移检查：同一处逻辑修复必须同时落到每个档位，
 # 否则另一份会变成「能编译但结果不对」的孤儿。允许的差异登记在脚本里。

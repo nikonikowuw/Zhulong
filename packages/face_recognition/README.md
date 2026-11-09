@@ -37,9 +37,13 @@ make -C packages/face_recognition/onnx test
 # 多档位源码漂移门禁与双端 schema 一致性检查
 make pkg-drift-check
 diff -u packages/face_recognition/onnx/config.schema.json packages/face_recognition/rk3568/config.schema.json
+
+# 算法包独立打包（在 packages/face_recognition 目录或其 Makefile 中）
+make package TARGET=onnx     # 或 python3 scripts/build_package.py --target onnx
+make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3568
 ```
 
-`unit-test` 与 `test` 需要已安装 SDK 前缀（`make sdk-install`）及 `ONNXRUNTIME_ROOT`（或 `BUNDLE_RUNTIME=1`）。交叉档位 `rk3568` 在宿主机上**只编译不执行**，真实板端耗时与验包需在硬件上运行 `make board-check`。
+`unit-test` 与 `test` 需要已安装 SDK 前缀（`make sdk-install`）及 `ONNXRUNTIME_ROOT`（或 `BUNDLE_RUNTIME=1`）。构建 `rk3568` 需要板端 SDK 前缀（`make sdk-cross-install`），在宿主机上**只编译不执行**，真实板端耗时与验包需在硬件上运行 `make board-check`。
 
 ## 算法链路
 
