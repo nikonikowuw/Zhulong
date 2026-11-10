@@ -18,7 +18,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const MaxMQTTBase64Bytes = 500 * 1024 // 500KB
+const maxMQTTBase64Bytes = 500 * 1024 // 500KB
 
 var (
 	ErrMQTTBrokerMissing = errors.New("mqtt broker url is missing")
@@ -176,49 +176,20 @@ func (s *MQTTSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 		}
 	}
 
-	payload := BuildAlarmPayload(ev, resolveDeviceID(s.opts.Identity))
+	payload := buildAlarmPayload(ev, resolveDeviceID(s.opts.Identity))
 
 	// Format image based on configured ImageMode
 	switch s.opts.ImageMode {
 	case ImageModeBase64:
 		s.attachBase64Image(ctx, &payload, ev)
 	case ImageModeURL:
-		if s.opts.Signer != nil && s.opts.PublicBaseURL != "" {
-			if ev.ImageReady && ev.ImagePath != "" {
-				u, err := GenerateSignedURL(
-					s.opts.PublicBaseURL,
-					s.opts.Signer,
-					ev.ImagePath,
-					s.opts.SignedURLTTL,
-				)
-				if err == nil {
-					payload.ImageURL = &u
-					payload.ImageReady = true
-				}
-			}
-			if ev.CropReady && ev.CropPath != "" {
-				u, err := GenerateSignedURL(
-					s.opts.PublicBaseURL,
-					s.opts.Signer,
-					ev.CropPath,
-					s.opts.SignedURLTTL,
-				)
-				if err == nil {
-					payload.CropURL = &u
-				}
-			}
-			if payload.Face != nil && ev.Face != nil && ev.Face.GalleryImagePath != "" {
-				u, err := GenerateSignedURL(
-					s.opts.PublicBaseURL,
-					s.opts.Signer,
-					ev.Face.GalleryImagePath,
-					s.opts.SignedURLTTL,
-				)
-				if err == nil {
-					payload.Face.GalleryURL = &u
-				}
-			}
-		}
+		populateSignedURLs(
+			&payload,
+			ev,
+			s.opts.PublicBaseURL,
+			s.opts.Signer,
+			s.opts.SignedURLTTL,
+		)
 	}
 
 	data, err := json.Marshal(payload)
@@ -226,7 +197,12 @@ func (s *MQTTSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 		return fmt.Errorf("marshal mqtt payload: %w", err)
 	}
 
-	token := s.client.Publish(s.opts.Topic, byte(s.opts.QoS), false, data)
+	token := s.client.Publish(
+		s.opts.Topic,
+		byte(s.opts.QoS),
+		false,
+		data,
+	)
 	publishTimeout := 5 * time.Second
 	select {
 	case <-ctx.Done():
@@ -243,7 +219,8 @@ func (s *MQTTSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 }
 
 func (s *MQTTSender) attachBase64Image(ctx context.Context, payload *AlarmPayload, ev record.AlarmEvent) {
-	if !ev.ImageReady || ev.ImagePath == "" || s.opts.Media == nil {
+	canReadImage := ev.ImageReady && ev.ImagePath != "" && s.opts.Media != nil
+	if !canReadImage {
 		payload.ImageReady = false
 		return
 	}
@@ -254,18 +231,24 @@ func (s *MQTTSender) attachBase64Image(ctx context.Context, payload *AlarmPayloa
 		payload.ImageReady = false
 		return
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			s.logger.Debug("close base64 media file", zap.Error(closeErr))
+		}
+	}()
 
-	if info.Size() > MaxMQTTBase64Bytes {
-		s.logger.Warn("image size exceeds 500KB limit, dropping base64 image",
+	if info.Size() > maxMQTTBase64Bytes {
+		s.logger.Warn(
+			"image size exceeds 500KB limit, dropping base64 image",
 			zap.Int64("bytes", info.Size()),
-			zap.String("path", ev.ImagePath))
+			zap.String("path", ev.ImagePath),
+		)
 		payload.ImageReady = false
 		return
 	}
 
-	data, err := io.ReadAll(io.LimitReader(f, MaxMQTTBase64Bytes+1))
-	if err != nil || len(data) > MaxMQTTBase64Bytes {
+	data, err := io.ReadAll(io.LimitReader(f, maxMQTTBase64Bytes+1))
+	if err != nil || len(data) > maxMQTTBase64Bytes {
 		payload.ImageReady = false
 		return
 	}

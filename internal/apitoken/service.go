@@ -46,16 +46,16 @@ func NewService(store *Store, logger *zap.Logger) *Service {
 func (s *Service) CreateToken(ctx context.Context, rawName string) (*APIToken, string, error) {
 	cleanName, err := normalizeTokenName(rawName)
 	if err != nil {
-		if errors.Is(err, ErrTokenNameRequired) {
+		switch {
+		case errors.Is(err, errTokenNameRequired):
 			return nil, "", apperr.Invalid("API_TOKEN_NAME_REQUIRED", "Token name is required", err)
-		}
-		if errors.Is(err, ErrTokenNameTooLong) {
+		case errors.Is(err, errTokenNameTooLong):
 			return nil, "", apperr.Invalid("API_TOKEN_NAME_TOO_LONG", "Token name exceeds 48 characters", err)
-		}
-		if errors.Is(err, ErrTokenNameInvalid) {
+		case errors.Is(err, errTokenNameInvalid):
 			return nil, "", apperr.Invalid("API_TOKEN_NAME_INVALID", "Token name contains invalid characters", err)
+		default:
+			return nil, "", apperr.Invalid("VALIDATION_FAILED", "Invalid token name", err)
 		}
-		return nil, "", apperr.Invalid("VALIDATION_FAILED", "Invalid token name", err)
 	}
 
 	raw, hash, masked, err := GenerateToken()
@@ -72,13 +72,18 @@ func (s *Service) CreateToken(ctx context.Context, rawName string) (*APIToken, s
 	}
 
 	if err := s.store.CreateToken(ctx, token); err != nil {
-		if errors.Is(err, ErrTokenLimitReached) {
+		switch {
+		case errors.Is(err, errTokenLimitReached):
 			return nil, "", apperr.Conflict("API_TOKEN_LIMIT_REACHED", "Active API token limit (10) reached", err)
+		case errors.Is(err, errTokenNameConflict):
+			return nil, "", apperr.Conflict(
+				"API_TOKEN_NAME_ALREADY_EXISTS",
+				"API token name already exists (including revoked tokens)",
+				err,
+			)
+		default:
+			return nil, "", apperr.Internal("INTERNAL_ERROR", "Failed to persist API token", err)
 		}
-		if errors.Is(err, ErrTokenNameConflict) {
-			return nil, "", apperr.Conflict("API_TOKEN_NAME_ALREADY_EXISTS", "API token name already exists (including revoked tokens)", err)
-		}
-		return nil, "", apperr.Internal("INTERNAL_ERROR", "Failed to persist API token", err)
 	}
 
 	return token, raw, nil
@@ -95,9 +100,8 @@ func (s *Service) ListTokens(ctx context.Context, includeRevoked bool) ([]APITok
 
 // RevokeToken soft-deletes a token by ID.
 func (s *Service) RevokeToken(ctx context.Context, id string) error {
-	err := s.store.Revoke(ctx, id)
-	if err != nil {
-		if errors.Is(err, ErrTokenNotFound) {
+	if err := s.store.Revoke(ctx, id); err != nil {
+		if errors.Is(err, errTokenNotFound) {
 			return apperr.NotFound("API_TOKEN_NOT_FOUND", "API token not found", err)
 		}
 		return apperr.Internal("INTERNAL_ERROR", "Failed to revoke API token", err)
@@ -106,12 +110,12 @@ func (s *Service) RevokeToken(ctx context.Context, id string) error {
 }
 
 // Authenticate validates a raw bearer token against active tokens in the database.
-// It returns ErrUnauthorized on invalid/revoked tokens, and propagates database errors.
+// It returns errUnauthorized on invalid/revoked tokens, and propagates database errors.
 func (s *Service) Authenticate(ctx context.Context, rawToken string) (Identity, error) {
-	hash := HashToken(rawToken)
+	hash := hashToken(rawToken)
 	token, err := s.store.FindActiveByHash(ctx, hash)
-	if errors.Is(err, ErrTokenNotFound) {
-		return Identity{}, ErrUnauthorized
+	if errors.Is(err, errTokenNotFound) {
+		return Identity{}, errUnauthorized
 	}
 	if err != nil {
 		return Identity{}, err // 500 error, not 401
@@ -121,7 +125,8 @@ func (s *Service) Authenticate(ctx context.Context, rawToken string) (Identity, 
 	return Identity{ID: token.ID, Name: token.Name}, nil
 }
 
-// touchLastUsed initiates an asynchronous update of last_used_at, coalesced to at most once per 60s per token.
+// touchLastUsed initiates an asynchronous update of last_used_at, coalesced to
+// at most once per 60s per token.
 func (s *Service) touchLastUsed(id string) {
 	s.mu.Lock()
 	if s.closed {
@@ -129,8 +134,7 @@ func (s *Service) touchLastUsed(id string) {
 		return
 	}
 
-	last, ok := s.lastUsedMap[id]
-	if ok && time.Since(last) < 60*time.Second {
+	if last, ok := s.lastUsedMap[id]; ok && time.Since(last) < 60*time.Second {
 		s.mu.Unlock()
 		return
 	}
@@ -149,10 +153,8 @@ func (s *Service) touchLastUsed(id string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		if err := s.store.TouchLastUsed(ctx, id, time.Now()); err != nil {
-			if !errors.Is(err, ErrDatabaseClosed) {
-				s.logger.Warn("failed to touch token last_used_at", zap.String("tokenId", id), zap.Error(err))
-			}
+		if err := s.store.TouchLastUsed(ctx, id, time.Now()); err != nil && !errors.Is(err, errDatabaseClosed) {
+			s.logger.Warn("failed to touch token last_used_at", zap.String("tokenId", id), zap.Error(err))
 		}
 	}()
 }

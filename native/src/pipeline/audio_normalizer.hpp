@@ -7,6 +7,8 @@
  *    - 视频原点建立时刻 V 为基准点；
  *    - 视频原点建立后的首枚有效音频包到达时刻 a、媒体时间戳 A 构造基准锚点 base = a - V；
  *    - 逐包映射：audio_out_us = (audio_abs_us - A) + base + video_shift_us；
+ *    - 视频不连续（代数变化）时 video_shift_us 是跳变时刻的**绝对**输出位置，故音频以
+ *      跳变包到达时刻 d 为新纪元重锚：A ← 当前音频时间戳，base ← a - d，避免重复叠加时长；
  * 2. 纯算术无锁设计：
  *    - 本类不调用任何系统读钟函数，不加互斥锁，所有时间由调用方单调时钟传入，
  *      与拉流 Worker 单线程上下文亲和，单测完全可确定性复现；
@@ -48,15 +50,16 @@ public:
      *
      * @param in 原始音频包视图
      * @param video_origin_ready 视频原点是否已就绪
-     * @param video_origin_arrival_us 视频首包到达时刻（微秒，steady_clock）
-     * @param video_shift_us 当前视频时间轴跳变累计偏移（微秒）
-     * @param video_discontinuity_gen 视频时间轴不连续代数
+     * @param video_epoch_arrival_us 当前视频时间轴纪元的到达时刻（微秒，steady_clock）：
+     *        原点建立时即视频首包到达时刻；每次视频不连续后推进为跳变包的到达时刻
+     * @param video_shift_us 当前视频时间轴偏移（微秒，即最近一次跳变时刻的绝对输出位置）
+     * @param video_discontinuity_gen 视频时间轴不连续代数（变化时音频按新纪元重锚）
      * @param audio_arrival_us 当前音频包到达时刻（微秒，steady_clock）
      * @return Zhulong_packet_view 归一化后的包视图；若在视频就绪前被丢弃则 size 返回 0
      */
     Zhulong_packet_view normalize(const Zhulong_packet_view &in,
                                   bool video_origin_ready,
-                                  int64_t video_origin_arrival_us,
+                                  int64_t video_epoch_arrival_us,
                                   int64_t video_shift_us,
                                   uint64_t video_discontinuity_gen,
                                   int64_t audio_arrival_us) noexcept;

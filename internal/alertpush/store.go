@@ -66,7 +66,7 @@ func (s *Store) HasExistingEncryptedData(ctx context.Context) (bool, error) {
 }
 
 // EncryptSecret encrypts the given secret struct with AAD bound to alert-destination:<id>.
-func (s *Store) EncryptSecret(id string, secret any) ([]byte, error) {
+func (s *Store) EncryptSecret(id string, secret destinationSecret) ([]byte, error) {
 	if s.cipher == nil {
 		return nil, errors.New("cipher is not configured")
 	}

@@ -99,14 +99,46 @@ void TestVideoDiscontinuityPropagation() {
     auto pkt1 = AudioPacket(0);
     normalizer.normalize(pkt1, true, v_arr, 0, 0, v_arr);
 
-    // 视频发生跳变：discontinuity generation 从 0 变到 1，shift 增加了 500ms
+    // 视频发生跳变：discontinuity generation 从 0 变到 1，跳变包与本音频包同时到达，
+    // 跳变时刻的视频绝对输出位置（shift）为 500ms
     auto pkt2 = AudioPacket(160);
-    auto out2 = normalizer.normalize(pkt2, true, v_arr, 500000, 1, v_arr + 20000);
+    auto out2 = normalizer.normalize(pkt2, true, v_arr + 20000, 500000, 1, v_arr + 20000);
 
     Check((out2.pkt_flags & ZHULONG_PKT_FLAG_DISCONTINUITY) != 0,
           "discontinuity flag must be set when video generation changes");
-    // 20ms + 500ms = 520,000 us
-    Check(out2.pts_us == 520000, "pts_us must include video shift");
+    // 重锚到新纪元：shift + (a - d) = 500ms + 0
+    Check(out2.pts_us == 500000, "audio must re-anchor onto the new video epoch");
+
+    // 重锚后正常前进 20ms
+    auto out3 = normalizer.normalize(AudioPacket(320), true, v_arr + 20000, 500000, 1, v_arr + 40000);
+    Check(out3.pts_us == 520000, "timeline must advance normally after video discontinuity");
+}
+
+/**
+ * @brief 只有视频跳变、音频时钟连续时，不得把跳变前的时长重复叠加
+ *
+ * 视频的 shift 是跳变时刻的**绝对**输出位置（不是增量）。若音频沿用旧锚点，
+ * (audio_abs - A) 已包含跳变前的 600s，再加 600s 的 shift 会输出约 1200s。
+ */
+void TestVideoOnlyDiscontinuityNoDoubleCount() {
+    zhulong::AudioNormalizer normalizer;
+    normalizer.update_metadata(Zhulong_CODEC_PCMA, 8000, 1, 1, 8000);
+
+    const int64_t v_arr = 1000000;
+    const int64_t elapsed_us = 600LL * 1000000; // 600s
+    auto out1 = normalizer.normalize(AudioPacket(0), true, v_arr, 0, 0, v_arr);
+    Check(out1.pts_us == 0, "anchor out is 0");
+
+    // 600s 后视频 DTS 回退触发不连续：shift = 600s，跳变包比本音频包早 10ms 到达
+    const int64_t jump_arrival = v_arr + elapsed_us - 10000;
+    auto out2 = normalizer.normalize(AudioPacket(600LL * 8000), true, jump_arrival,
+                                     elapsed_us, 1, v_arr + elapsed_us);
+    Check(out2.pts_us == elapsed_us + 10000,
+          "video-only discontinuity must not double count elapsed audio time");
+
+    auto out3 = normalizer.normalize(AudioPacket(600LL * 8000 + 160), true, jump_arrival,
+                                     elapsed_us, 1, v_arr + elapsed_us + 20000);
+    Check(out3.pts_us == elapsed_us + 30000, "timeline must keep advancing 20ms per packet");
 }
 
 void TestSyntheticPts() {
@@ -215,6 +247,7 @@ int main() {
     TestAnchorAndAlignment();
     TestNegativeBasePreserved();
     TestVideoDiscontinuityPropagation();
+    TestVideoOnlyDiscontinuityNoDoubleCount();
     TestSyntheticPts();
     TestMonotonicityProtection();
     TestTimestampWrapAround();

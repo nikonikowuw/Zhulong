@@ -22,6 +22,11 @@ import (
 // The only safe shape is: pin a dedicated goroutine's thread, spawn there, and keep
 // that goroutine (and thus the thread) alive until the child has been reaped.
 // StartPinned is that shape, packaged so callers cannot get it subtly wrong.
+//
+// RunnerProcess.Start is the other (deliberately separate) implementation of this
+// discipline: it additionally owns the ready handshake with its exit watcher and
+// the stdout/stderr log drain, which is why it does not call StartPinned. Keep the
+// two in sync when changing either spawn path.
 type PinnedProcess struct {
 	cmd *exec.Cmd
 	pid int

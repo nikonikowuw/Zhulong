@@ -112,7 +112,7 @@ func (s *WebhookSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt := range attempts {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
@@ -121,7 +121,7 @@ func (s *WebhookSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 			}
 		}
 
-		err, retryable := s.doSendOnce(ctx, ev)
+		retryable, err := s.doSendOnce(ctx, ev)
 		if err == nil {
 			return nil
 		}
@@ -133,13 +133,13 @@ func (s *WebhookSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 	return lastErr
 }
 
-func (s *WebhookSender) doSendOnce(ctx context.Context, ev record.AlarmEvent) (error, bool) {
+func (s *WebhookSender) doSendOnce(ctx context.Context, ev record.AlarmEvent) (bool, error) {
 	req, cleanup, err := s.buildRequest(ctx, ev)
 	if cleanup != nil {
 		defer cleanup()
 	}
 	if err != nil {
-		return err, false
+		return false, err
 	}
 
 	resp, err := s.client.Do(req.WithContext(ctx))
@@ -148,27 +148,32 @@ func (s *WebhookSender) doSendOnce(ctx context.Context, ev record.AlarmEvent) (e
 			zap.String("target_url", logsafe.URL(s.opts.URL)),
 			zap.Error(err),
 		)
-		return err, true
+		return true, err
 	}
 	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		_ = resp.Body.Close()
+		if _, copyErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)); copyErr != nil {
+			s.logger.Debug("drain webhook response body", zap.Error(copyErr))
+		}
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			s.logger.Debug("close webhook response body", zap.Error(closeErr))
+		}
 	}()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil, false
+		return false, nil
 	}
 
 	// 4xx is non-retryable client error (except 429 Too Many Requests)
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-		return fmt.Errorf("%w: status %d", ErrWebhookHTTPStatusError, resp.StatusCode), false
+	isClientError := resp.StatusCode >= 400 && resp.StatusCode < 500
+	if isClientError && resp.StatusCode != http.StatusTooManyRequests {
+		return false, fmt.Errorf("%w: status %d", ErrWebhookHTTPStatusError, resp.StatusCode)
 	}
 
-	return fmt.Errorf("%w: status %d", ErrWebhookHTTPStatusError, resp.StatusCode), true
+	return true, fmt.Errorf("%w: status %d", ErrWebhookHTTPStatusError, resp.StatusCode)
 }
 
 func (s *WebhookSender) buildRequest(ctx context.Context, ev record.AlarmEvent) (*http.Request, func(), error) {
-	payload := BuildAlarmPayload(ev, resolveDeviceID(s.opts.Identity))
+	payload := buildAlarmPayload(ev, resolveDeviceID(s.opts.Identity))
 
 	if s.opts.ImageMode == ImageModeMultipart {
 		return s.buildMultipartRequest(ctx, payload, ev)
@@ -177,42 +182,13 @@ func (s *WebhookSender) buildRequest(ctx context.Context, ev record.AlarmEvent) 
 }
 
 func (s *WebhookSender) buildJSONRequest(payload AlarmPayload, ev record.AlarmEvent) (*http.Request, func(), error) {
-	if s.opts.Signer != nil && s.opts.PublicBaseURL != "" {
-		if ev.ImageReady && ev.ImagePath != "" {
-			u, err := GenerateSignedURL(
-				s.opts.PublicBaseURL,
-				s.opts.Signer,
-				ev.ImagePath,
-				s.opts.SignedURLTTL,
-			)
-			if err == nil {
-				payload.ImageURL = &u
-				payload.ImageReady = true
-			}
-		}
-		if ev.CropReady && ev.CropPath != "" {
-			u, err := GenerateSignedURL(
-				s.opts.PublicBaseURL,
-				s.opts.Signer,
-				ev.CropPath,
-				s.opts.SignedURLTTL,
-			)
-			if err == nil {
-				payload.CropURL = &u
-			}
-		}
-		if payload.Face != nil && ev.Face != nil && ev.Face.GalleryImagePath != "" {
-			u, err := GenerateSignedURL(
-				s.opts.PublicBaseURL,
-				s.opts.Signer,
-				ev.Face.GalleryImagePath,
-				s.opts.SignedURLTTL,
-			)
-			if err == nil {
-				payload.Face.GalleryURL = &u
-			}
-		}
-	}
+	populateSignedURLs(
+		&payload,
+		ev,
+		s.opts.PublicBaseURL,
+		s.opts.Signer,
+		s.opts.SignedURLTTL,
+	)
 
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -235,13 +211,17 @@ func (s *WebhookSender) buildMultipartRequest(
 ) (*http.Request, func(), error) {
 	var file *os.File
 	cleanup := func() {
-		if file != nil {
-			_ = file.Close()
+		if file == nil {
+			return
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			s.logger.Debug("close multipart snapshot file", zap.Error(closeErr))
 		}
 	}
 
 	var hasImage bool
-	if ev.ImageReady && ev.ImagePath != "" && s.opts.Media != nil {
+	hasSnapshotSource := ev.ImageReady && ev.ImagePath != "" && s.opts.Media != nil
+	if hasSnapshotSource {
 		f, _, err := s.opts.Media.OpenContent(ctx, ev.ImagePath)
 		if err == nil {
 			file = f
@@ -324,7 +304,7 @@ func (s *WebhookSender) applyAuthAndHeaders(req *http.Request) {
 	}
 
 	for k, v := range s.opts.Headers {
-		if !IsReservedHeader(k) && strings.TrimSpace(k) != "" {
+		if !isReservedHeader(k) && strings.TrimSpace(k) != "" {
 			req.Header.Set(k, v)
 		}
 	}

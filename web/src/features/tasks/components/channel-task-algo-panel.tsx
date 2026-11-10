@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { AlertTriangle, CalendarClock, Layers, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
@@ -6,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { type Algorithm } from '@/features/algorithms/data/schema'
+import { type Algorithm } from '@/features/algorithms/contract'
 import { MAX_RECTS_PER_CATEGORY } from '../data/region-config'
 import { isScheduleAlwaysActive, parseSchedule } from '../data/schedule-config'
 import {
@@ -54,6 +55,14 @@ export function ChannelTaskAlgoPanel({
     ? (algorithms.find((algo) => algo.id === activeAlgoId) ?? null)
     : null
   const activeDraft = activeAlgoId ? (drafts[activeAlgoId] ?? null) : null
+  const activeScheduleJson = activeDraft?.scheduleJson
+  const isActiveScheduled = useMemo(
+    () =>
+      activeScheduleJson
+        ? !isScheduleAlwaysActive(parseSchedule(activeScheduleJson))
+        : false,
+    [activeScheduleJson]
+  )
   const selectedCount = Object.values(drafts).filter(
     (draft) => draft.selected
   ).length
@@ -195,14 +204,12 @@ export function ChannelTaskAlgoPanel({
               <TabsTrigger value='schedule' className='gap-1.5 text-xs'>
                 <CalendarClock className='size-3.5' />
                 {t('dialog.tabSchedule', '分时布防计划')}
-                {!isScheduleAlwaysActive(
-                  parseSchedule(activeDraft.scheduleJson)
-                ) ? (
+                {isActiveScheduled ? (
                   <Badge
                     variant='secondary'
                     className='h-4 px-1 font-mono text-[9px]'
                   >
-                    已排程
+                    {t('dialog.scheduledBadge', '已排程')}
                   </Badge>
                 ) : (
                   <Badge
@@ -231,7 +238,7 @@ export function ChannelTaskAlgoPanel({
                       {t('channelCard.pointsSuffix', '点')}
                     </Badge>
                     <span className='font-mono text-[10px] text-muted-foreground'>
-                      ({costPerFrame} 点/帧)
+                      ({costPerFrame} {t('dialog.costPerFrame', '点/帧')})
                     </span>
                   </div>
                   <span className='font-mono text-[10px] text-muted-foreground'>

@@ -148,6 +148,9 @@ private:
     /** @brief 归还包缓冲供后续复用（池扩容失败只放弃本次复用，不抛异常） */
     void recycle_buffer(std::vector<uint8_t> &&buffer) noexcept;
 
+    /** @brief 批量回收被清空的积压包缓冲（超出池上限的部分直接释放） */
+    void recycle_packets(std::deque<QueuedPacket> &&packets) noexcept;
+
     const uint64_t stream_id_{0};
     mutable std::mutex meta_mutex_;
     Video video_meta_;
@@ -217,6 +220,13 @@ struct Stream {
     PreviewNormalizer preview_normalizer_{};
     AudioNormalizer audio_normalizer_{};        /**< 音频时间戳归一化器 (v5) */
     int64_t video_origin_arrival_us_{0};        /**< 视频首帧到达时的单调微秒时间戳 */
+    /**
+     * 当前视频输出时间轴纪元的到达时刻（微秒，与 video_origin_arrival_us_ 同一时钟）。
+     * 原点建立时等于 video_origin_arrival_us_；每次视频不连续（timestamp_shift 重置为绝对位置）
+     * 时推进到该包的到达时刻，供 AudioNormalizer 在代际变化时重锚。只由拉流线程读写。
+     */
+    int64_t video_epoch_arrival_us_{0};
+    uint64_t video_epoch_generation_{0};        /**< video_epoch_arrival_us_ 对应的不连续代数 */
     bool audio_anchor_logged_{false};           /**< 音频锚点一次性日志门闸（只由拉流线程置位） */
 
     // 被逐订阅者隔离的回调异常累计次数 (仅统计用途，relaxed 原子)
@@ -238,8 +248,13 @@ struct Stream {
     Stream(Stream &&) = delete;
     Stream &operator=(Stream &&) = delete;
 
-    /** @brief 启动流拉取后台 Worker 线程 */
-    void start();
+    /**
+     * @brief 按解码策略初始化解码节点并启动流拉取后台 Worker 线程
+     *
+     * ⚠️ policy 必须是引擎当前的全局解码策略（`Engine::decode_policy_`）：新建流若用默认值，
+     *    「仅 MPP、禁止软解回退」会被静默降级为 AUTO，绕过 fail-closed。
+     */
+    void start(const Zhulong_decode_policy_t &policy);
 
     /** @brief 请求停止流拉取与解码 Worker */
     void request_stop();
@@ -294,6 +309,10 @@ struct Stream {
      *
      * @param policy 解码策略
      * @return 若需要休眠，返回需要停止的旧会话对象 (调用方须在锁外调用 stop_decode_session)
+     *
+     * ⚠️ 生命周期不变量：解码会话的熔断回调捕获的是本 Stream 的裸 `this`。调用方在
+     *    stop_decode_session() 返回（解码线程汇合）之前，**必须**持有本 Stream 的 shared_ptr，
+     *    否则 Reaper 可能在会话线程仍在运行时析构 Stream，熔断回调即成 use-after-free。
      */
     std::shared_ptr<DecodeSession> sync_decode_pipeline(
         const Zhulong_decode_policy_t &policy = {Zhulong_DECODE_BACKEND_AUTO, 1, 0});
@@ -306,6 +325,11 @@ struct Stream {
 
     /**
      * @brief 原生 C++ 消费/拉取解码帧 (只读借用)
+     *
+     * ⚠️ 无活跃解码会话（未创建 / 已熔断 / 已取消）时**阻塞满 timeout** 再返回 false：
+     *    已取消队列的 pop 会立即返回，若这里也立即返回，轮询型消费者（FramePublisher）
+     *    就会 100% CPU 空转直到 AI 消费者被释放。
+     *
      * @param[out] out_frame 输出硬件帧只读共享指针
      * @param timeout 最大等待超时时长
      * @return true 成功拉取；false 超时或无活跃解码会话

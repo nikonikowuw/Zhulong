@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
-import { type Camera as CameraSchema } from '@/features/cameras/data/schema'
+import { type Camera as CameraSchema } from '@/features/cameras/contract'
 import { MAX_COMPUTE_POINTS } from '../hooks/use-task-compute-budget'
 import { ChannelTaskBudgetMeter } from './channel-task-budget-meter'
 

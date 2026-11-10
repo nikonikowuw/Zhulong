@@ -120,7 +120,7 @@ type auditOut struct {
 
 func provideAudit(dbProvider database.DBProvider, logger *zap.Logger) auditOut {
 	store := audit.NewStore(dbProvider)
-	svc := audit.NewService(store, logger)
+	svc := audit.NewService(store, logger, audit.DefaultConfig())
 	handler := audithttp.NewHandler(svc, logger)
 	return auditOut{
 		Store:       store,

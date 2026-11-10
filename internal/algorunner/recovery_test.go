@@ -120,6 +120,34 @@ func TestRecoveryStateMachineStableRunningReset(t *testing.T) {
 	}
 }
 
+// TestCheckStableResetReportsWhetherThereWasState pins the boolean contract of
+// CheckStableReset: it reports whether there was state to clear, not whether the
+// uptime threshold was reached. The supervise loop logs "crash history reset" on
+// true, so claiming a reset on a state machine that never recorded a crash (or
+// on every tick after the first) would produce a misleading log line.
+func TestCheckStableResetReportsWhetherThereWasState(t *testing.T) {
+	opts := algorunner.RecoveryOptions{
+		MaxCrashes:             3,
+		CrashWindow:            5 * time.Minute,
+		InitialBackoff:         1 * time.Second,
+		MaxBackoff:             30 * time.Second,
+		StableRunningThreshold: 10 * time.Minute,
+	}
+	sm := algorunner.NewRecoveryStateMachine(opts)
+
+	if sm.CheckStableReset(11 * time.Minute) {
+		t.Fatal("a state machine with no crash history reported a reset")
+	}
+
+	sm.RecordCrash(time.Now())
+	if !sm.CheckStableReset(11 * time.Minute) {
+		t.Fatal("crash history was not reported as cleared")
+	}
+	if sm.CheckStableReset(11 * time.Minute) {
+		t.Fatal("the second check reported a reset although the history was already cleared")
+	}
+}
+
 // TestRecoveryOptionsNormalize asserts that RecoveryOptions with unset or
 // non-positive fields cannot take the supervisor down: NewSupervisor must not
 // panic and a full StartAlgorithm/StopAlgorithm cycle must complete.
@@ -163,7 +191,7 @@ func TestRecoveryOptionsNormalize(t *testing.T) {
 						t.Fatalf("NewSupervisor panicked for %s: %v", tc.name, r)
 					}
 				}()
-				supervisor = algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, opts, zap.NewNop())
+				supervisor = newTestSupervisor(t, store, algo, opts)
 			}()
 			t.Cleanup(func() { supervisor.StopAll(time.Second) })
 

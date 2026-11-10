@@ -23,8 +23,12 @@ func newTestService(t *testing.T) (*Service, func()) {
 	store := NewStore(dbStore)
 	svc := NewService(store, zap.NewNop())
 	cleanup := func() {
-		_ = svc.Close()
-		_ = dbStore.Close()
+		if err := svc.Close(); err != nil {
+			t.Errorf("close service: %v", err)
+		}
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
 	}
 	return svc, cleanup
 }
@@ -42,7 +46,7 @@ func TestService_CreateToken_SuccessAndLimit(t *testing.T) {
 	if tok.Name != "Platform-1" {
 		t.Errorf("expected Platform-1, got %q", tok.Name)
 	}
-	if tok.TokenHash != HashToken(raw) {
+	if tok.TokenHash != hashToken(raw) {
 		t.Errorf("token hash mismatch")
 	}
 
@@ -50,8 +54,8 @@ func TestService_CreateToken_SuccessAndLimit(t *testing.T) {
 	const workers = 15
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	successCount := 0
-	conflictCount := 0
+	var successCount int
+	var conflictCount int
 
 	for i := 2; i <= workers+1; i++ {
 		wg.Add(1)
@@ -62,14 +66,14 @@ func TestService_CreateToken_SuccessAndLimit(t *testing.T) {
 			defer mu.Unlock()
 			if cErr == nil {
 				successCount++
-			} else {
-				var appErr *apperr.Error
-				if errors.As(cErr, &appErr) && appErr.Code == "API_TOKEN_LIMIT_REACHED" {
-					conflictCount++
-				} else {
-					t.Errorf("unexpected error: %v", cErr)
-				}
+				return
 			}
+			var appErr *apperr.Error
+			if errors.As(cErr, &appErr) && appErr.Code == "API_TOKEN_LIMIT_REACHED" {
+				conflictCount++
+				return
+			}
+			t.Errorf("unexpected error: %v", cErr)
 		}(i)
 	}
 	wg.Wait()
@@ -139,8 +143,8 @@ func TestService_Authenticate(t *testing.T) {
 
 	// Invalid token
 	_, err = svc.Authenticate(ctx, "sk-invalid0000000000000000000000000000000000000000000000000000000000000000")
-	if !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("expected ErrUnauthorized for bad token, got %v", err)
+	if !errors.Is(err, errUnauthorized) {
+		t.Fatalf("expected errUnauthorized for bad token, got %v", err)
 	}
 
 	// Revoked token
@@ -148,8 +152,8 @@ func TestService_Authenticate(t *testing.T) {
 		t.Fatalf("RevokeToken failed: %v", err)
 	}
 	_, err = svc.Authenticate(ctx, raw)
-	if !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("expected ErrUnauthorized for revoked token, got %v", err)
+	if !errors.Is(err, errUnauthorized) {
+		t.Fatalf("expected errUnauthorized for revoked token, got %v", err)
 	}
 }
 
@@ -165,11 +169,13 @@ func TestService_Close_GracefulDrain(t *testing.T) {
 
 	// Run concurrent Authenticate calls
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = svc.Authenticate(ctx, raw)
+			if _, err := svc.Authenticate(ctx, raw); err != nil {
+				t.Errorf("Authenticate failed: %v", err)
+			}
 		}()
 	}
 	wg.Wait()
@@ -197,7 +203,7 @@ func TestService_ConcurrentCloseRace(t *testing.T) {
 	stopCallers := make(chan struct{})
 
 	// Spawn continuous authentication callers to aggressively trigger touchLastUsed
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -206,7 +212,9 @@ func TestService_ConcurrentCloseRace(t *testing.T) {
 				case <-stopCallers:
 					return
 				default:
-					_, _ = svc.Authenticate(ctx, raw)
+					if _, err := svc.Authenticate(ctx, raw); err != nil {
+						t.Errorf("Authenticate failed: %v", err)
+					}
 				}
 			}
 		}()

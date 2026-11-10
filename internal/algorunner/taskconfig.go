@@ -95,30 +95,48 @@ func (b *TaskConfigBroadcaster) broadcast(
 	slices.Sort(streamIDs)
 
 	var firstErr error
+
+	// warn emits the per-stream line shared by skip and fail. zap.Error(nil)
+	// contributes no field, so both paths keep the exact same message and fields.
+	warn := func(streamID uint64, message string, err error) {
+		b.logger.Warn(message,
+			zap.String("algorithm_id", algorithmID),
+			zap.Uint64("stream_id", streamID),
+			zap.Error(err),
+		)
+	}
+
+	// fail records the first real failure and logs it against the stream that
+	// caused it. The loop keeps going: one broken stream must not starve the
+	// others.
+	fail := func(streamID uint64, message string, err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+		warn(streamID, message, err)
+	}
+
+	// skip logs a stream this call deliberately does not broadcast. It is not a
+	// failure: nothing will be retried, and the other streams are unaffected.
+	skip := func(streamID uint64, message string) {
+		warn(streamID, message, nil)
+	}
+
 	for _, streamID := range streamIDs {
 		configJSON := configs[streamID]
 		if !json.Valid([]byte(configJSON)) {
 			// A malformed config would otherwise be applied by the package's own
 			// tolerant parser *or* silently ignored there. Reject it here, where the
 			// value originated from our own storage.
-			b.logger.Warn("skipping task config that is not valid JSON",
-				zap.String("algorithm_id", algorithmID),
-				zap.Uint64("stream_id", streamID),
-			)
+			skip(streamID, "skipping task config that is not valid JSON")
 			continue
 		}
 
 		payload, err := algoipc.EncodeTaskConfigPayload(algorithmID, []byte(configJSON))
 		if err != nil {
-			err = fmt.Errorf("encode task config for stream %d: %w", streamID, err)
-			b.logger.Warn("failed to encode task config",
-				zap.String("algorithm_id", algorithmID),
-				zap.Uint64("stream_id", streamID),
-				zap.Error(err),
+			fail(streamID, "failed to encode task config",
+				fmt.Errorf("encode task config for stream %d: %w", streamID, err),
 			)
-			if firstErr == nil {
-				firstErr = err
-			}
 			continue
 		}
 		if err := b.broadcaster.BroadcastAIMessage(
@@ -127,15 +145,9 @@ func (b *TaskConfigBroadcaster) broadcast(
 			msgType,
 			payload,
 		); err != nil {
-			err = fmt.Errorf("broadcast task config for stream %d: %w", streamID, err)
-			b.logger.Warn("failed to broadcast task config",
-				zap.String("algorithm_id", algorithmID),
-				zap.Uint64("stream_id", streamID),
-				zap.Error(err),
+			fail(streamID, "failed to broadcast task config",
+				fmt.Errorf("broadcast task config for stream %d: %w", streamID, err),
 			)
-			if firstErr == nil {
-				firstErr = err
-			}
 		}
 	}
 	return firstErr

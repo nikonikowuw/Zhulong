@@ -41,7 +41,7 @@ PLATE_NAMES = [
 ]
 COLOR_NAMES = ["黑色", "蓝色", "绿色", "白色", "黄色"]
 
-DET_INPUT_SIZE = 640
+DET_INPUT_WIDTH, DET_INPUT_HEIGHT = 640, 384
 REC_WIDTH, REC_HEIGHT = 168, 48
 REC_MEAN, REC_STD = 0.588, 0.193
 DOUBLE_LINE = 1
@@ -64,11 +64,11 @@ def resolve_output_layout(shape):
 def letterbox_detect(image, conf_threshold):
     """检测前处理：等比缩放 + 居中补边 + BGR→RGB → NCHW float32。"""
     height, width = image.shape[:2]
-    scale = min(DET_INPUT_SIZE / height, DET_INPUT_SIZE / width)
+    scale = min(DET_INPUT_HEIGHT / height, DET_INPUT_WIDTH / width)
     resized_w, resized_h = int(width * scale), int(height * scale)
-    pad_left, pad_top = (DET_INPUT_SIZE - resized_w) // 2, (DET_INPUT_SIZE - resized_h) // 2
+    pad_left, pad_top = (DET_INPUT_WIDTH - resized_w) // 2, (DET_INPUT_HEIGHT - resized_h) // 2
 
-    canvas = np.full((DET_INPUT_SIZE, DET_INPUT_SIZE, 3), 114, dtype=np.uint8)
+    canvas = np.full((DET_INPUT_HEIGHT, DET_INPUT_WIDTH, 3), 114, dtype=np.uint8)
     canvas[pad_top:pad_top + resized_h, pad_left:pad_left + resized_w] = cv2.resize(
         image, (resized_w, resized_h)
     )
@@ -142,10 +142,14 @@ def plate_sample_maps(target_w, target_h, x1, y1, crop_w, crop_h, plate_type):
 def recognize(image, rec_session, box, plate_type):
     """按与 C++ 相同的采样几何裁出 168×48 BGR 输入并解码字符/颜色。"""
     height, width = image.shape[:2]
-    x1 = int(np.clip(box[0] * width, 0, width - 1))
-    y1 = int(np.clip(box[1] * height, 0, height - 1))
-    x2 = int(np.clip(box[2] * width, x1 + 1, width))
-    y2 = int(np.clip(box[3] * height, y1 + 1, height))
+    box_w = (box[2] - box[0]) * width
+    box_h = (box[3] - box[1]) * height
+    pad_x = box_w * 0.045
+    pad_y = box_h * 0.04
+    x1 = int(np.clip(np.floor(box[0] * width - pad_x), 0, width - 1))
+    y1 = int(np.clip(np.floor(box[1] * height - pad_y), 0, height - 1))
+    x2 = int(np.clip(np.ceil(box[2] * width + pad_x), x1 + 1, width))
+    y2 = int(np.clip(np.ceil(box[3] * height + pad_y), y1 + 1, height))
     crop_w, crop_h = x2 - x1, y2 - y1
     if crop_w <= 0 or crop_h <= 0:
         return None

@@ -21,7 +21,9 @@ func startInProcessBroker(t *testing.T) (string, func()) {
 	t.Helper()
 
 	server := mochi.New(nil)
-	_ = server.AddHook(new(auth.AllowHook), nil)
+	if err := server.AddHook(new(auth.AllowHook), nil); err != nil {
+		t.Fatalf("failed to add auth hook: %v", err)
+	}
 
 	// Pick random free port
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -29,7 +31,9 @@ func startInProcessBroker(t *testing.T) (string, func()) {
 		t.Fatalf("failed to pick free port: %v", err)
 	}
 	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
+	if err := l.Close(); err != nil {
+		t.Fatalf("failed to close temp listener: %v", err)
+	}
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	tcp := listeners.NewTCP(listeners.Config{
@@ -41,13 +45,17 @@ func startInProcessBroker(t *testing.T) (string, func()) {
 	}
 
 	go func() {
-		_ = server.Serve()
+		if err := server.Serve(); err != nil {
+			return
+		}
 	}()
 
 	time.Sleep(50 * time.Millisecond)
 
 	return "tcp://" + addr, func() {
-		_ = server.Close()
+		if err := server.Close(); err != nil {
+			t.Errorf("broker close failed: %v", err)
+		}
 	}
 }
 

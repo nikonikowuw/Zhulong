@@ -22,6 +22,9 @@ describe('schedule-config', () => {
   it('parses empty and default schedule correctly', () => {
     expect(parseSchedule('')).toEqual({ enabled: false, days: {} })
     expect(parseSchedule('{}')).toEqual({ enabled: false, days: {} })
+    expect(
+      parseSchedule('{"enabled":true,"days":{"monday":"invalid"}}')
+    ).toEqual({ enabled: false, days: {} })
     expect(serializeSchedule({ enabled: false })).toBe('{}')
   })
 

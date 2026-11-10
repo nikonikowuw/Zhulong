@@ -11,33 +11,39 @@ import (
 	"gorm.io/gorm"
 )
 
-func setupTestStore(t *testing.T) (*Store, func()) {
+func setupTestStore(t *testing.T) *Store {
 	t.Helper()
-	tempDir := t.TempDir()
-	dbStore := database.New(tempDir, zap.NewNop())
+	dbStore := database.New(t.TempDir(), zap.NewNop())
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("close test database: %v", err)
+		}
+	})
+	return NewStore(dbStore)
+}
 
-	store := NewStore(dbStore)
-	cleanup := func() {
-		_ = dbStore.Close()
+// countRows returns how many rows are persisted. The store does not expose a
+// Count query: every caller can read the total from List, so this helper keeps
+// that surface closed and still lets table-size assertions stay direct.
+func countRows(t *testing.T, store *Store) int64 {
+	t.Helper()
+	_, total, err := store.List(context.Background(), Filter{Limit: 1})
+	if err != nil {
+		t.Fatalf("count audit rows: %v", err)
 	}
-	return store, cleanup
+	return total
 }
 
 func TestStoreCreateAndList(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
 	ctx := context.Background()
 
 	// Initial count should be 0
-	count, err := store.Count(ctx)
-	if err != nil {
-		t.Fatalf("Count failed: %v", err)
-	}
-	if count != 0 {
+	if count := countRows(t, store); count != 0 {
 		t.Fatalf("expected 0 count, got %d", count)
 	}
 
@@ -74,8 +80,7 @@ func TestStoreCreateAndList(t *testing.T) {
 }
 
 func TestStoreFilterByActionStatusAndDate(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
 	ctx := context.Background()
 	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
@@ -143,8 +148,7 @@ func TestStoreFilterByActionStatusAndDate(t *testing.T) {
 }
 
 func TestStoreFilterByMultipleActionsStatusAndDate(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
 	ctx := context.Background()
 	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
@@ -181,14 +185,13 @@ func TestStoreFilterByMultipleActionsStatusAndDate(t *testing.T) {
 }
 
 func TestStorePruneFIFO(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
 	ctx := context.Background()
 	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
 
 	// Create 10 entries with distinct timestamps
-	var logs []*AuditLog
+	logs := []*AuditLog{}
 	for i := 0; i < 10; i++ {
 		logs = append(logs, &AuditLog{
 			CreatedAt: baseTime.Add(time.Duration(i) * time.Minute),
@@ -212,11 +215,7 @@ func TestStorePruneFIFO(t *testing.T) {
 		t.Fatalf("expected 4 deleted, got %d", deleted)
 	}
 
-	count, err := store.Count(ctx)
-	if err != nil {
-		t.Fatalf("Count failed: %v", err)
-	}
-	if count != 6 {
+	if count := countRows(t, store); count != 6 {
 		t.Fatalf("expected 6 remaining, got %d", count)
 	}
 
@@ -252,8 +251,7 @@ func TestStorePruneFIFO(t *testing.T) {
 // excess. Otherwise the delete statement runs out of eligible rows and the
 // table stays above maxEntries for good.
 func TestPruneBoundsPrunableRowsWhenClearRecordsDominate(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 	ctx := context.Background()
 	base := time.Now().UTC()
 
@@ -315,8 +313,7 @@ func TestPruneBoundsPrunableRowsWhenClearRecordsDominate(t *testing.T) {
 }
 
 func TestStoreClearAllPreservesSelfAudit(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
 	ctx := context.Background()
 	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
@@ -362,11 +359,7 @@ func TestStoreClearAllPreservesSelfAudit(t *testing.T) {
 		t.Fatalf("expected 1 deleted, got %d", deleted)
 	}
 
-	count, err := store.Count(ctx)
-	if err != nil {
-		t.Fatalf("Count failed: %v", err)
-	}
-	if count != 2 {
+	if count := countRows(t, store); count != 2 {
 		t.Fatalf("expected only the 2 audit.clear records to remain, got %d", count)
 	}
 }
@@ -375,39 +368,47 @@ type mockNilDBProvider struct{}
 
 func (mockNilDBProvider) DB() *gorm.DB { return nil }
 
+// unconfiguredStore names one way a store can have no usable database.
+type unconfiguredStore struct {
+	name  string
+	store *Store
+}
+
+// unconfiguredStores lists the two ways a store has no usable database: a
+// provider that yields nil and a nil provider.
+func unconfiguredStores() []unconfiguredStore {
+	return []unconfiguredStore{
+		{name: "unready", store: NewStore(mockNilDBProvider{})},
+		{name: "nil", store: NewStore(nil)},
+	}
+}
+
 func TestStoreUnreadyDatabase(t *testing.T) {
 	ctx := context.Background()
 
-	for name, store := range map[string]*Store{
-		"unready": NewStore(mockNilDBProvider{}),
-		"nil":     NewStore(nil),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := store.Create(ctx, &AuditLog{Action: "test"}); err == nil {
-				t.Errorf("%s: expected error on Create, got nil", name)
+	for _, tc := range unconfiguredStores() {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.store.Create(ctx, &AuditLog{Action: "test"}); err == nil {
+				t.Errorf("%s: expected error on Create, got nil", tc.name)
 			}
-			if err := store.CreateBatch(ctx, []*AuditLog{{Action: "test"}}); err == nil {
-				t.Errorf("%s: expected error on CreateBatch, got nil", name)
+			if err := tc.store.CreateBatch(ctx, []*AuditLog{{Action: "test"}}); err == nil {
+				t.Errorf("%s: expected error on CreateBatch, got nil", tc.name)
 			}
-			if _, _, err := store.List(ctx, Filter{}); err == nil {
-				t.Errorf("%s: expected error on List, got nil", name)
+			if _, _, err := tc.store.List(ctx, Filter{}); err == nil {
+				t.Errorf("%s: expected error on List, got nil", tc.name)
 			}
-			if _, err := store.Count(ctx); err == nil {
-				t.Errorf("%s: expected error on Count, got nil", name)
+			if _, err := tc.store.Prune(ctx, 10); err == nil {
+				t.Errorf("%s: expected error on Prune, got nil", tc.name)
 			}
-			if _, err := store.Prune(ctx, 10); err == nil {
-				t.Errorf("%s: expected error on Prune, got nil", name)
-			}
-			if _, err := store.ClearWithAudit(ctx, &AuditLog{Action: ActionAuditClear}, nil); err == nil {
-				t.Errorf("%s: expected error on ClearWithAudit, got nil", name)
+			if _, err := tc.store.ClearWithAudit(ctx, &AuditLog{Action: ActionAuditClear}, nil); err == nil {
+				t.Errorf("%s: expected error on ClearWithAudit, got nil", tc.name)
 			}
 		})
 	}
 }
 
 func TestPruneExemptsAuditClear(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 	ctx := context.Background()
 
 	base := time.Now().UTC()
@@ -453,8 +454,7 @@ func TestPruneExemptsAuditClear(t *testing.T) {
 }
 
 func TestClearWithAuditPersistsSelfAudit(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
@@ -499,8 +499,7 @@ func TestClearWithAuditPersistsSelfAudit(t *testing.T) {
 }
 
 func TestClearWithAuditKeepsPreviousClearRecords(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 	ctx := context.Background()
 
 	if err := store.Create(ctx, &AuditLog{
@@ -542,18 +541,13 @@ func TestClearWithAuditKeepsPreviousClearRecords(t *testing.T) {
 		t.Fatalf("expected both clear records to survive, got total=%d len=%d", total, len(clears))
 	}
 
-	remaining, err := store.Count(ctx)
-	if err != nil {
-		t.Fatalf("Count failed: %v", err)
-	}
-	if remaining != 2 {
+	if remaining := countRows(t, store); remaining != 2 {
 		t.Fatalf("expected only clear records to remain, got %d", remaining)
 	}
 }
 
 func TestClearWithAuditRespectsBeforeFilter(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 	ctx := context.Background()
 
 	base := time.Now().UTC()
@@ -577,11 +571,7 @@ func TestClearWithAuditRespectsBeforeFilter(t *testing.T) {
 	}
 
 	// The recent ordinary record plus the new self-audit record remain.
-	total, err := store.Count(ctx)
-	if err != nil {
-		t.Fatalf("Count failed: %v", err)
-	}
-	if total != 2 {
+	if total := countRows(t, store); total != 2 {
 		t.Fatalf("expected 2 remaining records, got %d", total)
 	}
 }
@@ -589,17 +579,14 @@ func TestClearWithAuditRespectsBeforeFilter(t *testing.T) {
 func TestClearWithAuditFailsWhenDatabaseUnavailable(t *testing.T) {
 	ctx := context.Background()
 
-	for name, store := range map[string]*Store{
-		"unready": NewStore(mockNilDBProvider{}),
-		"nil":     NewStore(nil),
-	} {
-		t.Run(name, func(t *testing.T) {
-			cleared, err := store.ClearWithAudit(ctx, &AuditLog{Action: ActionAuditClear}, nil)
+	for _, tc := range unconfiguredStores() {
+		t.Run(tc.name, func(t *testing.T) {
+			cleared, err := tc.store.ClearWithAudit(ctx, &AuditLog{Action: ActionAuditClear}, nil)
 			if err == nil {
-				t.Fatalf("%s: expected an error so the caller cannot report success", name)
+				t.Fatalf("%s: expected an error so the caller cannot report success", tc.name)
 			}
 			if cleared != 0 {
-				t.Fatalf("%s: expected zero cleared on failure, got %d", name, cleared)
+				t.Fatalf("%s: expected zero cleared on failure, got %d", tc.name, cleared)
 			}
 		})
 	}

@@ -6,10 +6,10 @@ import {
 } from '@tanstack/react-query'
 import {
   tasksApi,
-  type CreateTaskDto,
+  type CreateTaskRequest,
   type GetTasksParams,
-  type SaveChannelTaskDto,
-  type UpdateTaskDto,
+  type SaveChannelTaskRequest,
+  type UpdateTaskRequest,
 } from '../api/tasks-api'
 import { type Task } from '../data/schema'
 
@@ -47,7 +47,7 @@ export function useCreateTask() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (data: CreateTaskDto) => tasksApi.createTask(data),
+    mutationFn: (data: CreateTaskRequest) => tasksApi.createTask(data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: TASKS_QUERY_KEY })
     },
@@ -61,7 +61,7 @@ export function useUpdateTask() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: UpdateTaskDto }) =>
+    mutationFn: ({ id, data }: { id: string; data: UpdateTaskRequest }) =>
       tasksApi.updateTask(id, data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: TASKS_QUERY_KEY })
@@ -76,7 +76,8 @@ export function useSaveChannelTask() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (data: SaveChannelTaskDto) => tasksApi.saveChannelTask(data),
+    mutationFn: (data: SaveChannelTaskRequest) =>
+      tasksApi.saveChannelTask(data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: TASKS_QUERY_KEY })
     },

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { type Algorithm } from '@/features/algorithms/data/schema'
+import { type Algorithm } from '@/features/algorithms/contract'
 import {
   calculatePeakCompute,
   isScheduleActiveAt,

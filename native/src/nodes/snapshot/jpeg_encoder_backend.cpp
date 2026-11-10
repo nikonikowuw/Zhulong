@@ -10,6 +10,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 namespace zhulong {
 namespace {
@@ -46,8 +47,12 @@ Requested parse_requested(const char *raw) {
 } // namespace
 
 JpegBackend &JpegBackend::instance() {
-    static JpegBackend backend;
-    return backend;
+    // 刻意不在进程退出时析构（同 MppLoader::instance）：
+    // librockchip_mpp 内部后台线程/全局状态在 __cxa_finalize 阶段顺序未定义，
+    // 静态析构里调 mpp_destroy / dlclose 易触发退出期崩溃，OS 回收进程资源更安全。
+    alignas(JpegBackend) static unsigned char storage[sizeof(JpegBackend)];
+    static JpegBackend *backend = new (storage) JpegBackend();
+    return *backend;
 }
 
 const char *JpegBackend::kind_name(JpegBackendKind kind) noexcept {
@@ -88,8 +93,10 @@ JpegBackend::JpegBackend() {
 bool JpegBackend::encode_dma(const HardwareFrame &frame, const CpuFrameView &view, int w, int h,
                              int quality, std::vector<uint8_t> &out_jpeg) {
     out_jpeg.clear();
+    const int full_w = static_cast<int>(frame.width & ~1U);
+    const int full_h = static_cast<int>(frame.height & ~1U);
     if (hw_ == nullptr || dma_state_.load(std::memory_order_relaxed) == DmaState::disabled ||
-        !prefer_hardware(w, h)) {
+        w != full_w || h != full_h || !prefer_hardware(w, h)) {
         return false;
     }
 
@@ -105,9 +112,13 @@ bool JpegBackend::encode_dma(const HardwareFrame &frame, const CpuFrameView &vie
                 return false;
             }
             if (reference == out_jpeg) {
-                if (dma_state_.exchange(DmaState::validated, std::memory_order_relaxed) ==
-                    DmaState::unverified) {
+                DmaState expected = DmaState::unverified;
+                if (dma_state_.compare_exchange_strong(expected, DmaState::validated,
+                                                       std::memory_order_relaxed)) {
                     ZL_LOGI(0, log_module, "jpeg_dmabuf_passthrough_validated: %dx%d", w, h);
+                } else if (expected == DmaState::disabled) {
+                    out_jpeg.clear();
+                    return false;
                 }
             } else {
                 dma_state_.store(DmaState::disabled, std::memory_order_relaxed);

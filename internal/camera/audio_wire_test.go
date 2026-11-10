@@ -15,8 +15,8 @@ func TestAudioWireRoundTrip(t *testing.T) {
 	pkt := engine.Packet{
 		TrackType: engine.TrackAudio,
 		Codec:     engine.CodecPCMA,
-		PtsUS:     1_234_567,
-		DtsUS:     1_234_567,
+		PTSUS:     1_234_567,
+		DTSUS:     1_234_567,
 		Flags:     engine.PacketFlagDiscontinuity,
 		Data:      bytes.Repeat([]byte{0xD5}, 160),
 	}

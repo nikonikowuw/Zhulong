@@ -114,6 +114,11 @@ public:
 
 private:
     JpegBackend();
+    /**
+     * @brief 禁用析构：由 `instance()` 的 placement-new 构造并故意泄漏至进程退出，
+     *        避免 `__cxa_finalize` 阶段调用厂商驱动 `mpp_destroy` / `dlclose` 引发退出崩溃
+     */
+    ~JpegBackend() = delete;
     JpegBackend(const JpegBackend &) = delete;
     JpegBackend &operator=(const JpegBackend &) = delete;
 

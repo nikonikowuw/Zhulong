@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -26,6 +26,16 @@ export function TaskCopyIdButton({
 }: TaskCopyIdButtonProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
   const [copied, setCopied] = useState(false)
+  const copyTimerRef = useRef<number | null>(null)
+
+  useEffect(
+    () => () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current)
+      }
+    },
+    []
+  )
 
   const text =
     label === 'task'
@@ -49,7 +59,10 @@ export function TaskCopyIdButton({
     }
     setCopied(true)
     toast.success(text.success)
-    setTimeout(() => setCopied(false), 2000)
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current)
+    }
+    copyTimerRef.current = window.setTimeout(() => setCopied(false), 2000)
   }
 
   return (

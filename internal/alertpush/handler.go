@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -15,7 +16,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const MaxDestinations = 32
+const maxDestinations = 32
 
 // Handler implements HTTP REST API for alert destinations.
 type Handler struct {
@@ -100,7 +101,12 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 
-	audithttp.Tag(c, ActionAlertDestinationCreate, "destination:"+req.Name, "Create alert destination "+req.Name)
+	audithttp.Tag(
+		c,
+		ActionAlertDestinationCreate,
+		"destination:"+req.Name,
+		"Create alert destination "+req.Name,
+	)
 
 	ctx := c.Request.Context()
 	existing, err := h.store.List(ctx)
@@ -108,7 +114,7 @@ func (h *Handler) Create(c *gin.Context) {
 		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to check destination limit", err))
 		return
 	}
-	if len(existing) >= MaxDestinations {
+	if len(existing) >= maxDestinations {
 		httputil.WriteError(
 			c,
 			apperr.Invalid(CodeAlertDestinationConfigInvalid, "Maximum destination limit (32) reached", nil),
@@ -132,7 +138,11 @@ func (h *Handler) Create(c *gin.Context) {
 	}
 
 	status := h.service.dispatcher.GetStatus(dest.ID, dest.Enabled)
-	resp, _ := h.toResponse(dest, status)
+	resp, err := h.toResponse(dest, status)
+	if err != nil {
+		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to project destination", err))
+		return
+	}
 	httputil.Success(c, resp)
 }
 
@@ -159,7 +169,12 @@ func (h *Handler) Update(c *gin.Context) {
 		return
 	}
 
-	audithttp.Tag(c, ActionAlertDestinationUpdate, "destination:"+id, "Update alert destination "+id)
+	audithttp.Tag(
+		c,
+		ActionAlertDestinationUpdate,
+		"destination:"+id,
+		"Update alert destination "+id,
+	)
 
 	ctx := c.Request.Context()
 	existing, err := h.store.GetByID(ctx, id)
@@ -188,7 +203,11 @@ func (h *Handler) Update(c *gin.Context) {
 	}
 
 	status := h.service.dispatcher.GetStatus(existing.ID, existing.Enabled)
-	resp, _ := h.toResponse(existing, status)
+	resp, err := h.toResponse(existing, status)
+	if err != nil {
+		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to project destination", err))
+		return
+	}
 	httputil.Success(c, resp)
 }
 
@@ -204,7 +223,12 @@ func (h *Handler) Update(c *gin.Context) {
 // @Router       /alert-destinations/{id} [delete]
 func (h *Handler) Delete(c *gin.Context) {
 	id := c.Param("id")
-	audithttp.Tag(c, ActionAlertDestinationDelete, "destination:"+id, "Delete alert destination "+id)
+	audithttp.Tag(
+		c,
+		ActionAlertDestinationDelete,
+		"destination:"+id,
+		"Delete alert destination "+id,
+	)
 
 	if err := h.service.Delete(c.Request.Context(), id); err != nil {
 		if errors.Is(err, ErrDestinationNotFound) {
@@ -229,22 +253,14 @@ func (h *Handler) Delete(c *gin.Context) {
 func (h *Handler) Enable(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	id := c.Param("id")
-	audithttp.Tag(c, ActionAlertDestinationEnable, "destination:"+id, "Enable alert destination "+id)
+	audithttp.Tag(
+		c,
+		ActionAlertDestinationEnable,
+		"destination:"+id,
+		"Enable alert destination "+id,
+	)
 
-	ctx := c.Request.Context()
-	if err := h.service.SetEnabled(ctx, id, true); err != nil {
-		if errors.Is(err, ErrDestinationNotFound) {
-			httputil.WriteError(c, apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err))
-			return
-		}
-		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to enable destination", err))
-		return
-	}
-
-	dest, _ := h.store.GetByID(ctx, id)
-	status := h.service.dispatcher.GetStatus(id, true)
-	resp, _ := h.toResponse(dest, status)
-	httputil.Success(c, resp)
+	h.setDestinationEnabled(c, id, true)
 }
 
 // Disable godoc
@@ -259,21 +275,38 @@ func (h *Handler) Enable(c *gin.Context) {
 func (h *Handler) Disable(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	id := c.Param("id")
-	audithttp.Tag(c, ActionAlertDestinationDisable, "destination:"+id, "Disable alert destination "+id)
+	audithttp.Tag(
+		c,
+		ActionAlertDestinationDisable,
+		"destination:"+id,
+		"Disable alert destination "+id,
+	)
 
+	h.setDestinationEnabled(c, id, false)
+}
+
+func (h *Handler) setDestinationEnabled(c *gin.Context, id string, enabled bool) {
 	ctx := c.Request.Context()
-	if err := h.service.SetEnabled(ctx, id, false); err != nil {
+	if err := h.service.SetEnabled(ctx, id, enabled); err != nil {
 		if errors.Is(err, ErrDestinationNotFound) {
 			httputil.WriteError(c, apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err))
 			return
 		}
-		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to disable destination", err))
+		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to update destination enabled state", err))
 		return
 	}
 
-	dest, _ := h.store.GetByID(ctx, id)
-	status := h.service.dispatcher.GetStatus(id, false)
-	resp, _ := h.toResponse(dest, status)
+	dest, err := h.store.GetByID(ctx, id)
+	if err != nil {
+		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to load destination", err))
+		return
+	}
+	status := h.service.dispatcher.GetStatus(id, enabled)
+	resp, err := h.toResponse(dest, status)
+	if err != nil {
+		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to project destination", err))
+		return
+	}
 	httputil.Success(c, resp)
 }
 
@@ -294,7 +327,12 @@ func (h *Handler) Test(c *gin.Context) {
 		return
 	}
 
-	audithttp.Tag(c, ActionAlertDestinationTest, "test:"+req.ChannelType, "Test alert destination connectivity")
+	audithttp.Tag(
+		c,
+		ActionAlertDestinationTest,
+		"test:"+req.ChannelType,
+		"Test alert destination connectivity",
+	)
 
 	ctx := c.Request.Context()
 	dest, secretRaw, err := h.resolveTestTarget(ctx, req)
@@ -319,54 +357,59 @@ func (h *Handler) Test(c *gin.Context) {
 func (h *Handler) resolveTestTarget(
 	ctx context.Context,
 	req TestAlertDestinationRequest,
-) (*AlertDestination, any, error) {
+) (*AlertDestination, destinationSecret, error) {
 	if req.ID != "" {
-		existing, err := h.store.GetByID(ctx, req.ID)
+		return h.resolveExistingTestTarget(ctx, req)
+	}
+	return h.resolveDraftTestTarget(req)
+}
+
+func (h *Handler) resolveExistingTestTarget(
+	ctx context.Context,
+	req TestAlertDestinationRequest,
+) (*AlertDestination, destinationSecret, error) {
+	existing, err := h.store.GetByID(ctx, req.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	switch existing.ChannelType {
+	case ChannelTypeWebhook:
+		sec, err := h.store.DecryptWebhookSecret(existing.ID, existing.SecretCiphertext)
 		if err != nil {
 			return nil, nil, err
 		}
-		if req.ChannelType == "" {
-			req.ChannelType = existing.ChannelType
+		if err := applyWebhookSecretOverrides(sec, req.Secret, false); err != nil {
+			return nil, nil, err
 		}
-		if req.ImageMode == "" {
-			req.ImageMode = existing.ImageMode
+		if req.Config.URL != "" {
+			sec.URL = req.Config.URL
 		}
-
-		if existing.ChannelType == ChannelTypeWebhook {
-			sec, _ := h.store.DecryptWebhookSecret(existing.ID, existing.SecretCiphertext)
-			if req.Secret != nil {
-				if req.Secret.Token != nil {
-					sec.Token = *req.Secret.Token
-				}
-				if req.Secret.Username != nil {
-					sec.Username = *req.Secret.Username
-				}
-				if req.Secret.Password != nil {
-					sec.Password = *req.Secret.Password
-				}
-				if req.Secret.Headers != nil {
-					sec.Headers = req.Secret.Headers
-				}
-			}
-			if req.Config.URL != "" {
-				sec.URL = req.Config.URL
-			}
-			return existing, sec, nil
-		} else if existing.ChannelType == ChannelTypeMQTT {
-			sec, _ := h.store.DecryptMQTTSecret(existing.ID, existing.SecretCiphertext)
-			if req.Secret != nil && req.Secret.Password != nil {
-				sec.Password = *req.Secret.Password
-			}
-			return existing, sec, nil
+		return existing, sec, nil
+	case ChannelTypeMQTT:
+		sec, err := h.store.DecryptMQTTSecret(existing.ID, existing.SecretCiphertext)
+		if err != nil {
+			return nil, nil, err
 		}
+		if req.Secret != nil && req.Secret.Password != nil {
+			sec.Password = *req.Secret.Password
+		}
+		return existing, sec, nil
+	default:
+		return nil, nil, ErrInvalidChannelType
 	}
+}
 
-	// Draft test
+func (h *Handler) resolveDraftTestTarget(
+	req TestAlertDestinationRequest,
+) (*AlertDestination, destinationSecret, error) {
 	dest := &AlertDestination{
 		ChannelType: req.ChannelType,
 		ImageMode:   req.ImageMode,
 	}
-	if req.ChannelType == ChannelTypeWebhook {
+
+	switch req.ChannelType {
+	case ChannelTypeWebhook:
 		timeout := 5
 		if req.Config.TimeoutSeconds != nil && *req.Config.TimeoutSeconds > 0 {
 			timeout = *req.Config.TimeoutSeconds
@@ -375,32 +418,24 @@ func (h *Handler) resolveTestTarget(
 		if req.Config.AuthType != "" {
 			authType = req.Config.AuthType
 		}
-		cfgJSON, _ := json.Marshal(WebhookConfig{
+		cfgJSON, err := json.Marshal(webhookConfig{
 			AuthType:       authType,
 			TimeoutSeconds: timeout,
 		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal webhook config: %w", err)
+		}
 		dest.ConfigJSON = string(cfgJSON)
 
 		sec := &webhookSecret{
 			URL: req.Config.URL,
 		}
-		if req.Secret != nil {
-			if req.Secret.Token != nil {
-				sec.Token = *req.Secret.Token
-			}
-			if req.Secret.Username != nil {
-				sec.Username = *req.Secret.Username
-			}
-			if req.Secret.Password != nil {
-				sec.Password = *req.Secret.Password
-			}
-			if req.Secret.Headers != nil {
-				sec.Headers = req.Secret.Headers
-			}
+		if err := applyWebhookSecretOverrides(sec, req.Secret, false); err != nil {
+			return nil, nil, err
 		}
 		return dest, sec, nil
-	} else if req.ChannelType == ChannelTypeMQTT {
-		qos := uint8(0)
+	case ChannelTypeMQTT:
+		var qos uint8
 		if req.Config.QoS != nil {
 			qos = *req.Config.QoS
 		}
@@ -408,7 +443,7 @@ func (h *Handler) resolveTestTarget(
 		if req.Config.KeepAliveSeconds != nil && *req.Config.KeepAliveSeconds > 0 {
 			keepAlive = *req.Config.KeepAliveSeconds
 		}
-		cfgJSON, _ := json.Marshal(MQTTConfig{
+		cfgJSON, err := json.Marshal(mqttConfig{
 			Broker:           req.Config.Broker,
 			Username:         req.Config.Username,
 			Topic:            req.Config.Topic,
@@ -416,6 +451,9 @@ func (h *Handler) resolveTestTarget(
 			KeepAliveSeconds: keepAlive,
 			TLSSkipVerify:    req.Config.TLSSkipVerify,
 		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal mqtt config: %w", err)
+		}
 		dest.ConfigJSON = string(cfgJSON)
 		if req.Config.ClientID != "" {
 			cID := req.Config.ClientID
@@ -426,11 +464,14 @@ func (h *Handler) resolveTestTarget(
 			sec.Password = *req.Secret.Password
 		}
 		return dest, sec, nil
+	default:
+		return nil, nil, ErrInvalidChannelType
 	}
-	return nil, nil, ErrInvalidChannelType
 }
 
-func (h *Handler) parseCreateRequest(req CreateAlertDestinationRequest) (*AlertDestination, any, error) {
+func (h *Handler) parseCreateRequest(
+	req CreateAlertDestinationRequest,
+) (*AlertDestination, destinationSecret, error) {
 	dest := &AlertDestination{
 		Name:        strings.TrimSpace(req.Name),
 		ChannelType: req.ChannelType,
@@ -438,118 +479,115 @@ func (h *Handler) parseCreateRequest(req CreateAlertDestinationRequest) (*AlertD
 		ImageMode:   req.ImageMode,
 	}
 
-	filter := DestinationFilter{}
-	if req.Filter != nil {
-		filter.EventTypes = req.Filter.EventTypes
-		filter.AlgorithmIDs = req.Filter.AlgorithmIDs
-		filter.CameraIDs = req.Filter.CameraIDs
+	filterJSON, err := marshalFilterInfo(req.Filter)
+	if err != nil {
+		return nil, nil, err
 	}
-	filterBytes, _ := json.Marshal(filter)
-	dest.FilterJSON = string(filterBytes)
+	dest.FilterJSON = filterJSON
 
-	if req.ChannelType == ChannelTypeWebhook {
-		if strings.TrimSpace(req.Config.URL) == "" {
-			return nil, nil, errors.New("url is required for webhook")
-		}
-		u, err := url.Parse(req.Config.URL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
-			return nil, nil, errors.New("webhook url must be http or https without userinfo")
-		}
-
-		timeout := 5
-		if req.Config.TimeoutSeconds != nil && *req.Config.TimeoutSeconds >= 1 && *req.Config.TimeoutSeconds <= 30 {
-			timeout = *req.Config.TimeoutSeconds
-		}
-		authType := AuthTypeNone
-		if req.Config.AuthType != "" {
-			authType = req.Config.AuthType
-		}
-
-		sec := &webhookSecret{
-			URL: req.Config.URL,
-		}
-		if req.Secret != nil {
-			if req.Secret.Token != nil {
-				sec.Token = *req.Secret.Token
-			}
-			if req.Secret.Username != nil {
-				sec.Username = *req.Secret.Username
-			}
-			if req.Secret.Password != nil {
-				sec.Password = *req.Secret.Password
-			}
-			if req.Secret.Headers != nil {
-				for hk := range req.Secret.Headers {
-					if IsReservedHeader(hk) {
-						return nil, nil, ErrReservedHeaderUsed
-					}
-				}
-				sec.Headers = req.Secret.Headers
-			}
-		}
-
-		if authType == AuthTypeBearer && strings.TrimSpace(sec.Token) == "" {
-			return nil, nil, errors.New("token is required for bearer auth")
-		}
-		if authType == AuthTypeBasic && (strings.TrimSpace(sec.Username) == "" || strings.TrimSpace(sec.Password) == "") {
-			return nil, nil, errors.New("username and password are required for basic auth")
-		}
-
-		cfgJSON, _ := json.Marshal(WebhookConfig{
-			AuthType:       authType,
-			TimeoutSeconds: timeout,
-		})
-		dest.ConfigJSON = string(cfgJSON)
-		return dest, sec, nil
-	} else if req.ChannelType == ChannelTypeMQTT {
-		if strings.TrimSpace(req.Config.Broker) == "" {
-			return nil, nil, errors.New("broker url is required for mqtt")
-		}
-		u, err := url.Parse(req.Config.Broker)
-		if err != nil || u.User != nil {
-			return nil, nil, errors.New("mqtt broker url must not contain userinfo")
-		}
-		if strings.TrimSpace(req.Config.Topic) == "" {
-			return nil, nil, errors.New("topic is required for mqtt")
-		}
-		if strings.ContainsAny(req.Config.Topic, "+#") {
-			return nil, nil, errors.New("mqtt publish topic must not contain wildcards")
-		}
-
-		if req.Config.ClientID != "" {
-			if len(req.Config.ClientID) > 23 {
-				return nil, nil, errors.New("mqtt client id must not exceed 23 characters")
-			}
-			cID := req.Config.ClientID
-			dest.MQTTClientID = &cID
-		}
-
-		qos := uint8(0)
-		if req.Config.QoS != nil {
-			qos = *req.Config.QoS
-		}
-		keepAlive := 30
-		if req.Config.KeepAliveSeconds != nil && *req.Config.KeepAliveSeconds > 0 {
-			keepAlive = *req.Config.KeepAliveSeconds
-		}
-
-		cfgJSON, _ := json.Marshal(MQTTConfig{
-			Broker:           req.Config.Broker,
-			Username:         req.Config.Username,
-			Topic:            req.Config.Topic,
-			QoS:              qos,
-			KeepAliveSeconds: keepAlive,
-			TLSSkipVerify:    req.Config.TLSSkipVerify,
-		})
-		dest.ConfigJSON = string(cfgJSON)
-
-		sec := &mqttSecret{}
-		if req.Secret != nil && req.Secret.Password != nil {
-			sec.Password = *req.Secret.Password
-		}
-		return dest, sec, nil
+	switch req.ChannelType {
+	case ChannelTypeWebhook:
+		sec, err := h.parseWebhookCreate(dest, req)
+		return dest, sec, err
+	case ChannelTypeMQTT:
+		sec, err := h.parseMQTTCreate(dest, req)
+		return dest, sec, err
+	default:
+		return nil, nil, ErrInvalidChannelType
 	}
-	return nil, nil, ErrInvalidChannelType
+}
+
+func (h *Handler) parseWebhookCreate(
+	dest *AlertDestination,
+	req CreateAlertDestinationRequest,
+) (*webhookSecret, error) {
+	if err := validateWebhookURL(req.Config.URL); err != nil {
+		return nil, err
+	}
+
+	timeout := 5
+	if isValidTimeoutSeconds(req.Config.TimeoutSeconds) {
+		timeout = *req.Config.TimeoutSeconds
+	}
+	authType := AuthTypeNone
+	if req.Config.AuthType != "" {
+		authType = req.Config.AuthType
+	}
+
+	sec := &webhookSecret{
+		URL: req.Config.URL,
+	}
+	if err := applyWebhookSecretOverrides(sec, req.Secret, true); err != nil {
+		return nil, err
+	}
+	if err := validateWebhookAuthCredentials(authType, sec); err != nil {
+		return nil, err
+	}
+
+	cfgJSON, err := json.Marshal(webhookConfig{
+		AuthType:       authType,
+		TimeoutSeconds: timeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal webhook config: %w", err)
+	}
+	dest.ConfigJSON = string(cfgJSON)
+	return sec, nil
+}
+
+func (h *Handler) parseMQTTCreate(
+	dest *AlertDestination,
+	req CreateAlertDestinationRequest,
+) (*mqttSecret, error) {
+	if strings.TrimSpace(req.Config.Broker) == "" {
+		return nil, errors.New("broker url is required for mqtt")
+	}
+	u, err := url.Parse(req.Config.Broker)
+	if err != nil || u.User != nil {
+		return nil, errors.New("mqtt broker url must not contain userinfo")
+	}
+	if strings.TrimSpace(req.Config.Topic) == "" {
+		return nil, errors.New("topic is required for mqtt")
+	}
+	if strings.ContainsAny(req.Config.Topic, "+#") {
+		return nil, errors.New("mqtt publish topic must not contain wildcards")
+	}
+
+	if req.Config.ClientID != "" {
+		if len(req.Config.ClientID) > 23 {
+			return nil, errors.New("mqtt client id must not exceed 23 characters")
+		}
+		cID := req.Config.ClientID
+		dest.MQTTClientID = &cID
+	}
+
+	var qos uint8
+	if req.Config.QoS != nil {
+		qos = *req.Config.QoS
+	}
+	keepAlive := 30
+	if req.Config.KeepAliveSeconds != nil && *req.Config.KeepAliveSeconds > 0 {
+		keepAlive = *req.Config.KeepAliveSeconds
+	}
+
+	cfgJSON, err := json.Marshal(mqttConfig{
+		Broker:           req.Config.Broker,
+		Username:         req.Config.Username,
+		Topic:            req.Config.Topic,
+		QoS:              qos,
+		KeepAliveSeconds: keepAlive,
+		TLSSkipVerify:    req.Config.TLSSkipVerify,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal mqtt config: %w", err)
+	}
+	dest.ConfigJSON = string(cfgJSON)
+
+	sec := &mqttSecret{}
+	if req.Secret != nil && req.Secret.Password != nil {
+		sec.Password = *req.Secret.Password
+	}
+	return sec, nil
 }
 
 func (h *Handler) parseUpdateRequest(
@@ -562,123 +600,145 @@ func (h *Handler) parseUpdateRequest(
 	}
 
 	if req.Filter != nil {
-		filter := DestinationFilter{
-			EventTypes:   req.Filter.EventTypes,
-			AlgorithmIDs: req.Filter.AlgorithmIDs,
-			CameraIDs:    req.Filter.CameraIDs,
+		fs, err := marshalFilterInfo(req.Filter)
+		if err != nil {
+			return UpdateParams{}, err
 		}
-		fb, _ := json.Marshal(filter)
-		fs := string(fb)
 		params.FilterJSON = &fs
 	}
 
-	if existing.ChannelType == ChannelTypeWebhook {
-		var curCfg WebhookConfig
-		_ = json.Unmarshal([]byte(existing.ConfigJSON), &curCfg)
-		curSec, _ := h.store.DecryptWebhookSecret(existing.ID, existing.SecretCiphertext)
-
-		if req.Config != nil {
-			if req.Config.URL != "" {
-				u, err := url.Parse(req.Config.URL)
-				if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
-					return UpdateParams{}, errors.New("webhook url must be http or https without userinfo")
-				}
-				curSec.URL = req.Config.URL
-			}
-			if req.Config.AuthType != "" {
-				curCfg.AuthType = req.Config.AuthType
-			}
-			if req.Config.TimeoutSeconds != nil && *req.Config.TimeoutSeconds >= 1 && *req.Config.TimeoutSeconds <= 30 {
-				curCfg.TimeoutSeconds = *req.Config.TimeoutSeconds
-			}
+	switch existing.ChannelType {
+	case ChannelTypeWebhook:
+		if err := h.applyWebhookUpdate(existing, req, &params); err != nil {
+			return UpdateParams{}, err
 		}
-
-		if req.Secret != nil {
-			if req.Secret.Token != nil {
-				curSec.Token = *req.Secret.Token
-			}
-			if req.Secret.Username != nil {
-				curSec.Username = *req.Secret.Username
-			}
-			if req.Secret.Password != nil {
-				curSec.Password = *req.Secret.Password
-			}
-			if req.Secret.Headers != nil {
-				for hk := range req.Secret.Headers {
-					if IsReservedHeader(hk) {
-						return UpdateParams{}, ErrReservedHeaderUsed
-					}
-				}
-				curSec.Headers = req.Secret.Headers
-			}
+	case ChannelTypeMQTT:
+		if err := h.applyMQTTUpdate(existing, req, &params); err != nil {
+			return UpdateParams{}, err
 		}
-
-		// Normalize by auth_type
-		switch curCfg.AuthType {
-		case AuthTypeNone:
-			curSec.Token = ""
-			curSec.Username = ""
-			curSec.Password = ""
-		case AuthTypeBearer:
-			if strings.TrimSpace(curSec.Token) == "" {
-				return UpdateParams{}, errors.New("token required for bearer auth")
-			}
-			curSec.Username = ""
-			curSec.Password = ""
-		case AuthTypeBasic:
-			if strings.TrimSpace(curSec.Username) == "" || strings.TrimSpace(curSec.Password) == "" {
-				return UpdateParams{}, errors.New("username and password required for basic auth")
-			}
-			curSec.Token = ""
-		}
-
-		cb, _ := json.Marshal(curCfg)
-		cs := string(cb)
-		params.ConfigJSON = &cs
-		params.SecretRaw = curSec
-	} else if existing.ChannelType == ChannelTypeMQTT {
-		var curCfg MQTTConfig
-		_ = json.Unmarshal([]byte(existing.ConfigJSON), &curCfg)
-		curSec, _ := h.store.DecryptMQTTSecret(existing.ID, existing.SecretCiphertext)
-
-		if req.Config != nil {
-			if req.Config.Broker != "" {
-				curCfg.Broker = req.Config.Broker
-			}
-			if req.Config.Username != "" {
-				curCfg.Username = req.Config.Username
-			}
-			if req.Config.Topic != "" {
-				if strings.ContainsAny(req.Config.Topic, "+#") {
-					return UpdateParams{}, errors.New("mqtt topic must not contain wildcards")
-				}
-				curCfg.Topic = req.Config.Topic
-			}
-			if req.Config.QoS != nil {
-				curCfg.QoS = *req.Config.QoS
-			}
-			if req.Config.KeepAliveSeconds != nil {
-				curCfg.KeepAliveSeconds = *req.Config.KeepAliveSeconds
-			}
-			curCfg.TLSSkipVerify = req.Config.TLSSkipVerify
-
-			if req.Config.ClientID != "" {
-				cID := req.Config.ClientID
-				params.ClientID = &cID
-			}
-		}
-
-		if req.Secret != nil && req.Secret.Password != nil {
-			curSec.Password = *req.Secret.Password
-		}
-
-		cb, _ := json.Marshal(curCfg)
-		cs := string(cb)
-		params.ConfigJSON = &cs
-		params.SecretRaw = curSec
+	default:
+		return UpdateParams{}, ErrInvalidChannelType
 	}
 
 	return params, nil
+}
+
+func (h *Handler) applyWebhookUpdate(
+	existing *AlertDestination,
+	req UpdateAlertDestinationRequest,
+	params *UpdateParams,
+) error {
+	var curCfg webhookConfig
+	if existing.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(existing.ConfigJSON), &curCfg); err != nil {
+			return fmt.Errorf("unmarshal existing webhook config: %w", err)
+		}
+	}
+	curSec, err := h.store.DecryptWebhookSecret(existing.ID, existing.SecretCiphertext)
+	if err != nil {
+		return fmt.Errorf("decrypt existing webhook secret: %w", err)
+	}
+
+	if req.Config != nil {
+		if req.Config.URL != "" {
+			if err := validateWebhookURL(req.Config.URL); err != nil {
+				return err
+			}
+			curSec.URL = req.Config.URL
+		}
+		if req.Config.AuthType != "" {
+			curCfg.AuthType = req.Config.AuthType
+		}
+		if isValidTimeoutSeconds(req.Config.TimeoutSeconds) {
+			curCfg.TimeoutSeconds = *req.Config.TimeoutSeconds
+		}
+	}
+
+	if err := applyWebhookSecretOverrides(curSec, req.Secret, true); err != nil {
+		return err
+	}
+
+	// Normalize and validate by auth_type
+	switch curCfg.AuthType {
+	case AuthTypeNone:
+		curSec.Token = ""
+		curSec.Username = ""
+		curSec.Password = ""
+	case AuthTypeBearer:
+		curSec.Username = ""
+		curSec.Password = ""
+	case AuthTypeBasic:
+		curSec.Token = ""
+	}
+	if err := validateWebhookAuthCredentials(curCfg.AuthType, curSec); err != nil {
+		return err
+	}
+
+	cb, err := json.Marshal(curCfg)
+	if err != nil {
+		return fmt.Errorf("marshal webhook config: %w", err)
+	}
+	cs := string(cb)
+	params.ConfigJSON = &cs
+	params.SecretRaw = curSec
+	return nil
+}
+
+func (h *Handler) applyMQTTUpdate(
+	existing *AlertDestination,
+	req UpdateAlertDestinationRequest,
+	params *UpdateParams,
+) error {
+	var curCfg mqttConfig
+	if existing.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(existing.ConfigJSON), &curCfg); err != nil {
+			return fmt.Errorf("unmarshal existing mqtt config: %w", err)
+		}
+	}
+	curSec, err := h.store.DecryptMQTTSecret(existing.ID, existing.SecretCiphertext)
+	if err != nil {
+		return fmt.Errorf("decrypt existing mqtt secret: %w", err)
+	}
+
+	if req.Config != nil {
+		if req.Config.Broker != "" {
+			curCfg.Broker = req.Config.Broker
+		}
+		if req.Config.Username != "" {
+			curCfg.Username = req.Config.Username
+		}
+		if req.Config.Topic != "" {
+			if strings.ContainsAny(req.Config.Topic, "+#") {
+				return errors.New("mqtt topic must not contain wildcards")
+			}
+			curCfg.Topic = req.Config.Topic
+		}
+		if req.Config.QoS != nil {
+			curCfg.QoS = *req.Config.QoS
+		}
+		if req.Config.KeepAliveSeconds != nil {
+			curCfg.KeepAliveSeconds = *req.Config.KeepAliveSeconds
+		}
+		curCfg.TLSSkipVerify = req.Config.TLSSkipVerify
+
+		if req.Config.ClientID != "" {
+			cID := req.Config.ClientID
+			params.ClientID = &cID
+		}
+	}
+
+	if req.Secret != nil && req.Secret.Password != nil {
+		curSec.Password = *req.Secret.Password
+	}
+
+	cb, err := json.Marshal(curCfg)
+	if err != nil {
+		return fmt.Errorf("marshal mqtt config: %w", err)
+	}
+	cs := string(cb)
+	params.ConfigJSON = &cs
+	params.SecretRaw = curSec
+	return nil
 }
 
 func (h *Handler) toResponse(dest *AlertDestination, status AlertDestinationStatus) (AlertDestinationResponse, error) {
@@ -691,26 +751,26 @@ func (h *Handler) toResponse(dest *AlertDestination, status AlertDestinationStat
 		Status:      status,
 	}
 
-	var filter DestinationFilter
-	_ = json.Unmarshal([]byte(dest.FilterJSON), &filter)
+	var filter destinationFilter
+	if dest.FilterJSON != "" {
+		if err := json.Unmarshal([]byte(dest.FilterJSON), &filter); err != nil {
+			return AlertDestinationResponse{}, fmt.Errorf("unmarshal filter json: %w", err)
+		}
+	}
 	resp.Filter = AlertDestinationFilterInfo{
-		EventTypes:   filter.EventTypes,
-		AlgorithmIDs: filter.AlgorithmIDs,
-		CameraIDs:    filter.CameraIDs,
-	}
-	if resp.Filter.EventTypes == nil {
-		resp.Filter.EventTypes = []string{}
-	}
-	if resp.Filter.AlgorithmIDs == nil {
-		resp.Filter.AlgorithmIDs = []string{}
-	}
-	if resp.Filter.CameraIDs == nil {
-		resp.Filter.CameraIDs = []string{}
+		EventTypes:   nonNilStrings(filter.EventTypes),
+		AlgorithmIDs: nonNilStrings(filter.AlgorithmIDs),
+		CameraIDs:    nonNilStrings(filter.CameraIDs),
 	}
 
-	if dest.ChannelType == ChannelTypeWebhook {
-		var cfg WebhookConfig
-		_ = json.Unmarshal([]byte(dest.ConfigJSON), &cfg)
+	switch dest.ChannelType {
+	case ChannelTypeWebhook:
+		var cfg webhookConfig
+		if dest.ConfigJSON != "" {
+			if err := json.Unmarshal([]byte(dest.ConfigJSON), &cfg); err != nil {
+				return AlertDestinationResponse{}, fmt.Errorf("unmarshal webhook config: %w", err)
+			}
+		}
 		resp.Config.AuthType = cfg.AuthType
 		resp.Config.TimeoutSeconds = &cfg.TimeoutSeconds
 
@@ -727,9 +787,13 @@ func (h *Handler) toResponse(dest *AlertDestination, status AlertDestinationStat
 				resp.HeaderNames = names
 			}
 		}
-	} else if dest.ChannelType == ChannelTypeMQTT {
-		var cfg MQTTConfig
-		_ = json.Unmarshal([]byte(dest.ConfigJSON), &cfg)
+	case ChannelTypeMQTT:
+		var cfg mqttConfig
+		if dest.ConfigJSON != "" {
+			if err := json.Unmarshal([]byte(dest.ConfigJSON), &cfg); err != nil {
+				return AlertDestinationResponse{}, fmt.Errorf("unmarshal mqtt config: %w", err)
+			}
+		}
 		resp.Config.Broker = cfg.Broker
 		resp.Config.Username = cfg.Username
 		resp.Config.Topic = cfg.Topic
@@ -759,4 +823,90 @@ func (h *Handler) writeValidationError(c *gin.Context, err error) {
 		return
 	}
 	httputil.WriteError(c, apperr.Invalid(CodeAlertDestinationConfigInvalid, err.Error(), err))
+}
+
+func marshalFilterInfo(info *AlertDestinationFilterInfo) (string, error) {
+	filter := destinationFilter{
+		EventTypes:   []string{},
+		AlgorithmIDs: []string{},
+		CameraIDs:    []string{},
+	}
+	if info != nil {
+		filter.EventTypes = nonNilStrings(info.EventTypes)
+		filter.AlgorithmIDs = nonNilStrings(info.AlgorithmIDs)
+		filter.CameraIDs = nonNilStrings(info.CameraIDs)
+	}
+	filterBytes, err := json.Marshal(filter)
+	if err != nil {
+		return "", fmt.Errorf("marshal destination filter: %w", err)
+	}
+	return string(filterBytes), nil
+}
+
+func nonNilStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+func validateWebhookURL(rawURL string) error {
+	if strings.TrimSpace(rawURL) == "" {
+		return errors.New("url is required for webhook")
+	}
+	u, err := url.Parse(rawURL)
+	isValidScheme := err == nil && (u.Scheme == "http" || u.Scheme == "https")
+	if !isValidScheme || u.User != nil {
+		return errors.New("webhook url must be http or https without userinfo")
+	}
+	return nil
+}
+
+func isValidTimeoutSeconds(v *int) bool {
+	return v != nil && *v >= 1 && *v <= 30
+}
+
+func applyWebhookSecretOverrides(
+	sec *webhookSecret,
+	input *AlertDestinationSecretInfo,
+	checkReserved bool,
+) error {
+	if input == nil {
+		return nil
+	}
+	if input.Token != nil {
+		sec.Token = *input.Token
+	}
+	if input.Username != nil {
+		sec.Username = *input.Username
+	}
+	if input.Password != nil {
+		sec.Password = *input.Password
+	}
+	if input.Headers != nil {
+		if checkReserved {
+			for hk := range input.Headers {
+				if isReservedHeader(hk) {
+					return ErrReservedHeaderUsed
+				}
+			}
+		}
+		sec.Headers = input.Headers
+	}
+	return nil
+}
+
+func validateWebhookAuthCredentials(authType string, sec *webhookSecret) error {
+	switch authType {
+	case AuthTypeBearer:
+		if strings.TrimSpace(sec.Token) == "" {
+			return errors.New("token is required for bearer auth")
+		}
+	case AuthTypeBasic:
+		missingBasicCreds := strings.TrimSpace(sec.Username) == "" || strings.TrimSpace(sec.Password) == ""
+		if missingBasicCreds {
+			return errors.New("username and password are required for basic auth")
+		}
+	}
+	return nil
 }

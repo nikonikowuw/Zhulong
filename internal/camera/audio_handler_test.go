@@ -171,7 +171,7 @@ func TestAudioStreamWSDeliversFrames(t *testing.T) {
 	source.packets <- engine.Packet{
 		TrackType: engine.TrackAudio,
 		Codec:     engine.CodecPCMA,
-		PtsUS:     20_000,
+		PTSUS:     20_000,
 		Data:      bytes.Repeat([]byte{0xD5}, 160),
 	}
 

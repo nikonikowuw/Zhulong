@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
-	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -53,7 +52,7 @@ while true; do sleep 0.05; done
 		algoV2 := algoV1
 		algoV2.Version = "2.0.0"
 		stubPackageRootAt(t, root, algoV2, scriptContent)
-		supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: root}, options, zap.NewNop())
+		supervisor := newTestSupervisorWithRoot(t, store, root, options)
 
 		if err := supervisor.StartAlgorithm(ctx, algoV1); err != nil {
 			supervisor.StopAll(time.Second)
@@ -106,7 +105,7 @@ func TestSupervisorUpgradeAlgorithmSuccess(t *testing.T) {
 	algoV2.Version = "2.0.0"
 	stubPackageRootAt(t, root, algoV2, idlePackageScript())
 
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: root}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newTestSupervisorWithRoot(t, store, root, algorunner.DefaultRecoveryOptions())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -154,7 +153,12 @@ while true; do sleep 0.1; done
 	algoV2 := algoV1
 	algoV2.Version = "2.0.0"
 	stubPackageRootAt(t, root, algoV2, scriptContent)
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: root}, options, zaptest.NewLogger(t))
+	supervisor := algorunner.NewSupervisor(
+		store,
+		algorunner.Runtime{AlgorithmsDir: root},
+		options,
+		zaptest.NewLogger(t),
+	)
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -196,7 +200,7 @@ func TestSupervisorStartFailsWithNoBrokerSocketsWhenResolverConfigured(t *testin
 	algo := supervisorTestPackage()
 	store.packages[algo.ID] = algo
 
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newTestSupervisor(t, store, algo, algorunner.DefaultRecoveryOptions())
 	supervisor.SetBrokerSubscriptionResolver(&mockBrokerPathResolver{paths: []string{}})
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
@@ -217,7 +221,7 @@ func TestSupervisorRestartWithZeroBrokersRetiresRunnerToStandby(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolver := newMutableBrokerPathResolver([]string{"/tmp/stream1.sock"})
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newTestSupervisor(t, store, algo, algorunner.DefaultRecoveryOptions())
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)

@@ -75,13 +75,19 @@ export function ScheduleDailyView({
                       ? 'bg-primary/10 text-primary'
                       : 'bg-muted text-muted-foreground hover:bg-muted/80'
                   )}
-                  title={`点击一键全天反选 ${dayLabel}`}
+                  title={t('schedule.toggleDayTitle', {
+                    day: dayLabel,
+                    defaultValue: `点击一键全天反选 ${dayLabel}`,
+                  })}
                 >
                   {dayLabel}
                 </button>
                 <span className='font-mono text-[10px] text-muted-foreground'>
                   {hasRanges
-                    ? `${ranges.length} 时段`
+                    ? t('schedule.rangeCount', {
+                        count: ranges.length,
+                        defaultValue: `${ranges.length} 个时段`,
+                      })
                     : t('schedule.dormant', '休眠')}
                 </span>
               </div>
@@ -130,7 +136,10 @@ export function ScheduleDailyView({
                   disabled={disabled || !hasRanges}
                   onClick={() => onClearDay(day)}
                   className='size-6 text-muted-foreground hover:text-destructive'
-                  title={`清空 ${dayLabel}`}
+                  title={t('schedule.clearDayTitle', {
+                    day: dayLabel,
+                    defaultValue: `清空 ${dayLabel}`,
+                  })}
                 >
                   <Trash2 className='size-3' />
                 </Button>
@@ -143,7 +152,7 @@ export function ScheduleDailyView({
             <div className='flex flex-col gap-1.5 pt-0.5'>
               {ranges.map((r, idx) => (
                 <div
-                  key={idx}
+                  key={`${r.start}-${r.end}`}
                   className='flex items-center justify-between rounded border border-border/40 bg-muted/20 px-2 py-1 text-xs'
                 >
                   <div className='flex items-center gap-1.5'>
@@ -163,7 +172,13 @@ export function ScheduleDailyView({
                       onChange={(val) => onUpdateDayRange(day, idx, 'end', val)}
                     />
                     <span className='font-mono text-[10px] text-muted-foreground tabular-nums'>
-                      ({formatDuration(r.start, r.end)})
+                      (
+                      {formatDuration(
+                        r.start,
+                        r.end,
+                        t('schedule.crossDay', '跨天')
+                      )}
+                      )
                     </span>
                   </div>
 
@@ -174,7 +189,8 @@ export function ScheduleDailyView({
                     disabled={disabled}
                     onClick={() => onRemoveDayInterval(day, idx)}
                     className='size-6 text-muted-foreground hover:text-destructive'
-                    title='删除时段'
+                    title={t('schedule.removeRange', '删除时段')}
+                    aria-label={t('schedule.removeRange', '删除时段')}
                   >
                     <Trash2 className='size-3' />
                   </Button>

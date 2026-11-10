@@ -45,13 +45,23 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	window := query.Normalize()
 
-	jobs, total, err := h.service.ListJobs(c.Request.Context(), query.Type, window.PageSize, window.Offset)
+	jobs, total, err := h.service.ListJobs(
+		c.Request.Context(),
+		query.Type,
+		window.PageSize,
+		window.Offset,
+	)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
 
-	httputil.PaginatedSuccess(c, toJobResponses(jobs, requestLocale(c)), total, window)
+	httputil.PaginatedSuccess(
+		c,
+		toJobResponses(jobs, requestLocale(c)),
+		total,
+		window,
+	)
 }
 
 // Get godoc
@@ -87,7 +97,12 @@ func (h *Handler) Cancel(c *gin.Context) {
 	id := c.Param("id")
 	// Declare the audit intent before the side effect so a failed cancellation
 	// (unknown id, already finished) is audited together with a successful one.
-	audithttp.Tag(c, ActionCancelJob, "job:"+id, "Cancel background job")
+	audithttp.Tag(
+		c,
+		ActionCancelJob,
+		"job:"+id,
+		"Cancel background job",
+	)
 	if err := h.service.CancelJob(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
 		return

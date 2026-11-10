@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -26,140 +26,23 @@ type AlertDestinationStatus struct {
 	Queued        int64      `json:"queued"`
 }
 
-type destinationWorker struct {
-	id            string
-	name          string
-	channelType   string
-	filter        DestinationFilter
-	sender        Sender
-	queue         chan record.AlarmEvent
-	dropped       atomic.Int64
-	state         atomic.Value // string
-	lastError     atomic.Value // string
-	lastSuccessAt atomic.Pointer[time.Time]
-	fingerprint   string
-	started       atomic.Bool
-	stopOnce      sync.Once
-	stopCh        chan struct{}
-	doneCh        chan struct{}
-	logger        *zap.Logger
+// Config represents alertpush configuration injected into Dispatcher.
+type Config struct {
+	PublicBaseURL string
+	SignedURLTTL  time.Duration
+	// DeviceID supplies the host identity stamped onto every dispatched payload.
+	// It is read per send (not cached at construction) so editing it under
+	// settings → system takes effect without rebuilding destinations.
+	DeviceID DeviceIDProvider
 }
 
-func newDestinationWorker(
-	dest *AlertDestination,
-	sender Sender,
-	filter DestinationFilter,
-	fingerprint string,
-	logger *zap.Logger,
-) *destinationWorker {
-	w := &destinationWorker{
-		id:          dest.ID,
-		name:        dest.Name,
-		channelType: dest.ChannelType,
-		filter:      filter,
-		sender:      sender,
-		queue:       make(chan record.AlarmEvent, 16),
-		fingerprint: fingerprint,
-		stopCh:      make(chan struct{}),
-		doneCh:      make(chan struct{}),
-		logger:      logger.With(zap.String("destination_id", dest.ID)),
-	}
-
-	initialState := StateUnverified
-	if dest.ChannelType == ChannelTypeMQTT {
-		initialState = StateConnecting
-	}
-	w.state.Store(initialState)
-	w.lastError.Store("")
-	return w
-}
-
-func (w *destinationWorker) start() {
-	if w.started.CompareAndSwap(false, true) {
-		go w.run()
-	}
-}
-
-func (w *destinationWorker) run() {
-	defer func() {
-		if w.sender != nil {
-			_ = w.sender.Close()
-		}
-		close(w.doneCh)
-	}()
-
-	// If MQTT sender, update connected state initially
-	if mqttSender, ok := w.sender.(*MQTTSender); ok {
-		if mqttSender.IsConnected() {
-			w.state.Store(StateConnected)
-		}
-	}
-
-	for {
-		select {
-		case <-w.stopCh:
-			// 目标退役时，在 3s 独立 deadline 内排空队列已排队事件
-			drainCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			for {
-				select {
-				case ev := <-w.queue:
-					if err := w.sender.Send(drainCtx, ev); err != nil {
-						w.logger.Debug("failed to send drained event on retirement", zap.Error(err))
-					}
-				case <-drainCtx.Done():
-					return
-				default:
-					return
-				}
-			}
-		case ev := <-w.queue:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			err := w.sender.Send(ctx, ev)
-			cancel()
-
-			if err == nil {
-				w.state.Store(StateConnected)
-				w.lastError.Store("")
-				now := time.Now().UTC()
-				w.lastSuccessAt.Store(&now)
-			} else {
-				w.state.Store(StateFailed)
-				w.lastError.Store(classifyError(err))
-				w.logger.Warn("destination dispatch failed", zap.Error(err))
-			}
-		}
-	}
-}
-
-func (w *destinationWorker) stop() {
-	w.stopOnce.Do(func() {
-		close(w.stopCh)
-	})
-
-	if w.started.Load() {
-		<-w.doneCh
-	} else {
-		if w.sender != nil {
-			_ = w.sender.Close()
-		}
-	}
-}
-
-func (w *destinationWorker) getStatus() AlertDestinationStatus {
-	st, _ := w.state.Load().(string)
-	if st == "" {
-		st = StateUnverified
-	}
-	lastErr, _ := w.lastError.Load().(string)
-
-	return AlertDestinationStatus{
-		State:         st,
-		LastError:     lastErr,
-		LastSuccessAt: w.lastSuccessAt.Load(),
-		Dropped:       w.dropped.Load(),
-		Queued:        int64(len(w.queue)),
-	}
+// DispatcherOptions holds parameters for constructing a Dispatcher.
+type DispatcherOptions struct {
+	Store  *Store
+	Signer *URLSigner
+	Media  MediaReader
+	Config Config
+	Logger *zap.Logger
 }
 
 // Dispatcher coordinates multi-target event filtering and asynchronous fan-out.
@@ -179,26 +62,17 @@ type Dispatcher struct {
 	wg       sync.WaitGroup
 }
 
-// Config represents alertpush configuration injected into Dispatcher.
-type Config struct {
-	PublicBaseURL string
-	SignedURLTTL  time.Duration
-	// DeviceID supplies the host identity stamped onto every dispatched payload.
-	// It is read per send (not cached at construction) so editing it under
-	// settings → system takes effect without rebuilding destinations.
-	DeviceID DeviceIDProvider
-}
-
 // NewDispatcher creates a new Dispatcher instance.
-func NewDispatcher(store *Store, signer *URLSigner, media MediaReader, cfg Config, logger *zap.Logger) *Dispatcher {
+func NewDispatcher(opts DispatcherOptions) *Dispatcher {
+	logger := opts.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Dispatcher{
-		store:    store,
-		signer:   signer,
-		media:    media,
-		config:   cfg,
+		store:    opts.Store,
+		signer:   opts.Signer,
+		media:    opts.Media,
+		config:   opts.Config,
 		logger:   logger.Named("alertpush.dispatcher"),
 		workers:  make(map[string]*destinationWorker),
 		stats:    make(map[string]AlertDestinationStatus),
@@ -367,8 +241,8 @@ func (d *Dispatcher) reconcile() {
 	}
 
 	activeIDs := make(map[string]struct{}, len(enabledDestinations))
-	var toRetire []*destinationWorker
-	var toStart []*destinationWorker
+	toRetire := []*destinationWorker{}
+	toStart := []*destinationWorker{}
 
 	d.mu.Lock()
 	for _, dest := range enabledDestinations {
@@ -398,13 +272,13 @@ func (d *Dispatcher) reconcile() {
 			continue
 		}
 
-		w := newDestinationWorker(
-			dest,
-			sender,
-			filter,
-			fp,
-			d.logger,
-		)
+		w := newDestinationWorker(destinationWorkerOptions{
+			dest:        dest,
+			sender:      sender,
+			filter:      filter,
+			fingerprint: fp,
+			logger:      d.logger,
+		})
 		d.workers[dest.ID] = w
 		toStart = append(toStart, w)
 	}
@@ -429,8 +303,252 @@ func (d *Dispatcher) reconcile() {
 	}
 }
 
+func (d *Dispatcher) buildSender(dest *AlertDestination) (Sender, destinationFilter, error) {
+	var filter destinationFilter
+	if dest.FilterJSON != "" {
+		if err := json.Unmarshal([]byte(dest.FilterJSON), &filter); err != nil {
+			return nil, filter, fmt.Errorf("unmarshal destination filter: %w", err)
+		}
+	}
+
+	switch dest.ChannelType {
+	case ChannelTypeWebhook:
+		sender, err := d.buildWebhookSender(dest)
+		return sender, filter, err
+	case ChannelTypeMQTT:
+		sender, err := d.buildMQTTSender(dest)
+		return sender, filter, err
+	default:
+		return nil, filter, errors.New("unsupported channel type")
+	}
+}
+
+func (d *Dispatcher) buildWebhookSender(dest *AlertDestination) (Sender, error) {
+	var cfg webhookConfig
+	if dest.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(dest.ConfigJSON), &cfg); err != nil {
+			return nil, fmt.Errorf("unmarshal webhook config: %w", err)
+		}
+	}
+	secret, err := d.store.DecryptWebhookSecret(dest.ID, dest.SecretCiphertext)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewWebhookSender(WebhookSenderOptions{
+		ID:            dest.ID,
+		Name:          dest.Name,
+		ImageMode:     dest.ImageMode,
+		PublicBaseURL: d.config.PublicBaseURL,
+		SignedURLTTL:  d.config.SignedURLTTL,
+		Signer:        d.signer,
+		Media:         d.media,
+		URL:           secret.URL,
+		AuthType:      cfg.AuthType,
+		Token:         secret.Token,
+		Username:      secret.Username,
+		Password:      secret.Password,
+		Headers:       secret.Headers,
+		Timeout:       time.Duration(cfg.TimeoutSeconds) * time.Second,
+		Identity:      d.config.DeviceID,
+		Logger:        d.logger,
+	})
+}
+
+func (d *Dispatcher) buildMQTTSender(dest *AlertDestination) (Sender, error) {
+	var cfg mqttConfig
+	if dest.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(dest.ConfigJSON), &cfg); err != nil {
+			return nil, fmt.Errorf("unmarshal mqtt config: %w", err)
+		}
+	}
+	secret, err := d.store.DecryptMQTTSecret(dest.ID, dest.SecretCiphertext)
+	if err != nil {
+		return nil, err
+	}
+
+	var clientID string
+	if dest.MQTTClientID != nil {
+		clientID = *dest.MQTTClientID
+	}
+
+	s, err := NewMQTTSender(MQTTSenderOptions{
+		ID:            dest.ID,
+		Name:          dest.Name,
+		ImageMode:     dest.ImageMode,
+		PublicBaseURL: d.config.PublicBaseURL,
+		SignedURLTTL:  d.config.SignedURLTTL,
+		Signer:        d.signer,
+		Media:         d.media,
+		Broker:        cfg.Broker,
+		ClientID:      clientID,
+		Username:      cfg.Username,
+		Password:      secret.Password,
+		Topic:         cfg.Topic,
+		QoS:           cfg.QoS,
+		KeepAlive:     time.Duration(cfg.KeepAliveSeconds) * time.Second,
+		TLSSkipVerify: cfg.TLSSkipVerify,
+		Identity:      d.config.DeviceID,
+		Logger:        d.logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Attempt initial connection asynchronously
+	go func() {
+		if connectErr := s.Connect(); connectErr != nil {
+			d.logger.Debug("initial mqtt connect attempt failed", zap.String("id", dest.ID), zap.Error(connectErr))
+		}
+	}()
+	return s, nil
+}
+
+type destinationWorkerOptions struct {
+	dest        *AlertDestination
+	sender      Sender
+	filter      destinationFilter
+	fingerprint string
+	logger      *zap.Logger
+}
+
+type destinationWorker struct {
+	id            string
+	name          string
+	channelType   string
+	filter        destinationFilter
+	sender        Sender
+	queue         chan record.AlarmEvent
+	dropped       atomic.Int64
+	state         atomic.Value // string
+	lastError     atomic.Value // string
+	lastSuccessAt atomic.Pointer[time.Time]
+	fingerprint   string
+	started       atomic.Bool
+	stopOnce      sync.Once
+	stopCh        chan struct{}
+	doneCh        chan struct{}
+	logger        *zap.Logger
+}
+
+func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
+	w := &destinationWorker{
+		id:          opts.dest.ID,
+		name:        opts.dest.Name,
+		channelType: opts.dest.ChannelType,
+		filter:      opts.filter,
+		sender:      opts.sender,
+		queue:       make(chan record.AlarmEvent, 16),
+		fingerprint: opts.fingerprint,
+		stopCh:      make(chan struct{}),
+		doneCh:      make(chan struct{}),
+		logger:      opts.logger.With(zap.String("destination_id", opts.dest.ID)),
+	}
+
+	initialState := StateUnverified
+	if opts.dest.ChannelType == ChannelTypeMQTT {
+		initialState = StateConnecting
+	}
+	w.state.Store(initialState)
+	w.lastError.Store("")
+	return w
+}
+
+func (w *destinationWorker) start() {
+	if w.started.CompareAndSwap(false, true) {
+		go w.run()
+	}
+}
+
+func (w *destinationWorker) run() {
+	defer func() {
+		if w.sender != nil {
+			if closeErr := w.sender.Close(); closeErr != nil {
+				w.logger.Debug("close destination sender", zap.Error(closeErr))
+			}
+		}
+		close(w.doneCh)
+	}()
+
+	// If MQTT sender, update connected state initially
+	if mqttSender, ok := w.sender.(*MQTTSender); ok && mqttSender.IsConnected() {
+		w.state.Store(StateConnected)
+	}
+
+	for {
+		select {
+		case <-w.stopCh:
+			// 目标退役时，在 3s 独立 deadline 内排空队列已排队事件
+			drainCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			for {
+				select {
+				case ev := <-w.queue:
+					if err := w.sender.Send(drainCtx, ev); err != nil {
+						w.logger.Debug("failed to send drained event on retirement", zap.Error(err))
+					}
+				case <-drainCtx.Done():
+					return
+				default:
+					return
+				}
+			}
+		case ev := <-w.queue:
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := w.sender.Send(ctx, ev)
+			cancel()
+
+			if err == nil {
+				w.state.Store(StateConnected)
+				w.lastError.Store("")
+				now := time.Now().UTC()
+				w.lastSuccessAt.Store(&now)
+			} else {
+				w.state.Store(StateFailed)
+				w.lastError.Store(classifyError(err))
+				w.logger.Warn("destination dispatch failed", zap.Error(err))
+			}
+		}
+	}
+}
+
+func (w *destinationWorker) stop() {
+	w.stopOnce.Do(func() {
+		close(w.stopCh)
+	})
+
+	if w.started.Load() {
+		<-w.doneCh
+		return
+	}
+	if w.sender != nil {
+		if closeErr := w.sender.Close(); closeErr != nil {
+			w.logger.Debug("close unstarted destination sender", zap.Error(closeErr))
+		}
+	}
+}
+
+func (w *destinationWorker) getStatus() AlertDestinationStatus {
+	st, ok := w.state.Load().(string)
+	if !ok || st == "" {
+		st = StateUnverified
+	}
+	lastErr, ok := w.lastError.Load().(string)
+	if !ok {
+		lastErr = ""
+	}
+
+	return AlertDestinationStatus{
+		State:         st,
+		LastError:     lastErr,
+		LastSuccessAt: w.lastSuccessAt.Load(),
+		Dropped:       w.dropped.Load(),
+		Queued:        int64(len(w.queue)),
+	}
+}
+
 func computeFingerprint(dest *AlertDestination) string {
-	clientID := ""
+	var clientID string
 	if dest.MQTTClientID != nil {
 		clientID = *dest.MQTTClientID
 	}
@@ -443,93 +561,11 @@ func computeFingerprint(dest *AlertDestination) string {
 		dest.ConfigJSON,
 		dest.FilterJSON,
 	} {
-		_, _ = io.WriteString(h, part)
-		_, _ = io.WriteString(h, "|")
+		h.Write([]byte(part))
+		h.Write([]byte("|"))
 	}
 	h.Write(dest.SecretCiphertext)
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-func (d *Dispatcher) buildSender(dest *AlertDestination) (Sender, DestinationFilter, error) {
-	var filter DestinationFilter
-	_ = json.Unmarshal([]byte(dest.FilterJSON), &filter)
-
-	clientID := ""
-	if dest.MQTTClientID != nil {
-		clientID = *dest.MQTTClientID
-	}
-
-	var sender Sender
-	if dest.ChannelType == ChannelTypeWebhook {
-		var cfg WebhookConfig
-		_ = json.Unmarshal([]byte(dest.ConfigJSON), &cfg)
-		secret, err := d.store.DecryptWebhookSecret(dest.ID, dest.SecretCiphertext)
-		if err != nil {
-			return nil, filter, err
-		}
-
-		s, err := NewWebhookSender(WebhookSenderOptions{
-			ID:            dest.ID,
-			Name:          dest.Name,
-			ImageMode:     dest.ImageMode,
-			PublicBaseURL: d.config.PublicBaseURL,
-			SignedURLTTL:  d.config.SignedURLTTL,
-			Signer:        d.signer,
-			Media:         d.media,
-			URL:           secret.URL,
-			AuthType:      cfg.AuthType,
-			Token:         secret.Token,
-			Username:      secret.Username,
-			Password:      secret.Password,
-			Headers:       secret.Headers,
-			Timeout:       time.Duration(cfg.TimeoutSeconds) * time.Second,
-			Identity:      d.config.DeviceID,
-			Logger:        d.logger,
-		})
-		if err != nil {
-			return nil, filter, err
-		}
-		sender = s
-	} else if dest.ChannelType == ChannelTypeMQTT {
-		var cfg MQTTConfig
-		_ = json.Unmarshal([]byte(dest.ConfigJSON), &cfg)
-		secret, err := d.store.DecryptMQTTSecret(dest.ID, dest.SecretCiphertext)
-		if err != nil {
-			return nil, filter, err
-		}
-
-		s, err := NewMQTTSender(MQTTSenderOptions{
-			ID:            dest.ID,
-			Name:          dest.Name,
-			ImageMode:     dest.ImageMode,
-			PublicBaseURL: d.config.PublicBaseURL,
-			SignedURLTTL:  d.config.SignedURLTTL,
-			Signer:        d.signer,
-			Media:         d.media,
-			Broker:        cfg.Broker,
-			ClientID:      clientID,
-			Username:      cfg.Username,
-			Password:      secret.Password,
-			Topic:         cfg.Topic,
-			QoS:           cfg.QoS,
-			KeepAlive:     time.Duration(cfg.KeepAliveSeconds) * time.Second,
-			TLSSkipVerify: cfg.TLSSkipVerify,
-			Identity:      d.config.DeviceID,
-			Logger:        d.logger,
-		})
-		if err != nil {
-			return nil, filter, err
-		}
-		// Attempt initial connection asynchronously
-		go func() {
-			_ = s.Connect()
-		}()
-		sender = s
-	} else {
-		return nil, filter, errors.New("unsupported channel type")
-	}
-
-	return sender, filter, nil
 }
 
 // classifyError maps Go errors into stable reason codes for status and test response.
@@ -540,29 +576,35 @@ func classifyError(err error) string {
 	errStr := strings.ToLower(err.Error())
 
 	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) || strings.Contains(errStr, "no such host") {
+	isDNS := errors.As(err, &dnsErr) || strings.Contains(errStr, "no such host")
+	isTimeout := strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded")
+	isTLS := strings.Contains(errStr, "certificate") ||
+		strings.Contains(errStr, "tls") ||
+		strings.Contains(errStr, "x509")
+	isAuth := strings.Contains(errStr, "401") ||
+		strings.Contains(errStr, "403") ||
+		strings.Contains(errStr, "not authorized")
+	isNotConnected := errors.Is(err, ErrMQTTNotConnected) || strings.Contains(errStr, "not connected")
+	isPublishFailed := errors.Is(err, ErrMQTTPublishFailed) || strings.Contains(errStr, "publish")
+
+	switch {
+	case isDNS:
 		return "dns"
-	}
-	if strings.Contains(errStr, "connection refused") {
+	case strings.Contains(errStr, "connection refused"):
 		return "connection_refused"
-	}
-	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded") {
+	case isTimeout:
 		return "timeout"
-	}
-	if strings.Contains(errStr, "certificate") || strings.Contains(errStr, "tls") || strings.Contains(errStr, "x509") {
+	case isTLS:
 		return "tls"
-	}
-	if strings.Contains(errStr, "401") || strings.Contains(errStr, "403") || strings.Contains(errStr, "not authorized") {
+	case isAuth:
 		return "auth"
-	}
-	if strings.Contains(errStr, "status") {
+	case strings.Contains(errStr, "status"):
 		return "http_status"
-	}
-	if errors.Is(err, ErrMQTTNotConnected) || strings.Contains(errStr, "not connected") {
+	case isNotConnected:
 		return "not_connected"
-	}
-	if errors.Is(err, ErrMQTTPublishFailed) || strings.Contains(errStr, "publish") {
+	case isPublishFailed:
 		return "publish_failed"
+	default:
+		return "unknown"
 	}
-	return "unknown"
 }

@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
+#include <string_view>
 #include <vector>
 
 namespace zhulong::plate {
@@ -29,7 +29,7 @@ constexpr std::size_t kEnvoySerialDigits = 6;
  * overlong 必须在这里挡掉：`C0 80` 与 `00` 都是 U+0000，若放它过去，后面所有
  * 「首字符是省简称 / 第 2 位是字母」的判断都建立在一个被错误编码的字节串上。
  */
-bool decode_utf8(const std::string& text, std::vector<uint32_t>& codepoints) {
+bool decode_utf8(std::string_view text, std::vector<uint32_t>& codepoints) {
     codepoints.clear();
     codepoints.reserve(text.size());
 
@@ -77,9 +77,9 @@ bool decode_utf8(const std::string& text, std::vector<uint32_t>& codepoints) {
 }
 
 /** @brief 单个 UTF-8 字符串 → 码点；空串或非法返回 0 */
-uint32_t codepoint_of(const char* utf8) {
+uint32_t codepoint_of(std::string_view utf8) {
     std::vector<uint32_t> codepoints;
-    if (utf8 == nullptr || !decode_utf8(utf8, codepoints) || codepoints.size() != 1) {
+    if (utf8.empty() || !decode_utf8(utf8, codepoints) || codepoints.size() != 1) {
         return 0;
     }
     return codepoints.front();
@@ -102,13 +102,16 @@ std::vector<uint32_t> codepoints_in_range(std::size_t first, std::size_t last) {
 }
 
 const std::vector<uint32_t>& province_codepoints() {
-    static const std::vector<uint32_t> values =
-        codepoints_in_range(kFirstProvinceIndex, kLastProvinceIndex);
+    static const std::vector<uint32_t> values = [] {
+        auto list = codepoints_in_range(kFirstProvinceIndex, kLastProvinceIndex);
+        std::sort(list.begin(), list.end());
+        return list;
+    }();
     return values;
 }
 
 /**
- * @brief 合法尾字码点集合（特殊尾字 ∪ 额外尾字）
+ * @brief 合法尾字码点集合（特殊尾字 ∪ 额外尾字，已排序便于二分查找）
  *
  * 两段都来自 `plate_charset.hpp`，不另抄一份字面量：字符表扩容而校验没跟上，
  * 表现是「模型认得、永远报不出来」，且不会编译失败。
@@ -118,29 +121,30 @@ const std::vector<uint32_t>& suffix_codepoints() {
         std::vector<uint32_t> merged = codepoints_in_range(kFirstSpecialIndex, kLastSpecialIndex);
         const std::vector<uint32_t> extra = codepoints_in_range(kFirstExtraSuffixIndex, kLastExtraSuffixIndex);
         merged.insert(merged.end(), extra.begin(), extra.end());
+        std::sort(merged.begin(), merged.end());
         return merged;
     }();
     return values;
 }
 
 /** @brief 在字符表某个区间里按字面量找码点（0 表示表里没有该字） */
-uint32_t codepoint_in_range(const char* name, std::size_t first, std::size_t last) {
+uint32_t codepoint_in_range(std::string_view name, std::size_t first, std::size_t last) {
     for (std::size_t i = first; i <= last && i < kNumPlateChars; ++i) {
-        if (std::strcmp(kPlateNames[i], name) == 0) {
+        if (kPlateNames[i] == name) {
             return codepoint_of(kPlateNames[i]);
         }
     }
     return 0;
 }
 
-bool contains(const std::vector<uint32_t>& set, uint32_t codepoint) {
-    return std::find(set.begin(), set.end(), codepoint) != set.end();
+bool contains(const std::vector<uint32_t>& sorted_set, uint32_t codepoint) noexcept {
+    return std::binary_search(sorted_set.begin(), sorted_set.end(), codepoint);
 }
 
-bool is_digit(uint32_t codepoint) { return codepoint >= '0' && codepoint <= '9'; }
+constexpr bool is_digit(uint32_t codepoint) noexcept { return codepoint >= '0' && codepoint <= '9'; }
 
 /** @brief 号码中允许出现的字母：A-Z 去 I/O（I/O 与数字 1/0 易混，标准号牌不用） */
-bool is_sequence_letter(uint32_t codepoint) {
+constexpr bool is_sequence_letter(uint32_t codepoint) noexcept {
     if (codepoint < 'A' || codepoint > 'Z') {
         return false;
     }
@@ -148,7 +152,7 @@ bool is_sequence_letter(uint32_t codepoint) {
 }
 
 /** @brief 新能源号牌的 D/F 标识位 */
-bool is_new_energy_letter(uint32_t codepoint) { return codepoint == 'D' || codepoint == 'F'; }
+constexpr bool is_new_energy_letter(uint32_t codepoint) noexcept { return codepoint == 'D' || codepoint == 'F'; }
 
 /** @brief 使馆/领馆号牌：使|领 + 6 位数字（黑底白字，首字符即特殊前缀） */
 bool is_envoy_plate(const std::vector<uint32_t>& codepoints) {
@@ -217,7 +221,7 @@ PlateFormatProblem check_structure(const std::vector<uint32_t>& codepoints) {
 
 } // namespace
 
-PlateFormatVerdict validate_plate_number(const std::string& plate_number) {
+PlateFormatVerdict validate_plate_number(std::string_view plate_number) {
     PlateFormatVerdict verdict;
 
     std::vector<uint32_t> codepoints;
@@ -233,26 +237,6 @@ PlateFormatVerdict validate_plate_number(const std::string& plate_number) {
     verdict.problem = check_structure(codepoints);
     verdict.valid = (verdict.problem == PlateFormatProblem::None);
     return verdict;
-}
-
-const char* plate_format_problem_name(PlateFormatProblem problem) {
-    switch (problem) {
-    case PlateFormatProblem::None:
-        return "none";
-    case PlateFormatProblem::InvalidUtf8:
-        return "invalid_utf8";
-    case PlateFormatProblem::BadLength:
-        return "bad_length";
-    case PlateFormatProblem::BadProvince:
-        return "bad_province";
-    case PlateFormatProblem::BadAuthority:
-        return "bad_authority";
-    case PlateFormatProblem::BadCharacter:
-        return "bad_character";
-    case PlateFormatProblem::BadNewEnergyLayout:
-        return "bad_new_energy_layout";
-    }
-    return "unknown";
 }
 
 } // namespace zhulong::plate

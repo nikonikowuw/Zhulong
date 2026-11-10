@@ -94,15 +94,28 @@ func TestBridgeIntegration_StreamReuseAndGrace(t *testing.T) {
 	defer cancel()
 
 	poolURL := baseURL + "/pool"
+	tcp := StreamOptions{Transport: TransportTCP}
+	udp := StreamOptions{Transport: TransportUDP}
+
+	// acquire 固定 URL 与消费者类型，只把「消费者 ID + 传输参数」摊开：
+	// 五次调用里真正变化的只有这两个值。
+	acquire := func(consumerID uint64, options StreamOptions) (*Stream, error) {
+		return e.Acquire(
+			ctx,
+			poolURL,
+			Consumer{ID: consumerID, Kind: ConsumerPreview},
+			options,
+		)
+	}
 
 	// 消费者 1 获取物理流
-	s1, err := e.Acquire(ctx, poolURL, Consumer{ID: 1001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
+	s1, err := acquire(1001, tcp)
 	if err != nil {
 		t.Fatalf("Acquire s1 failed: %v", err)
 	}
 
 	// 消费者 2 获取相同物理流（应该复用）
-	s2, err := e.Acquire(ctx, poolURL, Consumer{ID: 1002, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
+	s2, err := acquire(1002, tcp)
 	if err != nil {
 		t.Fatalf("Acquire s2 failed: %v", err)
 	}
@@ -111,14 +124,12 @@ func TestBridgeIntegration_StreamReuseAndGrace(t *testing.T) {
 	}
 
 	// 重复 consumerID 应当拒绝
-	_, err = e.Acquire(ctx, poolURL, Consumer{ID: 1001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
-	if !errors.Is(err, ErrDuplicate) {
+	if _, err := acquire(1001, tcp); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate for duplicate consumerID, got %v", err)
 	}
 
 	// 传输参数冲突应当拒绝
-	_, err = e.Acquire(ctx, poolURL, Consumer{ID: 1003, Kind: ConsumerPreview}, StreamOptions{Transport: TransportUDP})
-	if !errors.Is(err, ErrConfigConflict) {
+	if _, err := acquire(1003, udp); !errors.Is(err, ErrConfigConflict) {
 		t.Fatalf("expected ErrConfigConflict for mismatched transport, got %v", err)
 	}
 
@@ -133,7 +144,7 @@ func TestBridgeIntegration_StreamReuseAndGrace(t *testing.T) {
 	}
 
 	// 宽限期内重新 acquire，应当复用原物理连接而无需重新建立
-	s3, err := e.Acquire(ctx, poolURL, Consumer{ID: 1003, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
+	s3, err := acquire(1003, tcp)
 	if err != nil {
 		t.Fatalf("Acquire s3 during grace failed: %v", err)
 	}
@@ -141,7 +152,9 @@ func TestBridgeIntegration_StreamReuseAndGrace(t *testing.T) {
 		t.Fatalf("expected grace period reuse of stream ID %d, got %d", s1.id, s3.id)
 	}
 
-	_ = s3.Close()
+	if err := s3.Close(); err != nil {
+		t.Errorf("s3.Close failed: %v", err)
+	}
 }
 
 // TestBridgeIntegration_SubscriptionAndBackpressure 验证真实视频包订阅、深拷贝数据完整性及慢消费者背压隔离。
@@ -359,7 +372,12 @@ func TestBridgeIntegration_AIConsumerAndBrokerPath(t *testing.T) {
 	defer cancel()
 
 	// 1. 获取 AI 消费者流
-	s, err := e.Acquire(ctx, baseURL+"/live", Consumer{ID: 5001, Kind: ConsumerAI}, StreamOptions{Transport: TransportTCP})
+	s, err := e.Acquire(
+		ctx,
+		baseURL+"/live",
+		Consumer{ID: 5001, Kind: ConsumerAI},
+		StreamOptions{Transport: TransportTCP},
+	)
 	if err != nil {
 		t.Fatalf("Acquire AI consumer failed: %v", err)
 	}
@@ -505,8 +523,12 @@ func TestBridgeIntegration_AudioTrack(t *testing.T) {
 	defer cancel()
 
 	audioURL := baseURL + "/audio-pcma"
-	s, err := e.Acquire(ctx, audioURL, Consumer{ID: 3001, Kind: ConsumerPreview},
-		StreamOptions{Transport: TransportTCP})
+	s, err := e.Acquire(
+		ctx,
+		audioURL,
+		Consumer{ID: 3001, Kind: ConsumerPreview},
+		StreamOptions{Transport: TransportTCP},
+	)
 	if err != nil {
 		t.Fatalf("Acquire failed: %v", err)
 	}
@@ -524,11 +546,12 @@ func TestBridgeIntegration_AudioTrack(t *testing.T) {
 	}
 
 	// 2. 混合轨道订阅必须被拒绝：两条轨的生命周期与预算是分开的
-	if _, err := s.Subscribe(ctx, SubscriptionOptions{TrackMask: TrackMaskVideo | TrackMaskAudio}); !errors.Is(err, ErrInvalidArgument) {
+	mixedMask := SubscriptionOptions{TrackMask: TrackMaskVideo | TrackMaskAudio}
+	if _, err := s.Subscribe(ctx, mixedMask); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for mixed track mask, got %v", err)
 	}
 
-	// 3. 音频订阅只收音频包，且 codec 与 PtsUS 都已归一化到视频输出时间轴
+	// 3. 音频订阅只收音频包，且 codec 与 PTSUS 都已归一化到视频输出时间轴
 	sub, err := s.Subscribe(ctx, SubscriptionOptions{
 		TrackMask:        TrackMaskAudio,
 		MaxPackets:       48,

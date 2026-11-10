@@ -131,7 +131,12 @@ func TestSubscriptionPacketTooLarge(t *testing.T) {
 	})
 
 	huge := make([]byte, 200)
-	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: huge, Size: len(huge)})
+	sub.onPacketData(inboundPacket{
+		Codec:    CodecH264,
+		TimeBase: Rational{Num: 1, Den: 90000},
+		Data:     huge,
+		Size:     len(huge),
+	})
 
 	if !errors.Is(sub.Err(), ErrPacketTooLarge) {
 		t.Fatalf("expected ErrPacketTooLarge, got %v", sub.Err())

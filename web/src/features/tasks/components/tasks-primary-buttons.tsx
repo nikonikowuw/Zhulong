@@ -3,11 +3,11 @@ import { Plus, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { TASKS_QUERY_KEY } from '../hooks/use-tasks'
-import { useTasksContext } from './tasks-provider'
+import { useTasksActions } from './tasks-provider'
 
 export function TasksPrimaryButtons() {
   const { t } = useTranslation('tasks')
-  const { setOpen, setCurrentRow, setTargetCameraId } = useTasksContext()
+  const { setOpen, setCurrentRow, setTargetCameraId } = useTasksActions()
   const queryClient = useQueryClient()
 
   const handleRefresh = () => {

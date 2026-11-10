@@ -413,12 +413,15 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
     if (!has_dts) out.pkt_flags |= ZHULONG_PKT_FLAG_DTS_SYNTHETIC;
 
     // ------------------------------------------------- 2) 帧分类 + 参数集注入
+    // 编码类型取包自带值，缺失时回退到就绪元数据；两条判定共用同一来源，
+    // 避免「注入按 H.265 判、分类却按 H.264 解析」这类分叉。
+    const int32_t codec = in.codec > 0 ? in.codec : codec_;
     const bool is_idr = in.key_frame != 0;
     if (is_idr) {
         out.frame_class = Zhulong_FRAME_IDR;
         out.gop_id = ++gop_id_;
         if (!parameter_sets_.empty() &&
-            !has_complete_parameter_sets(codec_, in.data, in.size)) {
+            !has_complete_parameter_sets(codec, in.data, in.size)) {
             // 复用 stitch_ 缓冲：只在关键帧触发，容量一次长到最大帧后不再增长
             stitch_.resize(parameter_sets_.size() + in.size);
             std::memcpy(stitch_.data(), parameter_sets_.data(), parameter_sets_.size());
@@ -431,7 +434,7 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
             ++injected_count_;
         }
     } else {
-        out.frame_class = is_non_reference_frame(in.codec, in.data, in.size)
+        out.frame_class = is_non_reference_frame(codec, in.data, in.size)
                               ? Zhulong_FRAME_NON_REFERENCE
                               : Zhulong_FRAME_PREDICTIVE;
         out.gop_id = gop_id_;

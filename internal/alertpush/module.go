@@ -38,41 +38,16 @@ type Lifecycle interface {
 	Stop(ctx context.Context) error
 }
 
+// RouteRegistrar allows route registration onto a router group.
+type RouteRegistrar interface {
+	RegisterRoutes(rg *gin.RouterGroup)
+}
+
 type alertPushLifecycleImpl struct {
 	signer     *URLSigner
 	dataDir    string
 	dispatcher *Dispatcher
 	logger     *zap.Logger
-}
-
-func (l *alertPushLifecycleImpl) Start(ctx context.Context) error {
-	if l.signer != nil && l.dataDir != "" {
-		if err := InitSignerFromDataDir(l.signer, l.dataDir); err != nil {
-			l.logger.Warn("failed to load or create media signing key, signed URL feature may fail", zap.Error(err))
-		}
-	}
-	if l.dispatcher != nil {
-		if err := l.dispatcher.Start(ctx); err != nil {
-			return err
-		}
-	}
-	l.logger.Info("alertpush dispatcher started")
-	return nil
-}
-
-func (l *alertPushLifecycleImpl) Stop(ctx context.Context) error {
-	if l.dispatcher != nil {
-		if err := l.dispatcher.Stop(ctx); err != nil {
-			return err
-		}
-	}
-	l.logger.Info("alertpush dispatcher stopped")
-	return nil
-}
-
-// RouteRegistrar allows route registration onto a router group.
-type RouteRegistrar interface {
-	RegisterRoutes(rg *gin.RouterGroup)
 }
 
 // NewComponents constructs all AlertPush components.
@@ -84,21 +59,21 @@ func NewComponents(opts Options) Components {
 
 	signer := NewEmptyURLSigner()
 	store := NewStore(opts.DBProvider, opts.Cipher)
-	dispatcher := NewDispatcher(
-		store,
-		signer,
-		opts.MediaService,
-		opts.Config,
-		logger,
-	)
-	service := NewService(
-		store,
-		dispatcher,
-		signer,
-		opts.MediaService,
-		opts.Config,
-		logger,
-	)
+	dispatcher := NewDispatcher(DispatcherOptions{
+		Store:  store,
+		Signer: signer,
+		Media:  opts.MediaService,
+		Config: opts.Config,
+		Logger: logger,
+	})
+	service := NewService(ServiceOptions{
+		Store:      store,
+		Dispatcher: dispatcher,
+		Signer:     signer,
+		Media:      opts.MediaService,
+		Config:     opts.Config,
+		Logger:     logger,
+	})
 	handler := NewHandler(service, store, logger)
 	signedMediaHandler := NewSignedMediaHandler(signer, opts.MediaHandler, logger)
 
@@ -119,4 +94,29 @@ func NewComponents(opts Options) Components {
 		ProtectedRoutes:    handler,
 		SignedMediaRoutes:  signedMediaHandler,
 	}
+}
+
+func (l *alertPushLifecycleImpl) Start(ctx context.Context) error {
+	if l.signer != nil && l.dataDir != "" {
+		if err := initSignerFromDataDir(l.signer, l.dataDir); err != nil {
+			l.logger.Warn("failed to load or create media signing key, signed URL feature may fail", zap.Error(err))
+		}
+	}
+	if l.dispatcher != nil {
+		if err := l.dispatcher.Start(ctx); err != nil {
+			return err
+		}
+	}
+	l.logger.Info("alertpush dispatcher started")
+	return nil
+}
+
+func (l *alertPushLifecycleImpl) Stop(ctx context.Context) error {
+	if l.dispatcher != nil {
+		if err := l.dispatcher.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	l.logger.Info("alertpush dispatcher stopped")
+	return nil
 }

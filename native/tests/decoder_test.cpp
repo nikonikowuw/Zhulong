@@ -493,6 +493,18 @@ int main() {
             CHECK(stream.status.error == Zhulong_ERR_HARDWARE_UNAVAILABLE);
             CHECK(stream.cancel.stopped.load());
 
+            // 5.1c 熔断后会话已取消、却仍挂在流上：acquire_frame 必须按 timeout 节拍阻塞。
+            //      已取消队列的 pop 会立即返回，旧实现因此让 FramePublisher 轮询 100% CPU
+            //      空转，直到 AI 消费者被释放。
+            {
+                HardwareFrame::ConstPtr spin_frame;
+                const auto spin_start = std::chrono::steady_clock::now();
+                for (int i = 0; i < 4; ++i) {
+                    CHECK(!stream.acquire_frame(spin_frame, 20ms));
+                }
+                CHECK(std::chrono::steady_clock::now() - spin_start >= 70ms);
+            }
+
             // 5.1b 拉流线程收尾不得覆盖已记录的硬件故障：
             //      熔断会 request_stop()，随后拉流线程以 ERR_CANCELLED 收尾；若无条件
             //      重写 status，对外就变成「受控停机」（FAILED + CANCELLED），
@@ -504,6 +516,32 @@ int main() {
             stream.request_stop();
             stream.join();
             CHECK(!stream.has_active_decoder());
+        }
+
+        // ====================================================================
+        // 5.1d Stream::start 必须使用调用方传入的解码策略（新建流绕过 fail-closed 回归）
+        // ====================================================================
+        if (!zhulong::MppDecodeNode::is_supported()) {
+            // 旧实现的 start() 用默认策略 {AUTO, 允许软解} 建会话：「仅 MPP」在新建流上被静默
+            // 降级为软解，永远不会熔断。正确行为：无 MPP 的主机上按 mpp_hw 建解码器即 fail-closed。
+            zhulong::Stream stream(7003, "rtsp://127.0.0.1:1/policy", {});
+            stream.video_meta_.view.codec = Zhulong_CODEC_H264;
+            stream.consumers.emplace(1, Zhulong_CONSUMER_AI);
+            stream.start(Zhulong_decode_policy_t{Zhulong_DECODE_BACKEND_MPP, 0, 0});
+
+            bool hw_fail_closed = false;
+            for (int i = 0; i < 100 && !hw_fail_closed; ++i) {
+                {
+                    std::lock_guard<std::mutex> lock(stream.mutex);
+                    hw_fail_closed = stream.status.state == Zhulong_STREAM_FAILED &&
+                                     stream.status.error == Zhulong_ERR_HARDWARE_UNAVAILABLE;
+                }
+                if (!hw_fail_closed) std::this_thread::sleep_for(20ms);
+            }
+            CHECK(hw_fail_closed);
+
+            stream.request_stop();
+            stream.join();
         }
 
         // ====================================================================
@@ -906,8 +944,10 @@ int main() {
             const std::vector<uint8_t> main10 = read_binary_fixture("tests/fixtures/h265_main10_16x16.h265");
             CHECK(!main10.empty());
 
+            CapturedNativeLog runtime_log;
+            CHECK(zhulong::set_log_sink(capture_native_log, reinterpret_cast<uintptr_t>(&runtime_log)));
             auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000,
-                                               zhulong::DecoderBackend::ffmpeg_sw);
+                                               zhulong::DecoderBackend::ffmpeg_sw, 88);
             CHECK(decoder != nullptr);
             CHECK(decoder->send_packet(main10.data(), main10.size(), 7000, 7000) >= 0);
             CHECK(decoder->send_packet(nullptr, 0, 0, 0) >= 0);
@@ -917,12 +957,16 @@ int main() {
             for (int i = 0; i < 50 && recv_ret == zhulong::decode_again; ++i) {
                 recv_ret = decoder->receive_frame(frame);
             }
+            CHECK(zhulong::set_log_sink(nullptr, 0));
             CHECK(recv_ret == zhulong::decode_ok);
             CHECK(frame != nullptr);
             CHECK(frame->width == 16 && frame->height == 16);
             // 10bit 像素格式不在受支持集合内：必须 fail closed 标记 UNKNOWN，由下游显式拒绝
             CHECK(frame->format == zhulong::FRAME_FORMAT_UNKNOWN);
             CHECK(frame->format != zhulong::FRAME_FORMAT_NV12);
+            // 验证 IDecodeNode::create 将 stream_id 透传至 FFmpegDecodeNode 运行期日志
+            CHECK(runtime_log.stream_id == 88);
+            CHECK(runtime_log.message.find("ffmpeg_unsupported_pix_fmt") != std::string::npos);
         }
 
         // ====================================================================

@@ -60,7 +60,8 @@ func TestIpcPayloadSizeGate(t *testing.T) {
 
 	// One byte over the limit must be rejected by the send path.
 	tooLarge := make([]byte, algoipc.MaxIpcPayloadSize+1)
-	if _, err := algoipc.EncodeIpcMessage(algoipc.MsgGallerySync, 1, tooLarge); !errors.Is(err, algoipc.ErrIpcPayloadTooLarge) {
+	_, err = algoipc.EncodeIpcMessage(algoipc.MsgGallerySync, 1, tooLarge)
+	if !errors.Is(err, algoipc.ErrIpcPayloadTooLarge) {
 		t.Errorf("expected algoipc.ErrIpcPayloadTooLarge for 64KB+1, got: %v", err)
 	}
 
@@ -88,7 +89,11 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 		t.Fatalf("write .env: %v", err)
 	}
 	envProbePath := filepath.Join(dir, "env-probe")
-	scriptBody := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$ZHULONG_ENV_PROBE\" > '%s'\necho \"ZHULONG_ENV_PROBE=$ZHULONG_ENV_PROBE\"\nsleep 0.3\n", envProbePath)
+	probeScript := "#!/bin/sh\n" +
+		"printf '%%s' \"$ZHULONG_ENV_PROBE\" > '%s'\n" +
+		"echo \"ZHULONG_ENV_PROBE=$ZHULONG_ENV_PROBE\"\n" +
+		"sleep 0.3\n"
+	scriptBody := fmt.Sprintf(probeScript, envProbePath)
 	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
 		t.Fatalf("write runner script: %v", err)
 	}
@@ -122,10 +127,13 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 	foundRedactedLine := false
 	for _, entry := range observed.All() {
 		fields := entry.ContextMap()
-		if entry.Message == "runner output ignored" && fields["source"] == "stdout" && fields["line_bytes"] == int64(len("ZHULONG_ENV_PROBE=injected")) {
+		redactedLine := entry.Message == "runner output ignored" && fields["source"] == "stdout"
+		if redactedLine && fields["line_bytes"] == int64(len("ZHULONG_ENV_PROBE=injected")) {
 			foundRedactedLine = true
 		}
-		if strings.Contains(entry.Message, "ZHULONG_ENV_PROBE=injected") || strings.Contains(fmt.Sprint(fields), "ZHULONG_ENV_PROBE=injected") {
+		leakedMessage := strings.Contains(entry.Message, "ZHULONG_ENV_PROBE=injected")
+		leakedField := strings.Contains(fmt.Sprint(fields), "ZHULONG_ENV_PROBE=injected")
+		if leakedMessage || leakedField {
 			t.Fatalf("runner stdout content was not redacted: %+v", entry)
 		}
 	}
@@ -493,21 +501,22 @@ func TestRunnerProcessStopKillsProcessGroup(t *testing.T) {
 }
 
 func TestRunnerProcessForceKillOnTimeout(t *testing.T) {
-	// Run a shell script that traps SIGTERM and refuses to exit
-	trapScript := t.TempDir()
-	scriptFile := filepath.Join(trapScript, "trap.sh")
-	scriptContent := `#!/bin/sh
-trap '' TERM
-sleep 10
-`
+	// The script installs SIG_IGN for TERM (inherited by its sleep children), so
+	// only the SIGKILL escalation can end it.
+	dir := t.TempDir()
+	scriptFile := filepath.Join(dir, "trap.sh")
+	readyFile := filepath.Join(dir, "trap-ready")
+	scriptContent := "#!/bin/sh\ntrap '' TERM\nprintf ready > \"$READY_FILE\"\n" +
+		"while true; do sleep 0.05; done\n"
 	if err := os.WriteFile(scriptFile, []byte(scriptContent), 0o755); err != nil {
 		t.Fatalf("write trap script: %v", err)
 	}
+	t.Setenv("READY_FILE", readyFile)
 
 	cfg := algorunner.ProcessConfig{
 		AlgorithmID:    "stub_pkg",
 		AlgorithmName:  "stub_pkg",
-		ExecutablePath: "/bin/sh",
+		ExecutablePath: scriptFile,
 		Logger:         zap.NewNop(),
 	}
 
@@ -516,35 +525,69 @@ sleep 10
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	// Short timeout (100ms) will trigger SIGKILL
-	start := time.Now()
-	err := proc.Stop(100 * time.Millisecond)
-	elapsed := time.Since(start)
+	// A SIGTERM delivered before the script reaches `trap` would kill it, and the
+	// test would never exercise the escalation. Wait for the readiness marker.
+	waitForFile(t, readyFile)
 
-	if err != nil {
+	const termGrace = 100 * time.Millisecond
+	start := time.Now()
+	if err := proc.Stop(termGrace); err != nil {
 		t.Fatalf("Stop failed: %v", err)
 	}
+	elapsed := time.Since(start)
 
 	select {
 	case <-proc.Done():
-		// Process terminated by SIGKILL
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("process was not killed")
 	}
 
-	if elapsed < 90*time.Millisecond || elapsed > 1*time.Second {
-		t.Logf("SIGKILL applied after: %v", elapsed)
+	// Returning before the grace period would mean SIGTERM was honoured, i.e. the
+	// trap was not in force and this test never exercised the SIGKILL path.
+	if elapsed < termGrace {
+		t.Fatalf("Stop returned after %v, before the %v SIGKILL escalation", elapsed, termGrace)
 	}
 }
 
-func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
+// waitForFile blocks until path exists, failing the test on timeout.
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
+}
+
+// writeArgCapturingRunner installs a package script that records its argv and
+// returns the script path plus the capture file path.
+func writeArgCapturingRunner(t *testing.T) (scriptPath, argsPath string) {
+	t.Helper()
 	dir := t.TempDir()
-	script := filepath.Join(dir, "echo_args.sh")
-	argsPath := filepath.Join(dir, "args.txt")
+	scriptPath = filepath.Join(dir, "echo_args.sh")
+	argsPath = filepath.Join(dir, "args.txt")
 	scriptBody := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGS_CAPTURE\"\nexit 0\n"
-	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(scriptBody), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
+	return scriptPath, argsPath
+}
+
+// readCapturedRunnerArgs returns the argv the package script recorded.
+func readCapturedRunnerArgs(t *testing.T, path string) []string {
+	t.Helper()
+	gotBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read captured arguments: %v", err)
+	}
+	return strings.Fields(string(gotBytes))
+}
+
+func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
+	script, argsPath := writeArgCapturingRunner(t)
 
 	core, observed := observer.New(zapcore.DebugLevel)
 	logger := zap.New(core)
@@ -570,11 +613,7 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 		t.Fatal("timed out waiting for script to finish")
 	}
 
-	gotBytes, err := os.ReadFile(argsPath)
-	if err != nil {
-		t.Fatalf("read captured arguments: %v", err)
-	}
-	gotArgs := strings.Fields(string(gotBytes))
+	gotArgs := readCapturedRunnerArgs(t, argsPath)
 	// argv 里没有 --plugin：可执行文件本身就是算法。也没有 --max-workers：
 	// worker 池规模是包自己的事，宿主不该越权指定。
 	wantArgs := []string{
@@ -596,13 +635,7 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 func TestRunnerProcessDisableMotionGateFlag(t *testing.T) {
 	for _, disable := range []bool{true, false} {
 		t.Run(fmt.Sprintf("disable=%v", disable), func(t *testing.T) {
-			dir := t.TempDir()
-			script := filepath.Join(dir, "echo_args.sh")
-			argsPath := filepath.Join(dir, "args.txt")
-			scriptBody := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGS_CAPTURE\"\nexit 0\n"
-			if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
-				t.Fatalf("write script: %v", err)
-			}
+			script, argsPath := writeArgCapturingRunner(t)
 
 			cfg := algorunner.ProcessConfig{
 				AlgorithmID:       "temporal_pkg",
@@ -626,11 +659,7 @@ func TestRunnerProcessDisableMotionGateFlag(t *testing.T) {
 				t.Fatal("timed out waiting for script to finish")
 			}
 
-			gotBytes, err := os.ReadFile(argsPath)
-			if err != nil {
-				t.Fatalf("read captured arguments: %v", err)
-			}
-			gotArgs := strings.Fields(string(gotBytes))
+			gotArgs := readCapturedRunnerArgs(t, argsPath)
 			hasFlag := slices.Contains(gotArgs, "--disable-motion-gate")
 
 			if hasFlag != disable {
@@ -643,7 +672,8 @@ func TestRunnerProcessDisableMotionGateFlag(t *testing.T) {
 func TestRunnerProcessSpawnThreadSurvivesWhileChildRuns(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "long_lived_runner.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 0.05; done\n"), 0o755); err != nil {
+	longLivedBody := "#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 0.05; done\n"
+	if err := os.WriteFile(script, []byte(longLivedBody), 0o755); err != nil {
 		t.Fatalf("write long-lived runner: %v", err)
 	}
 

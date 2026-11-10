@@ -10,8 +10,6 @@ import "C"
 
 import (
 	"context"
-	"fmt"
-	"runtime"
 	"unsafe"
 )
 
@@ -22,8 +20,10 @@ const MaxSnapshotBoxes = 8
 // DefaultSnapshotQuality 是 JPEG 质量的默认值（0 表示「使用默认」）。
 const DefaultSnapshotQuality = 85
 
-// SnapshotBox 是一个归一化裁剪框，坐标语义与 aitypes.DetectionItem.Box 完全一致：
-// [x1, y1, x2, y2] ∈ [0.0, 1.0]，x1<=x2，y1<=y2。
+// SnapshotBox 是一个归一化裁剪框：坐标语义与 ViewRect 一致
+// （[x1, y1, x2, y2] ∈ [0.0, 1.0]，x1<=x2，y1<=y2），只是用途不同：
+// ViewRect 是分析窗口，SnapshotBox 是抓拍裁剪框。两者刻意不合并成同一个类型 ——
+// 它们可以赋值给同一变量的时候就没人能拦住把分析窗口当裁剪框传进去。
 type SnapshotBox [4]float64
 
 // SnapshotImage 是一张抓拍图。
@@ -42,7 +42,8 @@ type SnapshotImage struct {
 type SnapshotOptions struct {
 	// Quality 为 JPEG 质量 1..100。0 表示使用 DefaultSnapshotQuality。
 	Quality int
-	// PTS 为目标帧的时间戳（单位为源流原生时基 ticks）；若 <= 0 则抓取当前最新帧，若 > 0 则优先在历史环形缓存中精确匹配。
+	// PTS 为目标帧的时间戳（源流原生时基 ticks）；<= 0 抓当前最新帧，
+	// > 0 则优先在历史环形缓存中精确匹配。
 	PTS int64
 	// Boxes 为需要额外输出的裁剪框；为空表示只出全幅图。
 	// 上限为 MaxSnapshotBoxes。
@@ -85,7 +86,12 @@ func (s *Stream) Snapshot(ctx context.Context, options SnapshotOptions) ([]Snaps
 		size := C.size_t(len(options.Boxes) * 4 * int(unsafe.Sizeof(C.float(0))))
 		raw := C.malloc(size)
 		if raw == nil {
-			return nil, nativeErrorf("snapshot", StatusOutOfMemory, "failed to allocate %d bytes for box array", uint64(size))
+			return nil, nativeErrorf(
+				"snapshot",
+				StatusOutOfMemory,
+				"failed to allocate %d bytes for box array",
+				uint64(size),
+			)
 		}
 		defer C.free(raw)
 
@@ -134,7 +140,6 @@ func (e *Engine) snapshot(
 
 	var result C.Zhulong_snapshot_h
 	st := C.Zhulong_stream_snapshot(lease.handle, streamID, req, &result)
-	runtime.KeepAlive(req)
 	if st != C.Zhulong_OK {
 		// 把「构建不支持抓拍」与「本次抓拍失败」区分开：前者重试无意义。
 		if StatusCode(st) == StatusUnsupported {
@@ -143,13 +148,13 @@ func (e *Engine) snapshot(
 		return nil, mapNativeStatus("snapshot", int32(st))
 	}
 	if result == nil {
-		return nil, fmt.Errorf("%w: native snapshot returned a nil handle", ErrInternal)
+		return nil, nativeErrorf("snapshot", StatusInternal, "native snapshot returned a nil handle")
 	}
 	defer C.Zhulong_snapshot_destroy(result)
 
 	count := int(C.Zhulong_snapshot_count(result))
 	if count <= 0 {
-		return nil, fmt.Errorf("%w: native snapshot returned no images", ErrInternal)
+		return nil, nativeErrorf("snapshot", StatusInternal, "native snapshot returned no images")
 	}
 
 	images := make([]SnapshotImage, 0, count)
@@ -167,7 +172,7 @@ func (e *Engine) snapshot(
 		})
 	}
 	if len(images) == 0 {
-		return nil, fmt.Errorf("%w: native snapshot returned only empty images", ErrInternal)
+		return nil, nativeErrorf("snapshot", StatusInternal, "native snapshot returned only empty images")
 	}
 	return images, nil
 }

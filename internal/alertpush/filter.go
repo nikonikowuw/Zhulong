@@ -3,25 +3,22 @@ package alertpush
 import "slices"
 
 // Matches evaluates whether a dispatched event matches the destination's filter rules.
-func (f *DestinationFilter) Matches(eventType, algorithmID, cameraID string) bool {
+func (f *destinationFilter) Matches(eventType, algorithmID, cameraID string) bool {
 	if f == nil {
 		return true
 	}
-
-	// 1. Match event type
-	if len(f.EventTypes) > 0 && (eventType == "" || !slices.Contains(f.EventTypes, eventType)) {
+	if !matchesFilterList(f.EventTypes, eventType) {
 		return false
 	}
-
-	// 2. Match algorithm
-	if len(f.AlgorithmIDs) > 0 && (algorithmID == "" || !slices.Contains(f.AlgorithmIDs, algorithmID)) {
+	if !matchesFilterList(f.AlgorithmIDs, algorithmID) {
 		return false
 	}
+	return matchesFilterList(f.CameraIDs, cameraID)
+}
 
-	// 3. Match camera
-	if len(f.CameraIDs) > 0 && (cameraID == "" || !slices.Contains(f.CameraIDs, cameraID)) {
-		return false
+func matchesFilterList(allowed []string, value string) bool {
+	if len(allowed) == 0 {
+		return true
 	}
-
-	return true
+	return value != "" && slices.Contains(allowed, value)
 }

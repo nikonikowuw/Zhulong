@@ -311,6 +311,26 @@ std::string redact_credentials(std::string text) {
             position = find_scheme(authority_start);
             continue;
         }
+        // ⚠️ 防截断脱敏：若 authority 直到字符串末尾仍未闭合（无 '/'、'?'、'#' 或空白），
+        //    且不含 '@'，则可能是超长日志在 user:password 段被缓冲截断（'@' 尚未出现）。
+        //    非 IPv6 字面量下，只要 ':' 之后不全是 1..5 位数字端口号，一律按截断凭据脱敏。
+        if (authority_end == std::string::npos && authority_start < scan_end &&
+            text[authority_start] != '[') {
+            const size_t colon = text.find(':', authority_start);
+            if (colon != std::string::npos && colon < scan_end) {
+                const size_t suffix_len = scan_end - (colon + 1);
+                bool looks_like_port = suffix_len >= 1 && suffix_len <= 5;
+                for (size_t i = colon + 1; looks_like_port && i < scan_end; ++i) {
+                    if (!std::isdigit(static_cast<unsigned char>(text[i]))) {
+                        looks_like_port = false;
+                    }
+                }
+                if (!looks_like_port) {
+                    text.replace(authority_start, scan_end - authority_start, "***");
+                    break;
+                }
+            }
+        }
         // 没有 userinfo：从 authority 之后继续找，避免重复扫描同一个 scheme
         position = find_scheme(authority_start);
     }
@@ -390,8 +410,21 @@ void trace_log_callback(void *avcl, int /*level*/, const char *format, va_list a
     }
 
     char buffer[1024];
-    vsnprintf(buffer, sizeof(buffer), format, arguments);
-    const std::string redacted = redact_credentials(buffer);
+    va_list args_copy;
+    va_copy(args_copy, arguments);
+    const int needed = vsnprintf(buffer, sizeof(buffer), format, arguments);
+    std::string formatted;
+    if (needed >= static_cast<int>(sizeof(buffer))) {
+        constexpr int max_trace_bytes = 16384;
+        const size_t alloc_len = static_cast<size_t>(std::min(needed, max_trace_bytes));
+        formatted.resize(alloc_len);
+        vsnprintf(formatted.data(), alloc_len + 1, format, args_copy);
+    } else if (needed > 0) {
+        formatted.assign(buffer, static_cast<size_t>(needed));
+    }
+    va_end(args_copy);
+
+    const std::string redacted = redact_credentials(std::move(formatted));
     // FFmpeg 把请求打在 AV_LOG_TRACE（"Sending:..."），应答打在 AV_LOG_DEBUG。
     // 为了不把 RTP 逐包 TRACE 也放进来，这里按内容再筛一道。
     if (redacted.find("Sending") == std::string::npos &&
@@ -810,6 +843,9 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     bool request_audio = !is_probe_only;
     const ProbeLimits fast_limits{probe_analyze_duration_us, probe_size_bytes};
     ProbeSession session;
+    int64_t accumulated_open_ms = 0;
+    int64_t accumulated_info_ms = 0;
+    const auto first_open_started = Clock::now();
     try {
         session = open_and_probe(input, url, options, cancel, stream_id, fast_limits, request_audio);
     } catch (const Failure &f) {
@@ -823,6 +859,8 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
                                                !cancel.stopped.load(std::memory_order_relaxed) &&
                                                !cancel.expired();
         if (request_audio && audio_fallback_worthwhile) {
+            accumulated_open_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now() - first_open_started).count();
             ZL_LOGW(stream_id, "nodes.capture", "rtsp_audio_open_failed rc=%d falling back to video-only", f.status);
             request_audio = false;
             // 注意：不调 expire_after——第二次握手只能消耗首次剩余的预算。
@@ -846,6 +884,8 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
             session.info_rc, probe_metadata_usable(input.context, session.index, is_probe_only) ? 1 : 0,
             probe_size_bytes, probe_analyze_duration_us);
         probe_fallback = true;
+        accumulated_open_ms += session.open_ms;
+        accumulated_info_ms += session.info_ms;
 
         // 重连会重走 TEARDOWN + DESCRIBE + SETUP + PLAY；兼容档探测比快档慢一个
         // 数量级（1 MiB / 1 s），必须在完整预算下跑，否则 <late-probe> 这类相机
@@ -859,8 +899,10 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     }
 
     const int index = session.index;
-    const int64_t open_ms = session.open_ms;
-    const int64_t info_ms = session.info_ms;
+    const int64_t open_ms = accumulated_open_ms + session.open_ms;
+    const int64_t info_ms = accumulated_info_ms + session.info_ms;
+    const int effective_analyzeduration_us =
+        probe_fallback ? legacy_probe_analyze_duration_us : probe_analyze_duration_us;
 
     const auto *stream = input.context->streams[index];
     const auto *parameters = stream->codecpar;
@@ -980,7 +1022,7 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
                 ZL_LOGI(stream_id, "nodes.capture", "rtsp_startup_timing open_ms=%lld info_ms=%lld first_packet_ms=%lld analyzeduration_us=%d probe_fallback=%d",
                     static_cast<long long>(open_ms), static_cast<long long>(info_ms),
                     static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - read_started).count()),
-                    probe_analyze_duration_us, probe_fallback ? 1 : 0);
+                    effective_analyzeduration_us, probe_fallback ? 1 : 0);
             }
             // ⚠️ 时间戳保真透传：保留原流时间戳有效性标记，禁止将缺失时间戳默认视为 0
             Zhulong_packet_view view{};

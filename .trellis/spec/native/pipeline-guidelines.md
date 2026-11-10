@@ -19,6 +19,10 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
   - **防止取消状态残留**：流生命周期内若经历“AI 接入 ➔ 注销 ➔ 再次接入”，每次均创建全新的 `DecodeSession`，其内部 `packet_queue_` 与 `frame_queue_` 拥有初始干净的非取消状态，杜绝已取消队列引发的 100% CPU 空转与产帧中断。
 - **原生 C++ 帧消费通道**：
   - `Stream::acquire_frame(HardwareFrame::ConstPtr &out_frame, timeout)` 提供线程安全的原生帧借用通道，下游模块以只读共享所有权并发消费，由底层闭包安全保活。
+  - ⚠️ **无活跃会话时必须阻塞满 timeout 再返回 false**：会话熔断/取消后 `decode_session_` 仍非空，而已取消队列的 `pop` 会立即返回。若 `acquire_frame` 也立即返回，`FramePublisher` 这类轮询消费者会 100% CPU 空转直到 AI 消费者被释放。判据是 `DecodeSession::is_active()`。
+  - ⚠️ `BoundedQueue::pop` 取消后**不交出残余元素**，且出队元素先移入局部暂存、解锁后才赋给 `item`——调用方复用的旧句柄在队列锁外析构。
+- **新建流必须携带全局解码策略**：`Stream::start(policy)` 由 `Engine::acquire` 传入 `decode_policy_`。用默认值会把「仅 MPP、禁止软解回退」静默降级为 AUTO，绕过 fail-closed。
+- **FAILED 流不复用**：`Engine::acquire` 按 URL 查找时跳过 `status.state == FAILED` 的流（终态，拉流线程已退出）。否则只要另一消费者仍持有死流，Go 侧「acquire → 发现 FAILED → Close → 重试」会永远拿回同一条死流。旧流随其消费者释放后经宽限期回收。
 - **单流确定性线程模型与双后端自适应路由**：
   - 解码节点通过 `IDecodeNode::create` 统一抽象，提供 `DecoderBackend::automatic`、`DecoderBackend::ffmpeg_sw` 与 `DecoderBackend::mpp_hw` 三种分流策略。
   - 在 `automatic` 模式下，系统动态探测硬件加速能力（`MppDecodeNode::is_supported()`），若支持且码流为 H.264/H.265 则自动启用 MPP 硬件解码并直出 DMA-BUF；环境不支持或解码异常时透明回退至 FFmpeg 软解。
@@ -44,6 +48,9 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
   - `subscriptions` 与 `subscriber_snapshot_` 是一对不容错位的状态。`Engine::subscribe` / `unsubscribe` 必须先用 `Stream::make_subscriber_snapshot()` 把新快照**完整构建出来**（这一步允许因 `bad_alloc` 抛异常），再用 `subscriptions` 变更 + `shared_ptr` 移动赋值提交（两者都不抛）。
   - 反序（先改 map 再重建快照）会留下半提交状态：订阅登记成功但快照未更新 → 该订阅永不被派发、且消费者 `release` 永远撞 `ERR_BUSY`；注销时快照未更新 → 已删订阅仍被派发，且异常使 `disable_and_drain()` 被跳过，回调永不停止。
   - 由 `native/tests/decoder_test.cpp` 的 5.2 节守护。
+- **音频时间轴随视频纪元重锚**：
+  - `PreviewNormalizer` 跳变时把 `timestamp_shift_us_` 重置为**跳变时刻的绝对输出位置**（不是增量），源时钟从 0 重新起算。
+  - 因此 `AudioNormalizer` 在 `discontinuity_generation` 变化时必须重锚：`anchor ← 当前音频时间戳`、`base ← 音频到达时刻 − 视频跳变包到达时刻`（`Stream::video_epoch_arrival_us_`）。沿用旧锚点会把跳变前的时长再叠加一遍——只有视频 DTS 回退时，第 T 秒跳变音频就前跳 T。由 `audio_normalizer_test.cpp` 的 `TestVideoOnlyDiscontinuityNoDoubleCount` 守护。
 - **解码丢包与重同步可观测性**：
   - `DecodeSession::counters()` 返回 `DecodeCounters` 快照（`decoder_unavailable_drops` / `keyframe_gate_drops` / `congestion_resyncs`），`Stream::callback_exception_count()` 返回被隔离的回调异常数。
   - 全部为 `memory_order_relaxed` 原子自增，无锁、无同步依赖；仅供测试与运维观测，**不跨越 C ABI**（`engine.h` 无对应符号）。
@@ -112,6 +119,9 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 - ⚠️ **熔断错误码不得被拉流线程收尾覆盖**：`on_decode_fatal_error` 先写入 `FAILED + 具体故障码`，再 `request_stop()`；`Stream::capture` 收尾会拿到 `ERR_CANCELLED`。若收尾无条件重写 `status`，对外就变成 `FAILED + CANCELLED` —— 按 `engine.h` 的契约这正是「受控停机」，硬件故障从此静默。收尾只能在「尚未记录非取消类故障」时落盘。由 `native/tests/decoder_test.cpp` 的 5.1b 节守护。
 - ⚠️ **`noexcept` 线程入口必须自行收口异常**：`DecodeSession::decode_loop`、`FramePublisher::publish_loop`、`Engine::reap`、`Stream::capture` 都是 `noexcept` 的线程入口，而它们都会分配内存（缓冲池 `push_back`、broker 客户端快照与发送缓冲、过期流快照 `vector`）。任何逃出的异常都是 `std::terminate`，一次 `bad_alloc` 会带走整个宿主（含其他流与 Go 侧调用）。做法：入口 `try/catch` 包住工作体（`decode_loop_body` / `publish_once` / `reap_once`），异常翻译成受控失败或单帧丢弃并落稳定 token 日志；`ZL_LOG*` 自身是 `noexcept`，可以安全用于收口路径。
 - ⚠️ **`noexcept` 热路径不得用 `make_unique` 兜底**：`MotionDetector` 的 DMA-BUF 读取守卫用 `std::optional<ScopedFdSync>` 就地构造，而非 `unique_ptr` —— 后者在 OOM 时抛 `bad_alloc` 穿出 `noexcept`，把「读不到像素就 fail-open」变成进程崩溃。
+- ⚠️ **退役资源统一走 `RetiredResources`**：`release()` 与 `acquire()` 回滚共用 `Engine::detach_consumer_locked`，锁内只把 publisher/broker/会话/流摘进 `RetiredResources`，锁外 `finish()` 按 publisher → broker → 会话 → 流 的顺序停机。该对象必须声明在 control 锁守卫**之前**（析构兜底 `finish()` 含 join），且持有 Stream 的 `keepalive`——`DecodeSession` 熔断回调捕获的是 Stream 裸 `this`，会话汇合前 Stream 不得被 Reaper 析构。
+- ⚠️ **Broker 锁外启动**：`FrameBroker::start` 会阻塞获取与 Go 侧清扫互斥的目录锁并申请槽位内存，**不得**在 `Engine::control` 内执行。`acquire` 在锁外 `start_frame_broker`、锁内 `commit_frame_broker_locked`；同一流共用 shm 名与 socket 路径，故用 `brokers_pending` + `broker_settled` 保证同时只有一个启动者，`stop()` 必须广播 `broker_settled`。结果回调必须在 `start` **之前**登记（`set_on_result` 不加锁）。
+- ⚠️ **`BoundedQueue` 析构不得调用 `cancel()`**：`cancel()` 托管残余元素用的 `std::deque` 默认构造会分配，析构函数隐式 `noexcept`。析构只置位取消并广播，残余元素随成员析构。`cancel()` 本身两阶段：先置位并广播（不抛），再 `swap` 移出残余元素。
 
 ---
 
@@ -139,6 +149,7 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - ⚠️ **运动检测是发布侧的一部分，不在算法包里做**：`FramePublisher` 内嵌一个 `MotionDetector`，对**已通过节流**的帧做 320×180 Y 平面网格差分，并把 `has_motion` / `motion_boxes` 一并放进 `publish_frame`。因为是每流一个 publisher，「每流每帧只算一次」由持有关系保证，与挂载了多少算法包无关。
    - ⚠️ **检测失败必须 fail-open**：`MotionResult` 未被执行检测时默认 `has_motion = true`，`FrameMotionInfo` 默认同样放行；`detect()` 返回 `false`（格式不支持 / 像素拿不到）时直接把默认值发出去，**绝不**因为一次读取失败就把整条流的推理关掉。
    - ⚠️ **首帧同样 fail-open**：`MotionDetector` 没有参考底图时（流启动、`reset()` 之后、换窗重置之后）返回 `has_motion = true, box_count = 0`，下游按全帧推理。判静会让「画面里已经站着人」的启动瞬间一直空转到心跳（`MOTION_HEARTBEAT_FRAMES`），改一次裁剪区域就盲几秒。
+   - ⚠️ **大面积突变同样 fail-open**：单帧变化占比超过 `max_active_ratio`（70%）时无法区分光照跳档/红外切换与近处大目标、小窗口内有人经过，因此返回 `has_motion = true, box_count = 0` 并以本帧重置底图（不设 hold）。判静会让持续的大面积运动在 hold 结束后盲到心跳。
    - ⚠️ **DMA-BUF 帧要算上系统调用代价**：MPP 硬解帧只填 `dma_fd`，检测器每帧需要 `mmap` + `DMA_BUF_IOCTL_SYNC(START/END)` + `munmap`。这属于发布线程的常驻开销，写性能数字前先实测；不要把「检测本身零堆分配」讲成「整条路径零开销」。
 5. **跨层停机顺序**（Go 侧，硬约束）：
    - `camera.Stop` → `algorithm.Stop` → `native.Close`。理由：AI 消费者与 StreamHub 先撤，runner 子进程再排空，最后才销毁 broker 宿主。

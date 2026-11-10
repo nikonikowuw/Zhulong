@@ -51,20 +51,26 @@ var nativeSeverities = [...]struct {
 	{zap: zapcore.ErrorLevel, native: nativelog.Error},
 }
 
+// severity 把 C 侧等级映射成两套 Go 枚举；越界值收敛到 INFO。
+//
+// 两套枚举必须同进同出：分开各写一份区间检查，早晚会出现「zap 记 debug、nativelog 记 info」的漂移。
+func severity(level int32) (zapcore.Level, nativelog.Level) {
+	if level < 0 || int(level) >= len(nativeSeverities) {
+		return zapcore.InfoLevel, nativelog.Info
+	}
+	return nativeSeverities[level].zap, nativeSeverities[level].native
+}
+
 // zapLevel 把 C 侧等级映射为 zap 等级；越界值收敛到 INFO。
 func zapLevel(level int32) zapcore.Level {
-	if level >= 0 && int(level) < len(nativeSeverities) {
-		return nativeSeverities[level].zap
-	}
-	return zapcore.InfoLevel
+	zapLvl, _ := severity(level)
+	return zapLvl
 }
 
 // nativeLogLevel 把 C 侧等级映射为 nativelog 等级；越界值收敛到 INFO。
 func nativeLogLevel(level int32) nativelog.Level {
-	if level >= 0 && int(level) < len(nativeSeverities) {
-		return nativeSeverities[level].native
-	}
-	return nativelog.Info
+	_, nativeLvl := severity(level)
+	return nativeLvl
 }
 
 // nativeLogBridge 是挂到原生日志回调上的 Go 端载体。

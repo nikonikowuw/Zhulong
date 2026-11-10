@@ -300,11 +300,11 @@ func TestCancelRunningJob(t *testing.T) {
 		t.Fatalf("unexpected result payload after cancellation: %q", latest.ResultJSON)
 	}
 
-	if err := svc.CancelJob(context.Background(), job.ID); err == nil {
+	err = svc.CancelJob(context.Background(), job.ID)
+	if err == nil {
 		t.Fatalf("expected a second cancellation to be rejected")
-	} else {
-		assertCode(t, err, CodeJobNotCancellable)
 	}
+	assertCode(t, err, CodeJobNotCancellable)
 }
 
 func TestCancelQueuedJobAbortsWithoutExecuting(t *testing.T) {
@@ -342,11 +342,11 @@ func TestCancelQueuedJobAbortsWithoutExecuting(t *testing.T) {
 func TestCancelRejectsUnknownAndFinishedJobs(t *testing.T) {
 	svc, store := newTestService(t)
 
-	if err := svc.CancelJob(context.Background(), "does-not-exist"); err == nil {
+	err := svc.CancelJob(context.Background(), "does-not-exist")
+	if err == nil {
 		t.Fatalf("expected cancelling an unknown job to fail")
-	} else {
-		assertCode(t, err, CodeJobNotFound)
 	}
+	assertCode(t, err, CodeJobNotFound)
 
 	finishedAt := time.Now().UTC()
 	done := &Job{
@@ -360,11 +360,11 @@ func TestCancelRejectsUnknownAndFinishedJobs(t *testing.T) {
 		t.Fatalf("CreateJob failed: %v", err)
 	}
 
-	if err := svc.CancelJob(context.Background(), done.ID); err == nil {
+	err = svc.CancelJob(context.Background(), done.ID)
+	if err == nil {
 		t.Fatalf("expected cancelling a completed job to fail")
-	} else {
-		assertCode(t, err, CodeJobNotCancellable)
 	}
+	assertCode(t, err, CodeJobNotCancellable)
 
 	latest := mustGetJob(t, svc, done.ID)
 	if latest.Status != StatusCompleted {
@@ -382,9 +382,16 @@ func TestLateProgressDoesNotResurrectTerminalJob(t *testing.T) {
 		t.Fatalf("CreateJob failed: %v", err)
 	}
 
-	if err := store.UpdateProgress(context.Background(), job.ID, 40, ProgressUpdate{
-		Stage: StageProcessing, Total: 10, Processed: 4,
-	}); err != nil {
+	if err := store.UpdateProgress(
+		context.Background(),
+		job.ID,
+		40,
+		ProgressUpdate{
+			Stage:     StageProcessing,
+			Total:     10,
+			Processed: 4,
+		},
+	); err != nil {
 		t.Fatalf("UpdateProgress failed: %v", err)
 	}
 
@@ -458,8 +465,8 @@ func TestStopFailsQueuedJobsAndRejectsNewWork(t *testing.T) {
 	handler := &scriptedHandler{jobType: "test.stop"}
 	svc.RegisterHandler(handler)
 
-	var ids []string
-	for i := 0; i < 2; i++ {
+	ids := make([]string, 0, 2)
+	for range 2 {
 		job, err := svc.SubmitJob(context.Background(), "test.stop", `{}`)
 		if err != nil {
 			t.Fatalf("SubmitJob failed: %v", err)
@@ -484,11 +491,11 @@ func TestStopFailsQueuedJobsAndRejectsNewWork(t *testing.T) {
 		t.Fatalf("expected the abort hook for each queued job, got %d", aborts)
 	}
 
-	if _, err := svc.SubmitJob(context.Background(), "test.stop", `{}`); err == nil {
+	_, err := svc.SubmitJob(context.Background(), "test.stop", `{}`)
+	if err == nil {
 		t.Fatalf("expected submissions to be rejected after Stop")
-	} else {
-		assertCode(t, err, CodeJobServiceStopped)
 	}
+	assertCode(t, err, CodeJobServiceStopped)
 }
 
 func TestQueueOverflowRejectsSubmission(t *testing.T) {
@@ -496,7 +503,7 @@ func TestQueueOverflowRejectsSubmission(t *testing.T) {
 	handler := &scriptedHandler{jobType: "test.overflow"}
 	svc.RegisterHandler(handler)
 
-	for i := 0; i < defaultQueueDepth; i++ {
+	for i := range defaultQueueDepth {
 		if _, err := svc.SubmitJob(context.Background(), "test.overflow", `{}`); err != nil {
 			t.Fatalf("SubmitJob %d failed: %v", i, err)
 		}
@@ -511,7 +518,12 @@ func TestQueueOverflowRejectsSubmission(t *testing.T) {
 	}
 	assertCode(t, err, CodeJobQueueFull)
 
-	jobs, total, listErr := svc.ListJobs(context.Background(), "test.overflow", 100, 0)
+	jobs, total, listErr := svc.ListJobs(
+		context.Background(),
+		"test.overflow",
+		100,
+		0,
+	)
 	if listErr != nil {
 		t.Fatalf("ListJobs failed: %v", listErr)
 	}
@@ -537,7 +549,7 @@ func TestListJobsPagesAndFilters(t *testing.T) {
 	base := time.Now().UTC().Add(-time.Hour)
 
 	// Five "a" jobs and two "b" jobs, oldest first.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		job := &Job{
 			ID:        fmt.Sprintf("job-a-%d", i),
 			Type:      "test.a",
@@ -548,7 +560,7 @@ func TestListJobsPagesAndFilters(t *testing.T) {
 			t.Fatalf("CreateJob failed: %v", err)
 		}
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		job := &Job{
 			ID:        fmt.Sprintf("job-b-%d", i),
 			Type:      "test.b",
@@ -560,7 +572,12 @@ func TestListJobsPagesAndFilters(t *testing.T) {
 		}
 	}
 
-	page2, total, err := svc.ListJobs(context.Background(), "test.a", 2, 2)
+	page2, total, err := svc.ListJobs(
+		context.Background(),
+		"test.a",
+		2,
+		2,
+	)
 	if err != nil {
 		t.Fatalf("ListJobs failed: %v", err)
 	}
@@ -575,7 +592,12 @@ func TestListJobsPagesAndFilters(t *testing.T) {
 		t.Fatalf("unexpected page 2 order: %s, %s", page2[0].ID, page2[1].ID)
 	}
 
-	all, total, err := svc.ListJobs(context.Background(), "", 100, 0)
+	all, total, err := svc.ListJobs(
+		context.Background(),
+		"",
+		100,
+		0,
+	)
 	if err != nil {
 		t.Fatalf("ListJobs failed: %v", err)
 	}
@@ -584,7 +606,12 @@ func TestListJobsPagesAndFilters(t *testing.T) {
 	}
 
 	// A zero window must fall back to the shared default, not to "no LIMIT".
-	defaulted, _, err := svc.ListJobs(context.Background(), "", 0, 0)
+	defaulted, _, err := svc.ListJobs(
+		context.Background(),
+		"",
+		0,
+		0,
+	)
 	if err != nil {
 		t.Fatalf("ListJobs failed: %v", err)
 	}

@@ -34,7 +34,9 @@ func setupTestStore(t *testing.T) (*Store, func()) {
 	}
 	store := NewStore(dbStore, fakeCipher{})
 	return store, func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("dbStore.Close failed: %v", err)
+		}
 	}
 }
 
@@ -54,7 +56,7 @@ func TestStoreCRUD(t *testing.T) {
 
 	// 2. Create destination
 	webhookID := "01J8Z000000000000000000001"
-	secData, err := store.EncryptSecret(webhookID, webhookSecret{URL: "https://example.com/hook"})
+	secData, err := store.EncryptSecret(webhookID, &webhookSecret{URL: "https://example.com/hook"})
 	if err != nil {
 		t.Fatalf("EncryptSecret failed: %v", err)
 	}
@@ -133,7 +135,10 @@ func TestStoreCRUD(t *testing.T) {
 	if err := store.SetEnabled(ctx, webhookID, true); err != nil {
 		t.Fatalf("SetEnabled failed: %v", err)
 	}
-	reloaded, _ = store.GetByID(ctx, webhookID)
+	reloaded, err = store.GetByID(ctx, webhookID)
+	if err != nil {
+		t.Fatalf("GetByID after SetEnabled failed: %v", err)
+	}
 	if !reloaded.Enabled {
 		t.Fatal("expected Enabled to be true after SetEnabled")
 	}

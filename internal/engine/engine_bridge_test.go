@@ -75,7 +75,6 @@ func TestEngineStaleResource(t *testing.T) {
 		id:         1,
 		consumerID: 100,
 		kind:       ConsumerPreview,
-		url:        "rtsp://127.0.0.1:8554/live",
 		generation: generationForTest(e),
 	}
 

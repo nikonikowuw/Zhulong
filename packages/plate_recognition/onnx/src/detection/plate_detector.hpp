@@ -33,9 +33,12 @@ struct PlateBoxDetection {
 class PlateDetector {
 public:
     PlateDetector() = default;
+    ~PlateDetector() = default;
 
     PlateDetector(const PlateDetector&) = delete;
     PlateDetector& operator=(const PlateDetector&) = delete;
+    PlateDetector(PlateDetector&&) = delete;
+    PlateDetector& operator=(PlateDetector&&) = delete;
 
     std::vector<PlateBoxDetection> detect(zhulong::Session& session, const zhulong::Image& image) const;
 

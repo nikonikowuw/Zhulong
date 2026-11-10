@@ -19,7 +19,11 @@ func newTestStore(t *testing.T) (*Store, func()) {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 	store := NewStore(dbStore)
-	return store, func() { _ = dbStore.Close() }
+	return store, func() {
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	}
 }
 
 func TestStore_CreateTokenAndLimit(t *testing.T) {
@@ -28,7 +32,7 @@ func TestStore_CreateTokenAndLimit(t *testing.T) {
 	ctx := context.Background()
 
 	// Create 10 tokens
-	for i := 1; i <= MaxActiveTokens; i++ {
+	for i := 1; i <= maxActiveTokens; i++ {
 		tok := &APIToken{
 			ID:        fmt.Sprintf("id_%02d", i),
 			Name:      fmt.Sprintf("Token-%02d", i),
@@ -41,7 +45,7 @@ func TestStore_CreateTokenAndLimit(t *testing.T) {
 		}
 	}
 
-	// 11th token should fail with ErrTokenLimitReached
+	// 11th token should fail with errTokenLimitReached
 	overflow := &APIToken{
 		ID:        "id_overflow",
 		Name:      "Token-Overflow",
@@ -50,8 +54,8 @@ func TestStore_CreateTokenAndLimit(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}
 	err := store.CreateToken(ctx, overflow)
-	if !errors.Is(err, ErrTokenLimitReached) {
-		t.Fatalf("expected ErrTokenLimitReached, got %v", err)
+	if !errors.Is(err, errTokenLimitReached) {
+		t.Fatalf("expected errTokenLimitReached, got %v", err)
 	}
 
 	// Revoke one token, then creation should succeed
@@ -88,8 +92,8 @@ func TestStore_NameConflictAcrossEntireTable(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}
 	err := store.CreateToken(ctx, tok2)
-	if !errors.Is(err, ErrTokenNameConflict) {
-		t.Fatalf("expected ErrTokenNameConflict for active token, got %v", err)
+	if !errors.Is(err, errTokenNameConflict) {
+		t.Fatalf("expected errTokenNameConflict for active token, got %v", err)
 	}
 
 	// Soft revoke tok1
@@ -99,8 +103,8 @@ func TestStore_NameConflictAcrossEntireTable(t *testing.T) {
 
 	// Name conflict should still trigger even when the previous token is revoked!
 	err = store.CreateToken(ctx, tok2)
-	if !errors.Is(err, ErrTokenNameConflict) {
-		t.Fatalf("expected ErrTokenNameConflict even after revocation, got %v", err)
+	if !errors.Is(err, errTokenNameConflict) {
+		t.Fatalf("expected errTokenNameConflict even after revocation, got %v", err)
 	}
 }
 
@@ -140,8 +144,8 @@ func TestStore_ListAndFind(t *testing.T) {
 
 	// FindActive should fail now
 	_, err = store.FindActiveByHash(ctx, "hash_alpha")
-	if !errors.Is(err, ErrTokenNotFound) {
-		t.Fatalf("expected ErrTokenNotFound after revocation, got %v", err)
+	if !errors.Is(err, errTokenNotFound) {
+		t.Fatalf("expected errTokenNotFound after revocation, got %v", err)
 	}
 
 	// ListTokens

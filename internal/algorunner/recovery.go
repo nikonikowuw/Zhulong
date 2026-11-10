@@ -3,13 +3,11 @@ package algorunner
 import (
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 )
 
-// Default recovery parameters
+// Default recovery parameters.
 const (
-	DefaultBaseBackoff         = 1 * time.Second
+	DefaultBaseBackoff         = time.Second
 	DefaultMaxBackoff          = 30 * time.Second
 	DefaultCrashWindow         = 5 * time.Minute
 	DefaultMaxCrashesInWindow  = 3
@@ -37,19 +35,6 @@ func DefaultRecoveryOptions() RecoveryOptions {
 		StableRunningThreshold: DefaultStableResetDuration,
 		RollbackGuardWindow:    DefaultRollbackGuardWindow,
 	}
-}
-
-// RecoveryStateMachine tracks crash history, exponential backoff, and circuit breakers.
-//
-// The crash count inside the sliding window is len(crashHistory): no separate
-// counter is kept, because a counter and the history it counts can drift apart
-// and the backoff ladder would then be computed from a number the circuit
-// breaker never saw.
-type RecoveryStateMachine struct {
-	opts           RecoveryOptions
-	crashHistory   []time.Time
-	circuitTripped bool
-	mu             sync.Mutex
 }
 
 // normalize fills in defaults for unset or non-positive fields.
@@ -84,6 +69,31 @@ func (o RecoveryOptions) normalize() RecoveryOptions {
 	return o
 }
 
+// dependencyStableReset is the uptime after which a dependency failure starts the
+// restart ladder over instead of escalating it.
+//
+// It is a named accessor rather than a direct MaxBackoff comparison at the call
+// site because the two questions — "how slow may a restart get?" and "when does
+// the dependency count as freshly lost?" — only share a value today; the watcher
+// reads better asking the semantic question, and tuning can diverge later without
+// touching it.
+func (o RecoveryOptions) dependencyStableReset() time.Duration {
+	return o.MaxBackoff
+}
+
+// RecoveryStateMachine tracks crash history, exponential backoff, and circuit breakers.
+//
+// The crash count inside the sliding window is len(crashHistory): no separate
+// counter is kept, because a counter and the history it counts can drift apart
+// and the backoff ladder would then be computed from a number the circuit
+// breaker never saw.
+type RecoveryStateMachine struct {
+	opts           RecoveryOptions
+	crashHistory   []time.Time
+	circuitTripped bool
+	mu             sync.Mutex
+}
+
 // NewRecoveryStateMachine creates a state machine instance.
 func NewRecoveryStateMachine(opts RecoveryOptions) *RecoveryStateMachine {
 	opts = opts.normalize()
@@ -104,7 +114,13 @@ func NewRecoveryStateMachine(opts RecoveryOptions) *RecoveryStateMachine {
 // observable delays are 1s, 2s, 4s; the 8s tier (shift=3) is UNREACHABLE under
 // this quota because crash 4 trips the breaker instead of scheduling 8s. The
 // ladder describes the formula's shape, not a guarantee that every tier runs.
-func (sm *RecoveryStateMachine) RecordCrash(now time.Time) (shouldRestart bool, delay time.Duration, circuitBroken bool) {
+func (sm *RecoveryStateMachine) RecordCrash(
+	now time.Time,
+) (
+	shouldRestart bool,
+	delay time.Duration,
+	circuitBroken bool,
+) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -144,17 +160,19 @@ func (sm *RecoveryStateMachine) RecordCrash(now time.Time) (shouldRestart bool, 
 	return true, delay, false
 }
 
-// CheckStableReset checks if stable uptime exceeds the threshold to reset crash counts.
+// CheckStableReset clears the crash history once uptime reaches the threshold,
+// reporting whether there was any history (or tripped breaker) to clear.
 func (sm *RecoveryStateMachine) CheckStableReset(uptime time.Duration) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if uptime >= sm.opts.StableRunningThreshold {
-		sm.crashHistory = []time.Time{}
-		sm.circuitTripped = false
-		return true
+	if uptime < sm.opts.StableRunningThreshold {
+		return false
 	}
-	return false
+	hadState := len(sm.crashHistory) > 0 || sm.circuitTripped
+	sm.crashHistory = []time.Time{}
+	sm.circuitTripped = false
+	return hadState
 }
 
 // Reset clears all crash history and circuit state (e.g., when operator explicitly updates package).
@@ -170,89 +188,4 @@ func (sm *RecoveryStateMachine) IsCircuitBroken() bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	return sm.circuitTripped
-}
-
-// RollbackGuard manages observation period for newly upgraded packages.
-type RollbackGuard struct {
-	pkgID           string
-	newVersion      string
-	previousVersion string
-	startedAt       time.Time
-	guardWindow     time.Duration
-	observedDone    bool
-	mu              sync.Mutex
-	logger          *zap.Logger
-}
-
-// RollbackGuardOptions identifies the freshly upgraded package and the window
-// during which a crash still triggers a rollback.
-//
-// The version fields are named rather than positional on purpose: NewVersion and
-// PreviousVersion are both plain strings, so an argument swap would invert the
-// rollback direction with no compile error.
-type RollbackGuardOptions struct {
-	PackageID       string
-	NewVersion      string
-	PreviousVersion string
-	// GuardWindow <= 0 falls back to DefaultRollbackGuardWindow.
-	GuardWindow time.Duration
-	Logger      *zap.Logger
-}
-
-// NewRollbackGuard creates a guard to observe newly upgraded package stability.
-func NewRollbackGuard(opts RollbackGuardOptions) *RollbackGuard {
-	logger := opts.Logger
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-
-	guardWindow := opts.GuardWindow
-	if guardWindow <= 0 {
-		guardWindow = DefaultRollbackGuardWindow
-	}
-
-	return &RollbackGuard{
-		pkgID:           opts.PackageID,
-		newVersion:      opts.NewVersion,
-		previousVersion: opts.PreviousVersion,
-		startedAt:       time.Now(),
-		guardWindow:     guardWindow,
-		logger:          logger.With(zap.String("package", opts.PackageID)),
-	}
-}
-
-// ShouldRollback returns true if a crash occurred during the initial observation window
-// and a valid previous version exists.
-func (g *RollbackGuard) ShouldRollback(crashTime time.Time) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if g.observedDone || g.previousVersion == "" {
-		return false
-	}
-
-	if crashTime.Sub(g.startedAt) <= g.guardWindow {
-		g.logger.Warn("new package version crashed within observation window, triggering rollback",
-			zap.String("new_version", g.newVersion),
-			zap.String("rollback_to_version", g.previousVersion),
-			zap.Duration("elapsed", crashTime.Sub(g.startedAt)),
-		)
-		g.observedDone = true
-		return true
-	}
-
-	g.observedDone = true
-	return false
-}
-
-// MarkStable marks the observation window as successfully completed without rollback.
-func (g *RollbackGuard) MarkStable() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.observedDone = true
-}
-
-// PreviousVersion returns the fallback version.
-func (g *RollbackGuard) PreviousVersion() string {
-	return g.previousVersion
 }

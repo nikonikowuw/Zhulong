@@ -43,8 +43,14 @@ func setupTestRouter(t *testing.T) (*gin.Engine, Components, func()) {
 func TestHandlerCRUDAndCacheControl(t *testing.T) {
 	router, comp, cleanup := setupTestRouter(t)
 	defer cleanup()
-	_ = comp.Dispatcher.Start(context.Background())
-	defer comp.Dispatcher.Stop(context.Background())
+	if err := comp.Dispatcher.Start(context.Background()); err != nil {
+		t.Fatalf("Dispatcher.Start failed: %v", err)
+	}
+	defer func() {
+		if err := comp.Dispatcher.Stop(context.Background()); err != nil {
+			t.Errorf("Dispatcher.Stop failed: %v", err)
+		}
+	}()
 
 	// 1. Create Webhook Destination
 	reqBody := CreateAlertDestinationRequest{
@@ -59,9 +65,12 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 			Token: stringPtr("bearer-token-123"),
 		},
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("marshal request failed: %v", err)
+	}
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(bodyBytes))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -73,10 +82,17 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 	}
 
 	var createResp httputil.Response
-	_ = json.Unmarshal(w.Body.Bytes(), &createResp)
-	dataBytes, _ := json.Marshal(createResp.Data)
+	if err := json.Unmarshal(w.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+	dataBytes, err := json.Marshal(createResp.Data)
+	if err != nil {
+		t.Fatalf("marshal response data failed: %v", err)
+	}
 	var created AlertDestinationResponse
-	_ = json.Unmarshal(dataBytes, &created)
+	if err := json.Unmarshal(dataBytes, &created); err != nil {
+		t.Fatalf("unmarshal created destination failed: %v", err)
+	}
 
 	if created.Name != "Test Webhook" || created.ID == "" {
 		t.Fatalf("unexpected created response: %+v", created)
@@ -87,7 +103,7 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 
 	// 2. List Destinations
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/alert-destinations", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/alert-destinations", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -101,9 +117,12 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 	updBody := UpdateAlertDestinationRequest{
 		Name: stringPtr("Renamed Webhook"),
 	}
-	bodyBytes, _ = json.Marshal(updBody)
+	bodyBytes, err = json.Marshal(updBody)
+	if err != nil {
+		t.Fatalf("marshal update request failed: %v", err)
+	}
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPut, "/api/v1/alert-destinations/"+created.ID, bytes.NewReader(bodyBytes))
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/alert-destinations/"+created.ID, bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -116,7 +135,7 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 
 	// 4. Disable and Enable
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/alert-destinations/"+created.ID+"/disable", nil)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations/"+created.ID+"/disable", nil)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("disable expected 200, got %d", w.Code)
@@ -126,7 +145,7 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/alert-destinations/"+created.ID+"/enable", nil)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations/"+created.ID+"/enable", nil)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("enable expected 200, got %d", w.Code)
@@ -137,7 +156,7 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 
 	// 5. Delete Destination
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodDelete, "/api/v1/alert-destinations/"+created.ID, nil)
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/alert-destinations/"+created.ID, nil)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete expected 200, got %d", w.Code)
@@ -162,9 +181,12 @@ func TestHandlerReservedHeaderForbidden(t *testing.T) {
 			},
 		},
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("marshal request failed: %v", err)
+	}
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(bodyBytes))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 

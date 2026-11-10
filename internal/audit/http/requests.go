@@ -30,25 +30,17 @@ func (q *ListLogsQuery) ToFilter() (audit.Filter, httputil.PageWindow, error) {
 		Offset:  window.Offset,
 	}
 
-	if q.StartTime != "" {
-		t, err := time.Parse(time.RFC3339, q.StartTime)
-		if err != nil {
-			return filter, window, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: "startTime", Code: "INVALID_FORMAT", Message: "startTime must be in RFC3339 format"},
-			})
-		}
-		filter.StartTime = &t
+	startTime, err := parseTimeParam("startTime", q.StartTime)
+	if err != nil {
+		return filter, window, err
 	}
+	filter.StartTime = startTime
 
-	if q.EndTime != "" {
-		t, err := time.Parse(time.RFC3339, q.EndTime)
-		if err != nil {
-			return filter, window, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: "endTime", Code: "INVALID_FORMAT", Message: "endTime must be in RFC3339 format"},
-			})
-		}
-		filter.EndTime = &t
+	endTime, err := parseTimeParam("endTime", q.EndTime)
+	if err != nil {
+		return filter, window, err
 	}
+	filter.EndTime = endTime
 
 	return filter, window, nil
 }
@@ -61,13 +53,20 @@ type ClearLogsQuery struct {
 // ParseBefore parses the optional before RFC3339 timestamp. A nil result means
 // every prunable record matches.
 func (q *ClearLogsQuery) ParseBefore() (*time.Time, error) {
-	if q.Before == "" {
+	return parseTimeParam("before", q.Before)
+}
+
+// parseTimeParam parses an optional RFC3339 query parameter. It returns a nil
+// time without an error for an absent value, which callers read as "no bound",
+// and a validation error naming field when the value is malformed.
+func parseTimeParam(field, value string) (*time.Time, error) {
+	if value == "" {
 		return nil, nil
 	}
-	t, err := time.Parse(time.RFC3339, q.Before)
+	t, err := time.Parse(time.RFC3339, value)
 	if err != nil {
 		return nil, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-			{Field: "before", Code: "INVALID_FORMAT", Message: "before must be in RFC3339 format"},
+			{Field: field, Code: "INVALID_FORMAT", Message: field + " must be in RFC3339 format"},
 		})
 	}
 	return &t, nil

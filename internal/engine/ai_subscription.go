@@ -110,7 +110,9 @@ func (s *AIResultSubscription) Close() error {
 		s.core.closeWithErr(nil)
 		s.core.dropQueued()
 
-		if s.stream != nil && s.stream.engine != nil && s.id > 0 {
+		// 本地构造的订阅（测试接缝）没有原生 id，只能就地释放 token。
+		hasNativeSubscription := s.stream != nil && s.stream.engine != nil && s.id > 0
+		if hasNativeSubscription {
 			closeErr = s.stream.engine.unsubscribeWith(
 				s.generation,
 				"unsubscribe_ai_results",

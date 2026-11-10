@@ -63,6 +63,10 @@ var (
 	// ErrInternal covers crashes, timeouts, protocol desync and malformed feature
 	// dimensions. It is the only error that may be retried, and only once.
 	ErrInternal = errors.New("face feature extraction failed")
+	// ErrEntry is returned when the provider package has no runnable entry. It wraps
+	// the underlying resolution error (algorunner.ErrMissingEntry / ErrLegacyEntry /
+	// ErrInvalidEntry) so callers can distinguish "not installed yet" from "broken".
+	ErrEntry = errors.New("provider package entry is unavailable")
 )
 
 // Internal verdicts. They never cross the package boundary — callers only ever see
@@ -82,6 +86,9 @@ var (
 	// errCallerCancelled means the caller went away mid-round-trip. It is never
 	// retried: the replacement child would be killed the instant it started.
 	errCallerCancelled = errors.New("caller cancelled the request")
+
+	errDeadlineExceeded = errors.New("read deadline exceeded")
+	errReplyTooLong     = errors.New("provider reply line exceeds the protocol limit")
 )
 
 // Pixel formats accepted by the provider protocol. The numbers are part of the wire
@@ -90,6 +97,15 @@ var (
 const (
 	FormatBGR24 uint32 = 1
 	FormatRGB24 uint32 = 2
+)
+
+// Defaults for Options.
+const (
+	DefaultRequestTimeout = 30 * time.Second
+	DefaultIdleTimeout    = 60 * time.Second
+	// IdleTimeoutEnv lets operators keep the historical knob. The retired loader
+	// read the same variable, so existing deployments keep their memory profile.
+	IdleTimeoutEnv = "ZHULONG_FACE_PLUGIN_IDLE_TIMEOUT_SEC"
 )
 
 // Protocol constants. They are part of the SDK contract (see algo-plugin-contract
@@ -128,11 +144,6 @@ type Frame struct {
 	Pixels []byte
 }
 
-// ErrEntry is returned when the provider package has no runnable entry. It wraps
-// the underlying resolution error (algorunner.ErrMissingEntry / ErrLegacyEntry /
-// ErrInvalidEntry) so callers can distinguish "not installed yet" from "broken".
-var ErrEntry = errors.New("provider package entry is unavailable")
-
 // Options configures a Client. Zero values are filled from DefaultOptions.
 type Options struct {
 	// Entry resolves the provider package's executable. It is a function, not a
@@ -152,15 +163,6 @@ type Options struct {
 	// per-frame noise.
 	Logger *zap.Logger
 }
-
-// Defaults for Options.
-const (
-	DefaultRequestTimeout = 30 * time.Second
-	DefaultIdleTimeout    = 60 * time.Second
-	// IdleTimeoutEnv lets operators keep the historical knob. The retired loader
-	// read the same variable, so existing deployments keep their memory profile.
-	IdleTimeoutEnv = "ZHULONG_FACE_PLUGIN_IDLE_TIMEOUT_SEC"
-)
 
 // Client is a concurrency-1, one-request-at-a-time conversation with one provider
 // process.
@@ -207,6 +209,17 @@ type fileFingerprint struct {
 	mtime int64
 }
 
+// reply is the wire form of one provider answer. Every field is optional except
+// request_id and status, because failures carry a code instead of features.
+type reply struct {
+	RequestID  uint32    `json:"request_id"`
+	Status     string    `json:"status"`
+	Code       string    `json:"code"`
+	Error      string    `json:"error"`
+	FeatureDim uint32    `json:"feature_dim"`
+	Features   []float32 `json:"features"`
+}
+
 // New creates a client. It does not start a process: the first Extract does, so a
 // host that never enrols a face never pays for a model load.
 func New(opts Options) *Client {
@@ -228,20 +241,6 @@ func New(opts Options) *Client {
 	}
 	go c.reapIdleLoop()
 	return c
-}
-
-// idleTimeoutFromEnv reads the historical TTL knob, falling back to the default on
-// anything unusable. A malformed value must not silently disable reclamation.
-func idleTimeoutFromEnv() time.Duration {
-	raw := os.Getenv(IdleTimeoutEnv)
-	if raw == "" {
-		return DefaultIdleTimeout
-	}
-	seconds, err := strconv.Atoi(raw)
-	if err != nil || seconds <= 0 {
-		return DefaultIdleTimeout
-	}
-	return time.Duration(seconds) * time.Second
 }
 
 // Extract returns the normalised feature vector of the most prominent face in f.
@@ -326,19 +325,8 @@ func (c *Client) ensureProcess(ctx context.Context) (*proc, error) {
 		return nil, fmt.Errorf("%w: %v", ErrEntry, err)
 	}
 
-	if c.proc != nil {
-		if c.proc.entry == entry && c.proc.finger == finger {
-			select {
-			case <-c.proc.cmd.Done():
-				// Exited on its own: replace it, but report nothing — the retry logic
-				// in Extract decides whether the frame was answered.
-				c.discardLocked(c.proc, "provider process exited")
-			default:
-				return c.proc, nil
-			}
-		} else {
-			c.discardLocked(c.proc, "provider executable changed")
-		}
+	if p := c.reuseProcessLocked(entry, finger); p != nil {
+		return p, nil
 	}
 
 	p, err := c.spawn(entry, finger)
@@ -350,6 +338,27 @@ func (c *Client) ensureProcess(ctx context.Context) (*proc, error) {
 	c.proc = p
 	c.lastUsed = time.Now()
 	return p, nil
+}
+
+// reuseProcessLocked returns c.proc if it is still alive and matches the current
+// executable; otherwise it discards any stale or exited process and returns nil.
+func (c *Client) reuseProcessLocked(entry string, finger fileFingerprint) *proc {
+	if c.proc == nil {
+		return nil
+	}
+	if c.proc.entry != entry || c.proc.finger != finger {
+		c.discardLocked(c.proc, "provider executable changed")
+		return nil
+	}
+	select {
+	case <-c.proc.cmd.Done():
+		// Exited on its own: replace it, but report nothing — the retry logic
+		// in Extract decides whether the frame was answered.
+		c.discardLocked(c.proc, "provider process exited")
+		return nil
+	default:
+		return c.proc
+	}
 }
 
 func (c *Client) resolveEntry(ctx context.Context) (string, error) {
@@ -448,23 +457,6 @@ func (c *Client) roundTrip(ctx context.Context, p *proc, f Frame) ([]float32, er
 	return parseReply(line, requestID)
 }
 
-// roundTripFailure classifies a transport-level failure. A caller that went away is
-// reported as such — never retried, never blamed on the package — while every other
-// transport error means the stream is no longer trustworthy.
-func roundTripFailure(ctx context.Context, stage string, err error) error {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return callerGone(ctxErr)
-	}
-	return fmt.Errorf("%w: %w: %s: %v", ErrInternal, errProtocolDesync, stage, err)
-}
-
-// callerGone wraps the caller's cancellation. The result still satisfies
-// errors.Is(err, ErrInternal), so the HTTP layer keeps its 500 contract, but it
-// carries errCallerCancelled so Extract knows a retry would be pure waste.
-func callerGone(err error) error {
-	return fmt.Errorf("%w: %w: %v", ErrInternal, errCallerCancelled, err)
-}
-
 // discardLocked kills and reaps p, then forgets it. The lock must be held so no
 // request can observe a half-dead process.
 func (c *Client) discardLocked(p *proc, reason string) {
@@ -528,10 +520,47 @@ func (c *Client) reapIdleLoop() {
 	}
 }
 
-var (
-	errDeadlineExceeded = errors.New("read deadline exceeded")
-	errReplyTooLong     = errors.New("provider reply line exceeds the protocol limit")
-)
+// idleTimeoutFromEnv reads the historical TTL knob, falling back to the default on
+// anything unusable. A malformed value must not silently disable reclamation.
+func idleTimeoutFromEnv() time.Duration {
+	raw := os.Getenv(IdleTimeoutEnv)
+	if raw == "" {
+		return DefaultIdleTimeout
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		return DefaultIdleTimeout
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// roundTripFailure classifies a transport-level failure. A caller that went away is
+// reported as such — never retried, never blamed on the package — while every other
+// transport error means the stream is no longer trustworthy.
+func roundTripFailure(ctx context.Context, stage string, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return callerGone(ctxErr)
+	}
+	return fmt.Errorf(
+		"%w: %w: %s: %v",
+		ErrInternal,
+		errProtocolDesync,
+		stage,
+		err,
+	)
+}
+
+// callerGone wraps the caller's cancellation. The result still satisfies
+// errors.Is(err, ErrInternal), so the HTTP layer keeps its 500 contract, but it
+// carries errCallerCancelled so Extract knows a retry would be pure waste.
+func callerGone(err error) error {
+	return fmt.Errorf(
+		"%w: %w: %v",
+		ErrInternal,
+		errCallerCancelled,
+		err,
+	)
+}
 
 // readLineBefore reads one '\n'-terminated protocol line, honouring a wall-clock
 // deadline.
@@ -625,35 +654,38 @@ func writeFrame(w io.Writer, requestID uint32, f Frame) error {
 	return err
 }
 
-// reply is the wire form of one provider answer. Every field is optional except
-// request_id and status, because failures carry a code instead of features.
-type reply struct {
-	RequestID  uint32    `json:"request_id"`
-	Status     string    `json:"status"`
-	Code       string    `json:"code"`
-	Error      string    `json:"error"`
-	FeatureDim uint32    `json:"feature_dim"`
-	Features   []float32 `json:"features"`
-}
-
 func parseReply(line string, wantRequestID uint32) ([]float32, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || trimmed[0] != '{' {
 		// Anything else is either a stray log line or garbage. Treating it as a
 		// desync (retryable, and the child is replaced) is the only safe reading: a
 		// silent skip could pair this request with the *next* answer.
-		return nil, fmt.Errorf("%w: %w: provider wrote a non-JSON line on stdout: %.120q",
-			ErrInternal, errProtocolDesync, trimmed)
+		return nil, fmt.Errorf(
+			"%w: %w: provider wrote a non-JSON line on stdout: %.120q",
+			ErrInternal,
+			errProtocolDesync,
+			trimmed,
+		)
 	}
 	var r reply
 	if err := json.Unmarshal([]byte(trimmed), &r); err != nil {
-		return nil, fmt.Errorf("%w: %w: decode provider reply: %v", ErrInternal, errProtocolDesync, err)
+		return nil, fmt.Errorf(
+			"%w: %w: decode provider reply: %v",
+			ErrInternal,
+			errProtocolDesync,
+			err,
+		)
 	}
 	if r.RequestID != wantRequestID {
 		// Mismatched ids mean the stream is out of step; attaching these features to
 		// this request would store someone else's embedding.
-		return nil, fmt.Errorf("%w: %w: reply request_id %d does not match request %d",
-			ErrInternal, errProtocolDesync, r.RequestID, wantRequestID)
+		return nil, fmt.Errorf(
+			"%w: %w: reply request_id %d does not match request %d",
+			ErrInternal,
+			errProtocolDesync,
+			r.RequestID,
+			wantRequestID,
+		)
 	}
 	if r.Status != "passed" {
 		// A reply that echoes our id is in sync: the child answered this request. The
@@ -665,12 +697,19 @@ func parseReply(line string, wantRequestID uint32) ([]float32, error) {
 		}
 		return nil, failureForCode(r.Code, detail)
 	}
-	if r.FeatureDim == 0 || r.FeatureDim > maxFeatureDim || len(r.Features) != int(r.FeatureDim) {
+	validDim := r.FeatureDim > 0 && r.FeatureDim <= maxFeatureDim
+	dimMatches := len(r.Features) == int(r.FeatureDim)
+	if !validDim || !dimMatches {
 		// "passed" with an unusable dimension is a fake success: the child is in sync
 		// but produced something the gallery cannot store, so replace it rather than
 		// trust the next answer.
-		return nil, fmt.Errorf("%w: %w: provider returned feature_dim=%d with %d values",
-			ErrInternal, errProtocolDesync, r.FeatureDim, len(r.Features))
+		return nil, fmt.Errorf(
+			"%w: %w: provider returned feature_dim=%d with %d values",
+			ErrInternal,
+			errProtocolDesync,
+			r.FeatureDim,
+			len(r.Features),
+		)
 	}
 	return r.Features, nil
 }
@@ -705,10 +744,20 @@ func validateFrame(f Frame) error {
 		stride = f.Width * 3
 	}
 	if stride < f.Width*3 {
-		return fmt.Errorf("%w: stride %d is smaller than a packed row (%d)", ErrInvalidArgument, stride, f.Width*3)
+		return fmt.Errorf(
+			"%w: stride %d is smaller than a packed row (%d)",
+			ErrInvalidArgument,
+			stride,
+			f.Width*3,
+		)
 	}
 	if want := uint64(stride) * uint64(f.Height); uint64(len(f.Pixels)) != want {
-		return fmt.Errorf("%w: payload is %d bytes, want %d", ErrInvalidArgument, len(f.Pixels), want)
+		return fmt.Errorf(
+			"%w: payload is %d bytes, want %d",
+			ErrInvalidArgument,
+			len(f.Pixels),
+			want,
+		)
 	}
 	return nil
 }

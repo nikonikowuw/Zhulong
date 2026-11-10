@@ -29,7 +29,14 @@ func (e *Engine) getBrokerPath(gen uint64, streamID C.Zhulong_stream_id) (string
 	if st != C.Zhulong_OK {
 		return "", mapNativeStatus("get_broker_path", int32(st))
 	}
-	return C.GoString(&buf[0]), nil
+
+	// 按原生回报的长度取（含末尾 '\0'），不用 GoString 扫描终止符：
+	// 那样一旦原生哪天漏补 '\0'，就会越过缓冲区一直读到栈尾。
+	written := min(int(inoutLen), len(buf))
+	if written > 0 {
+		written-- // 去掉末尾 '\0'
+	}
+	return C.GoStringN(&buf[0], C.int(written)), nil
 }
 
 // brokerClientsCapacity 是单次快照最多取回的客户端条数。
@@ -52,7 +59,12 @@ func (e *Engine) getBrokerClients(gen uint64, streamID C.Zhulong_stream_id) ([]B
 	var buf [brokerClientsCapacity]C.Zhulong_broker_client_stats
 	var total C.uint32_t
 	st := C.Zhulong_stream_get_broker_clients(
-		lease.handle, streamID, &buf[0], C.uint32_t(len(buf)), &total)
+		lease.handle,
+		streamID,
+		&buf[0],
+		C.uint32_t(len(buf)),
+		&total,
+	)
 	if st != C.Zhulong_OK {
 		return nil, 0, mapNativeStatus("get_broker_clients", int32(st))
 	}

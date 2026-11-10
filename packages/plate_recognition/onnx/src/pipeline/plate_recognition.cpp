@@ -10,11 +10,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -63,7 +66,7 @@ std::string executable_directory() {
     }
 #endif
     if (self_path.empty()) {
-        Dl_info info;
+        Dl_info info{};
         if (dladdr(reinterpret_cast<void*>(&executable_directory), &info) == 0 || info.dli_fname == nullptr) {
             return {};
         }
@@ -139,35 +142,39 @@ zhulong_status_t model_unavailable_status(const std::string& resolved_path) {
  * @brief 读取扁平 JSON 里的数值字段（只服务 config.schema.json 声明的键）
  *
  * 刻意不引入 JSON 依赖：算法包必须保持零第三方依赖，可被任意宿主加载。
- * 匹配 `"key"` 后取第一个 `:` 之后的数值，非法或缺失时返回 false。
+ * 匹配 `"key"` 后取第一个 `:` 之后的数值，非法或缺失时返回 std::nullopt。
  *
  * ⚠️ 不校验 JSON 类型：`"confidence_threshold": "0.5"`（字符串）同样会被 strtod 接受。
  *    这是零依赖换来的刻意取舍 —— 键名与语义的权威声明属于 config.schema.json，
  *    宿主在下发前就该按 schema 校验过；本函数只负责「拿不到/拿不准就用默认值」。
  */
-bool json_number_field(const std::string& json, const std::string& key, double& out) {
-    const std::string quoted_key = "\"" + key + "\"";
+std::optional<double> json_number_field(const std::string& json, std::string_view key) {
+    std::string quoted_key;
+    quoted_key.reserve(key.size() + 2);
+    quoted_key.push_back('"');
+    quoted_key.append(key);
+    quoted_key.push_back('"');
+
     const auto key_pos = json.find(quoted_key);
     if (key_pos == std::string::npos) {
-        return false;
+        return std::nullopt;
     }
     const auto colon = json.find(':', key_pos + quoted_key.size());
     if (colon == std::string::npos) {
-        return false;
+        return std::nullopt;
     }
     const char* begin = json.c_str() + colon + 1;
     char* end = nullptr;
     errno = 0;
     const double value = std::strtod(begin, &end);
     if (end == begin || errno == ERANGE || !std::isfinite(value)) {
-        return false;
+        return std::nullopt;
     }
-    out = value;
-    return true;
+    return value;
 }
 
 /** @brief 值是否落在阈值可接受区间（与 config.schema.json 的区间一致） */
-bool threshold_in_range(double value) noexcept {
+constexpr bool threshold_in_range(double value) noexcept {
     return value > kThresholdMinExclusive && value <= kThresholdMaxInclusive;
 }
 
@@ -178,11 +185,10 @@ bool threshold_in_range(double value) noexcept {
  * （CONFIDENCE_THRESHOLD / NMS_THRESHOLD），使「声明了可调参数」与「真的能调」对齐。
  * 越界值回落默认值而不是报错：宿主与包分开交付，版本偏斜真实存在。
  */
-float resolve_threshold(const std::string& config_json, const char* config_key, const char* env_key,
+float resolve_threshold(const std::string& config_json, std::string_view config_key, const char* env_key,
                         float default_value) {
-    double value = 0.0;
-    if (json_number_field(config_json, config_key, value)) {
-        return threshold_in_range(value) ? static_cast<float>(value) : default_value;
+    if (const auto value = json_number_field(config_json, config_key); value.has_value()) {
+        return threshold_in_range(*value) ? static_cast<float>(*value) : default_value;
     }
     if (const char* env_value = std::getenv(env_key); env_value != nullptr && env_value[0] != '\0') {
         char* end = nullptr;
@@ -309,9 +315,7 @@ std::vector<zhulong::VehicleItem> PlateRecognitionPlugin::detect_vehicles(
 
         zhulong::VehicleItem vehicle;
         vehicle.track_id = 0; // 退化模式：无车辆跟踪
-        for (std::size_t k = 0; k < detection.box.size(); ++k) {
-            vehicle.vehicle_box[k] = detection.box[k];
-        }
+        std::copy_n(detection.box.begin(), detection.box.size(), vehicle.vehicle_box);
         // 退化语义下「车」就是车牌框：vehicle_score 取**车牌检测**置信度，
         // 而 plate.score 是字符识别置信度，二者语义不同、不可互换。
         vehicle.vehicle_score = detection.score;
@@ -319,9 +323,7 @@ std::vector<zhulong::VehicleItem> PlateRecognitionPlugin::detect_vehicles(
         vehicle.vehicle_color = "";
 
         zhulong::PlateItem plate;
-        for (std::size_t k = 0; k < detection.box.size(); ++k) {
-            plate.box[k] = detection.box[k];
-        }
+        std::copy_n(detection.box.begin(), detection.box.size(), plate.box);
         plate.score = recognized.score;
         plate.plate_number = std::move(recognized.plate_number);
         plate.plate_color = std::move(recognized.plate_color);

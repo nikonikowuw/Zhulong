@@ -21,15 +21,38 @@ import (
 type harness struct {
 	router  *gin.Engine
 	service *audit.Service
-	cleanup func()
 }
 
-func newHarness(t *testing.T, configure func(api *gin.RouterGroup, service *audit.Service)) *harness {
+// harnessConfig is the middleware arrangement a harness builds; options adjust
+// it instead of forcing tests to re-implement the wiring.
+type harnessConfig struct {
+	recovery   gin.HandlerFunc
+	middleware []gin.HandlerFunc
+}
+
+// harnessOption adjusts how newHarness wires the router.
+type harnessOption func(*harnessConfig)
+
+// withBodyLimit appends a body-limit middleware after the audit middleware, so a
+// request rejected while its body is read is still audited. It also swaps in
+// Gin's recovery: these tests never panic, so the panic observer is not needed
+// and using it here would blur what the assertion covers.
+func withBodyLimit(limit int64, errorCode string) harnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.recovery = gin.Recovery()
+		cfg.middleware = append(cfg.middleware, httpmiddleware.MaxBodyLimitWithLimitAndCode(limit, errorCode))
+	}
+}
+
+func newHarness(
+	t *testing.T,
+	configure func(api *gin.RouterGroup, service *audit.Service),
+	opts ...harnessOption,
+) *harness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	tempDir := t.TempDir()
-	dbStore := database.New(tempDir, zap.NewNop())
+	dbStore := database.New(t.TempDir(), zap.NewNop())
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
@@ -43,6 +66,22 @@ func newHarness(t *testing.T, configure func(api *gin.RouterGroup, service *audi
 	if err := service.Start(context.Background()); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := service.Stop(context.Background()); err != nil {
+			t.Logf("stop audit service: %v", err)
+		}
+		if err := dbStore.Close(); err != nil {
+			t.Logf("close test database: %v", err)
+		}
+	})
+
+	cfg := harnessConfig{
+		recovery:   httpmiddleware.Recovery(zap.NewNop(), NewPanicObserver(service)),
+		middleware: []gin.HandlerFunc{Middleware(service)},
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	router := gin.New()
 	// Mirror production: this deployment has no reverse proxy, so forwarding
@@ -50,16 +89,12 @@ func newHarness(t *testing.T, configure func(api *gin.RouterGroup, service *audi
 	if err := router.SetTrustedProxies(nil); err != nil {
 		t.Fatalf("SetTrustedProxies failed: %v", err)
 	}
-	router.Use(httpmiddleware.Recovery(zap.NewNop(), NewPanicObserver(service)))
+	router.Use(cfg.recovery)
 	api := router.Group("/api/v1")
-	api.Use(Middleware(service))
+	api.Use(cfg.middleware...)
 	configure(api, service)
 
-	cleanup := func() {
-		_ = service.Stop(context.Background())
-		_ = dbStore.Close()
-	}
-	return &harness{router: router, service: service, cleanup: cleanup}
+	return &harness{router: router, service: service}
 }
 
 // records stops the service so the asynchronous queue is drained, then returns
@@ -95,7 +130,6 @@ func TestMiddlewareRecordsSuccessWithClientIP(t *testing.T) {
 			httputil.Success(c, gin.H{"id": "new"})
 		})
 	})
-	defer h.cleanup()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/cameras", nil)
 	req.RemoteAddr = "192.168.5.20:45678"
@@ -133,7 +167,6 @@ func TestMiddlewareSkipsRequestsWithoutTag(t *testing.T) {
 			httputil.Success(c, gin.H{"items": []string{}})
 		})
 	})
-	defer h.cleanup()
 
 	if w := do(h.router, httptest.NewRequest(http.MethodGet, "/api/v1/cameras", nil)); w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -154,7 +187,6 @@ func TestMiddlewareRecordsHTTPFailureWithSafeError(t *testing.T) {
 				errLeaky))
 		})
 	})
-	defer h.cleanup()
 
 	if w := do(h.router, httptest.NewRequest(http.MethodPost, "/api/v1/cameras", nil)); w.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", w.Code)
@@ -188,7 +220,6 @@ func TestMiddlewareRecordsJSONBindFailure(t *testing.T) {
 			httputil.Success(c, gin.H{"ok": true})
 		})
 	})
-	defer h.cleanup()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -217,7 +248,6 @@ func TestMiddlewareRecordsDomainFailureOn2xx(t *testing.T) {
 			httputil.Success(c, gin.H{"syncStatus": gin.H{"state": "failed"}})
 		})
 	})
-	defer h.cleanup()
 
 	if w := do(h.router, httptest.NewRequest(http.MethodPost, "/api/v1/system/time/sync", nil)); w.Code != http.StatusOK {
 		t.Fatalf("expected the existing 200 contract to be preserved, got %d", w.Code)
@@ -254,7 +284,6 @@ func TestTagActionOverridesDeclaredAction(t *testing.T) {
 			httputil.Success(c, gin.H{"ok": true})
 		})
 	})
-	defer h.cleanup()
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/cameras/cam_9", strings.NewReader(`{"enabled":true}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -286,7 +315,6 @@ func TestTagActorRefinesIdentityAndKeepsIP(t *testing.T) {
 			httputil.Success(c, gin.H{"ok": true})
 		})
 	})
-	defer h.cleanup()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
 	req.RemoteAddr = "10.9.8.7:1234"
@@ -315,7 +343,6 @@ func TestFailedLoginKeepsAnonymousActor(t *testing.T) {
 				http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid credentials", nil))
 		})
 	})
-	defer h.cleanup()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
 	req.RemoteAddr = "10.1.1.1:2222"
@@ -345,7 +372,6 @@ func TestPanicIsRecordedAsFailure(t *testing.T) {
 			panic("boom")
 		})
 	})
-	defer h.cleanup()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/cameras", nil)
 	req.RemoteAddr = "10.2.3.4:5555"
@@ -377,7 +403,6 @@ func TestPanicWithoutTagProducesNoRecord(t *testing.T) {
 			panic("untagged")
 		})
 	})
-	defer h.cleanup()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/boom", nil)
 	if w := do(h.router, req); w.Code != http.StatusInternalServerError {
@@ -408,7 +433,6 @@ func TestMiddlewareIsRaceFree(t *testing.T) {
 			httputil.Success(c, gin.H{"ok": true})
 		})
 	})
-	defer h.cleanup()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/cameras", nil)
 	if w := do(h.router, req); w.Code != http.StatusOK {
@@ -419,123 +443,64 @@ func TestMiddlewareIsRaceFree(t *testing.T) {
 // errLeaky stands in for an internal error that must never be persisted.
 var errLeaky = errors.New("sqlite: UNIQUE constraint failed: cameras.rtsp_url")
 
+// oversizedLoginPayload exceeds the 64-byte limit the body-limit tests install.
+func oversizedLoginPayload() string {
+	return `{"username":"` + strings.Repeat("a", 200) + `"}`
+}
+
+// bindBody fails while reading the body, which is where a chunked overflow
+// surfaces: the ContentLength pre-check cannot reject it.
+func bindBody(c *gin.Context) {
+	var body map[string]any
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
+	httputil.Success(c, gin.H{"ok": true})
+}
+
 // TestChunkedBodyOverflowIsAudited covers the path that slips past the
 // ContentLength pre-check: a request without a known length is only rejected
 // once the body is read, which happens inside the handler after the tag was
 // declared. That is a bind failure, so it must be recorded.
 func TestChunkedBodyOverflowIsAudited(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	tempDir := t.TempDir()
-	dbStore := database.New(tempDir, zap.NewNop())
-	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
-		t.Fatalf("OpenAndMigrate failed: %v", err)
-	}
-	service := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
-	})
-	if err := service.Start(context.Background()); err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
-	defer func() {
-		_ = service.Stop(context.Background())
-		_ = dbStore.Close()
-	}()
-
-	const limit int64 = 64
-	router := gin.New()
-	router.Use(gin.Recovery())
-	api := router.Group("/api/v1")
-	api.Use(Middleware(service), httpmiddleware.MaxBodyLimitWithLimitAndCode(limit, "PAYLOAD_TOO_LARGE"))
-	api.POST("/auth/login", TagMiddleware(audit.ActionAuthLogin, "user:", ""), func(c *gin.Context) {
-		var body map[string]any
-		if err := c.ShouldBindJSON(&body); err != nil {
-			httputil.HandleBindError(c, err)
-			return
-		}
-		httputil.Success(c, gin.H{"ok": true})
-	})
+	h := newHarness(t, func(api *gin.RouterGroup, _ *audit.Service) {
+		api.POST("/auth/login", TagMiddleware(audit.ActionAuthLogin, "user:", ""), bindBody)
+	}, withBodyLimit(64, "PAYLOAD_TOO_LARGE"))
 
 	// ContentLength is -1, so the pre-check cannot reject the request; the
 	// overflow only surfaces while binding.
-	payload := `{"username":"` + strings.Repeat("a", 200) + `"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(oversizedLoginPayload()))
 	req.ContentLength = -1
 	req.Header.Set("Content-Type", "application/json")
-	if w := do(router, req); w.Code != http.StatusRequestEntityTooLarge {
+	if w := do(h.router, req); w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d: %s", w.Code, w.Body.String())
 	}
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := service.Stop(stopCtx); err != nil {
-		t.Fatalf("drain failed: %v", err)
+	records := h.records(t)
+	if len(records) != 1 {
+		t.Fatalf("expected the bind failure to be audited, got %d records", len(records))
 	}
-	items, _, err := service.List(context.Background(), audit.Filter{Limit: 10})
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("expected the bind failure to be audited, got %d records", len(items))
-	}
-	if items[0].Status != audit.StatusFailed {
-		t.Fatalf("expected failed status, got %q", items[0].Status)
+	if records[0].Status != audit.StatusFailed {
+		t.Fatalf("expected failed status, got %q", records[0].Status)
 	}
 }
 
 // TestChunkedBodyOverflowWithoutTagIsSkipped is the counterpart: a request that
 // never declared an action stays unrecorded even when it is rejected.
 func TestChunkedBodyOverflowWithoutTagIsSkipped(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+	h := newHarness(t, func(api *gin.RouterGroup, _ *audit.Service) {
+		api.POST("/untagged", bindBody)
+	}, withBodyLimit(64, "PAYLOAD_TOO_LARGE"))
 
-	tempDir := t.TempDir()
-	dbStore := database.New(tempDir, zap.NewNop())
-	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
-		t.Fatalf("OpenAndMigrate failed: %v", err)
-	}
-	service := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
-	})
-	if err := service.Start(context.Background()); err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
-	defer func() {
-		_ = service.Stop(context.Background())
-		_ = dbStore.Close()
-	}()
-
-	const limit int64 = 64
-	router := gin.New()
-	router.Use(gin.Recovery())
-	api := router.Group("/api/v1")
-	api.Use(Middleware(service), httpmiddleware.MaxBodyLimitWithLimitAndCode(limit, "PAYLOAD_TOO_LARGE"))
-	api.POST("/untagged", func(c *gin.Context) {
-		var body map[string]any
-		if err := c.ShouldBindJSON(&body); err != nil {
-			httputil.HandleBindError(c, err)
-			return
-		}
-		httputil.Success(c, gin.H{"ok": true})
-	})
-
-	payload := `{"username":"` + strings.Repeat("a", 200) + `"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/untagged", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/untagged", strings.NewReader(oversizedLoginPayload()))
 	req.ContentLength = -1
 	req.Header.Set("Content-Type", "application/json")
-	if w := do(router, req); w.Code != http.StatusRequestEntityTooLarge {
+	if w := do(h.router, req); w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", w.Code)
 	}
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := service.Stop(stopCtx); err != nil {
-		t.Fatalf("drain failed: %v", err)
-	}
-	items, _, err := service.List(context.Background(), audit.Filter{Limit: 10})
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
-	}
-	if len(items) != 0 {
-		t.Fatalf("expected no records for an untagged request, got %d", len(items))
+	if records := h.records(t); len(records) != 0 {
+		t.Fatalf("expected no records for an untagged request, got %d", len(records))
 	}
 }

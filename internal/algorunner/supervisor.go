@@ -66,6 +66,11 @@ var (
 	ErrNoBrokerSockets         = errors.New("cannot start runner without broker sockets")
 )
 
+// errNoLifecycleStore reports a RestartAlgorithm call on a supervisor built
+// without a store. It is unexported: only this package's own tests construct such
+// a supervisor.
+var errNoLifecycleStore = errors.New("no lifecycle store configured")
+
 // NewSupervisor creates a Supervisor instance.
 //
 // Broker socket paths are resolved per algorithm package through
@@ -142,11 +147,19 @@ func (s *Supervisor) pushTaskConfigs(algoID string) {
 
 	if regions, ok := provider.(TaskRegionProvider); ok {
 		snapshots, err := regions.TaskRegionsFor(ctx, algoID)
-		if err == nil {
-			err = broadcaster.BroadcastRegions(ctx, algoID, snapshots)
-		}
 		if err != nil {
-			s.logger.Warn("failed to push task regions", zap.String("id", algoID), zap.Error(err))
+			// Resolve and push failures are logged apart: one names the lookup,
+			// the other the broadcast, and an operator acting on the message must
+			// not have to guess which side failed.
+			s.logger.Warn("failed to resolve task regions",
+				zap.String("id", algoID),
+				zap.Error(err),
+			)
+		} else if err := broadcaster.BroadcastRegions(ctx, algoID, snapshots); err != nil {
+			s.logger.Warn("failed to push task regions",
+				zap.String("id", algoID),
+				zap.Error(err),
+			)
 		}
 	}
 	configs, err := provider.TaskConfigsFor(ctx, algoID)
@@ -298,8 +311,11 @@ func (s *Supervisor) processConfigJSON(algoID string) string {
 	if raw == "" {
 		return ""
 	}
-	var probe map[string]any
-	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+	// Decode into RawMessage values rather than `any`: the only question asked is
+	// "is the top level a JSON object", and `null` must be rejected too — it
+	// unmarshals into a nil map without an error.
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &object); err != nil || object == nil {
 		s.logger.Warn("ignoring malformed process-level algorithm config",
 			zap.String("algorithm_id", algoID),
 			zap.String("env", algoConfigEnv),
@@ -474,6 +490,13 @@ func (s *Supervisor) StopAlgorithm(ctx context.Context, algoID string) error {
 		return fmt.Errorf("wait for algorithm %q to stop: %w", algoID, ctx.Err())
 	}
 
+	// The complement stop in startProcess runs after stopProcess has already
+	// returned, so its failure cannot reach stopErr above. Reading it here — after
+	// doneCh, i.e. after the only writer has finished — keeps "the child is still
+	// running" from being reported as a clean stop. errors.Join(nil, nil) is nil,
+	// so the common path stays nil.
+	stopErr = errors.Join(stopErr, w.spawnedStopError())
+
 	// Only persist DISABLED when this call actually retired its own watcher. If a
 	// rollback/upgrade re-registered a live watcher under the same ID, the DB
 	// must keep reflecting that running process.
@@ -498,7 +521,7 @@ func (s *Supervisor) RestartAlgorithm(ctx context.Context, algoID string) error 
 		}
 	}
 	if s.store == nil {
-		return errors.New("no store configured to load algorithm for restart")
+		return errNoLifecycleStore
 	}
 	algo, err := s.store.GetAlgorithmPackage(ctx, algoID)
 	if err != nil {
@@ -658,7 +681,7 @@ func (s *Supervisor) ResetAlgorithm(ctx context.Context, algoID string) error {
 	select {
 	case <-w.doneCh:
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("wait for algorithm %q to stop: %w", algoID, ctx.Err())
 	}
 
 	s.retireWatcher(algoID, w)

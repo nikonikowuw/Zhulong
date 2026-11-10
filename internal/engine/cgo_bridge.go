@@ -6,7 +6,8 @@ package engine
 #include <Zhulong/engine.h>
 
 void zhulongPacketCallbackBridge(uintptr_t token, const Zhulong_packet_view *packet);
-void zhulongAIResultCallbackBridge(uintptr_t token, Zhulong_stream_id stream, const char *json_payload, size_t payload_len);
+void zhulongAIResultCallbackBridge(uintptr_t token, Zhulong_stream_id stream,
+    const char *json_payload, size_t payload_len);
 */
 import "C"
 

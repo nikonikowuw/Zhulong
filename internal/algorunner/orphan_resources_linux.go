@@ -16,12 +16,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// socketSweepResult is the outcome of one socket-file decision.
-type socketSweepResult struct {
-	removed    bool
-	unverified bool
-	err        error
-}
+// socketSweepResult, sweepBatch and OrphanCleanupReport live in orphan_report.go:
+// they describe the sweep's outcome and are shared with the other platforms.
 
 // removeStaleBrokerSocket unlinks sockPath only when it can prove no process
 // still owns the socket.
@@ -142,41 +138,102 @@ func unixSocketPaths() (map[string]struct{}, error) {
 	return paths, nil
 }
 
+// resolveBrokerSocketBaseDir returns the broker socket base directory with every
+// symlink resolved, reporting false when it cannot be resolved.
+//
+// It is resolved once per sweep pass, not per candidate: the answer is a loop
+// invariant, and EvalSymlinks is a chain of lstats the sweep must not pay for
+// every entry of a directory as busy as /tmp.
+func resolveBrokerSocketBaseDir() (string, bool) {
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(brokerSocketBaseDir()))
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
+}
+
+// isBrokerSocketPath reports whether path is a broker socket file this host could
+// have created: it must live directly in the broker socket base directory and
+// carry the broker socket prefix/suffix.
+//
+// resolvedBase is the base directory as returned by resolveBrokerSocketBaseDir;
+// an empty value means "unresolvable" and rejects everything (fail-closed).
+//
+// It is the single place that answers that question, because it also gates the
+// paths read out of a leftover runner's cmdline. Those are untrusted input — a
+// package writes its own --broker values — and unlinking an arbitrary path just
+// because a process named it is not something the sweep may do.
+//
+// The checks run cheapest-first. The name's prefix/suffix is pure lexical work, so
+// an entry that cannot be a broker socket costs no system call at all; only the
+// few that pass it get the two EvalSymlinks below.
+//
+// Two forms of alias are rejected explicitly:
+//
+//   - A path whose lexical form is not canonical (filepath.Clean(path) != path,
+//     i.e. "..", "//" or a trailing slash). unlink resolves the path through the
+//     kernel while the checks here are lexical, so the two must agree on the file
+//     before anything is claimed about its directory.
+//   - A directory that only reaches the base dir through a symlink. Both sides are
+//     compared AFTER EvalSymlinks, so a symlinked intermediate directory cannot be
+//     used as a pivot to unlink something outside the base dir. Any resolution
+//     failure is fail-closed: an unreadable or non-existent directory is never a
+//     broker socket directory.
+func isBrokerSocketPath(path, resolvedBase string) bool {
+	if path == "" || resolvedBase == "" {
+		return false
+	}
+	// Shape first: a directory full of unrelated files must not cost a single
+	// lstat here.
+	name := filepath.Base(path)
+	if !strings.HasPrefix(name, brokerSocketPrefix) || !strings.HasSuffix(name, brokerSocketSuffix) {
+		return false
+	}
+	// Reject non-canonical spellings before touching the filesystem: the kernel
+	// would resolve them to a different file than this lexical form names.
+	if filepath.Clean(path) != path {
+		return false
+	}
+	resolvedDir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return false
+	}
+	return resolvedDir == resolvedBase
+}
+
 // removeAbandonedBrokerSockets sweeps the broker socket directory for socket files
-// that nothing is bound to.
-func removeAbandonedBrokerSockets() sweepBatch {
+// that nothing is bound to, folding each decision into report.
+//
+// The caller's context is checked on every entry: once the startup budget is gone,
+// continuing to unlink files would let the same sweep report both "truncated" and
+// "removed these sockets".
+func removeAbandonedBrokerSockets(ctx context.Context, report *OrphanCleanupReport) []error {
+	resolvedBase, baseOK := resolveBrokerSocketBaseDir()
+	if !baseOK {
+		// Fail-closed, and once for the whole pass: an unresolvable base dir is
+		// never a broker socket directory.
+		return nil
+	}
 	baseDir := brokerSocketBaseDir()
+
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
-		return sweepBatch{
-			removed:    []string{},
-			unverified: []string{},
-			failures:   []error{},
-		} // Unreadable dir is not a sweep failure.
+		return nil // Unreadable dir is not a sweep failure.
 	}
 
-	result := sweepBatch{
-		removed:    []string{},
-		unverified: []string{},
-		failures:   []error{},
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, brokerSocketPrefix) || !strings.HasSuffix(name, brokerSocketSuffix) {
+	failures := []error{}
+	for i, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return append(failures, fmt.Errorf("orphan socket sweep aborted after %d/%d candidates: %w",
+				i, len(entries), err))
+		}
+		full := filepath.Join(baseDir, entry.Name())
+		if !isBrokerSocketPath(full, resolvedBase) {
 			continue
 		}
-		full := filepath.Join(baseDir, name)
-		outcome := removeStaleBrokerSocket(full)
-		switch {
-		case outcome.removed:
-			result.removed = append(result.removed, full)
-		case outcome.err != nil:
-			result.failures = append(result.failures, outcome.err)
-		case outcome.unverified:
-			result.unverified = append(result.unverified, full)
-		}
+		failures = append(failures, report.recordSocket(full, removeStaleBrokerSocket(full))...)
 	}
-	return result
+	return failures
 }
 
 // shmRoot is where POSIX shm objects live on Linux. frame_broker.cpp builds the
@@ -201,11 +258,7 @@ const (
 // unlinking while mapped would not corrupt them (POSIX semantics keep the mapping
 // alive) but would make a running stream look broken on restart.
 func removeUnheldShmSegments(ctx context.Context, logger *zap.Logger) sweepBatch {
-	result := sweepBatch{
-		removed:    []string{},
-		unverified: []string{},
-		failures:   []error{},
-	}
+	result := newSweepBatch()
 	entries, err := os.ReadDir(shmRoot)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -216,8 +269,8 @@ func removeUnheldShmSegments(ctx context.Context, logger *zap.Logger) sweepBatch
 	}
 
 	for _, entry := range entries {
-		if ctx.Err() != nil {
-			result.failures = append(result.failures, ctx.Err())
+		if err := ctx.Err(); err != nil {
+			result.failures = append(result.failures, err)
 			break
 		}
 		name := entry.Name()
@@ -269,7 +322,7 @@ func shmHoldState(path string) (holdState, error) {
 	if err != nil {
 		return holdUnknown, fmt.Errorf("orphan sweep: read %q: %w", procRoot, err)
 	}
-	unknown := false
+	var unknown bool
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -326,11 +379,11 @@ func processMapsFile(procDir string, id fileID) (bool, holdState) {
 	}
 	mapped, readErr := mapsFileContains(mapsFile, id)
 	closeFileBestEffort(mapsFile)
-	if readErr == nil && !mapped {
-		return false, holdNone
-	}
 	if readErr != nil {
 		return false, stateForProcError(readErr)
+	}
+	if !mapped {
+		return false, holdNone
 	}
 	return true, holdLive
 }
@@ -411,10 +464,16 @@ func processVanished(err error) bool {
 // unreliable exactly when it matters: it gains a " (deleted)" suffix once the
 // segment has been unlinked, and it is rewritten by a rename.
 func mapsFileContains(file *os.File, id fileID) (bool, error) {
+	const (
+		// A maps line is short; the pathname column is the only unbounded part.
+		mapsInitialReadBuffer = 64 * 1024
+		mapsMaxReadBuffer     = 1024 * 1024
+	)
+
 	wantDev := fmt.Sprintf("%02x:%02x", id.devMajor, id.devMinor)
 	wantIno := strconv.FormatUint(id.ino, 10)
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, mapsInitialReadBuffer), mapsMaxReadBuffer)
 	for scanner.Scan() {
 		// Format: addr perms offset dev inode [pathname]
 		fields := strings.Fields(scanner.Text())

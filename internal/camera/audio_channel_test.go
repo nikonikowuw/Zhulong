@@ -187,7 +187,7 @@ func TestAudioChannelPumpPacksFrames(t *testing.T) {
 	source.packets <- engine.Packet{
 		TrackType: engine.TrackAudio,
 		Codec:     engine.CodecPCMU,
-		PtsUS:     8000,
+		PTSUS:     8000,
 		Data:      []byte{0xFF, 0xFF},
 	}
 
@@ -229,7 +229,7 @@ func TestAudioChannelBackpressureClosesOnlyThisChannel(t *testing.T) {
 		source.packets <- engine.Packet{
 			TrackType: engine.TrackAudio,
 			Codec:     engine.CodecPCMA,
-			PtsUS:     int64(i),
+			PTSUS:     int64(i),
 			Data:      []byte{0xD5},
 		}
 	}

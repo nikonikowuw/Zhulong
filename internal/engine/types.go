@@ -46,6 +46,16 @@ func (k ConsumerKind) String() string {
 	}
 }
 
+// IsValid 报告该类型是否为已知的消费者类型。
+func (k ConsumerKind) IsValid() bool {
+	switch k {
+	case ConsumerPreview, ConsumerRecording, ConsumerAI:
+		return true
+	default:
+		return false
+	}
+}
+
 // Consumer 标识一个流消费者：唯一 ID 与用途类型。
 //
 // 两者必须成对合法（ID 非零且 Kind 已知），因此作为整体在拉流接口与校验之间传递，
@@ -179,6 +189,8 @@ const (
 
 func (f FrameClass) String() string {
 	switch f {
+	case FrameUnknown:
+		return "unknown"
 	case FrameIDR:
 		return "idr"
 	case FramePredictive:
@@ -186,7 +198,8 @@ func (f FrameClass) String() string {
 	case FrameNonReference:
 		return "non_reference"
 	default:
-		return "unknown"
+		// 越界取值不当成 FrameUnknown：那样会把「原生侧越界」隐形为合法值。
+		return fmt.Sprintf("frame_class(%d)", int32(f))
 	}
 }
 
@@ -194,7 +207,7 @@ func (f FrameClass) String() string {
 type PacketFlag uint32
 
 const (
-	// PacketFlagTimestampSynthetic 表示 PtsUS 由 DTS 合成（源流缺失 PTS）。
+	// PacketFlagTimestampSynthetic 表示 PTSUS 由 DTS 合成（源流缺失 PTS）。
 	PacketFlagTimestampSynthetic PacketFlag = 0x0001
 	// PacketFlagParameterSetsInjected 表示原生层已为本帧前置注入 VPS/SPS/PPS，
 	// 接收方无需再等待码流内自带参数集。
@@ -202,7 +215,7 @@ const (
 	// PacketFlagDiscontinuity 表示源流时间轴发生跳变（相机或 RTSP 会话重建），
 	// 接收方必须重置解码器并从关键帧重新开始。
 	PacketFlagDiscontinuity PacketFlag = 0x0004
-	// PacketFlagDtsSynthetic 表示源流缺失 DTS，DtsUS 是合成的单调解码时钟。
+	// PacketFlagDtsSynthetic 表示源流缺失 DTS，DTSUS 是合成的单调解码时钟。
 	PacketFlagDtsSynthetic PacketFlag = 0x0008
 )
 
@@ -211,7 +224,7 @@ func (f PacketFlag) Has(flag PacketFlag) bool {
 	return f&flag != 0
 }
 
-// StreamState 定义物理流运行状态。
+// StreamState 定义物理流运行状态（取值与 C ABI 的 Zhulong_STREAM_STATE_* 一一对应）。
 type StreamState int32
 
 const (
@@ -272,7 +285,7 @@ type VideoInfo struct {
 
 // Packet 封装一帧编码压缩包（视频或音频轨）。
 type Packet struct {
-	// TrackType 标识轨道；音频包只带 PtsUS/DtsUS 与编解码，帧分类与 GOP 恒为零值。
+	// TrackType 标识轨道；音频包只带 PTSUS/DTSUS 与编解码，帧分类与 GOP 恒为零值。
 	TrackType TrackType
 	Codec     Codec
 	PTS       int64
@@ -283,11 +296,11 @@ type Packet struct {
 	KeyFrame  bool
 	Data      []byte // Go-owned 副本
 
-	// PtsUS 是显示时间戳微秒值；保留 B 帧重排，不保证按包序单调（ABI v3 起提供）。
+	// PTSUS 是显示时间戳微秒值；保留 B 帧重排，不保证按包序单调（ABI v3 起提供）。
 	// 预览路径应只消费此字段；源流 time_base 与重连时间轴已在原生层归一化。
-	PtsUS int64
-	// DtsUS 是按包序单调的解码时间戳微秒值；若由原生层合成，由 PacketFlagDtsSynthetic 标记。
-	DtsUS int64
+	PTSUS int64
+	// DTSUS 是按包序单调的解码时间戳微秒值；若由原生层合成，由 PacketFlagDtsSynthetic 标记。
+	DTSUS int64
 	// FrameClass 标注本帧在参考链中的角色，决定接收方能否安全丢弃。
 	FrameClass FrameClass
 	// GOPID 每个关键帧或时间轴跳变自增；跨值即代表可以重建解码器。

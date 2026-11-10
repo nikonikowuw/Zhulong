@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 export const MINUTES_PER_DAY = 1440
 export const MINUTES_PER_WEEK = 7 * MINUTES_PER_DAY
 export const SLOTS_PER_DAY = 48
@@ -49,18 +51,57 @@ export interface SchedulableItem {
   schedule?: WeekSchedule | string
 }
 
+const timeRangeSchema = z.object({
+  start: z.string(),
+  end: z.string(),
+})
+
+const dayRangesSchema = z.array(timeRangeSchema).optional()
+
+const weekScheduleSchema = z.looseObject({
+  enabled: z.boolean().optional(),
+  days: z
+    .looseObject({
+      monday: dayRangesSchema,
+      tuesday: dayRangesSchema,
+      wednesday: dayRangesSchema,
+      thursday: dayRangesSchema,
+      friday: dayRangesSchema,
+      saturday: dayRangesSchema,
+      sunday: dayRangesSchema,
+    })
+    .optional(),
+})
+
 export function parseSchedule(raw?: string | null): WeekSchedule {
   if (!raw || raw.trim() === '' || raw.trim() === '{}') {
     return { enabled: false, days: {} }
   }
   try {
-    const parsed = JSON.parse(raw) as WeekSchedule
-    if (typeof parsed !== 'object' || parsed === null) {
+    const parsed: unknown = JSON.parse(raw)
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
       return { enabled: false, days: {} }
     }
+    const result = weekScheduleSchema.safeParse(parsed)
+    if (!result.success) {
+      return { enabled: false, days: {} }
+    }
+    const validDays: Partial<Record<DayKey, TimeRange[]>> = {}
+    if (result.data.days) {
+      for (const day of DAY_KEYS) {
+        const ranges = result.data.days[day]
+        if (ranges) {
+          validDays[day] = ranges
+        }
+      }
+    }
     return {
-      enabled: Boolean(parsed.enabled),
-      days: parsed.days ?? {},
+      enabled: Boolean(result.data.enabled),
+      days: validDays,
     }
   } catch {
     return { enabled: false, days: {} }
@@ -411,10 +452,14 @@ export function calculatePeakCompute(items: SchedulableItem[]): number {
   return peak
 }
 
-export function formatDuration(start: string, end: string): string {
+export function formatDuration(
+  start: string,
+  end: string,
+  crossDayLabel = '跨天'
+): string {
   const s = timeStringToMinutes(start)
   const e = timeStringToMinutes(end)
-  if (e <= s) return '跨天'
+  if (e <= s) return crossDayLabel
   const diffHours = ((e - s) / 60).toFixed(1)
   return `${diffHours}h`
 }

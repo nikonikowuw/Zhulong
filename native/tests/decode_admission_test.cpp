@@ -142,6 +142,38 @@ int main() {
     if (Zhulong_engine_get_decode_stats(engine, &stats) != Zhulong_OK) return 22;
     assert(stats.active_sessions == 1);
 
+    // 5. FAILED 流不得被复用：拉流失败后只要还有消费者持有它，按 URL 复用就会把新消费者
+    //    挂到一条死流上，Go 侧「acquire → 发现 FAILED → Close → 重试」会永远拿回同一条死流。
+    {
+        const char *dead_url = "rtsp://127.0.0.1:1/failed_reuse"; // 端口 1：连接被拒，快速失败
+        Zhulong_stream_id dead_id = 0;
+        status = Zhulong_stream_acquire(engine, dead_url, &opts, 5001, Zhulong_CONSUMER_PREVIEW, &dead_id);
+        if (status != Zhulong_OK || dead_id == 0) return 23;
+
+        bool failed = false;
+        for (int i = 0; i < 200 && !failed; ++i) {
+            Zhulong_stream_status st{};
+            if (Zhulong_stream_get_status(engine, dead_id, &st) != Zhulong_OK) return 24;
+            failed = st.state == Zhulong_STREAM_FAILED;
+            if (!failed) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (!failed) {
+            fprintf(stderr, "stream to refused port never reached FAILED\n");
+            return 25;
+        }
+
+        Zhulong_stream_id fresh_id = 0;
+        status = Zhulong_stream_acquire(engine, dead_url, &opts, 5002, Zhulong_CONSUMER_PREVIEW, &fresh_id);
+        if (status != Zhulong_OK || fresh_id == 0) return 26;
+        if (fresh_id == dead_id) {
+            fprintf(stderr, "acquire must not reuse a FAILED stream\n");
+            return 27;
+        }
+
+        Zhulong_stream_release(engine, dead_id, 5001);
+        Zhulong_stream_release(engine, fresh_id, 5002);
+    }
+
     // 清理释放
     Zhulong_stream_release(engine, ai_stream_2, 3002);
     Zhulong_stream_release(engine, preview_stream_1, 2001);

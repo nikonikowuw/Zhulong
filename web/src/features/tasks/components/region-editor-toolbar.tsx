@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { categoryBadgeClass, categoryTextClass } from '@/lib/category-palette'
 import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -23,7 +24,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { MAX_RECTS_PER_CATEGORY, MAX_TRIPWIRES } from '../data/region-config'
+import {
+  MAX_RECTS_PER_CATEGORY,
+  MAX_TRIPWIRES,
+  REGION_CATEGORY_HUE,
+} from '../data/region-config'
 import { type RegionTool } from './region-drag-types'
 
 export interface RegionEditorToolbarProps {
@@ -95,6 +100,7 @@ export function RegionEditorToolbar({
 
   const renderToolButton = (category: 'roi' | 'mask') => {
     const isRoi = category === 'roi'
+    const hue = REGION_CATEGORY_HUE[category]
     const count = isRoi ? counts.roi : counts.mask
     const isMax = count >= MAX_RECTS_PER_CATEGORY
     const isDisabled = !isEditable || isMax
@@ -111,23 +117,15 @@ export function RegionEditorToolbar({
         className={cn(
           'h-7.5 gap-1.5 text-xs font-medium transition-all',
           isActive
-            ? isRoi
-              ? 'bg-emerald-500/15 font-semibold text-emerald-700 shadow-xs ring-1 ring-emerald-500/30 dark:text-emerald-300'
-              : 'bg-violet-500/15 font-semibold text-violet-700 shadow-xs ring-1 ring-violet-500/30 dark:text-violet-300'
-            : isRoi
-              ? 'text-muted-foreground hover:text-emerald-600 dark:hover:text-emerald-400'
-              : 'text-muted-foreground hover:text-violet-600 dark:hover:text-violet-400'
+            ? cn(categoryBadgeClass(hue), 'border font-semibold shadow-xs')
+            : 'text-muted-foreground hover:text-foreground'
         )}
         onClick={() => requestTool(category)}
       >
         <Icon
           className={cn(
             'size-3.5',
-            isActive
-              ? isRoi
-                ? 'text-emerald-600 dark:text-emerald-400'
-                : 'text-violet-600 dark:text-violet-400'
-              : 'text-muted-foreground'
+            isActive ? categoryTextClass(hue) : 'text-muted-foreground'
           )}
         />
         <span>
@@ -195,8 +193,8 @@ export function RegionEditorToolbar({
           className={cn(
             'h-7.5 gap-1.5 text-xs font-medium transition-all',
             tool === 'crop'
-              ? 'bg-cyan-500/15 font-semibold text-cyan-700 shadow-xs ring-1 ring-cyan-500/30 dark:text-cyan-300'
-              : 'text-muted-foreground hover:text-cyan-600 dark:hover:text-cyan-400'
+              ? cn(categoryBadgeClass('cyan'), 'border font-semibold shadow-xs')
+              : 'text-muted-foreground hover:text-foreground'
           )}
           title={
             cropEditable
@@ -205,7 +203,14 @@ export function RegionEditorToolbar({
           }
           onClick={() => onToolChange(tool === 'crop' ? 'select' : 'crop')}
         >
-          <Crop className='size-3.5' />
+          <Crop
+            className={cn(
+              'size-3.5',
+              tool === 'crop'
+                ? categoryTextClass('cyan')
+                : 'text-muted-foreground'
+            )}
+          />
           <span>{t('region.toolCrop', '裁剪窗口')}</span>
         </Button>
       </div>
@@ -289,7 +294,7 @@ export function RegionEditorToolbar({
           variant='ghost'
           size='sm'
           disabled={!cropEditable || !hasCrop}
-          className='h-8 gap-1.5 text-xs text-muted-foreground hover:text-cyan-600 dark:hover:text-cyan-400'
+          className='h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground'
           title={t('region.cropClearHint', '清除任务级裁剪窗口（恢复全幅）')}
           onClick={onCropClear}
         >

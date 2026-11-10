@@ -19,7 +19,7 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
+#include <string_view>
 
 namespace zhulong::plate {
 
@@ -56,9 +56,27 @@ struct PlateFormatVerdict {
  *
  * @param plate_number CTC 解码出的号码（UTF-8）
  */
-PlateFormatVerdict validate_plate_number(const std::string& plate_number);
+PlateFormatVerdict validate_plate_number(std::string_view plate_number);
 
 /** @brief 失败原因的稳定短名（stderr 调试输出与单测用） */
-const char* plate_format_problem_name(PlateFormatProblem problem);
+constexpr const char* plate_format_problem_name(PlateFormatProblem problem) noexcept {
+    switch (problem) {
+    case PlateFormatProblem::None:
+        return "none";
+    case PlateFormatProblem::InvalidUtf8:
+        return "invalid_utf8";
+    case PlateFormatProblem::BadLength:
+        return "bad_length";
+    case PlateFormatProblem::BadProvince:
+        return "bad_province";
+    case PlateFormatProblem::BadAuthority:
+        return "bad_authority";
+    case PlateFormatProblem::BadCharacter:
+        return "bad_character";
+    case PlateFormatProblem::BadNewEnergyLayout:
+        return "bad_new_energy_layout";
+    }
+    return "unknown";
+}
 
 } // namespace zhulong::plate

@@ -24,8 +24,8 @@ func checkerImage() *image.RGBA {
 		{R: 130, G: 140, B: 150, A: 255},
 		{R: 160, G: 170, B: 180, A: 255},
 	}
-	for y := 0; y < 3; y++ {
-		for x := 0; x < 2; x++ {
+	for y := range 3 {
+		for x := range 2 {
 			img.SetRGBA(x, y, palette[y*2+x])
 		}
 	}
@@ -131,30 +131,38 @@ func TestPackRGB24_AppliesExifOrientation(t *testing.T) {
 		w, h        int
 		position    func(x, y int) (int, int) // 源 (x,y) 在输出中的落点
 	}{
-		{1, 2, 3, func(x, y int) (int, int) { return x, y }},
-		{2, 2, 3, func(x, y int) (int, int) { return 1 - x, y }},
-		{3, 2, 3, func(x, y int) (int, int) { return 1 - x, 2 - y }},
-		{4, 2, 3, func(x, y int) (int, int) { return x, 2 - y }},
-		{5, 3, 2, func(x, y int) (int, int) { return y, x }},
-		{6, 3, 2, func(x, y int) (int, int) { return 2 - y, x }},
-		{7, 3, 2, func(x, y int) (int, int) { return 2 - y, 1 - x }},
-		{8, 3, 2, func(x, y int) (int, int) { return y, 1 - x }},
+		{orientation: 1, w: 2, h: 3, position: func(x, y int) (int, int) { return x, y }},
+		{orientation: 2, w: 2, h: 3, position: func(x, y int) (int, int) { return 1 - x, y }},
+		{orientation: 3, w: 2, h: 3, position: func(x, y int) (int, int) { return 1 - x, 2 - y }},
+		{orientation: 4, w: 2, h: 3, position: func(x, y int) (int, int) { return x, 2 - y }},
+		{orientation: 5, w: 3, h: 2, position: func(x, y int) (int, int) { return y, x }},
+		{orientation: 6, w: 3, h: 2, position: func(x, y int) (int, int) { return 2 - y, x }},
+		{orientation: 7, w: 3, h: 2, position: func(x, y int) (int, int) { return 2 - y, 1 - x }},
+		{orientation: 8, w: 3, h: 2, position: func(x, y int) (int, int) { return y, 1 - x }},
 	}
 
 	for _, tc := range cases {
 		dst := make([]byte, tc.w*tc.h*3)
 		packRGB24(img, tc.orientation, dst)
 
-		for y := 0; y < 3; y++ {
-			for x := 0; x < 2; x++ {
+		for y := range 3 {
+			for x := range 2 {
 				ox, oy := tc.position(x, y)
 				src := img.RGBAAt(x, y)
 				idx := (oy*tc.w + ox) * 3
 				got := [3]byte{dst[idx], dst[idx+1], dst[idx+2]}
 				want := [3]byte{src.R, src.G, src.B}
 				if got != want {
-					t.Errorf("orientation %d: source (%d,%d) -> (%d,%d): got %v, want %v",
-						tc.orientation, x, y, ox, oy, got, want)
+					t.Errorf(
+						"orientation %d: source (%d,%d) -> (%d,%d): got %v, want %v",
+						tc.orientation,
+						x,
+						y,
+						ox,
+						oy,
+						got,
+						want,
+					)
 				}
 			}
 		}
@@ -249,8 +257,8 @@ func packRGB24Reference(img image.Image, orientation int, dst []byte) {
 	w, h := bounds.Dx(), bounds.Dy()
 	outWidth, _ := orientedDimensions(img, orientation)
 
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			var ox, oy int
 			switch orientation {
 			case 2:
@@ -293,16 +301,22 @@ func (o oddImage) At(x, y int) color.Color {
 
 func TestPackRGB24_MatchesReferenceAcrossImageTypes(t *testing.T) {
 	nrgba := image.NewNRGBA(image.Rect(0, 0, 3, 4))
-	for y := 0; y < 4; y++ {
-		for x := 0; x < 3; x++ {
+	for y := range 4 {
+		for x := range 3 {
 			// alpha 故意不是 255：预乘语义一旦写错，半透明像素就会偏色。
-			nrgba.SetNRGBA(x, y, color.NRGBA{R: uint8(10 + x*40), G: uint8(20 + y*30), B: uint8(90 - x*7), A: uint8(60 + x*30)})
+			c := color.NRGBA{
+				R: uint8(10 + x*40),
+				G: uint8(20 + y*30),
+				B: uint8(90 - x*7),
+				A: uint8(60 + x*30),
+			}
+			nrgba.SetNRGBA(x, y, c)
 		}
 	}
 
 	gray := image.NewGray(image.Rect(0, 0, 3, 4))
-	for y := 0; y < 4; y++ {
-		for x := 0; x < 3; x++ {
+	for y := range 4 {
+		for x := range 3 {
 			gray.SetGray(x, y, color.Gray{Y: uint8(x*30 + y*11)})
 		}
 	}

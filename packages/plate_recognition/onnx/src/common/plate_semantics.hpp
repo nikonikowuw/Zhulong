@@ -43,7 +43,7 @@ inline constexpr int kMaxPlateClasses = 4;
  * 结构性错位的降级（双层按单层采样的后果是号码错，而把单层当双层采样会拿到
  * 上下半各一半的乱码）。检测 Stage 已在上游用 kMaxPlateClasses 挡住越界模型。
  */
-inline PlateKind plate_kind_from_index(int32_t class_id) noexcept {
+inline constexpr PlateKind plate_kind_from_index(int32_t class_id) noexcept {
     switch (class_id) {
     case static_cast<int32_t>(PlateKind::DoubleLine):
         return PlateKind::DoubleLine;

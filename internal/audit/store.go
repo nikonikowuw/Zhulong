@@ -16,6 +16,10 @@ import (
 const pruneAuditLogsSQL = "DELETE FROM audit_logs WHERE id IN (" +
 	"SELECT id FROM audit_logs WHERE action != ? ORDER BY created_at ASC, id ASC LIMIT ?)"
 
+// batchInsertSize bounds how many rows one INSERT statement carries, so a large
+// drain does not build a single oversized statement.
+const batchInsertSize = 100
+
 // Store provides persistence operations for audit logs.
 type Store struct {
 	dbProvider database.DBProvider
@@ -66,7 +70,7 @@ func (s *Store) CreateBatch(ctx context.Context, logs []*AuditLog) error {
 	for _, l := range logs {
 		l.CreatedAt = normalizeCreatedAt(l.CreatedAt, now)
 	}
-	if err := gorm.G[*AuditLog](db).CreateInBatches(ctx, &logs, 100); err != nil {
+	if err := gorm.G[*AuditLog](db).CreateInBatches(ctx, &logs, batchInsertSize); err != nil {
 		return fmt.Errorf("create audit log batch: %w", err)
 	}
 	return nil
@@ -87,7 +91,7 @@ func (s *Store) List(ctx context.Context, filter Filter) ([]AuditLog, int64, err
 	if err != nil {
 		return nil, 0, err
 	}
-	var g gorm.ChainInterface[AuditLog] = gorm.G[AuditLog](db).Scopes()
+	g := gorm.G[AuditLog](db).Scopes()
 
 	if len(filter.Actions) > 0 {
 		g = g.Where("action IN ?", filter.Actions)
@@ -126,19 +130,6 @@ func (s *Store) List(ctx context.Context, filter Filter) ([]AuditLog, int64, err
 	}
 
 	return items, total, nil
-}
-
-// Count returns the total number of audit logs.
-func (s *Store) Count(ctx context.Context) (int64, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return 0, err
-	}
-	total, err := gorm.G[AuditLog](db).Count(ctx, "*")
-	if err != nil {
-		return 0, fmt.Errorf("count audit logs: %w", err)
-	}
-	return total, nil
 }
 
 // Prune deletes the oldest audit records if the prunable count exceeds

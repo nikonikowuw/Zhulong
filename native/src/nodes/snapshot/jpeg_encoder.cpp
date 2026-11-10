@@ -97,6 +97,40 @@ constexpr int quality_scale_factor = 5;
 
 } // namespace
 
+bool normalize_crop_rect(int x, int y, int w, int h, uint32_t frame_w, uint32_t frame_h,
+                         int &out_x, int &out_y, int &out_w, int &out_h) noexcept {
+    out_x = 0;
+    out_y = 0;
+    out_w = 0;
+    out_h = 0;
+    if (w <= 0 || h <= 0 || frame_w < 2 || frame_h < 2) {
+        return false;
+    }
+
+    // ⚠️ 右/下边界用 64 位中间量：x + w 的 int 溢出是 UB，而本函数对外部调用方完全开放
+    int x0 = floor_even(x < 0 ? 0 : x);
+    int y0 = floor_even(y < 0 ? 0 : y);
+    int x1 = ceil_even(static_cast<int>(
+        std::min<long long>(static_cast<long long>(x) + w, static_cast<long long>(frame_w))));
+    int y1 = ceil_even(static_cast<int>(
+        std::min<long long>(static_cast<long long>(y) + h, static_cast<long long>(frame_h))));
+    if (x1 > static_cast<int>(frame_w)) x1 = floor_even(static_cast<int>(frame_w));
+    if (y1 > static_cast<int>(frame_h)) y1 = floor_even(static_cast<int>(frame_h));
+    if (x1 <= x0 || y1 <= y0) {
+        return false;
+    }
+    const int cw = x1 - x0;
+    const int ch = y1 - y0;
+    if (cw < 2 || ch < 2) {
+        return false;
+    }
+    out_x = x0;
+    out_y = y0;
+    out_w = cw;
+    out_h = ch;
+    return true;
+}
+
 bool extract_yuv_region(const CpuFrameView &src, int x, int y, int w, int h, YuvFrame &out) {
     if (src.width == 0 || src.height == 0 || !src.planes[0] || w <= 0 || h <= 0) {
         return false;
@@ -106,26 +140,43 @@ bool extract_yuv_region(const CpuFrameView &src, int x, int y, int w, int h, Yuv
     }
 
     // 1. 裁剪矩形 clamp 并 2 像素对齐（色度下采样要求）
-    // ⚠️ 右/下边界用 64 位中间量：x + w 的 int 溢出是 UB，而本函数对外部调用方完全开放
-    int x0 = floor_even(x < 0 ? 0 : x);
-    int y0 = floor_even(y < 0 ? 0 : y);
-    int x1 = ceil_even(static_cast<int>(
-        std::min<long long>(static_cast<long long>(x) + w, static_cast<long long>(src.width))));
-    int y1 = ceil_even(static_cast<int>(
-        std::min<long long>(static_cast<long long>(y) + h, static_cast<long long>(src.height))));
-    if (x1 > static_cast<int>(src.width)) x1 = floor_even(static_cast<int>(src.width));
-    if (y1 > static_cast<int>(src.height)) y1 = floor_even(static_cast<int>(src.height));
-    if (x1 <= x0 || y1 <= y0) {
+    int x0 = 0;
+    int y0 = 0;
+    int cw = 0;
+    int ch = 0;
+    if (!normalize_crop_rect(x, y, w, h, src.width, src.height, x0, y0, cw, ch)) {
         return false;
     }
-    const uint32_t dw = static_cast<uint32_t>(x1 - x0);
-    const uint32_t dh = static_cast<uint32_t>(y1 - y0);
-    if (dw < 2 || dh < 2) {
-        return false;
-    }
+    const uint32_t dw = static_cast<uint32_t>(cw);
+    const uint32_t dh = static_cast<uint32_t>(ch);
 
-    // 2. 源平面 stride：strides[0] == 0 表示紧凑排列
+    // 2. 校验源平面指针与 stride（在修改/分配 out 之前完成，保证失败不产生半成品副作用）
     const size_t y_stride = src.strides[0] != 0 ? src.strides[0] : src.width;
+    if (y_stride < src.width) {
+        return false;
+    }
+    size_t u_stride = 0;
+    size_t v_stride = 0;
+    size_t uv_stride = 0;
+    if (src.format == FRAME_FORMAT_YUV420P) {
+        if (!src.planes[1] || !src.planes[2]) {
+            return false;
+        }
+        const size_t min_chroma_stride = src.width / 2;
+        u_stride = src.strides[1] != 0 ? src.strides[1] : min_chroma_stride;
+        v_stride = src.strides[2] != 0 ? src.strides[2] : min_chroma_stride;
+        if (u_stride < min_chroma_stride || v_stride < min_chroma_stride) {
+            return false;
+        }
+    } else {
+        if (!src.planes[1]) {
+            return false;
+        }
+        uv_stride = src.strides[1] != 0 ? src.strides[1] : y_stride;
+        if (uv_stride < src.width) {
+            return false;
+        }
+    }
 
     // 3. 分配紧凑三平面
     out.width = dw;
@@ -140,12 +191,6 @@ bool extract_yuv_region(const CpuFrameView &src, int x, int y, int w, int h, Yuv
 
     // 5. 色度平面
     if (src.format == FRAME_FORMAT_YUV420P) {
-        // 三平面：U/V 各自独立，stride 通常为 Y 的一半
-        if (!src.planes[1] || !src.planes[2]) {
-            return false;
-        }
-        const size_t u_stride = src.strides[1] != 0 ? src.strides[1] : (src.width / 2);
-        const size_t v_stride = src.strides[2] != 0 ? src.strides[2] : (src.width / 2);
         const int cx = x0 / 2;
         const int cy = y0 / 2;
         copy_plane_strided(out.u.data(), src.planes[1] + u_stride * static_cast<size_t>(cy),
@@ -155,16 +200,13 @@ bool extract_yuv_region(const CpuFrameView &src, int x, int y, int w, int h, Yuv
     } else {
         // NV12：UV 交错，planes[1] 已由调用方定位到 UV 平面首字节（Y + stride * vstride），
         // 交错行内一个色度样本占 2 字节，因此 x 偏移的字节数等于像素偏移。
-        if (!src.planes[1]) {
-            return false;
-        }
         const uint8_t *uv_base = src.planes[1];
         const int cx = x0;      // 交错平面里一个色度样本占 2 字节，x 偏移即像素偏移
         const int cy = y0 / 2;
-        copy_plane_from_nv12(out.u.data(), uv_base + y_stride * static_cast<size_t>(cy),
-                             dw / 2, dh / 2, y_stride, cx, 0);
-        copy_plane_from_nv12(out.v.data(), uv_base + y_stride * static_cast<size_t>(cy),
-                             dw / 2, dh / 2, y_stride, cx, 1);
+        copy_plane_from_nv12(out.u.data(), uv_base + uv_stride * static_cast<size_t>(cy),
+                             dw / 2, dh / 2, uv_stride, cx, 0);
+        copy_plane_from_nv12(out.v.data(), uv_base + uv_stride * static_cast<size_t>(cy),
+                             dw / 2, dh / 2, uv_stride, cx, 1);
     }
     return true;
 }

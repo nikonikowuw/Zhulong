@@ -1,5 +1,5 @@
-import { useAlgorithms } from '@/features/algorithms/hooks/use-algorithms'
-import { useCameras } from '@/features/cameras/hooks/use-cameras'
+import { useAlgorithms } from '@/features/algorithms/contract'
+import { useAllCameras } from '@/features/cameras/contract'
 import { useTasks } from '../hooks/use-tasks'
 import { ChannelTaskDialog } from './channel-task-dialog'
 import { TaskDeleteDialog } from './task-delete-dialog'
@@ -21,7 +21,7 @@ export function TasksDialogs() {
     setTargetAlgorithmId,
   } = useTasksContext()
 
-  const { data: camerasData } = useCameras({ pageSize: 100 })
+  const { data: camerasData } = useAllCameras()
   const { data: algorithms = [] } = useAlgorithms()
   const { data: tasks = [] } = useTasks()
 

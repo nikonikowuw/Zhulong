@@ -32,7 +32,7 @@ import { DEFAULT_COMPUTE_COST } from '../hooks/use-task-compute-budget'
 import { useUpdateTask } from '../hooks/use-tasks'
 import { TaskCopyIdButton } from './task-copy-id-button'
 import { TaskStatusBadge } from './task-status-badge'
-import { useTasksContext } from './tasks-provider'
+import { useTasksActions } from './tasks-provider'
 
 interface TaskSubTableProps {
   group: ChannelTaskGroup
@@ -41,7 +41,7 @@ interface TaskSubTableProps {
 function SubRowActions({ item, task }: { item: ChannelTaskItem; task: Task }) {
   const { t } = useTranslation('tasks')
   const { setOpen, setCurrentRow, setTargetCameraId, setTargetAlgorithmId } =
-    useTasksContext()
+    useTasksActions()
   const updateMutation = useUpdateTask()
   const subId = item.algorithmItem.id
   const isLastAlgorithm = (task.algorithms?.length ?? 0) <= 1
@@ -183,7 +183,8 @@ export function TaskSubTable({ group }: TaskSubTableProps): React.JSX.Element {
             {group.items.map((item) => {
               const subscription = item.algorithmItem
               const isItemEnabled = task.enabled && subscription.enabled
-              const region = parseRegionConfig(subscription.regionConfigJson)
+              const region =
+                item.region ?? parseRegionConfig(subscription.regionConfigJson)
               const hasRegion = region.roi.length > 0 || region.mask.length > 0
               const costPerFrame =
                 item.algorithm?.computeCost ?? DEFAULT_COMPUTE_COST
@@ -252,6 +253,7 @@ export function TaskSubTable({ group }: TaskSubTableProps): React.JSX.Element {
                       cameraHealth={group.camera.health}
                       cameraSession={group.camera.session}
                       isCameraEnabled={group.camera.enabled}
+                      schedule={item.schedule}
                       scheduleJson={item.algorithmItem.scheduleJson}
                     />
                   </TableCell>

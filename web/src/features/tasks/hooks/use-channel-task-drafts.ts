@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useReducer } from 'react'
-import { type Algorithm } from '@/features/algorithms/data/schema'
+import { type Algorithm } from '@/features/algorithms/contract'
 import {
   EMPTY_CONFIG_JSON,
   MAX_SAMPLE_FPS,
@@ -121,6 +121,15 @@ export function useChannelTaskDrafts({
       )
   )
 
+  const algorithmsById = useMemo(
+    () => new Map(algorithms.map((algo) => [algo.id, algo])),
+    [algorithms]
+  )
+  const tasksByCameraId = useMemo(
+    () => new Map(allTasks.map((task) => [task.cameraId, task])),
+    [allTasks]
+  )
+
   const drafts = useMemo(
     () => state.draftsByCamera[state.cameraId] ?? EMPTY_DRAFTS,
     [state.draftsByCamera, state.cameraId]
@@ -130,8 +139,7 @@ export function useChannelTaskDrafts({
     : EMPTY_CONFIG_JSON
 
   // crop 属于任务（= 相机），与当前选中算法无关：切算法不重载，切相机才重载。
-  const initialCrop =
-    allTasks.find((task) => task.cameraId === initialCameraId)?.crop ?? null
+  const initialCrop = tasksByCameraId.get(initialCameraId)?.crop ?? null
   const regionEditor = useRegionEditor(initialRegionJson, initialCrop)
 
   const currentRegionJson = useCallback(
@@ -167,7 +175,6 @@ export function useChannelTaskDrafts({
         : state.activeAlgoId === algoId
           ? pickNextActiveAfterUncheck(drafts, algoId)
           : state.activeAlgoId
-      const algorithmsById = new Map(algorithms.map((algo) => [algo.id, algo]))
 
       dispatch({
         type: 'toggle-algo',
@@ -186,7 +193,7 @@ export function useChannelTaskDrafts({
       }
     },
     [
-      algorithms,
+      algorithmsById,
       drafts,
       state.activeAlgoId,
       currentRegionJson,
@@ -202,6 +209,7 @@ export function useChannelTaskDrafts({
         state.draftsByCamera[cameraId] ??
         computeInitialDrafts(cameraId, allTasks, algorithms)
       const activeAlgoId = pickActiveAlgo(draftsForCamera, algorithms)
+      const cameraTask = tasksByCameraId.get(cameraId)
 
       dispatch({
         type: 'change-camera',
@@ -210,9 +218,7 @@ export function useChannelTaskDrafts({
         activeAlgoId,
         currentRegionJson: currentRegionJson(),
         channelEnabled:
-          state.enabledByCamera[cameraId] ??
-          allTasks.find((task) => task.cameraId === cameraId)?.enabled ??
-          true,
+          state.enabledByCamera[cameraId] ?? cameraTask?.enabled ?? true,
       })
       regionEditor.reset(
         activeAlgoId
@@ -220,9 +226,7 @@ export function useChannelTaskDrafts({
               EMPTY_CONFIG_JSON)
           : EMPTY_CONFIG_JSON
       )
-      regionEditor.resetCrop(
-        allTasks.find((task) => task.cameraId === cameraId)?.crop ?? null
-      )
+      regionEditor.resetCrop(cameraTask?.crop ?? null)
     },
     [
       state.cameraId,
@@ -230,6 +234,7 @@ export function useChannelTaskDrafts({
       state.enabledByCamera,
       allTasks,
       algorithms,
+      tasksByCameraId,
       currentRegionJson,
       regionEditor,
     ]

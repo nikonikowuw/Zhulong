@@ -31,7 +31,7 @@ type JobStore interface {
 	ListJobs(ctx context.Context, jobType string, limit, offset int) ([]Job, int64, error)
 	ClaimJob(ctx context.Context, id string) (bool, error)
 	UpdateProgress(ctx context.Context, id string, progressPercent int, p ProgressUpdate) error
-	FinishJob(ctx context.Context, id string, status JobStatus, resultJSON, errorCode string) (bool, error)
+	FinishJob(ctx context.Context, id string, outcome FinishOutcome) (bool, error)
 	CancelJobRecord(ctx context.Context, id string) error
 	AbandonJob(ctx context.Context, id string, errorCode string) (bool, error)
 	RecoverOrphanJobs(ctx context.Context) (int64, error)
@@ -285,19 +285,18 @@ type jobProgressUpdater struct {
 }
 
 func (u *jobProgressUpdater) Update(ctx context.Context, p ProgressUpdate) error {
-	percent := 0
+	var percent int
 	if p.Total > 0 {
-		percent = (p.Processed * 100) / p.Total
-		if percent > 100 {
-			percent = 100
-		}
-		if percent < 0 {
-			percent = 0
-		}
+		percent = min(max((p.Processed*100)/p.Total, 0), 100)
 	}
 	dbCtx, cancel := context.WithTimeout(ctx, databaseTimeout)
 	defer cancel()
-	if err := u.store.UpdateProgress(dbCtx, u.jobID, percent, p); err != nil {
+	if err := u.store.UpdateProgress(
+		dbCtx,
+		u.jobID,
+		percent,
+		p,
+	); err != nil {
 		u.logger.Debug("failed to update job progress in store", zap.String("id", u.jobID), zap.Error(err))
 		return err
 	}
@@ -322,7 +321,10 @@ func (s *Service) executeJob(jobID string) {
 		s.cancelsMu.Unlock()
 		if recovered := recover(); recovered != nil {
 			s.logger.Error("async job panicked", zap.String("id", jobID), zap.Any("panic", recovered))
-			s.finish(jobID, StatusFailed, "", CodeJobPanicked)
+			s.finish(jobID, FinishOutcome{
+				Status:    StatusFailed,
+				ErrorCode: CodeJobPanicked,
+			})
 		}
 	}()
 
@@ -345,7 +347,10 @@ func (s *Service) executeJob(jobID string) {
 	cancelRead()
 	if loadErr != nil {
 		s.logger.Error("failed to load claimed job", zap.String("id", jobID), zap.Error(loadErr))
-		s.finish(jobID, StatusFailed, "", CodeJobExecutionFailed)
+		s.finish(jobID, FinishOutcome{
+			Status:    StatusFailed,
+			ErrorCode: CodeJobExecutionFailed,
+		})
 		return
 	}
 
@@ -368,7 +373,10 @@ func (s *Service) executeJob(jobID string) {
 	handler, exists := s.handlers[job.Type]
 	s.handlersMu.RUnlock()
 	if !exists {
-		s.finish(jobID, StatusFailed, "", CodeJobTypeUnsupported)
+		s.finish(jobID, FinishOutcome{
+			Status:    StatusFailed,
+			ErrorCode: CodeJobTypeUnsupported,
+		})
 		return
 	}
 
@@ -378,25 +386,36 @@ func (s *Service) executeJob(jobID string) {
 	switch {
 	case execErr == nil:
 		s.logger.Info("async job completed successfully", zap.String("id", jobID))
-		s.finish(jobID, StatusCompleted, job.ResultJSON, "")
+		s.finish(jobID, FinishOutcome{
+			Status:     StatusCompleted,
+			ResultJSON: job.ResultJSON,
+		})
 	case errors.Is(execErr, context.Canceled) && s.stopping.Load():
 		s.logger.Warn("async job interrupted by shutdown", zap.String("id", jobID))
-		s.finish(jobID, StatusFailed, job.ResultJSON, CodeJobShutdown)
+		s.finish(jobID, FinishOutcome{
+			Status:     StatusFailed,
+			ResultJSON: job.ResultJSON,
+			ErrorCode:  CodeJobShutdown,
+		})
 	default:
 		// The raw cause belongs to the server log; the job row stores a stable code.
 		s.logger.Warn("async job failed", zap.String("id", jobID), zap.Error(execErr))
-		s.finish(jobID, StatusFailed, job.ResultJSON, CodeJobExecutionFailed)
+		s.finish(jobID, FinishOutcome{
+			Status:     StatusFailed,
+			ResultJSON: job.ResultJSON,
+			ErrorCode:  CodeJobExecutionFailed,
+		})
 	}
 }
 
 // finish writes a terminal state with its own bounded context. It deliberately
 // does not reuse the job context: finalization happens after cancellation and
 // panics too, when that context is already done.
-func (s *Service) finish(jobID string, status JobStatus, resultJSON, errorCode string) {
+func (s *Service) finish(jobID string, outcome FinishOutcome) {
 	ctx, cancel := context.WithTimeout(context.Background(), databaseTimeout)
 	defer cancel()
 
-	updated, err := s.store.FinishJob(ctx, jobID, status, resultJSON, errorCode)
+	updated, err := s.store.FinishJob(ctx, jobID, outcome)
 	if err != nil {
 		s.logger.Error("failed to finalize async job", zap.String("id", jobID), zap.Error(err))
 		return
@@ -414,8 +433,11 @@ func (s *Service) abandon(jobID, errorCode, reason string) {
 	if err != nil {
 		s.logger.Warn("failed to abandon async job", zap.String("id", jobID), zap.Error(err))
 	} else if failed {
-		s.logger.Info("abandoned async job that never started",
-			zap.String("id", jobID), zap.String("reason", reason))
+		s.logger.Info(
+			"abandoned async job that never started",
+			zap.String("id", jobID),
+			zap.String("reason", reason),
+		)
 	}
 	s.abortNeverRun(jobID, reason)
 }
@@ -442,7 +464,11 @@ func (s *Service) abortNeverRun(jobID, reason string) {
 		return
 	}
 	if err := aborter.Abort(ctx, job); err != nil {
-		s.logger.Warn("failed to release artifacts of a job that never ran",
-			zap.String("id", jobID), zap.String("reason", reason), zap.Error(err))
+		s.logger.Warn(
+			"failed to release artifacts of a job that never ran",
+			zap.String("id", jobID),
+			zap.String("reason", reason),
+			zap.Error(err),
+		)
 	}
 }

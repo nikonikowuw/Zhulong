@@ -38,7 +38,7 @@ inline int& failure_count() noexcept {
 }
 
 /** @brief 断言失败时打印 文件:行 与表达式原文，便于直接跳到出错点 */
-inline void check(bool ok, const char* expr, const char* file, int line) {
+inline void check(bool ok, const char* expr, const char* file, int line) noexcept {
     if (ok) {
         return;
     }
@@ -58,7 +58,7 @@ inline void check(bool ok, const char* expr, const char* file, int line) {
     } while (0)
 
 /** @brief 浮点近似比较（采样坐标是 float，不能用 == 钉） */
-inline bool near(float lhs, float rhs, float epsilon = 1e-4f) {
+inline bool near(float lhs, float rhs, float epsilon = 1e-4f) noexcept {
     return std::fabs(lhs - rhs) <= epsilon;
 }
 
@@ -68,7 +68,7 @@ inline bool near(float lhs, float rhs, float epsilon = 1e-4f) {
  * 「步长 × 目标尺寸」这类断言里两个 float 都是几百量级（例如 200.28 - 199.76），
  * 相减会抵消掉大部分有效位：绝对容差 1e-4 会随机抢红，相对容差才稳。
  */
-inline bool near_scaled(float lhs, float rhs, float relative = 1e-3f) {
+inline bool near_scaled(float lhs, float rhs, float relative = 1e-3f) noexcept {
     const float scale = std::max(1.0f, std::fabs(rhs));
     return std::fabs(lhs - rhs) <= relative * scale;
 }
@@ -271,7 +271,7 @@ inline void check_frame_view_guard() {
 }
 
 /** @brief 可接受区间的边界语义：(0, 1]，0 与负数、>1 全部越界 */
-inline bool threshold_in_range_self_check(double value) noexcept {
+inline constexpr bool threshold_in_range_self_check(double value) noexcept {
     return value > kThresholdMinExclusive && value <= kThresholdMaxInclusive;
 }
 

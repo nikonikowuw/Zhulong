@@ -3,6 +3,7 @@ package alertpush
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"mime"
@@ -37,15 +38,16 @@ func (m *fakeMediaService) OpenContent(_ context.Context, relPath string) (*os.F
 		return nil, nil, os.ErrNotExist
 	}
 	tmp := filepath.Join(os.TempDir(), filepath.Base(relPath))
-	_ = os.WriteFile(tmp, data, 0o600)
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return nil, nil, err
+	}
 	f, err := os.Open(tmp)
 	if err != nil {
 		return nil, nil, err
 	}
 	info, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return nil, nil, err
+		return nil, nil, errors.Join(err, f.Close())
 	}
 	return f, info, nil
 }
@@ -58,7 +60,12 @@ func TestWebhookSenderURLMode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAuth = r.Header.Get("Authorization")
 		receivedCustom = r.Header.Get("X-Custom-Key")
-		receivedBody, _ = io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		receivedBody = body
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()

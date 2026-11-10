@@ -61,16 +61,16 @@ func (AlertDestination) TableName() string {
 	return "alert_destinations"
 }
 
-// WebhookConfig is the non-sensitive configuration stored in config_json.
+// webhookConfig is the non-sensitive configuration stored in config_json.
 // The actual Webhook URL is stored in secret_ciphertext because platforms often include tokens in the query string.
-type WebhookConfig struct {
+type webhookConfig struct {
 	AuthType       string `json:"auth_type"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
-// MQTTConfig is the non-sensitive configuration stored in config_json.
+// mqttConfig is the non-sensitive configuration stored in config_json.
 // mqtt_client_id is stored in a dedicated column for unique constraint indexing.
-type MQTTConfig struct {
+type mqttConfig struct {
 	Broker           string `json:"broker"`
 	Username         string `json:"username,omitempty"`
 	Topic            string `json:"topic"`
@@ -79,11 +79,16 @@ type MQTTConfig struct {
 	TLSSkipVerify    bool   `json:"tls_skip_verify"`
 }
 
-// DestinationFilter defines event type, algorithm, and camera filtering criteria stored in filter_json.
-type DestinationFilter struct {
+// destinationFilter defines event type, algorithm, and camera filtering criteria stored in filter_json.
+type destinationFilter struct {
 	EventTypes   []string `json:"event_types,omitempty"`
 	AlgorithmIDs []string `json:"algorithm_ids,omitempty"`
 	CameraIDs    []string `json:"camera_ids,omitempty"`
+}
+
+// destinationSecret is a sealed marker interface for encrypted destination credentials.
+type destinationSecret interface {
+	isDestinationSecret()
 }
 
 // webhookSecret is the sensitive data encrypted in secret_ciphertext.
@@ -95,7 +100,11 @@ type webhookSecret struct {
 	Headers  map[string]string `json:"headers,omitempty"`
 }
 
+func (*webhookSecret) isDestinationSecret() {}
+
 // mqttSecret is the sensitive data encrypted in secret_ciphertext.
 type mqttSecret struct {
 	Password string `json:"password,omitempty"`
 }
+
+func (*mqttSecret) isDestinationSecret() {}

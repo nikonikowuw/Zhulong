@@ -17,19 +17,19 @@ func GenerateToken() (string, string, string, error) {
 		return "", "", "", fmt.Errorf("read token entropy: %w", err)
 	}
 	raw := "sk-" + hex.EncodeToString(buf)
-	hash := HashToken(raw)
-	masked := MaskToken(raw)
+	hash := hashToken(raw)
+	masked := maskToken(raw)
 	return raw, hash, masked, nil
 }
 
-// HashToken computes the SHA-256 hex string of a raw token.
-func HashToken(raw string) string {
+// hashToken computes the SHA-256 hex string of a raw token.
+func hashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
 
-// MaskToken produces the masked preview "sk-xxxx...yyyy" of a raw token.
-func MaskToken(raw string) string {
+// maskToken produces the masked preview "sk-xxxx...yyyy" of a raw token.
+func maskToken(raw string) string {
 	if len(raw) <= 11 {
 		return raw
 	}
@@ -41,14 +41,14 @@ func MaskToken(raw string) string {
 func normalizeTokenName(name string) (string, error) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
-		return "", ErrTokenNameRequired
+		return "", errTokenNameRequired
 	}
-	if len([]rune(trimmed)) > MaxTokenNameLen {
-		return "", ErrTokenNameTooLong
+	if len([]rune(trimmed)) > maxTokenNameLen {
+		return "", errTokenNameTooLong
 	}
 	for _, r := range trimmed {
 		if unicode.IsControl(r) {
-			return "", ErrTokenNameInvalid
+			return "", errTokenNameInvalid
 		}
 	}
 	return trimmed, nil

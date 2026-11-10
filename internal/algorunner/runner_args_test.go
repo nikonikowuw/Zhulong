@@ -154,6 +154,10 @@ func TestProcessConfigJSON(t *testing.T) {
 		{name: "valid object with padding", env: " {\"a\":1} ", want: `{"a":1}`},
 		{name: "not json", env: "threshold=0.55", want: ""},
 		{name: "json array is not an object", env: "[1,2]", want: ""},
+		// JSON null unmarshals into a nil map without an error, so it must be
+		// rejected explicitly instead of being forwarded as a valid config.
+		{name: "json null is not an object", env: "null", want: ""},
+		{name: "json null with padding is not an object", env: "null ", want: ""},
 	}
 
 	for _, tt := range tests {

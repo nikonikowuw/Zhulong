@@ -19,7 +19,8 @@ type handleLease struct {
 // handleRequirement 描述一次跨 CGO 调用对引擎状态的前置要求。
 //
 // 三个条件的不同组合覆盖全部调用点，差异必须显式写出来，borrowHandle 不做任何缺省推断；
-// deniedError 是必填项（nil 会被当作“拒绝时返回 nil 错误”的悖论）。
+// deniedError 是必填项（nil 会被当作“拒绝时返回 nil 错误”的悖论），缺失时 borrowHandle
+// 不猜也不静默成功，而是直接返回 ErrInternal。
 //
 // 尤其 requireRunning：停机排空路径（releaseStream / unsubscribeWith）**故意**不要求
 // 运行态 —— 无条件加上会让关流退化成 ErrNotRunning，token 便会堆到下次排空。
@@ -31,6 +32,11 @@ type handleRequirement struct {
 
 // borrowHandle 取出句柄租约与解锁函数；成功时调用方必须 defer release()。
 func (e *Engine) borrowHandle(req handleRequirement) (handleLease, func(), error) {
+	if req.deniedError == nil {
+		// 编程错误：拒绝时若返回 nil 错误，调用方会拿零租约里的 nil 句柄继续调 CGO。
+		return handleLease{}, nil, ErrInternal
+	}
+
 	e.handleMu.RLock()
 
 	e.mu.Lock()

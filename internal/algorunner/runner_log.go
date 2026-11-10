@@ -2,16 +2,15 @@ package algorunner
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -25,6 +24,9 @@ const (
 	maxRunnerLogLine = 64 * 1024
 	// runnerLogRate caps how many records per source are emitted per second.
 	runnerLogRate = 100
+	// maxNativeModuleName caps the module token accepted from a native log
+	// record. Anything longer is rejected rather than truncated.
+	maxNativeModuleName = 128
 )
 
 // runnerLogSourceCount is the number of streams whose logs are rate limited
@@ -40,38 +42,57 @@ type runnerLogWindow struct {
 // runnerLogStats counts records a source produced but that could not be emitted.
 //
 // The same type holds both the running totals and the last reported snapshot, so
-// reportRunnerIssues' diff cannot silently miss a counter added later.
+// reportRunnerIssues' diff cannot silently miss a counter added later: minus and
+// total iterate the same array, and a new category is one row in runnerIssueKind.
 type runnerLogStats struct {
-	rateLimited uint64
-	invalid     uint64
-	oversized   uint64
-	readErrors  uint64
+	counts [runnerLogCategoryCount]uint64
 }
 
 // minus returns the counters that changed since prev.
 func (s runnerLogStats) minus(prev runnerLogStats) runnerLogStats {
-	return runnerLogStats{
-		rateLimited: s.rateLimited - prev.rateLimited,
-		invalid:     s.invalid - prev.invalid,
-		oversized:   s.oversized - prev.oversized,
-		readErrors:  s.readErrors - prev.readErrors,
+	var delta runnerLogStats
+	for kind := range delta.counts {
+		delta.counts[kind] = s.counts[kind] - prev.counts[kind]
 	}
+	return delta
 }
 
 // total returns the number of dropped records across every category.
 func (s runnerLogStats) total() uint64 {
-	return s.rateLimited + s.invalid + s.oversized + s.readErrors
+	var sum uint64
+	for _, count := range s.counts {
+		sum += count
+	}
+	return sum
 }
 
-// runnerIssueKind is a drop-reason counter selector. It is a type rather than a
-// bare string so a typo cannot silently count nothing.
+// runnerIssueKind indexes the per-source drop counters. It is a typed index into
+// runnerLogStats.counts rather than a struct field so that a category cannot be
+// added without the array, minus and total picking it up.
 type runnerIssueKind int
 
 const (
-	runnerIssueInvalid runnerIssueKind = iota
+	// runnerIssueRateLimited counts records dropped by the per-source rate limit.
+	runnerIssueRateLimited runnerIssueKind = iota
+	runnerIssueInvalid
 	runnerIssueOversized
 	runnerIssueReadError
+
+	// runnerLogCategoryCount is the number of categories above, and therefore the
+	// length of every per-category counter array.
+	runnerLogCategoryCount
 )
+
+// runnerLogCategoryFields names each counter in the drop report, in emission
+// order. Adding a category means adding its name here as well:
+// TestRunnerLogCategoryFieldsAreNamed checks that every counter is named and that
+// no two counters share a name.
+var runnerLogCategoryFields = [runnerLogCategoryCount]string{
+	runnerIssueRateLimited: "rate_limited",
+	runnerIssueInvalid:     "invalid",
+	runnerIssueOversized:   "oversized",
+	runnerIssueReadError:   "read_errors",
+}
 
 // runnerLogLine is one line read from a runner stream.
 type runnerLogLine struct {
@@ -85,15 +106,7 @@ type runnerLogLine struct {
 	oversized bool
 }
 
-// streamLogs pumps one of the runner's output streams into the host log.
-func (p *RunnerProcess) streamLogs(r *os.File, level zapcore.Level, isStderr bool) {
-	source := "stdout"
-	if isStderr {
-		source = "stderr"
-	}
-	p.streamLogReader(r, source, level)
-}
-
+// streamLogReader pumps one of the runner's output streams into the host log.
 func (p *RunnerProcess) streamLogReader(reader io.Reader, source string, fallback zapcore.Level) {
 	buf := bufio.NewReaderSize(reader, 4096)
 	for {
@@ -122,7 +135,6 @@ func (p *RunnerProcess) emitLogLine(source string, fallback zapcore.Level, line 
 	if line.oversized {
 		p.countRunnerIssue(source, runnerIssueOversized)
 		p.emitRunnerEvent(source, fallback, "runner output line exceeded limit",
-			zap.String("source", source),
 			zap.Int64("line_bytes", line.bytes),
 		)
 		return
@@ -130,14 +142,16 @@ func (p *RunnerProcess) emitLogLine(source string, fallback zapcore.Level, line 
 	if len(line.data) == 0 {
 		return
 	}
-	parsed := classifyRunnerLine(line.data, source, fallback)
+	parsed := classifyRunnerLine(line.data, fallback)
 	if parsed.invalid {
 		p.countRunnerIssue(source, runnerIssueInvalid)
 	}
 	// 两条「依赖没了」的信号都要记录：connect 失败带退出码 5，而 mid-run 断连
 	// 是干净退出（码 0），只有 stage 标记才能把它与真正的插件崩溃区分开。
-	if parsed.stage == algoipc.FailureStageBrokerConnect ||
-		parsed.stage == algoipc.FailureStageBrokerLost {
+	//
+	// 判据复用 isDependencyFailure：它同时决定这条退出是否计入熔断配额，两份
+	// 实现一旦漂移，日志分析与重启策略就会各说各话。
+	if isDependencyFailure(parsed.stage) {
 		p.setFailureStage(parsed.stage)
 	}
 	p.emitRunnerEvent(source, parsed.level, parsed.message, parsed.fields...)
@@ -169,8 +183,8 @@ var runnerProtocolFields = []runnerProtocolField{
 	{key: "step", valid: validRunnerStep},
 }
 
-func classifyRunnerLine(line []byte, source string, fallback zapcore.Level) parsedRunnerLine {
-	base := []zap.Field{zap.String("source", source), zap.Int("line_bytes", len(line))}
+func classifyRunnerLine(line []byte, fallback zapcore.Level) parsedRunnerLine {
+	base := []zap.Field{zap.Int("line_bytes", len(line))}
 	parsed := parsedRunnerLine{level: fallback}
 
 	var object map[string]json.RawMessage
@@ -219,7 +233,7 @@ func classifyProtocolEvent(
 		}
 		var value string
 		if json.Unmarshal(raw, &value) != nil || !field.valid(value) {
-			return rejectedProtocolRecord(base)
+			return rejectedProtocolRecord(parsed.level, base)
 		}
 		parsed.fields = append(parsed.fields, zap.String(field.key, value))
 		if field.recordsStage {
@@ -229,19 +243,23 @@ func classifyProtocolEvent(
 	if raw, exists := object["rc"]; exists {
 		code, err := strconv.ParseInt(string(raw), 10, 32)
 		if err != nil {
-			return rejectedProtocolRecord(base)
+			return rejectedProtocolRecord(parsed.level, base)
 		}
 		parsed.fields = append(parsed.fields, zap.Int64("rc", code))
 	}
-	_, errorExists := object["error"]
-	errorPresent := errorExists && string(object["error"]) != "null"
+	rawErr, errorExists := object["error"]
+	errorPresent := errorExists && !bytes.Equal(rawErr, []byte("null"))
 	parsed.fields = append(parsed.fields, zap.Bool("error_present", errorPresent))
 	return parsed
 }
 
-func rejectedProtocolRecord(base []zap.Field) parsedRunnerLine {
+// rejectedProtocolRecord discards the tokens of a record that failed the
+// allowlist. The stream's fallback level is kept, so a rejection is reported at
+// the same severity as any other unparsable line.
+func rejectedProtocolRecord(fallback zapcore.Level, base []zap.Field) parsedRunnerLine {
 	return parsedRunnerLine{
 		message: "runner protocol record rejected",
+		level:   fallback,
 		fields:  base,
 		invalid: true,
 	}
@@ -328,7 +346,7 @@ func validRunnerStep(value string) bool {
 }
 
 func validNativeModule(value string) bool {
-	if len(value) == 0 || len(value) > 128 {
+	if len(value) == 0 || len(value) > maxNativeModuleName {
 		return false
 	}
 	return strings.IndexFunc(value, func(char rune) bool {
@@ -385,6 +403,22 @@ func nativeZapLevel(value string) (zapcore.Level, bool) {
 	}
 }
 
+// retain appends content to the retained prefix, or drops the retained data and
+// marks the line oversized once it would exceed max. An oversized line is dropped
+// whole, never truncated, so a partially parsed JSON record cannot be mistaken
+// for a complete one.
+func (l *runnerLogLine) retain(content []byte, max int) {
+	if l.oversized {
+		return
+	}
+	if len(content) > max-len(l.data) {
+		l.oversized = true
+		l.data = nil
+		return
+	}
+	l.data = append(l.data, content...)
+}
+
 // readBoundedLine reads one newline-terminated line, draining an oversized one
 // instead of buffering it.
 func readBoundedLine(reader *bufio.Reader, max int) (runnerLogLine, error) {
@@ -400,14 +434,7 @@ func readBoundedLine(reader *bufio.Reader, max int) (runnerLogLine, error) {
 		} else {
 			line.bytes += int64(len(content))
 		}
-		if !line.oversized {
-			if len(content) > max-len(line.data) {
-				line.oversized = true
-				line.data = nil
-			} else {
-				line.data = append(line.data, content...)
-			}
-		}
+		line.retain(content, max)
 		if err == nil {
 			return line, nil
 		}
@@ -420,6 +447,10 @@ func readBoundedLine(reader *bufio.Reader, max int) (runnerLogLine, error) {
 
 // emitRunnerEvent applies the per-source rate limit, flushes any pending drop
 // report, and then logs the event.
+//
+// It owns the "source" field: callers build only event-specific fields, so the
+// stream name appears exactly once no matter which classification path produced
+// the record.
 func (p *RunnerProcess) emitRunnerEvent(source string, level zapcore.Level, message string, fields ...zap.Field) {
 	index := runnerSourceIndex(source)
 
@@ -431,7 +462,7 @@ func (p *RunnerProcess) emitRunnerEvent(source string, level zapcore.Level, mess
 		window.emitted = 0
 	}
 	if window.emitted >= runnerLogRate {
-		p.logStats[index].rateLimited++
+		p.countRunnerIssueLocked(source, runnerIssueRateLimited)
 		p.logRateMu.Unlock()
 		return
 	}
@@ -439,7 +470,7 @@ func (p *RunnerProcess) emitRunnerEvent(source string, level zapcore.Level, mess
 	p.logRateMu.Unlock()
 
 	p.reportRunnerIssues(source)
-	p.logger.Log(level, message, fields...)
+	p.logger.Log(level, message, append([]zap.Field{zap.String("source", source)}, fields...)...)
 }
 
 // runnerSourceIndex maps a stream name to its slot in the per-source arrays.
@@ -454,15 +485,13 @@ func (p *RunnerProcess) countRunnerIssue(source string, kind runnerIssueKind) {
 	p.logRateMu.Lock()
 	defer p.logRateMu.Unlock()
 
-	stats := &p.logStats[runnerSourceIndex(source)]
-	switch kind {
-	case runnerIssueInvalid:
-		stats.invalid++
-	case runnerIssueOversized:
-		stats.oversized++
-	case runnerIssueReadError:
-		stats.readErrors++
-	}
+	p.countRunnerIssueLocked(source, kind)
+}
+
+// countRunnerIssueLocked is the single counting entry point for every drop
+// category, including the rate limiter's own drops. Callers must hold logRateMu.
+func (p *RunnerProcess) countRunnerIssueLocked(source string, kind runnerIssueKind) {
+	p.logStats[runnerSourceIndex(source)].counts[kind]++
 }
 
 // reportRunnerIssues emits the drops that happened since the last report, so a
@@ -478,11 +507,10 @@ func (p *RunnerProcess) reportRunnerIssues(source string) {
 	if delta.total() == 0 {
 		return
 	}
-	p.logger.Warn("runner output records dropped",
-		zap.String("source", source),
-		zap.Uint64("rate_limited", delta.rateLimited),
-		zap.Uint64("invalid", delta.invalid),
-		zap.Uint64("oversized", delta.oversized),
-		zap.Uint64("read_errors", delta.readErrors),
-	)
+	fields := make([]zap.Field, 0, runnerLogCategoryCount+1)
+	fields = append(fields, zap.String("source", source))
+	for kind, name := range runnerLogCategoryFields {
+		fields = append(fields, zap.Uint64(name, delta.counts[kind]))
+	}
+	p.logger.Warn("runner output records dropped", fields...)
 }

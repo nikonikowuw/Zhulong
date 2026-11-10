@@ -50,9 +50,15 @@ public:
     explicit BoundedQueue(size_t capacity, OverflowStrategy strategy = OverflowStrategy::block)
         : capacity_(capacity > 0 ? capacity : 1), strategy_(strategy) {}
 
-    /** @brief 析构函数，自动触发取消并唤醒所有等待线程 */
+    /**
+     * @brief 析构函数，置位取消并唤醒所有等待线程
+     *
+     * ⚠️ 这里刻意不调用 cancel()：cancel() 为了锁外析构会构造临时 `std::deque`（libstdc++
+     *    下默认构造即分配），而析构函数隐式 noexcept，OOM 时就是 std::terminate。
+     *    析构时已不可能再有并发访问者，残余元素随 queue_ 成员析构即可（天然在锁外）。
+     */
     ~BoundedQueue() {
-        cancel();
+        mark_cancelled();
     }
 
     BoundedQueue(const BoundedQueue&) = delete;
@@ -119,6 +125,10 @@ public:
 
     /**
      * @brief 带超时的数据出队
+     *
+     * ⚠️ 锁外析构：出队元素先移入局部暂存，解锁后才赋给 `item`。`item` 原有的值
+     *    （例如调用方复用的 HardwareFrame 句柄）因此在队列锁外析构。
+     *
      * @tparam Rep 时钟周期表示类型
      * @tparam Period 时钟周期比例类型
      * @param[out] item 成功时接收出队数据的引用
@@ -127,41 +137,42 @@ public:
      */
     template <typename Rep, typename Period>
     bool pop(T &item, const std::chrono::duration<Rep, Period> &timeout) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        if (!not_empty_.wait_for(lock, timeout, [this] {
-            return cancelled_ || !queue_.empty();
-        })) {
-            return false; // 等待超时
+        std::optional<T> popped;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (!not_empty_.wait_for(lock, timeout, [this] {
+                return cancelled_ || !queue_.empty();
+            })) {
+                return false; // 等待超时
+            }
+            if (!take_front_locked(popped)) {
+                return false; // 队列已被取消或当前为空
+            }
         }
-
-        if (queue_.empty()) {
-            return false; // 队列已被取消或当前为空
-        }
-
-        item = std::move(queue_.front());
-        queue_.pop_front();
-        not_full_.notify_one();
+        item = std::move(*popped);
         return true;
     }
 
     /**
      * @brief 阻塞直到出队成功或队列被取消
+     *
+     * ⚠️ 锁外析构语义同带超时版本。
+     *
      * @param[out] item 成功时接收出队数据的引用
-     * @return true 成功获取数据；false 队列已被取消且为空
+     * @return true 成功获取数据；false 队列已被取消
      */
     bool pop(T &item) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        not_empty_.wait(lock, [this] {
-            return cancelled_ || !queue_.empty();
-        });
-
-        if (queue_.empty()) {
-            return false;
+        std::optional<T> popped;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            not_empty_.wait(lock, [this] {
+                return cancelled_ || !queue_.empty();
+            });
+            if (!take_front_locked(popped)) {
+                return false;
+            }
         }
-
-        item = std::move(queue_.front());
-        queue_.pop_front();
-        not_full_.notify_one();
+        item = std::move(*popped);
         return true;
     }
 
@@ -169,23 +180,17 @@ public:
      * @brief 协作式取消队列，唤醒所有阻塞等待的生产者与消费者
      *
      * ⚠️ 不可逆性契约：
-     *   - 一旦取消，cancelled_ 恒为 true，队列不再接受新数据且无法复活；
+     *   - 一旦取消，cancelled_ 恒为 true，队列不再接受新数据、pop 不再交出任何残余元素，且无法复活；
      *   - 残余数据在锁外释放，清空内存。
      *
-     * ⚠️ 本函数不是 noexcept：锁外托管的 `std::deque` 默认构造在内存紧张时会抛
-     *    `bad_alloc`（残余元素必须移出锁外销毁，不能在这里 `clear()`，否则
-     *    HardwareFrame 的 release_fn 会在队列锁内执行）。因此 noexcept 线程入口
-     *    的异常收口路径调用它时必须自己 `try/catch`（见 `DecodeSession::decode_loop`）。
+     * ⚠️ 两阶段：先置位取消并广播（不分配、不抛出），再把残余元素移出锁外销毁。
+     *    第二阶段托管用的 `std::deque` 默认构造在内存紧张时可能抛 `bad_alloc`，
+     *    但此时取消已经生效、等待者已被唤醒——抛出只意味着残余元素延后到队列析构时释放。
+     *    noexcept 线程入口的异常收口路径调用它时仍须自己 `try/catch`（见 `DecodeSession::decode_loop`）。
      */
     void cancel() {
-        std::deque<T> discarded;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            cancelled_ = true;
-            discarded = std::move(queue_);
-        }
-        not_empty_.notify_all();
-        not_full_.notify_all();
+        mark_cancelled();
+        drain();
     }
 
     /**
@@ -195,12 +200,22 @@ public:
      * 即使在停机竞态下调用也不会意外复活已取消的队列。
      */
     void clear() {
+        drain();
+    }
+
+    /**
+     * @brief 取走全部残余元素（不改变取消标记），交由调用方在锁外处置
+     *
+     * 与 clear() 相同的锁外语义，但把元素交还给调用方（例如回收包缓冲进复用池）。
+     */
+    std::deque<T> drain() {
         std::deque<T> discarded;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            discarded = std::move(queue_);
+            discarded.swap(queue_); // swap 不分配、不抛出
         }
         not_full_.notify_all();
+        return discarded;
     }
 
     /** @brief 检查队列是否已被取消 */
@@ -227,6 +242,27 @@ public:
     }
 
 private:
+    /** @brief 置位取消标记并唤醒全部等待者（不分配、不抛出） */
+    void mark_cancelled() noexcept {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            cancelled_ = true;
+        }
+        not_empty_.notify_all();
+        not_full_.notify_all();
+    }
+
+    /** @brief 持锁取出队头；已取消或为空时返回 false（取消后绝不交出残余元素） */
+    bool take_front_locked(std::optional<T> &out) {
+        if (cancelled_ || queue_.empty()) {
+            return false;
+        }
+        out.emplace(std::move(queue_.front()));
+        queue_.pop_front();
+        not_full_.notify_one();
+        return true;
+    }
+
     template <typename U>
     bool push_internal(U &&item) {
         std::optional<T> discarded;

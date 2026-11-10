@@ -22,7 +22,7 @@ export function ScheduleTimelineBar({
       </div>
 
       {/* 连续生效时段高亮 (精确到分钟) */}
-      {ranges.map((r, idx) => {
+      {ranges.map((r) => {
         const startMin = timeStringToMinutes(r.start)
         const endMin = timeStringToMinutes(r.end)
         if (startMin >= endMin) return null
@@ -30,7 +30,7 @@ export function ScheduleTimelineBar({
         const width = ((endMin - startMin) / MINUTES_PER_DAY) * 100
         return (
           <div
-            key={idx}
+            key={`${r.start}-${r.end}`}
             className='absolute top-0 bottom-0 rounded-full bg-primary transition-all duration-150'
             style={{
               left: `${left}%`,
