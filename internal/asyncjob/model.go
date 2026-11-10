@@ -2,6 +2,7 @@ package asyncjob
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -38,12 +39,7 @@ func (s JobStatus) IsTerminal() bool {
 
 // IsActive reports whether the status belongs to the in-flight lifecycle.
 func (s JobStatus) IsActive() bool {
-	for _, active := range activeStatuses {
-		if s == active {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(activeStatuses, s)
 }
 
 // JobStage is the human-facing phase a handler reports while it works. It is
@@ -104,6 +100,14 @@ type Job struct {
 // TableName returns the table name for GORM.
 func (Job) TableName() string {
 	return "system_async_jobs"
+}
+
+// FinishOutcome describes the terminal state and summary recorded when an
+// active job finishes.
+type FinishOutcome struct {
+	Status     JobStatus
+	ResultJSON string
+	ErrorCode  string
 }
 
 // ProgressUpdate represents an incremental progress telemetry payload.

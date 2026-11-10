@@ -184,9 +184,9 @@ func (s *Store) UpdateProgress(ctx context.Context, id string, progressPercent i
 // It reports false when the job already reached a terminal state, which is the
 // normal outcome of a cancellation that won the race; callers must not treat
 // that as an error, and the stored result is left untouched.
-func (s *Store) FinishJob(ctx context.Context, id string, status JobStatus, resultJSON, errorCode string) (bool, error) {
-	if !status.IsTerminal() {
-		return false, fmt.Errorf("finish job: %q is not a terminal status", status)
+func (s *Store) FinishJob(ctx context.Context, id string, outcome FinishOutcome) (bool, error) {
+	if !outcome.Status.IsTerminal() {
+		return false, fmt.Errorf("finish job: %q is not a terminal status", outcome.Status)
 	}
 	db, err := s.db(ctx)
 	if err != nil {
@@ -194,19 +194,19 @@ func (s *Store) FinishJob(ctx context.Context, id string, status JobStatus, resu
 	}
 	now := time.Now().UTC()
 	updates := map[string]any{
-		"status":        status,
+		"status":        outcome.Status,
 		"current_file":  "",
-		"error_code":    errorCode,
+		"error_code":    outcome.ErrorCode,
 		"error_message": "",
 		"updated_at":    now,
 		"finished_at":   now,
 	}
 	// An empty result means "the handler produced no new summary"; keep whatever
 	// is already stored instead of wiping a partially written result.
-	if resultJSON != "" {
-		updates["result_json"] = resultJSON
+	if outcome.ResultJSON != "" {
+		updates["result_json"] = outcome.ResultJSON
 	}
-	if status == StatusCompleted {
+	if outcome.Status == StatusCompleted {
 		updates["progress"] = 100
 		updates["error_code"] = ""
 	}
