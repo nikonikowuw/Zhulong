@@ -16,25 +16,25 @@ const (
 // Rejection reasons for auth_rejected audit entries.
 // Detail must only contain these coarse reasons, never token fragments, prefixes or hashes.
 const (
-	RejectMalformed        = "malformed"
-	RejectUnknownOrRevoked = "unknown_or_revoked"
+	rejectMalformed        = "malformed"
+	rejectUnknownOrRevoked = "unknown_or_revoked"
 )
 
 // Domain limits and lengths.
 const (
-	MaxActiveTokens = 10
-	MaxTokenNameLen = 48
+	maxActiveTokens = 10
+	maxTokenNameLen = 48
 )
 
 // Domain sentinel errors.
 var (
-	ErrTokenNotFound     = errors.New("api token not found")
-	ErrTokenLimitReached = errors.New("api token limit reached")
-	ErrTokenNameConflict = errors.New("api token name already exists")
-	ErrUnauthorized      = errors.New("unauthorized")
-	ErrTokenNameRequired = errors.New("api token name is required")
-	ErrTokenNameTooLong  = errors.New("api token name is too long")
-	ErrTokenNameInvalid  = errors.New("api token name contains invalid characters")
+	errTokenNotFound     = errors.New("api token not found")
+	errTokenLimitReached = errors.New("api token limit reached")
+	errTokenNameConflict = errors.New("api token name already exists")
+	errUnauthorized      = errors.New("unauthorized")
+	errTokenNameRequired = errors.New("api token name is required")
+	errTokenNameTooLong  = errors.New("api token name is too long")
+	errTokenNameInvalid  = errors.New("api token name contains invalid characters")
 )
 
 // APIToken is the persistence model for M2M API tokens in the api_tokens table.

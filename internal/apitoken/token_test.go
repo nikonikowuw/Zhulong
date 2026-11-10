@@ -20,8 +20,8 @@ func TestGenerateToken(t *testing.T) {
 	if len(hash) != 64 {
 		t.Errorf("expected SHA-256 hash length 64, got %d (%q)", len(hash), hash)
 	}
-	if hash != HashToken(raw) {
-		t.Errorf("hash mismatch: expected %q, got %q", HashToken(raw), hash)
+	if hash != hashToken(raw) {
+		t.Errorf("hash mismatch: expected %q, got %q", hashToken(raw), hash)
 	}
 	if !strings.HasPrefix(masked, "sk-") || !strings.Contains(masked, "...") {
 		t.Errorf("expected masked key format sk-...xxxx, got %q", masked)
@@ -37,11 +37,11 @@ func TestNormalizeTokenName(t *testing.T) {
 	}{
 		{name: "valid normal", input: "Platform-A", want: "Platform-A", targetErr: nil},
 		{name: "valid trimmed", input: "  Platform-B  ", want: "Platform-B", targetErr: nil},
-		{name: "empty", input: "   ", want: "", targetErr: ErrTokenNameRequired},
-		{name: "too long", input: strings.Repeat("a", 49), want: "", targetErr: ErrTokenNameTooLong},
+		{name: "empty", input: "   ", want: "", targetErr: errTokenNameRequired},
+		{name: "too long", input: strings.Repeat("a", 49), want: "", targetErr: errTokenNameTooLong},
 		{name: "max length", input: strings.Repeat("a", 48), want: strings.Repeat("a", 48), targetErr: nil},
-		{name: "control char", input: "abc\n123", want: "", targetErr: ErrTokenNameInvalid},
-		{name: "null byte", input: "abc\x00123", want: "", targetErr: ErrTokenNameInvalid},
+		{name: "control char", input: "abc\n123", want: "", targetErr: errTokenNameInvalid},
+		{name: "null byte", input: "abc\x00123", want: "", targetErr: errTokenNameInvalid},
 	}
 
 	for _, tc := range tests {
@@ -51,7 +51,9 @@ func TestNormalizeTokenName(t *testing.T) {
 				if !errors.Is(err, tc.targetErr) {
 					t.Fatalf("normalizeTokenName(%q) expected error %v, got %v", tc.input, tc.targetErr, err)
 				}
-			} else if err != nil {
+				return
+			}
+			if err != nil {
 				t.Fatalf("normalizeTokenName(%q) unexpected error: %v", tc.input, err)
 			}
 			if got != tc.want {

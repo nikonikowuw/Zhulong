@@ -39,9 +39,15 @@ func setupMiddlewareEnv(t *testing.T) (*Service, *audit.Service, func()) {
 	}
 
 	cleanup := func() {
-		_ = tokenSvc.Close()
-		_ = auditSvc.Stop(context.Background())
-		_ = dbStore.Close()
+		if err := tokenSvc.Close(); err != nil {
+			t.Errorf("close token service: %v", err)
+		}
+		if err := auditSvc.Stop(context.Background()); err != nil {
+			t.Errorf("stop audit service: %v", err)
+		}
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
 	}
 	return tokenSvc, auditSvc, cleanup
 }
@@ -61,12 +67,12 @@ func TestRequireBearer_Valid(t *testing.T) {
 	var capturedIdentity Identity
 	var capturedActor audit.Actor
 	router.GET("/test", func(c *gin.Context) {
-		id, ok := GetIdentity(c)
-		if ok {
+		if id, ok := GetIdentity(c); ok {
 			capturedIdentity = id
 		}
-		actor, _ := audit.FromContext(c.Request.Context())
-		capturedActor = actor
+		if actor, ok := audit.FromContext(c.Request.Context()); ok {
+			capturedActor = actor
+		}
 		c.Status(http.StatusOK)
 	})
 

@@ -1,7 +1,6 @@
 package apitoken
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -13,17 +12,12 @@ import (
 // Handler manages HTTP endpoints for API token creation, listing, and revocation.
 type Handler struct {
 	service *Service
-	logger  *zap.Logger
 }
 
 // NewHandler creates a new Handler instance.
-func NewHandler(service *Service, logger *zap.Logger) *Handler {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
+func NewHandler(service *Service, _ *zap.Logger) *Handler {
 	return &Handler{
 		service: service,
-		logger:  logger.Named("apitoken.handler"),
 	}
 }
 
@@ -52,8 +46,8 @@ func (h *Handler) List(c *gin.Context) {
 	}
 
 	items := make([]APITokenInfo, 0, len(tokens))
-	for i := range tokens {
-		items = append(items, newAPITokenInfo(&tokens[i]))
+	for _, token := range tokens {
+		items = append(items, newAPITokenInfo(token))
 	}
 
 	httputil.Success(c, APITokenListResponse{Items: items})
@@ -83,11 +77,16 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 
-	audithttp.Tag(c, ActionTokenCreate, token.Name, fmt.Sprintf("id=%s", token.ID))
+	audithttp.Tag(
+		c,
+		ActionTokenCreate,
+		token.Name,
+		"id="+token.ID,
+	)
 	c.Header("Cache-Control", "no-store")
 
 	httputil.SuccessWithStatus(c, http.StatusCreated, APITokenCreateResponse{
-		APITokenInfo: newAPITokenInfo(token),
+		APITokenInfo: newAPITokenInfo(*token),
 		Token:        rawToken,
 	})
 }
@@ -108,6 +107,11 @@ func (h *Handler) Revoke(c *gin.Context) {
 		return
 	}
 
-	audithttp.Tag(c, ActionTokenRevoke, id, "")
+	audithttp.Tag(
+		c,
+		ActionTokenRevoke,
+		id,
+		"",
+	)
 	httputil.Success(c, APITokenRevokeResponse{Revoked: true})
 }

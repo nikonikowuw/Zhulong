@@ -10,9 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// ErrDatabaseClosed is an alias of the shared sentinel, kept under the name this
-// package's callers already use.
-var ErrDatabaseClosed = database.ErrClosed
+var errDatabaseClosed = database.ErrClosed
 
 // Store manages persistence of API tokens in SQLite.
 type Store struct {
@@ -24,18 +22,7 @@ func NewStore(dbProvider database.DBProvider) *Store {
 	return &Store{dbProvider: dbProvider}
 }
 
-func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
-	if s.dbProvider == nil {
-		return nil, ErrDatabaseClosed
-	}
-	db := s.dbProvider.DB()
-	if db == nil {
-		return nil, ErrDatabaseClosed
-	}
-	return db.WithContext(ctx), nil
-}
-
-// CreateToken inserts a new token inside a transaction that enforces the MaxActiveTokens limit.
+// CreateToken inserts a new token inside a transaction that enforces the maxActiveTokens limit.
 // Notice: Within db.Transaction, tx MUST be used exclusively to prevent deadlock under MaxOpenConns=1.
 func (s *Store) CreateToken(ctx context.Context, token *APIToken) error {
 	db, err := s.db(ctx)
@@ -48,14 +35,14 @@ func (s *Store) CreateToken(ctx context.Context, token *APIToken) error {
 		if err := tx.Model(&APIToken{}).Where("revoked_at IS NULL").Count(&activeCount).Error; err != nil {
 			return err
 		}
-		if activeCount >= MaxActiveTokens {
-			return ErrTokenLimitReached
+		if activeCount >= maxActiveTokens {
+			return errTokenLimitReached
 		}
 
 		if err := tx.Create(token).Error; err != nil {
 			errStr := err.Error()
 			if strings.Contains(errStr, "api_tokens.name") || strings.Contains(errStr, "ux_api_tokens_name") {
-				return ErrTokenNameConflict
+				return errTokenNameConflict
 			}
 			return err
 		}
@@ -92,7 +79,7 @@ func (s *Store) FindActiveByHash(ctx context.Context, hash string) (*APIToken, e
 	var token APIToken
 	if err := db.Where("token_hash = ? AND revoked_at IS NULL", hash).First(&token).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrTokenNotFound
+			return nil, errTokenNotFound
 		}
 		return nil, err
 	}
@@ -109,7 +96,7 @@ func (s *Store) Revoke(ctx context.Context, id string) error {
 	var token APIToken
 	if err := db.Where("id = ?", id).First(&token).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrTokenNotFound
+			return errTokenNotFound
 		}
 		return err
 	}
@@ -129,4 +116,15 @@ func (s *Store) TouchLastUsed(ctx context.Context, id string, t time.Time) error
 	}
 
 	return db.Model(&APIToken{}).Where("id = ?", id).Update("last_used_at", t.UTC()).Error
+}
+
+func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
+	if s.dbProvider == nil {
+		return nil, errDatabaseClosed
+	}
+	db := s.dbProvider.DB()
+	if db == nil {
+		return nil, errDatabaseClosed
+	}
+	return db.WithContext(ctx), nil
 }

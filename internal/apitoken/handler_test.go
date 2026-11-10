@@ -29,8 +29,12 @@ func setupHandlerEnv(t *testing.T) (*gin.Engine, *Service, func()) {
 	handler.RegisterRoutes(router.Group("/api/v1"))
 
 	cleanup := func() {
-		_ = tokenSvc.Close()
-		_ = dbStore.Close()
+		if err := tokenSvc.Close(); err != nil {
+			t.Errorf("close token service: %v", err)
+		}
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
 	}
 	return router, tokenSvc, cleanup
 }
@@ -133,7 +137,9 @@ func TestHandler_ListAndRevoke(t *testing.T) {
 	// Active list now has 1
 	wAfter := httptest.NewRecorder()
 	router.ServeHTTP(wAfter, httptest.NewRequest(http.MethodGet, "/api/v1/api-tokens", nil))
-	_ = json.Unmarshal(wAfter.Body.Bytes(), &listResp)
+	if err := json.Unmarshal(wAfter.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list response after revoke: %v", err)
+	}
 	if len(listResp.Data.Items) != 1 {
 		t.Errorf("expected 1 active token after revoke, got %d", len(listResp.Data.Items))
 	}
@@ -141,7 +147,9 @@ func TestHandler_ListAndRevoke(t *testing.T) {
 	// Include revoked query returns 2
 	wInclude := httptest.NewRecorder()
 	router.ServeHTTP(wInclude, httptest.NewRequest(http.MethodGet, "/api/v1/api-tokens?includeRevoked=true", nil))
-	_ = json.Unmarshal(wInclude.Body.Bytes(), &listResp)
+	if err := json.Unmarshal(wInclude.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list response with includeRevoked: %v", err)
+	}
 	if len(listResp.Data.Items) != 2 {
 		t.Errorf("expected 2 tokens with includeRevoked=true, got %d", len(listResp.Data.Items))
 	}

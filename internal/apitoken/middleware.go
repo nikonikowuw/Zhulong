@@ -2,7 +2,6 @@ package apitoken
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -27,6 +26,40 @@ func GetIdentity(c *gin.Context) (Identity, bool) {
 	}
 	id, ok := val.(Identity)
 	return id, ok
+}
+
+// RequireBearer returns a Gin middleware that enforces Bearer token authentication for OpenAPI routes.
+func RequireBearer(svc *Service, _ *zap.Logger, auditSvc *audit.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rawToken, ok := parseBearer(c.Request.Header.Values("Authorization"))
+		if !ok {
+			recordRejected(auditSvc, c, rejectMalformed)
+			writeUnauthorized(c)
+			return
+		}
+
+		identity, err := svc.Authenticate(c.Request.Context(), rawToken)
+		if errors.Is(err, errUnauthorized) {
+			recordRejected(auditSvc, c, rejectUnknownOrRevoked)
+			writeUnauthorized(c)
+			return
+		}
+		if err != nil {
+			httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Internal server error", err))
+			c.Abort()
+			return
+		}
+
+		ctx := audit.WithActor(c.Request.Context(), audit.Actor{
+			IP:       c.ClientIP(),
+			Username: "api_token:" + identity.Name,
+			Source:   audit.SourceAPI,
+		})
+		c.Request = c.Request.WithContext(ctx)
+
+		SetIdentity(c, identity)
+		c.Next()
+	}
 }
 
 // parseBearer extracts the token string from Authorization header values.
@@ -60,41 +93,8 @@ func recordRejected(auditSvc *audit.Service, c *gin.Context, reason string) {
 		Username: audit.UsernameAnonymous,
 		Action:   ActionTokenAuthRejected,
 		Target:   "openapi",
-		Detail:   fmt.Sprintf("reject=%s", reason),
+		Detail:   "reject=" + reason,
 		Status:   audit.StatusFailed,
 		ErrorMsg: "Unauthorized",
 	})
-}
-
-// RequireBearer returns a Gin middleware that enforces Bearer token authentication for OpenAPI routes.
-func RequireBearer(svc *Service, logger *zap.Logger, auditSvc *audit.Service) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		rawToken, ok := parseBearer(c.Request.Header.Values("Authorization"))
-		if !ok {
-			recordRejected(auditSvc, c, RejectMalformed)
-			writeUnauthorized(c)
-			return
-		}
-
-		identity, err := svc.Authenticate(c.Request.Context(), rawToken)
-		if errors.Is(err, ErrUnauthorized) {
-			recordRejected(auditSvc, c, RejectUnknownOrRevoked)
-			writeUnauthorized(c)
-			return
-		}
-		if err != nil {
-			httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Internal server error", err))
-			c.Abort()
-			return
-		}
-
-		c.Request = c.Request.WithContext(audit.WithActor(c.Request.Context(), audit.Actor{
-			IP:       c.ClientIP(),
-			Username: "api_token:" + identity.Name,
-			Source:   audit.SourceAPI,
-		}))
-
-		SetIdentity(c, identity)
-		c.Next()
-	}
 }
