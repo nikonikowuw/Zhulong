@@ -3,6 +3,7 @@
 #include "common/runner_log.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -20,6 +21,15 @@ constexpr int kModelInputHeight = 384;
 
 /// 输出通道数上限：4 个框分量 + 类别分；超出即判定该张量不是检测头输出
 constexpr int64_t kMaxOutputChannels = 256;
+
+/** @brief 256 项归一化查表：编译期生成，消除每帧 73 万次浮点除法并保证常驻 L1 缓存 */
+inline constexpr auto kNormLut = []() constexpr {
+    std::array<float, 256> lut{};
+    for (std::size_t i = 0; i < 256; ++i) {
+        lut[i] = static_cast<float>(i) / 255.0f;
+    }
+    return lut;
+}();
 
 /**
  * @brief NMS 前的候选上限
@@ -51,12 +61,17 @@ struct OutputLayout {
 OutputLayout resolve_output_layout(const std::vector<int64_t>& shape) {
     OutputLayout layout;
 
-    std::vector<int64_t> dims;
-    dims.reserve(shape.size());
+    std::array<int64_t, 4> dims{};
+    std::size_t num_dims = 0;
     for (const int64_t dim : shape) {
-        if (dim != 1) dims.push_back(dim);
+        if (dim != 1) {
+            if (num_dims >= dims.size()) {
+                return layout;
+            }
+            dims[num_dims++] = dim;
+        }
     }
-    if (dims.size() != 2 || dims[0] <= 0 || dims[1] <= 0) {
+    if (num_dims != 2 || dims[0] <= 0 || dims[1] <= 0) {
         return layout;
     }
 
@@ -131,9 +146,9 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session,
     float* plane_b = destination + kPlane * 2;
     for (int i = 0; i < kPlane; ++i) {
         const std::size_t offset = static_cast<std::size_t>(i) * 3;
-        plane_r[i] = static_cast<float>(source[offset + 0]) / 255.0f;
-        plane_g[i] = static_cast<float>(source[offset + 1]) / 255.0f;
-        plane_b[i] = static_cast<float>(source[offset + 2]) / 255.0f;
+        plane_r[i] = kNormLut[source[offset + 0]];
+        plane_g[i] = kNormLut[source[offset + 1]];
+        plane_b[i] = kNormLut[source[offset + 2]];
     }
     std::vector<zhulong::Tensor> outputs = session.forward({model_input});
 

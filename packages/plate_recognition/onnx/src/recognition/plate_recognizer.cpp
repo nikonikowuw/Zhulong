@@ -60,12 +60,14 @@ inline void sample_packed_channels(
     const uint8_t* p10 = row(y1) + static_cast<std::size_t>(x0) * 3;
     const uint8_t* p11 = row(y1) + static_cast<std::size_t>(x1) * 3;
 
-    out_c0 = (1.0f - dx) * (1.0f - dy) * p00[0] + dx * (1.0f - dy) * p01[0] +
-             (1.0f - dx) * dy * p10[0] + dx * dy * p11[0];
-    out_c1 = (1.0f - dx) * (1.0f - dy) * p00[1] + dx * (1.0f - dy) * p01[1] +
-             (1.0f - dx) * dy * p10[1] + dx * dy * p11[1];
-    out_c2 = (1.0f - dx) * (1.0f - dy) * p00[2] + dx * (1.0f - dy) * p01[2] +
-             (1.0f - dx) * dy * p10[2] + dx * dy * p11[2];
+    const float w00 = (1.0f - dx) * (1.0f - dy);
+    const float w01 = dx * (1.0f - dy);
+    const float w10 = (1.0f - dx) * dy;
+    const float w11 = dx * dy;
+
+    out_c0 = w00 * p00[0] + w01 * p01[0] + w10 * p10[0] + w11 * p11[0];
+    out_c1 = w00 * p00[1] + w01 * p01[1] + w10 * p10[1] + w11 * p11[1];
+    out_c2 = w00 * p00[2] + w01 * p01[2] + w10 * p10[2] + w11 * p11[2];
 }
 
 /**
@@ -148,17 +150,19 @@ struct LogitsShape {
 LogitsShape resolve_logits_shape(const zhulong::Tensor& tensor) {
     LogitsShape result;
 
-    std::vector<std::size_t> dims;
+    std::array<std::size_t, 4> dims{};
+    std::size_t num_dims = 0;
     for (const int64_t dim : tensor.shape()) {
         if (dim == 1) continue; // 忽略 batch/squeeze 维
         if (dim <= 0) return {};
-        dims.push_back(static_cast<std::size_t>(dim));
+        if (num_dims >= dims.size()) return {};
+        dims[num_dims++] = static_cast<std::size_t>(dim);
     }
 
     const std::size_t total = tensor.element_count();
-    if (dims.size() >= 2) {
-        result.timesteps = dims[dims.size() - 2];
-        result.classes = dims.back();
+    if (num_dims >= 2) {
+        result.timesteps = dims[num_dims - 2];
+        result.classes = dims[num_dims - 1];
     }
     if (result.timesteps == 0 || result.classes == 0) {
         // 回退：该权重固定 21 时间步；类别数由元素总数反推（不做任何类别数硬编码）

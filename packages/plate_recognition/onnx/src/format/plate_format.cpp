@@ -102,13 +102,16 @@ std::vector<uint32_t> codepoints_in_range(std::size_t first, std::size_t last) {
 }
 
 const std::vector<uint32_t>& province_codepoints() {
-    static const std::vector<uint32_t> values =
-        codepoints_in_range(kFirstProvinceIndex, kLastProvinceIndex);
+    static const std::vector<uint32_t> values = [] {
+        auto list = codepoints_in_range(kFirstProvinceIndex, kLastProvinceIndex);
+        std::sort(list.begin(), list.end());
+        return list;
+    }();
     return values;
 }
 
 /**
- * @brief 合法尾字码点集合（特殊尾字 ∪ 额外尾字）
+ * @brief 合法尾字码点集合（特殊尾字 ∪ 额外尾字，已排序便于二分查找）
  *
  * 两段都来自 `plate_charset.hpp`，不另抄一份字面量：字符表扩容而校验没跟上，
  * 表现是「模型认得、永远报不出来」，且不会编译失败。
@@ -118,6 +121,7 @@ const std::vector<uint32_t>& suffix_codepoints() {
         std::vector<uint32_t> merged = codepoints_in_range(kFirstSpecialIndex, kLastSpecialIndex);
         const std::vector<uint32_t> extra = codepoints_in_range(kFirstExtraSuffixIndex, kLastExtraSuffixIndex);
         merged.insert(merged.end(), extra.begin(), extra.end());
+        std::sort(merged.begin(), merged.end());
         return merged;
     }();
     return values;
@@ -133,8 +137,8 @@ uint32_t codepoint_in_range(std::string_view name, std::size_t first, std::size_
     return 0;
 }
 
-bool contains(const std::vector<uint32_t>& set, uint32_t codepoint) noexcept {
-    return std::find(set.begin(), set.end(), codepoint) != set.end();
+bool contains(const std::vector<uint32_t>& sorted_set, uint32_t codepoint) noexcept {
+    return std::binary_search(sorted_set.begin(), sorted_set.end(), codepoint);
 }
 
 constexpr bool is_digit(uint32_t codepoint) noexcept { return codepoint >= '0' && codepoint <= '9'; }
