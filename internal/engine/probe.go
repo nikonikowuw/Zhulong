@@ -26,6 +26,9 @@ type probeContext struct {
 }
 
 // stop 请求私有引擎停止；已销毁时为空操作。
+//
+// ⚠️ 契约（runProbe 依赖它）：stop 必须让在途的 Zhulong_engine_probe 尽快返回。
+// 做不到时不会报错，只会表现为 Probe 晚于 ctx 返回 —— 见 runProbe 里的取舍说明。
 func (p *probeContext) stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -77,6 +80,9 @@ func (e *Engine) activeProbeContexts() []*probeContext {
 // 每个探测使用隔离的私有 Native Engine 实例，并发上限为 probeConcurrency。
 // 上限已满时**阻塞等待**（或被 ctx 取消），不做投机性排队。
 // 调用方应始终传入带 deadline 的 ctx，否则可能长期等待。
+//
+// 取消语义：ctx 取消后 Probe 会尽力回到调用方，但**不保证**立即返回 ——
+// 若原生侧在 stop 之后仍不返回，这里会选择继续等（理由见 runProbe）。
 func (e *Engine) Probe(ctx context.Context, uri string, options StreamOptions) (VideoInfo, error) {
 	if err := validateRTSPURI(uri); err != nil {
 		return VideoInfo{}, err
@@ -191,6 +197,11 @@ func runProbe(
 	case res = <-resChan:
 	case <-ctx.Done():
 		// 停掉私有引擎让阻塞中的探测尽快返回，再回收结果；取消语义以 ctx 为准。
+		//
+		// ⚠️ 第二次等待刻意不加上限，哪怕它可能越过 ctx 的截止时间：一旦超时放弃，
+		// 就必须把 pCtx 的所有权移交给 goroutine（由它返回后 destroy），而 Probe 的
+		// defer 会立即 destroy —— 两条路径稍一交错就是对在跑的原生调用 destroy 句柄。
+		// 用「可能晚返回」换「不会 Use-After-Free」；该等待能被解开的前提见 probeContext.stop 的契约。
 		pCtx.stop()
 		res = <-resChan
 	}

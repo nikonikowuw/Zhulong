@@ -47,8 +47,8 @@ type inboundPacket struct {
 	KeyFrame   bool
 	Data       []byte // 借用的原生内存，仅在回调期间有效
 	Size       int
-	PtsUS      int64
-	DtsUS      int64
+	PTSUS      int64
+	DTSUS      int64
 	FrameClass FrameClass
 	GOPID      uint32
 	Flags      PacketFlag
@@ -73,8 +73,8 @@ func (in inboundPacket) toPacket() Packet {
 		TimeBase:   in.TimeBase,
 		KeyFrame:   in.KeyFrame,
 		Data:       data,
-		PtsUS:      in.PtsUS,
-		DtsUS:      in.DtsUS,
+		PTSUS:      in.PTSUS,
+		DTSUS:      in.DTSUS,
 		FrameClass: in.FrameClass,
 		GOPID:      in.GOPID,
 		Flags:      in.Flags,
@@ -109,8 +109,8 @@ func (s *Subscription) onPacket(packet *C.Zhulong_packet_view) {
 		KeyFrame:   packet.key_frame != 0,
 		Data:       borrowed,
 		Size:       size,
-		PtsUS:      int64(packet.pts_us),
-		DtsUS:      int64(packet.dts_us),
+		PTSUS:      int64(packet.pts_us),
+		DTSUS:      int64(packet.dts_us),
 		FrameClass: FrameClass(packet.frame_class),
 		GOPID:      uint32(packet.gop_id),
 		Flags:      PacketFlag(packet.pkt_flags),
@@ -174,7 +174,9 @@ func (s *Subscription) Close() error {
 			s.cancelControl()
 		}
 
-		if s.stream != nil && s.stream.engine != nil && s.id > 0 {
+		// 本地构造的订阅（测试接缝）没有原生 id，只能就地释放 token。
+		hasNativeSubscription := s.stream != nil && s.stream.engine != nil && s.id > 0
+		if hasNativeSubscription {
 			closeErr = s.stream.engine.unsubscribeWith(
 				s.generation,
 				"unsubscribe",

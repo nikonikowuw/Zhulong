@@ -20,7 +20,6 @@ type Stream struct {
 	id         C.Zhulong_stream_id
 	consumerID uint64
 	kind       ConsumerKind
-	url        string
 	generation uint64
 
 	mu          sync.Mutex

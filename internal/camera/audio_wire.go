@@ -66,7 +66,7 @@ func PackAudioPacket(pkt engine.Packet, seq uint32) []byte {
 	buf[5] = audioWireFlags(pkt.Flags)
 	// buf[6:8] reserved，make() 已置零
 	binary.BigEndian.PutUint32(buf[8:12], seq)
-	binary.BigEndian.PutUint64(buf[12:20], uint64(pkt.PtsUS))
+	binary.BigEndian.PutUint64(buf[12:20], uint64(pkt.PTSUS))
 	copy(buf[AudioWireHeaderSize:], pkt.Data)
 	return buf
 }

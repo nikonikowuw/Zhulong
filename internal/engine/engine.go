@@ -23,12 +23,14 @@ package engine
 #include <Zhulong/engine.h>
 
 void zhulongPacketCallbackBridge(uintptr_t token, const Zhulong_packet_view *packet);
-void zhulongAIResultCallbackBridge(uintptr_t token, Zhulong_stream_id stream, const char *json_payload, size_t payload_len);
+void zhulongAIResultCallbackBridge(uintptr_t token, Zhulong_stream_id stream,
+    const char *json_payload, size_t payload_len);
 */
 import "C"
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"runtime/cgo"
@@ -77,7 +79,7 @@ type Engine struct {
 	logHandle cgo.Handle
 }
 
-// DecodeBackend 定义原生解码后端类型。
+// DecodeBackend 定义原生解码后端类型（取值与 C ABI 的 Zhulong_DECODE_BACKEND_* 一一对应）。
 type DecodeBackend int32
 
 const (
@@ -160,6 +162,40 @@ func verifyABI() error {
 	return nil
 }
 
+// applyDecodePolicy 把解码策略下发给已启动的句柄。
+//
+// 只做一次 CGO 调用，不碰任何锁：调用方负责保证 handle 有效，且当前不在原生回调上下文
+// （回调内调用控制接口会被原生侧以 ERR_CALLBACK_CONTEXT 拒绝）。
+func applyDecodePolicy(handle C.Zhulong_engine_h, policy DecodePolicy) error {
+	var allowFallback int32
+	if policy.AllowSoftwareFallback {
+		allowFallback = 1
+	}
+
+	cPolicy := C.Zhulong_decode_policy_t{
+		backend:                 C.int32_t(policy.Backend),
+		allow_software_fallback: C.int32_t(allowFallback),
+		max_sessions:            C.int32_t(policy.MaxSessions),
+	}
+	if status := C.Zhulong_engine_configure_decode(handle, &cPolicy); status != C.Zhulong_OK {
+		return mapNativeStatus("configure_decode", int32(status))
+	}
+	return nil
+}
+
+// resetFailedStart 把启动失败后的句柄与运行态复位，避免下一次 Start 复用已销毁的指针。
+//
+// 调用方必须持有 lifecycleMu（保证与 Stop / Close 互斥），并且不得持有 mu 或 handleMu ——
+// 这里的写锁取用顺序仍是 handleMu → mu。
+func (e *Engine) resetFailedStart() {
+	e.handleMu.Lock()
+	e.mu.Lock()
+	e.handle = nil
+	e.running = false
+	e.mu.Unlock()
+	e.handleMu.Unlock()
+}
+
 // Start 幂等地启动 Native 引擎：已运行时为空操作，失败时不会留下半初始化的句柄。
 // 每次成功启动都会推进 generation，旧代次的 Stream / Subscription 随之失效。
 func (e *Engine) Start() error {
@@ -170,59 +206,52 @@ func (e *Engine) Start() error {
 		return err
 	}
 
+	// ⚠️ 下面三段 CGO（create / start / configure_decode）全程不持 mu：mu 只保护状态字段。
+	// 因此这里唯一允许的形状是「锁内读快照 → 锁外调 CGO → 锁内发布结果」。
+	// 反过来做（像旧实现那样在 mu 下等 engine_start）会让所有 API 在启动期间被一起挂住。
 	e.mu.Lock()
 	if e.running {
 		e.mu.Unlock()
 		return nil
 	}
+	handle := e.handle
+	policy := e.decodePolicy
+	e.mu.Unlock()
 
-	e.generation++
-
-	e.probesMu.Lock()
-	e.probesClosed = false
-	e.probesMu.Unlock()
-
-	if e.handle == nil {
-		var handle C.Zhulong_engine_h
+	if handle == nil {
 		if status := C.Zhulong_engine_create(&handle); status != C.Zhulong_OK {
-			e.mu.Unlock()
 			return mapNativeStatus("create", int32(status))
 		}
-		e.handle = handle
 	}
 
-	if status := C.Zhulong_engine_start(e.handle); status != C.Zhulong_OK {
-		C.Zhulong_engine_destroy(e.handle)
-		e.handle = nil
-		e.running = false
-		e.mu.Unlock()
+	if status := C.Zhulong_engine_start(handle); status != C.Zhulong_OK {
+		C.Zhulong_engine_destroy(handle)
+		e.resetFailedStart()
 		return mapNativeStatus("start", int32(status))
 	}
 
-	if e.decodePolicy != nil {
-		var allowFallback int32
-		if e.decodePolicy.AllowSoftwareFallback {
-			allowFallback = 1
-		}
-		cPolicy := C.Zhulong_decode_policy_t{
-			backend:                 C.int32_t(e.decodePolicy.Backend),
-			allow_software_fallback: C.int32_t(allowFallback),
-			max_sessions:            C.int32_t(e.decodePolicy.MaxSessions),
-		}
-		if status := C.Zhulong_engine_configure_decode(e.handle, &cPolicy); status != C.Zhulong_OK {
-			C.Zhulong_engine_stop(e.handle)
-			C.Zhulong_engine_destroy(e.handle)
-			e.handle = nil
-			e.running = false
-			e.mu.Unlock()
-			return mapNativeStatus("configure_decode", int32(status))
+	if policy != nil {
+		if err := applyDecodePolicy(handle, *policy); err != nil {
+			C.Zhulong_engine_stop(handle)
+			C.Zhulong_engine_destroy(handle)
+			e.resetFailedStart()
+			return err
 		}
 	}
 
+	// 发布启动结果：handleMu 写锁与 borrowHandle 的读锁配对，保证 handle 一旦可见就已就绪。
+	e.handleMu.Lock()
+	e.mu.Lock()
+	e.handle = handle
 	e.running = true
 	e.stopping = false
 	e.nativeStopped = false
+	e.generation++
+	e.probesMu.Lock()
+	e.probesClosed = false
+	e.probesMu.Unlock()
 	e.mu.Unlock()
+	e.handleMu.Unlock()
 	return nil
 }
 
@@ -290,35 +319,30 @@ func (e *Engine) Ready() bool {
 }
 
 // ConfigureDecode 配置全局解码策略。
+//
+// 引擎未运行（或正在停机）时只缓存策略，随下一次 Start 生效；运行中则立即下发。
+// 句柄访问统一走 borrowHandle，与 Close 的 destroy 互斥。
 func (e *Engine) ConfigureDecode(policy DecodePolicy) error {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
 
 	e.mu.Lock()
 	e.decodePolicy = &policy
-	handle := e.handle
-	running := e.running
 	e.mu.Unlock()
 
-	if !running || handle == nil {
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireRunning: true,
+		deniedError:    ErrNotRunning,
+	})
+	if errors.Is(err, ErrNotRunning) {
 		return nil
 	}
-
-	var allowFallback int32
-	if policy.AllowSoftwareFallback {
-		allowFallback = 1
+	if err != nil {
+		return err
 	}
+	defer release()
 
-	cPolicy := C.Zhulong_decode_policy_t{
-		backend:                 C.int32_t(policy.Backend),
-		allow_software_fallback: C.int32_t(allowFallback),
-		max_sessions:            C.int32_t(policy.MaxSessions),
-	}
-
-	if status := C.Zhulong_engine_configure_decode(handle, &cPolicy); status != C.Zhulong_OK {
-		return mapNativeStatus("configure_decode", int32(status))
-	}
-	return nil
+	return applyDecodePolicy(lease.handle, policy)
 }
 
 // GetDecodeStats 查询原生解码器运行态统计。
@@ -383,6 +407,11 @@ func (e *Engine) Close() error {
 
 // Acquire 获取或复用物理 RTSP 流。
 func (e *Engine) Acquire(ctx context.Context, uri string, consumer Consumer, options StreamOptions) (*Stream, error) {
+	// 只带 cancel、没有 deadline 的 ctx 不会被 clampToDeadline 拦下，必须在这里挡：
+	// 否则已取消的调用仍会发起最长 maxAllowedTimeout 的阻塞式 native open。
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := validateRTSPURI(uri); err != nil {
 		return nil, err
 	}
@@ -426,7 +455,6 @@ func (e *Engine) Acquire(ctx context.Context, uri string, consumer Consumer, opt
 		id:         streamID,
 		consumerID: consumer.ID,
 		kind:       consumer.Kind,
-		url:        uri,
 		generation: lease.generation,
 	}
 
@@ -551,7 +579,11 @@ type audioInfoResult struct {
 //	（panic: argument of cgo function has Go pointer to unpinned Go pointer），
 //	即使它指向的是无指针的 []byte。用 C.malloc + C.GoBytes 既满足检查，
 //	也让「谁分配谁释放」在代码里一眼可见。
-func callAudioInfo(handle C.Zhulong_engine_h, streamID C.Zhulong_stream_id, capacity int) (audioInfoResult, C.Zhulong_status_t) {
+func callAudioInfo(
+	handle C.Zhulong_engine_h,
+	streamID C.Zhulong_stream_id,
+	capacity int,
+) (audioInfoResult, C.Zhulong_status_t) {
 	if capacity <= 0 {
 		capacity = audioInfoBufferBytes
 	}

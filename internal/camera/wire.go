@@ -103,8 +103,8 @@ func packFrame(pkt engine.Packet, seq uint32) ([]byte, WireHeader) {
 		Codec:      wireCodec(pkt.Codec),
 		FrameClass: wireFrameClass(pkt.FrameClass, pkt.KeyFrame),
 		Flags:      wireFlags(pkt.Flags, pkt.KeyFrame),
-		PTSUS:      pkt.PtsUS,
-		DTSUS:      pkt.DtsUS,
+		PTSUS:      pkt.PTSUS,
+		DTSUS:      pkt.DTSUS,
 		Seq:        seq,
 		GOPID:      pkt.GOPID,
 	}

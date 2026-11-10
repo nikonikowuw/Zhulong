@@ -45,8 +45,8 @@ func validateConsumer(consumer Consumer) error {
 	if consumer.ID == 0 {
 		return fmt.Errorf("%w: consumer ID must be non-zero", ErrInvalidArgument)
 	}
-	if consumer.Kind != ConsumerPreview && consumer.Kind != ConsumerRecording && consumer.Kind != ConsumerAI {
-		return fmt.Errorf("%w: invalid consumer kind %d", ErrInvalidArgument, consumer.Kind)
+	if !consumer.Kind.IsValid() {
+		return fmt.Errorf("%w: invalid consumer kind %s", ErrInvalidArgument, consumer.Kind)
 	}
 	return nil
 }
@@ -64,7 +64,12 @@ func (l subscriptionLimits) validate() (subscriptionLimits, error) {
 	if err != nil {
 		return subscriptionLimits{}, err
 	}
-	maxPacketBytes, err := resolveLimit(l.maxPacketBytes, DefaultMaxPacketBytes, HardLimitMaxPacketBytes, "MaxPacketBytes")
+	maxPacketBytes, err := resolveLimit(
+		l.maxPacketBytes,
+		DefaultMaxPacketBytes,
+		HardLimitMaxPacketBytes,
+		"MaxPacketBytes",
+	)
 	if err != nil {
 		return subscriptionLimits{}, err
 	}
@@ -90,7 +95,12 @@ func (l subscriptionLimits) validate() (subscriptionLimits, error) {
 // resolveLimit 收敛单项预设：0 表示「用默认值」，负值与超过硬上限一律拒绝。
 func resolveLimit(value, defaultValue, hardLimit int, name string) (int, error) {
 	if value < 0 || value > hardLimit {
-		return 0, fmt.Errorf("%w: %s must be within [1, %d]", ErrInvalidArgument, name, hardLimit)
+		return 0, fmt.Errorf(
+			"%w: %s must be within [0, %d] (0 keeps the default)",
+			ErrInvalidArgument,
+			name,
+			hardLimit,
+		)
 	}
 	if value == 0 {
 		return defaultValue, nil
