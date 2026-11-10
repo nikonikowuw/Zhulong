@@ -21,12 +21,6 @@ var reservedHeaders = map[string]struct{}{
 	"host":              {},
 }
 
-// IsReservedHeader returns true if the header name is managed internally and forbidden in custom headers.
-func IsReservedHeader(name string) bool {
-	_, ok := reservedHeaders[strings.ToLower(strings.TrimSpace(name))]
-	return ok
-}
-
 // MediaReader abstracts read access to media files with four-layer path protection.
 type MediaReader interface {
 	OpenContent(ctx context.Context, relPath string) (*os.File, fs.FileInfo, error)
@@ -46,15 +40,6 @@ type Sender interface {
 // systeminfo; the host wires the implementation in.
 type DeviceIDProvider interface {
 	DeviceID() string
-}
-
-// resolveDeviceID tolerates a nil provider: payloads then omit device_id instead of
-// panicking on a partially wired sender.
-func resolveDeviceID(provider DeviceIDProvider) string {
-	if provider == nil {
-		return ""
-	}
-	return strings.TrimSpace(provider.DeviceID())
 }
 
 // AlarmDataPayload holds behavior & safety alarm details.
@@ -105,8 +90,23 @@ type AlarmPayload struct {
 	Vehicle     *VehicleDataPayload `json:"vehicle,omitempty"`
 }
 
-// BuildAlarmPayload creates the base payload from a perception event.
-func BuildAlarmPayload(ev record.AlarmEvent, deviceID string) AlarmPayload {
+// isReservedHeader returns true if the header name is managed internally and forbidden in custom headers.
+func isReservedHeader(name string) bool {
+	_, ok := reservedHeaders[strings.ToLower(strings.TrimSpace(name))]
+	return ok
+}
+
+// resolveDeviceID tolerates a nil provider: payloads then omit device_id instead of
+// panicking on a partially wired sender.
+func resolveDeviceID(provider DeviceIDProvider) string {
+	if provider == nil {
+		return ""
+	}
+	return strings.TrimSpace(provider.DeviceID())
+}
+
+// buildAlarmPayload creates the base payload from a perception event.
+func buildAlarmPayload(ev record.AlarmEvent, deviceID string) AlarmPayload {
 	eventType := string(ev.EventType)
 	if eventType == "" {
 		eventType = string(record.EventTypeAlarm)
@@ -185,8 +185,42 @@ func BuildAlarmPayload(ev record.AlarmEvent, deviceID string) AlarmPayload {
 	return payload
 }
 
-// GenerateSignedURL generates an absolute signed URL using the public base URL and URLSigner.
-func GenerateSignedURL(publicBaseURL string, signer *URLSigner, relPath string, ttl time.Duration) (string, error) {
+func populateSignedURLs(
+	payload *AlarmPayload,
+	ev record.AlarmEvent,
+	publicBaseURL string,
+	signer *URLSigner,
+	ttl time.Duration,
+) {
+	if signer == nil || publicBaseURL == "" {
+		return
+	}
+	if ev.ImageReady && ev.ImagePath != "" {
+		if u, err := generateSignedURL(publicBaseURL, signer, ev.ImagePath, ttl); err == nil {
+			payload.ImageURL = &u
+			payload.ImageReady = true
+		}
+	}
+	if ev.CropReady && ev.CropPath != "" {
+		if u, err := generateSignedURL(publicBaseURL, signer, ev.CropPath, ttl); err == nil {
+			payload.CropURL = &u
+		}
+	}
+	hasFaceGallery := payload.Face != nil && ev.Face != nil && ev.Face.GalleryImagePath != ""
+	if hasFaceGallery {
+		if u, err := generateSignedURL(publicBaseURL, signer, ev.Face.GalleryImagePath, ttl); err == nil {
+			payload.Face.GalleryURL = &u
+		}
+	}
+}
+
+// generateSignedURL generates an absolute signed URL using the public base URL and URLSigner.
+func generateSignedURL(
+	publicBaseURL string,
+	signer *URLSigner,
+	relPath string,
+	ttl time.Duration,
+) (string, error) {
 	if signer == nil || relPath == "" || publicBaseURL == "" {
 		return "", nil
 	}
@@ -197,7 +231,7 @@ func GenerateSignedURL(publicBaseURL string, signer *URLSigner, relPath string, 
 	}
 
 	base := strings.TrimRight(publicBaseURL, "/")
-	cleanRel := NormalizeRelativePath(relPath)
+	cleanRel := normalizeRelativePath(relPath)
 	u, err := url.Parse(base + "/api/v1/media/signed/" + cleanRel)
 	if err != nil {
 		return "", err

@@ -48,28 +48,34 @@ func (m *mockSender) count() int {
 }
 
 func TestDispatcherFaultIsolation(t *testing.T) {
-	d := NewDispatcher(nil, nil, nil, Config{}, zap.NewNop())
+	d := NewDispatcher(DispatcherOptions{Logger: zap.NewNop()})
 	ctx := context.Background()
-	_ = d.Start(ctx)
-	defer d.Stop(ctx)
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() {
+		if err := d.Stop(ctx); err != nil {
+			t.Errorf("Stop failed: %v", err)
+		}
+	}()
 
 	fastSender := &mockSender{}
 	slowSender := &mockSender{delay: 2 * time.Second}
 
-	fastWorker := newDestinationWorker(
-		&AlertDestination{ID: "fast", ChannelType: ChannelTypeWebhook},
-		fastSender,
-		DestinationFilter{},
-		"fp1",
-		zap.NewNop(),
-	)
-	slowWorker := newDestinationWorker(
-		&AlertDestination{ID: "slow", ChannelType: ChannelTypeWebhook},
-		slowSender,
-		DestinationFilter{},
-		"fp2",
-		zap.NewNop(),
-	)
+	fastWorker := newDestinationWorker(destinationWorkerOptions{
+		dest:        &AlertDestination{ID: "fast", ChannelType: ChannelTypeWebhook},
+		sender:      fastSender,
+		filter:      destinationFilter{},
+		fingerprint: "fp1",
+		logger:      zap.NewNop(),
+	})
+	slowWorker := newDestinationWorker(destinationWorkerOptions{
+		dest:        &AlertDestination{ID: "slow", ChannelType: ChannelTypeWebhook},
+		sender:      slowSender,
+		filter:      destinationFilter{},
+		fingerprint: "fp2",
+		logger:      zap.NewNop(),
+	})
 
 	d.mu.Lock()
 	d.workers["fast"] = fastWorker
@@ -100,27 +106,33 @@ func TestDispatcherFaultIsolation(t *testing.T) {
 }
 
 func TestDispatcherQueueDropOldest(t *testing.T) {
-	d := NewDispatcher(nil, nil, nil, Config{}, zap.NewNop())
+	d := NewDispatcher(DispatcherOptions{Logger: zap.NewNop()})
 	ctx := context.Background()
-	_ = d.Start(ctx)
-	defer d.Stop(ctx)
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() {
+		if err := d.Stop(ctx); err != nil {
+			t.Errorf("Stop failed: %v", err)
+		}
+	}()
 
 	// 不启动 worker 消费，纯测试队列填满丢最旧
 	sender := &mockSender{}
-	w := newDestinationWorker(
-		&AlertDestination{ID: "drop_test", ChannelType: ChannelTypeWebhook},
-		sender,
-		DestinationFilter{},
-		"fp",
-		zap.NewNop(),
-	)
+	w := newDestinationWorker(destinationWorkerOptions{
+		dest:        &AlertDestination{ID: "drop_test", ChannelType: ChannelTypeWebhook},
+		sender:      sender,
+		filter:      destinationFilter{},
+		fingerprint: "fp",
+		logger:      zap.NewNop(),
+	})
 
 	d.mu.Lock()
 	d.workers["drop_test"] = w
 	d.mu.Unlock()
 
 	// 队列容量 16，连续投递 20 条
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		d.Dispatch(record.AlarmEvent{ID: "ev"})
 	}
 
@@ -133,14 +145,18 @@ func TestDispatcherQueueDropOldest(t *testing.T) {
 }
 
 func TestDispatcherStopSafe(t *testing.T) {
-	d := NewDispatcher(nil, nil, nil, Config{}, zap.NewNop())
+	d := NewDispatcher(DispatcherOptions{Logger: zap.NewNop()})
 	ctx := context.Background()
 
 	// 未 Start 调用 Dispatch 不 panic
 	d.Dispatch(record.AlarmEvent{ID: "safe"})
 
-	_ = d.Start(ctx)
-	_ = d.Stop(ctx)
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if err := d.Stop(ctx); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
 
 	// 停止后调用 Dispatch 不 panic
 	d.Dispatch(record.AlarmEvent{ID: "safe_after_stop"})
@@ -169,11 +185,20 @@ func TestDispatcherReconcilePreservesUnchangedWorker(t *testing.T) {
 		t.Fatalf("Create destination failed: %v", err)
 	}
 
-	d := NewDispatcher(store, NewEmptyURLSigner(), nil, Config{PublicBaseURL: "http://127.0.0.1:8000"}, zap.NewNop())
+	d := NewDispatcher(DispatcherOptions{
+		Store:  store,
+		Signer: NewEmptyURLSigner(),
+		Config: Config{PublicBaseURL: "http://127.0.0.1:8000"},
+		Logger: zap.NewNop(),
+	})
 	if err := d.Start(ctx); err != nil {
 		t.Fatalf("Start dispatcher failed: %v", err)
 	}
-	defer d.Stop(ctx)
+	defer func() {
+		if err := d.Stop(ctx); err != nil {
+			t.Errorf("Stop failed: %v", err)
+		}
+	}()
 
 	d.mu.RLock()
 	initialWorker, ok := d.workers[dest.ID]

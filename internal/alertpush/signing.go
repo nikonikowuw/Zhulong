@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	SigningKeyFileName = "media_url.key"
-	SigningKeyLength   = 32
-	SigningKeyPerm     = 0600
+	signingKeyFileName = "media_url.key"
+	signingKeyLength   = 32
+	signingKeyPerm     = 0600
 )
 
 var (
@@ -39,8 +39,8 @@ type URLSigner struct {
 
 // NewURLSigner creates a URLSigner with the given secret key.
 func NewURLSigner(key []byte) (*URLSigner, error) {
-	if len(key) != SigningKeyLength {
-		return nil, fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidSignerKey, SigningKeyLength, len(key))
+	if len(key) != signingKeyLength {
+		return nil, fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidSignerKey, signingKeyLength, len(key))
 	}
 	keyCopy := make([]byte, len(key))
 	copy(keyCopy, key)
@@ -54,8 +54,8 @@ func NewEmptyURLSigner() *URLSigner {
 
 // SetKey safely assigns the secret signing key.
 func (s *URLSigner) SetKey(key []byte) error {
-	if len(key) != SigningKeyLength {
-		return fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidSignerKey, SigningKeyLength, len(key))
+	if len(key) != signingKeyLength {
+		return fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidSignerKey, signingKeyLength, len(key))
 	}
 	keyCopy := make([]byte, len(key))
 	copy(keyCopy, key)
@@ -70,81 +70,12 @@ func (s *URLSigner) SetKey(key []byte) error {
 func (s *URLSigner) IsConfigured() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.key) == SigningKeyLength
-}
-
-// InitSignerFromDataDir loads media_url.key from dataDir or generates a new one atomically, populating the signer.
-func InitSignerFromDataDir(signer *URLSigner, dataDir string) error {
-	keyPath := filepath.Join(dataDir, SigningKeyFileName)
-	data, err := os.ReadFile(keyPath)
-	if err == nil {
-		return signer.SetKey(data)
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read signing key: %w", err)
-	}
-
-	key := make([]byte, SigningKeyLength)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		return fmt.Errorf("generate signing key: %w", err)
-	}
-
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
-	}
-
-	tempFile, err := os.CreateTemp(dataDir, "media_url.key.tmp.*")
-	if err != nil {
-		return fmt.Errorf("create temp signing key file: %w", err)
-	}
-	tempPath := tempFile.Name()
-	defer func() {
-		_ = os.Remove(tempPath)
-	}()
-
-	if runtime.GOOS != "windows" {
-		if err := tempFile.Chmod(SigningKeyPerm); err != nil {
-			_ = tempFile.Close()
-			return fmt.Errorf("chmod temp signing key file: %w", err)
-		}
-	}
-
-	if _, err := tempFile.Write(key); err != nil {
-		_ = tempFile.Close()
-		return fmt.Errorf("write temp signing key file: %w", err)
-	}
-	if err := tempFile.Sync(); err != nil {
-		_ = tempFile.Close()
-		return fmt.Errorf("sync temp signing key file: %w", err)
-	}
-	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("close temp signing key file: %w", err)
-	}
-	if err := os.Rename(tempPath, keyPath); err != nil {
-		return fmt.Errorf("rename signing key file: %w", err)
-	}
-
-	return signer.SetKey(key)
-}
-
-// LoadOrCreateSigningKey loads media_url.key from dataDir or generates a new one atomically.
-func LoadOrCreateSigningKey(dataDir string) (*URLSigner, error) {
-	signer := NewEmptyURLSigner()
-	if err := InitSignerFromDataDir(signer, dataDir); err != nil {
-		return nil, err
-	}
-	return signer, nil
-}
-
-// NormalizeRelativePath strips leading slashes and cleans relative media path.
-func NormalizeRelativePath(p string) string {
-	clean := strings.TrimPrefix(filepath.ToSlash(p), "/")
-	return strings.TrimPrefix(clean, "./")
+	return len(s.key) == signingKeyLength
 }
 
 // Sign generates a base64url encoded signature for the given relative path and expiration timestamp.
 func (s *URLSigner) Sign(relPath string, exp int64) (string, error) {
-	normPath := NormalizeRelativePath(relPath)
+	normPath := normalizeRelativePath(relPath)
 	if !strings.HasPrefix(normPath, "snapshots/") {
 		return "", ErrPathNotAllowed
 	}
@@ -165,7 +96,7 @@ func (s *URLSigner) Sign(relPath string, exp int64) (string, error) {
 
 // Verify validates whether the given signature is valid and not expired.
 func (s *URLSigner) Verify(relPath string, exp int64, sig string) error {
-	normPath := NormalizeRelativePath(relPath)
+	normPath := normalizeRelativePath(relPath)
 	if !strings.HasPrefix(normPath, "snapshots/") {
 		return ErrPathNotAllowed
 	}
@@ -201,6 +132,78 @@ func (s *URLSigner) Verify(relPath string, exp int64, sig string) error {
 		return ErrURLInvalid
 	}
 	return nil
+}
+
+// initSignerFromDataDir loads media_url.key from dataDir or generates a new one atomically, populating the signer.
+func initSignerFromDataDir(signer *URLSigner, dataDir string) error {
+	keyPath := filepath.Join(dataDir, signingKeyFileName)
+	data, err := os.ReadFile(keyPath)
+	if err == nil {
+		return signer.SetKey(data)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read signing key: %w", err)
+	}
+
+	key := make([]byte, signingKeyLength)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return fmt.Errorf("generate signing key: %w", err)
+	}
+
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+
+	tempFile, err := os.CreateTemp(dataDir, "media_url.key.tmp.*")
+	if err != nil {
+		return fmt.Errorf("create temp signing key file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	var renamed bool
+	defer func() {
+		if !renamed {
+			if rmErr := os.Remove(tempPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				return
+			}
+		}
+	}()
+
+	if runtime.GOOS != "windows" {
+		if err := tempFile.Chmod(signingKeyPerm); err != nil {
+			return errors.Join(fmt.Errorf("chmod temp signing key file: %w", err), tempFile.Close())
+		}
+	}
+
+	if _, err := tempFile.Write(key); err != nil {
+		return errors.Join(fmt.Errorf("write temp signing key file: %w", err), tempFile.Close())
+	}
+	if err := tempFile.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("sync temp signing key file: %w", err), tempFile.Close())
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close temp signing key file: %w", err)
+	}
+	if err := os.Rename(tempPath, keyPath); err != nil {
+		return fmt.Errorf("rename signing key file: %w", err)
+	}
+	renamed = true
+
+	return signer.SetKey(key)
+}
+
+// loadOrCreateSigningKey loads media_url.key from dataDir or generates a new one atomically.
+func loadOrCreateSigningKey(dataDir string) (*URLSigner, error) {
+	signer := NewEmptyURLSigner()
+	if err := initSignerFromDataDir(signer, dataDir); err != nil {
+		return nil, err
+	}
+	return signer, nil
+}
+
+// normalizeRelativePath strips leading slashes and cleans relative media path.
+func normalizeRelativePath(p string) string {
+	clean := strings.TrimPrefix(filepath.ToSlash(p), "/")
+	return strings.TrimPrefix(clean, "./")
 }
 
 func buildSignaturePayload(normPath string, exp int64) string {

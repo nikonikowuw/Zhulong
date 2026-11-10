@@ -5,7 +5,7 @@ import "testing"
 func TestDestinationFilterMatches(t *testing.T) {
 	tests := []struct {
 		name        string
-		filter      *DestinationFilter
+		filter      *destinationFilter
 		eventType   string
 		algorithmID string
 		cameraID    string
@@ -21,7 +21,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		},
 		{
 			name:        "empty filter matches all",
-			filter:      &DestinationFilter{},
+			filter:      &destinationFilter{},
 			eventType:   "face_recognition",
 			algorithmID: "algo_01",
 			cameraID:    "cam_01",
@@ -29,7 +29,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		},
 		{
 			name: "match specific event type, algorithm and camera",
-			filter: &DestinationFilter{
+			filter: &destinationFilter{
 				EventTypes:   []string{"alarm", "face_recognition"},
 				AlgorithmIDs: []string{"algo_01", "algo_02"},
 				CameraIDs:    []string{"cam_01"},
@@ -41,7 +41,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		},
 		{
 			name: "event type mismatch",
-			filter: &DestinationFilter{
+			filter: &destinationFilter{
 				EventTypes: []string{"face_recognition"},
 			},
 			eventType:   "alarm",
@@ -51,7 +51,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		},
 		{
 			name: "algorithm mismatch",
-			filter: &DestinationFilter{
+			filter: &destinationFilter{
 				AlgorithmIDs: []string{"algo_01"},
 			},
 			eventType:   "alarm",
@@ -61,7 +61,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		},
 		{
 			name: "camera mismatch",
-			filter: &DestinationFilter{
+			filter: &destinationFilter{
 				CameraIDs: []string{"cam_01"},
 			},
 			eventType:   "alarm",
@@ -71,7 +71,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		},
 		{
 			name: "empty algorithm id when filter is set",
-			filter: &DestinationFilter{
+			filter: &destinationFilter{
 				AlgorithmIDs: []string{"algo_01"},
 			},
 			eventType:   "alarm",
@@ -81,7 +81,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		},
 		{
 			name: "empty camera id when filter is set",
-			filter: &DestinationFilter{
+			filter: &destinationFilter{
 				CameraIDs: []string{"cam_01"},
 			},
 			eventType:   "alarm",

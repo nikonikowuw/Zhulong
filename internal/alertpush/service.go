@@ -21,6 +21,16 @@ var (
 	ErrReservedHeaderUsed         = errors.New("reserved header is not allowed in custom headers")
 )
 
+// ServiceOptions holds dependencies for constructing a Service.
+type ServiceOptions struct {
+	Store      *Store
+	Dispatcher *Dispatcher
+	Signer     *URLSigner
+	Media      MediaReader
+	Config     Config
+	Logger     *zap.Logger
+}
+
 // Service provides high-level domain operations for alert push destinations.
 type Service struct {
 	store      *Store
@@ -37,34 +47,35 @@ type UpdateParams struct {
 	ImageMode  *string
 	ConfigJSON *string
 	FilterJSON *string
-	SecretRaw  any
+	SecretRaw  destinationSecret
 	ClientID   *string
 }
 
+// TestExecutionResult holds the result of a connection test.
+type TestExecutionResult struct {
+	OK        bool   `json:"ok"`
+	LatencyMs int64  `json:"latencyMs"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 // NewService creates a new alertpush Service instance.
-func NewService(
-	store *Store,
-	dispatcher *Dispatcher,
-	signer *URLSigner,
-	media MediaReader,
-	cfg Config,
-	logger *zap.Logger,
-) *Service {
+func NewService(opts ServiceOptions) *Service {
+	logger := opts.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:      store,
-		dispatcher: dispatcher,
-		signer:     signer,
-		media:      media,
-		config:     cfg,
+		store:      opts.Store,
+		dispatcher: opts.Dispatcher,
+		signer:     opts.Signer,
+		media:      opts.Media,
+		config:     opts.Config,
 		logger:     logger.Named("alertpush.service"),
 	}
 }
 
 // Create validates and saves a new destination, then requests reload.
-func (s *Service) Create(ctx context.Context, dest *AlertDestination, secretRaw any) error {
+func (s *Service) Create(ctx context.Context, dest *AlertDestination, secretRaw destinationSecret) error {
 	if err := s.validateDestination(dest); err != nil {
 		return err
 	}
@@ -77,13 +88,11 @@ func (s *Service) Create(ctx context.Context, dest *AlertDestination, secretRaw 
 			cID := "z" + dest.ID[4:]
 			dest.MQTTClientID = &cID
 		}
-		// If derived or provided ID conflicts, retry regenerating ID if derived, or fail if custom
 		conflict, err := s.store.CheckMQTTClientIDConflict(ctx, "", *dest.MQTTClientID)
 		if err != nil {
 			return err
 		}
 		if conflict {
-			// If it's custom, reject with 422 ErrClientIDConflict
 			return ErrClientIDConflict
 		}
 	}
@@ -118,11 +127,9 @@ func (s *Service) Update(ctx context.Context, existing *AlertDestination, params
 	}
 
 	if existing.ChannelType == ChannelTypeMQTT {
-		targetClientID := ""
+		targetClientID := "z" + existing.ID[4:]
 		if params.ClientID != nil && strings.TrimSpace(*params.ClientID) != "" {
 			targetClientID = strings.TrimSpace(*params.ClientID)
-		} else {
-			targetClientID = "z" + existing.ID[4:]
 		}
 
 		conflict, err := s.store.CheckMQTTClientIDConflict(ctx, existing.ID, targetClientID)
@@ -173,89 +180,47 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// TestExecutionResult holds the result of a connection test.
-type TestExecutionResult struct {
-	OK        bool   `json:"ok"`
-	LatencyMs int64  `json:"latencyMs"`
-	Reason    string `json:"reason,omitempty"`
-}
-
 // Test attempts sending a dummy ping/test event to the destination.
-func (s *Service) Test(ctx context.Context, dest *AlertDestination, secretRaw any) (TestExecutionResult, error) {
-	testTimeout := 10 * time.Second
+func (s *Service) Test(
+	ctx context.Context,
+	dest *AlertDestination,
+	secretRaw destinationSecret,
+) (TestExecutionResult, error) {
+	const testTimeout = 10 * time.Second
 	testCtx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
 
-	var sender Sender
-	if dest.ChannelType == ChannelTypeWebhook {
+	var (
+		sender Sender
+		err    error
+	)
+	switch dest.ChannelType {
+	case ChannelTypeWebhook:
 		sec, ok := secretRaw.(*webhookSecret)
 		if !ok || sec == nil || sec.URL == "" {
 			return TestExecutionResult{OK: false, Reason: "config_invalid"}, ErrInvalidConfig
 		}
-		var cfg WebhookConfig
-		_ = json.Unmarshal([]byte(dest.ConfigJSON), &cfg)
-
-		wSender, err := NewWebhookSender(WebhookSenderOptions{
-			ID:            dest.ID,
-			Name:          dest.Name,
-			ImageMode:     dest.ImageMode,
-			PublicBaseURL: s.config.PublicBaseURL,
-			SignedURLTTL:  s.config.SignedURLTTL,
-			Signer:        s.signer,
-			Media:         s.media,
-			URL:           sec.URL,
-			AuthType:      cfg.AuthType,
-			Token:         sec.Token,
-			Username:      sec.Username,
-			Password:      sec.Password,
-			Headers:       sec.Headers,
-			Timeout:       testTimeout,
-			Identity:      s.config.DeviceID,
-			Logger:        s.logger,
-		})
+		sender, err = s.buildTestWebhookSender(dest, sec, testTimeout)
 		if err != nil {
 			return TestExecutionResult{OK: false, Reason: classifyError(err)}, nil
 		}
-		defer wSender.Close()
-		sender = wSender
-	} else if dest.ChannelType == ChannelTypeMQTT {
+	case ChannelTypeMQTT:
 		sec, ok := secretRaw.(*mqttSecret)
 		if !ok || sec == nil {
 			sec = &mqttSecret{}
 		}
-		var cfg MQTTConfig
-		_ = json.Unmarshal([]byte(dest.ConfigJSON), &cfg)
-
-		// Probe connectivity must strictly use a transient ClientID to avoid kicking online workers off broker
-		clientID := "test-probe-" + idutil.New()[:12]
-
-		mSender, err := NewMQTTSender(MQTTSenderOptions{
-			ID:            dest.ID,
-			Name:          dest.Name,
-			ImageMode:     dest.ImageMode,
-			PublicBaseURL: s.config.PublicBaseURL,
-			SignedURLTTL:  s.config.SignedURLTTL,
-			Signer:        s.signer,
-			Media:         s.media,
-			Broker:        cfg.Broker,
-			ClientID:      clientID,
-			Username:      cfg.Username,
-			Password:      sec.Password,
-			Topic:         cfg.Topic,
-			QoS:           cfg.QoS,
-			KeepAlive:     30 * time.Second,
-			TLSSkipVerify: cfg.TLSSkipVerify,
-			Identity:      s.config.DeviceID,
-			Logger:        s.logger,
-		})
+		sender, err = s.buildTestMQTTSender(dest, sec)
 		if err != nil {
 			return TestExecutionResult{OK: false, Reason: classifyError(err)}, nil
 		}
-		defer mSender.Close()
-		sender = mSender
-	} else {
+	default:
 		return TestExecutionResult{OK: false, Reason: "unsupported_channel"}, ErrInvalidChannelType
 	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			s.logger.Debug("close test sender", zap.Error(closeErr))
+		}
+	}()
 
 	testEvent := record.AlarmEvent{
 		ID:         "01TESTALARM0000000000000",
@@ -266,13 +231,13 @@ func (s *Service) Test(ctx context.Context, dest *AlertDestination, secretRaw an
 	}
 
 	start := time.Now()
-	err := sender.Send(testCtx, testEvent)
+	sendErr := sender.Send(testCtx, testEvent)
 	latency := time.Since(start).Milliseconds()
 
-	success := err == nil
-	reason := ""
-	if err != nil {
-		reason = classifyError(err)
+	success := sendErr == nil
+	var reason string
+	if sendErr != nil {
+		reason = classifyError(sendErr)
 	}
 
 	if dest.ID != "" && dest.Enabled {
@@ -284,6 +249,70 @@ func (s *Service) Test(ctx context.Context, dest *AlertDestination, secretRaw an
 		LatencyMs: latency,
 		Reason:    reason,
 	}, nil
+}
+
+func (s *Service) buildTestWebhookSender(
+	dest *AlertDestination,
+	sec *webhookSecret,
+	timeout time.Duration,
+) (Sender, error) {
+	var cfg webhookConfig
+	if dest.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(dest.ConfigJSON), &cfg); err != nil {
+			return nil, fmt.Errorf("unmarshal webhook config: %w", err)
+		}
+	}
+
+	return NewWebhookSender(WebhookSenderOptions{
+		ID:            dest.ID,
+		Name:          dest.Name,
+		ImageMode:     dest.ImageMode,
+		PublicBaseURL: s.config.PublicBaseURL,
+		SignedURLTTL:  s.config.SignedURLTTL,
+		Signer:        s.signer,
+		Media:         s.media,
+		URL:           sec.URL,
+		AuthType:      cfg.AuthType,
+		Token:         sec.Token,
+		Username:      sec.Username,
+		Password:      sec.Password,
+		Headers:       sec.Headers,
+		Timeout:       timeout,
+		Identity:      s.config.DeviceID,
+		Logger:        s.logger,
+	})
+}
+
+func (s *Service) buildTestMQTTSender(dest *AlertDestination, sec *mqttSecret) (Sender, error) {
+	var cfg mqttConfig
+	if dest.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(dest.ConfigJSON), &cfg); err != nil {
+			return nil, fmt.Errorf("unmarshal mqtt config: %w", err)
+		}
+	}
+
+	// Probe connectivity must strictly use a transient ClientID to avoid kicking online workers off broker
+	clientID := "test-probe-" + idutil.New()[:12]
+
+	return NewMQTTSender(MQTTSenderOptions{
+		ID:            dest.ID,
+		Name:          dest.Name,
+		ImageMode:     dest.ImageMode,
+		PublicBaseURL: s.config.PublicBaseURL,
+		SignedURLTTL:  s.config.SignedURLTTL,
+		Signer:        s.signer,
+		Media:         s.media,
+		Broker:        cfg.Broker,
+		ClientID:      clientID,
+		Username:      cfg.Username,
+		Password:      sec.Password,
+		Topic:         cfg.Topic,
+		QoS:           cfg.QoS,
+		KeepAlive:     30 * time.Second,
+		TLSSkipVerify: cfg.TLSSkipVerify,
+		Identity:      s.config.DeviceID,
+		Logger:        s.logger,
+	})
 }
 
 func (s *Service) validateDestination(dest *AlertDestination) error {

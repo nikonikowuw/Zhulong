@@ -9,9 +9,9 @@ import (
 
 func TestURLSigner(t *testing.T) {
 	tempDir := t.TempDir()
-	signer, err := LoadOrCreateSigningKey(tempDir)
+	signer, err := loadOrCreateSigningKey(tempDir)
 	if err != nil {
-		t.Fatalf("LoadOrCreateSigningKey failed: %v", err)
+		t.Fatalf("loadOrCreateSigningKey failed: %v", err)
 	}
 
 	relPath := "snapshots/cam_01/2026-11-03/01J8Z.jpg"
@@ -37,31 +37,34 @@ func TestURLSigner(t *testing.T) {
 
 	// 3. Expired signature rejected
 	pastExp := time.Now().Add(-10 * time.Second).Unix()
-	expiredSig, _ := signer.Sign(relPath, pastExp)
-	if err := signer.Verify(relPath, pastExp, expiredSig); err != ErrURLExpired {
+	expiredSig, err := signer.Sign(relPath, pastExp)
+	if err != nil {
+		t.Fatalf("Sign expired failed: %v", err)
+	}
+	if err := signer.Verify(relPath, pastExp, expiredSig); !errors.Is(err, ErrURLExpired) {
 		t.Fatalf("expected ErrURLExpired, got %v", err)
 	}
 
 	// 4. Tampered signature rejected
-	if err := signer.Verify(relPath, futureExp, sig+"tamper"); err != ErrURLInvalid {
+	if err := signer.Verify(relPath, futureExp, sig+"tamper"); !errors.Is(err, ErrURLInvalid) {
 		t.Fatalf("expected ErrURLInvalid, got %v", err)
 	}
 
 	// 5. Tampered path rejected
-	if err := signer.Verify("snapshots/cam_01/2026-11-03/other.jpg", futureExp, sig); err != ErrURLInvalid {
+	if err := signer.Verify("snapshots/cam_01/2026-11-03/other.jpg", futureExp, sig); !errors.Is(err, ErrURLInvalid) {
 		t.Fatalf("expected ErrURLInvalid for tampered path, got %v", err)
 	}
 
 	// 6. Path outside snapshots rejected
-	if _, err := signer.Sign("recordings/cam_01/test.mp4", futureExp); err != ErrPathNotAllowed {
+	if _, err := signer.Sign("recordings/cam_01/test.mp4", futureExp); !errors.Is(err, ErrPathNotAllowed) {
 		t.Fatalf("expected ErrPathNotAllowed, got %v", err)
 	}
-	if err := signer.Verify("recordings/cam_01/test.mp4", futureExp, sig); err != ErrPathNotAllowed {
+	if err := signer.Verify("recordings/cam_01/test.mp4", futureExp, sig); !errors.Is(err, ErrPathNotAllowed) {
 		t.Fatalf("expected ErrPathNotAllowed, got %v", err)
 	}
 
 	// 7. Reload from existing key file produces identical signature
-	reloaded, err := LoadOrCreateSigningKey(tempDir)
+	reloaded, err := loadOrCreateSigningKey(tempDir)
 	if err != nil {
 		t.Fatalf("reloading signing key failed: %v", err)
 	}
@@ -83,7 +86,7 @@ func TestURLSignerInvalidKeyLength(t *testing.T) {
 func TestLoadOrCreateSigningKeyExistingDir(t *testing.T) {
 	tempDir := t.TempDir()
 	subDir := filepath.Join(tempDir, "keys")
-	signer, err := LoadOrCreateSigningKey(subDir)
+	signer, err := loadOrCreateSigningKey(subDir)
 	if err != nil {
 		t.Fatalf("failed to create key in non-existent directory: %v", err)
 	}
