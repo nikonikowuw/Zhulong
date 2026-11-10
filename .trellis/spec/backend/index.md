@@ -14,7 +14,7 @@
 | [单用户认证](./authentication-guidelines.md) | SQLite 单用户凭据、内存 Session、Cookie、限流及前后端认证态契约 |
 | [HTTP 中间件开发与编排](./middleware-guidelines.md) | 中间件分层隔离、流水线时序、Request ID、Access Log、CORS 与类型安全 |
 | [数据库与版本化迁移](./database-guidelines.md) | GORM+SQLite、WAL/Pragma 配置、启动自动迁移、事务约束 |
-| [依赖注入与生命周期](./dependency-injection.md) | Uber Fx 装配、启动失败回滚、HTTP 排空、native/数据库关闭顺序、public/protected/**upload** 三路路由值组 |
+| [依赖注入与生命周期](./dependency-injection.md) | Uber Fx 装配、启动失败回滚、HTTP 排空、native/数据库关闭顺序、public/protected/upload/openapi 四路路由值组 |
 | [边缘媒体存储与动态生命周期](./storage-guidelines.md) | 存储路径规范、statfs 水位感知、外挂盘防穿透（写侧熔断 + 读侧穿透）、双水位回差清理与熔断 |
 | [媒体文件服务（只读字节层）](./mediafile-guidelines.md) | 按相对路径取元信息与 Range 传输、`os.Root` 四层路径防护、无列表边界、裸字节端点与 HEAD/503 陷阱 |
 | [摄像机业务与生命周期](./camera-guidelines.md) | 主子流建模、AES-GCM 凭据加密、双流原子门禁、正交状态机与探活调度 |
