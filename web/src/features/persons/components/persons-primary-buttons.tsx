@@ -60,25 +60,25 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
   const handleExportManifest = async () => {
     try {
       await exportMutation.mutateAsync({ search, faceStatus })
-      toast.success(t('export.success', { defaultValue: '采像清单已导出' }))
-    } catch {
-      // 全局 API 错误处理已展示本地化服务端消息
+      toast.success(t('export.success'))
+    } catch (err: unknown) {
+      // exportManifest 会把 blob 形态的 JSON 错误体还原成 Error；
+      // 这里只补一次提示，避免用户在按钮无反应时反复点。
+      toast.error(err instanceof Error ? err.message : String(err))
     }
   }
 
   return (
-    <div className='flex items-center gap-2'>
+    <div className='flex flex-wrap items-center gap-2'>
       <Button
         variant='outline'
         size='sm'
         className='h-8'
         onClick={handleRefresh}
-        title={t('actions.refresh', { defaultValue: '刷新' })}
+        title={t('actions.refresh')}
       >
         <RefreshCw className='me-1 h-4 w-4' />
-        <span className='hidden sm:inline'>
-          {t('actions.refresh', { defaultValue: '刷新' })}
-        </span>
+        <span className='hidden sm:inline'>{t('actions.refresh')}</span>
       </Button>
 
       <Tooltip>
@@ -89,9 +89,7 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
             className='h-8'
             onClick={() => void handleExportManifest()}
             disabled={exportMutation.isPending}
-            title={t('actions.exportManifest', {
-              defaultValue: '导出采像清单',
-            })}
+            title={t('actions.exportManifest')}
           >
             {exportMutation.isPending ? (
               <Loader2 className='me-1 h-4 w-4 animate-spin' />
@@ -99,17 +97,12 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
               <FileSpreadsheet className='me-1 h-4 w-4' />
             )}
             <span className='hidden md:inline'>
-              {t('actions.exportManifest', { defaultValue: '导出采像清单' })}
+              {t('actions.exportManifest')}
             </span>
           </Button>
         </TooltipTrigger>
         <TooltipContent>
-          <p>
-            {t('export.tooltip', {
-              defaultValue:
-                '按当前搜索与底库筛选导出 CSV，含姓名、工号与建议照片文件名，可直接回传给「人脸批量导入」',
-            })}
-          </p>
+          <p className='max-w-xs'>{t('export.tooltip')}</p>
         </TooltipContent>
       </Tooltip>
 
@@ -121,7 +114,7 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
         title={t('actions.import')}
       >
         <FileUp className='me-1 h-4 w-4' />
-        <span>{t('actions.import')}</span>
+        <span className='hidden sm:inline'>{t('actions.import')}</span>
       </Button>
 
       <Button
@@ -129,12 +122,10 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
         size='sm'
         className='h-8'
         onClick={handleImportFaces}
-        title={t('actions.importFaces', { defaultValue: '人脸批量导入' })}
+        title={t('actions.importFaces')}
       >
         <Images className='me-1 h-4 w-4' />
-        <span>
-          {t('actions.importFaces', { defaultValue: '人脸批量导入' })}
-        </span>
+        <span className='hidden md:inline'>{t('actions.importFaces')}</span>
       </Button>
 
       <Button size='sm' className='h-8' onClick={handleCreate}>

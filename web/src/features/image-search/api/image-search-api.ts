@@ -1,4 +1,5 @@
 import { apiClient, type ApiResponse } from '@/lib/api-client'
+import { getGalleryImageUrl } from '@/lib/media-url'
 import {
   imageSearchResponseSchema,
   type ImageSearchParams,
@@ -28,7 +29,8 @@ export const imageSearchApi = {
     return imageSearchResponseSchema.parse(resp.data.data)
   },
 
+  /** 底库图片 URL 统一由 `@/lib/media-url` 生成，避免各特性各拼一份。 */
   getFaceImageUrl(personId: string, faceId: string): string {
-    return `/api/v1/persons/${encodeURIComponent(personId)}/faces/${encodeURIComponent(faceId)}/image`
+    return getGalleryImageUrl(personId, faceId)
   },
 }

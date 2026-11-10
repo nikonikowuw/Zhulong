@@ -19,6 +19,7 @@ const mockPerson: Person = {
 
 vi.mock('../hooks/use-persons', () => ({
   PERSONS_QUERY_KEY: ['persons'],
+  personFacesQueryKey: (id: string) => ['persons', id, 'faces'],
   usePersonFaces: () => ({
     data: {
       items: [

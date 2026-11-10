@@ -76,10 +76,11 @@ describe('personsApi', () => {
       .mockResolvedValueOnce(mockResponse(preview))
 
     await expect(personsApi.previewImport(file)).resolves.toEqual(preview)
+    // 不显式设置 Content-Type：浏览器必须自己写 multipart boundary，
+    // 手写成不带 boundary 的 multipart/form-data 在部分网关下会被解析成空体。
     expect(spy).toHaveBeenCalledWith(
       '/persons/import/preview',
-      expect.any(FormData),
-      { headers: { 'Content-Type': 'multipart/form-data' } }
+      expect.any(FormData)
     )
   })
 
@@ -109,8 +110,7 @@ describe('personsApi', () => {
     await expect(personsApi.commitImport(file)).resolves.toEqual(result)
     expect(spy).toHaveBeenCalledWith(
       '/persons/import/commit',
-      expect.any(FormData),
-      { headers: { 'Content-Type': 'multipart/form-data' } }
+      expect.any(FormData)
     )
   })
 
@@ -232,14 +232,18 @@ describe('personsApi', () => {
     expect(res).toEqual(createdFace)
     expect(spy).toHaveBeenCalledWith(
       '/persons/p-01/faces',
-      expect.any(FormData),
-      { headers: { 'Content-Type': 'multipart/form-data' } }
+      expect.any(FormData)
     )
   })
 
   it('getFaceImageUrl returns image URL path', () => {
     const url = personsApi.getFaceImageUrl('p-01', 'f-01')
     expect(url).toBe('/api/v1/persons/p-01/faces/f-01/image')
+  })
+
+  it('getFaceImageUrl percent-encodes ids so a slash cannot escape the path', () => {
+    const url = personsApi.getFaceImageUrl('p/1', 'f 2')
+    expect(url).toBe('/api/v1/persons/p%2F1/faces/f%202/image')
   })
 
   it('deleteFace calls DELETE /persons/:id/faces/:face_id', async () => {
@@ -276,6 +280,7 @@ describe('personsApi', () => {
   })
 
   it('exportManifest downloads the CSV named by Content-Disposition', async () => {
+    vi.useFakeTimers()
     const clickSpy = vi
       .spyOn(HTMLAnchorElement.prototype, 'click')
       .mockImplementation(() => {})
@@ -285,6 +290,13 @@ describe('personsApi', () => {
     const revokeUrlSpy = vi
       .spyOn(URL, 'revokeObjectURL')
       .mockImplementation(() => {})
+
+    let downloadedName = ''
+    vi.spyOn(HTMLAnchorElement.prototype, 'download', 'set').mockImplementation(
+      (value: string) => {
+        downloadedName = value
+      }
+    )
 
     const blob = new Blob(['\uFEFFname,personId'], { type: 'text/csv' })
     const spy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce({
@@ -309,13 +321,19 @@ describe('personsApi', () => {
     })
     expect(createUrlSpy).toHaveBeenCalledWith(blob)
     expect(clickSpy).toHaveBeenCalled()
-
-    await vi.waitFor(() => {
-      expect(revokeUrlSpy).toHaveBeenCalledWith('blob:manifest-url')
-    })
+    expect(downloadedName).toBe(
+      'person_photo_manifest_missing_20260101_000000.csv'
+    )
+    // 立即 revoke 会让 Safari/Firefox 在下载真正启动前丢掉大 Blob，
+    // 必须延后 —— 与 `@/lib/csv` 的 triggerDownload 保持同一语义。
+    expect(revokeUrlSpy).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(10_000)
+    expect(revokeUrlSpy).toHaveBeenCalledWith('blob:manifest-url')
+    vi.useRealTimers()
   })
 
   it('exportManifest omits blank filters and falls back to a default filename', async () => {
+    vi.useFakeTimers()
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fallback-url')
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
@@ -342,5 +360,31 @@ describe('personsApi', () => {
       responseType: 'blob',
     })
     expect(downloadedName).toBe('person_photo_manifest.csv')
+    vi.useRealTimers()
+  })
+
+  it('exportManifest surfaces the server message when the error body is a JSON blob', async () => {
+    // `responseType: 'blob'` 下错误体也是 Blob：不显式识别就会退化成
+    // "Request failed with status code 500"，用户看不到服务端的真实原因。
+    vi.spyOn(apiClient, 'get').mockResolvedValueOnce({
+      data: new Blob(
+        [
+          JSON.stringify({
+            code: 'INTERNAL_ERROR',
+            message: '导出失败：磁盘写入错误',
+            data: null,
+          }),
+        ],
+        { type: 'application/json' }
+      ),
+      status: 500,
+      statusText: 'OK',
+      headers: {},
+      config: {} as AxiosResponse['config'],
+    })
+
+    await expect(personsApi.exportManifest()).rejects.toThrow(
+      '导出失败：磁盘写入错误'
+    )
   })
 })

@@ -20,6 +20,31 @@ export const apiClient = axios.create({
   },
 })
 
+/**
+ * 把一个 `responseType: 'blob'` 请求体里意外出现的 JSON 错误信封还原成错误。
+ *
+ * Axios 在 blob 模式下不会反序列化响应体，`error.response.data` 是个 Blob，
+ * 于是 `data.message` 恒为 `undefined`。调用方需要显式识别并读回文本。
+ */
+export async function readBlobErrorEnvelope(
+  blob: Blob
+): Promise<ApiResponse<unknown> | null> {
+  try {
+    const parsed: unknown = JSON.parse(await blob.text())
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'code' in parsed &&
+      'message' in parsed
+    ) {
+      return parsed as ApiResponse<unknown>
+    }
+  } catch {
+    // 不是 JSON：保持原样返回 null，由调用方决定回落文案。
+  }
+  return null
+}
+
 // 请求拦截器：自动注入当前语言偏好 Accept-Language
 apiClient.interceptors.request.use((config) => {
   if (i18n.language) {

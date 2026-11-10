@@ -56,6 +56,7 @@ describe('PersonsImportDialog', () => {
   })
 
   it('opens with the CSV upload prompt and allows downloading template', async () => {
+    vi.useFakeTimers()
     const clickSpy = vi
       .spyOn(HTMLAnchorElement.prototype, 'click')
       .mockImplementation(() => {})
@@ -88,7 +89,11 @@ describe('PersonsImportDialog', () => {
     await getByRole('button', { name: /下载 CSV 模板/i }).click()
     expect(createUrlSpy).toHaveBeenCalled()
     expect(clickSpy).toHaveBeenCalled()
+    // revoke 必须延后：立即撤销会让 Safari/Firefox 在下载启动前丢掉 Blob。
+    expect(revokeUrlSpy).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(10_000)
     expect(revokeUrlSpy).toHaveBeenCalledWith('blob:mock-url')
+    vi.useRealTimers()
   })
 
   it('rejects non-csv files with an error toast', async () => {
@@ -228,7 +233,8 @@ describe('PersonsImportDialog', () => {
     await downloadFailedBtn.click()
     expect(createUrlSpy).toHaveBeenCalled()
     expect(clickSpy).toHaveBeenCalled()
-    expect(revokeUrlSpy).toHaveBeenCalled()
+    // revoke 延迟 10s（共享的 triggerDownload），此处只断言"已安排"。
+    expect(revokeUrlSpy).not.toHaveBeenCalled()
 
     // 3. 确认导入提交
     const confirmBtn = getByRole('button', { name: /确认导入/i })

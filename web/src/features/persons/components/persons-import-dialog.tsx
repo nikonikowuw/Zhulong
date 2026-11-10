@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { toCsv, triggerDownload } from '@/lib/csv'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,48 +37,31 @@ import {
 } from '../hooks/use-persons'
 import { usePersonsActions, usePersonsState } from './persons-provider'
 
-function escapeCsvCell(value: string): string {
-  const safeValue = /^[=+\-@]/.test(value) ? `'${value}` : value
-  return /[",\r\n]/.test(safeValue)
-    ? `"${safeValue.replace(/"/g, '""')}"`
-    : safeValue
-}
-
-function downloadCsv(lines: string[][], filename: string) {
-  const csv = lines
-    .map((line) => line.map(escapeCsvCell).join(','))
-    .join('\r\n')
-  const blob = new Blob([`\uFEFF${csv}\r\n`], {
-    type: 'text/csv;charset=utf-8',
-  })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  document.body.appendChild(anchor)
-  anchor.click()
-  requestAnimationFrame(() => {
-    document.body.removeChild(anchor)
-    URL.revokeObjectURL(url)
-  })
-}
+/** CSV 模板与导出共用的列头。 */
+const MANIFEST_HEADERS = ['name', 'personId'] as const
 
 function downloadImportTemplate() {
-  downloadCsv(
-    [
-      ['name', 'personId'],
-      ['Alice', 'EMP-001'],
-    ],
+  const csv = toCsv(MANIFEST_HEADERS, [['Alice', 'EMP-001']])
+  triggerDownload(
+    new Blob([csv], { type: 'text/csv;charset=utf-8' }),
     'person-import-template.csv'
   )
 }
 
+/**
+ * 导出失败行。
+ *
+ * 走 `@/lib/csv` 而不是本地一份 `escapeCsvCell`：那里的 `escapeCsvField` 覆盖
+ * 了 `\t\r` 前缀（Excel 同样会把它当公式起始）、数值类型豁免加引号，并且
+ * `triggerDownload` 会在 10s 后才 revoke —— 立即 revoke 会让 Safari/Firefox
+ * 在下载真正启动前丢掉大 Blob。
+ */
 function downloadFailedRows(rows: PersonImportRow[], filename: string) {
-  const lines = [
-    ['name', 'personId'],
-    ...rows.map((row) => [row.name, row.personId ?? '']),
-  ]
-  downloadCsv(lines, filename)
+  const csv = toCsv(
+    MANIFEST_HEADERS,
+    rows.map((row) => [row.name, row.personId ?? ''])
+  )
+  triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), filename)
 }
 
 export function PersonsImportDialog() {
@@ -118,8 +102,8 @@ export function PersonsImportDialog() {
     commitMutation.reset()
     try {
       await previewMutation.mutateAsync(selected)
-    } catch {
-      // Global API error handling displays the localized server message.
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -128,8 +112,8 @@ export function PersonsImportDialog() {
     try {
       await commitMutation.mutateAsync(file)
       toast.success(t('import.completed'))
-    } catch {
-      // Global API error handling displays the localized server message.
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -137,7 +121,7 @@ export function PersonsImportDialog() {
     <Dialog
       open={isOpen}
       onOpenChange={(nextOpen) => {
-        if (!nextOpen && !isBusy) {
+        if (!nextOpen) {
           setOpen(null)
           reset()
         }
@@ -333,7 +317,7 @@ function ImportRowsTable({
             const statusText = hasIssues
               ? t('import.invalid')
               : isResult && row.imported
-                ? t('import.imported', '已导入')
+                ? t('import.imported')
                 : t('import.ready')
 
             return (

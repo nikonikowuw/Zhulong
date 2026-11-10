@@ -2,7 +2,7 @@ import React, { createContext, useContext, useMemo, useState } from 'react'
 import useDialogState from '@/hooks/use-dialog-state'
 import { type Person } from '../data/schema'
 
-export type PersonsDialogType =
+type PersonsDialogType =
   | 'create'
   | 'edit'
   | 'delete'
@@ -10,24 +10,24 @@ export type PersonsDialogType =
   | 'import'
   | 'import-faces'
 
-export interface PreviewImageInfo {
+interface PreviewImageInfo {
   url: string
   title: string
 }
 
-export interface PersonsStateContextType {
+interface PersonsStateContextType {
   open: PersonsDialogType | null
   currentRow: Person | null
   previewImage: PreviewImageInfo | null
 }
 
-export interface PersonsActionsContextType {
+interface PersonsActionsContextType {
   setOpen: (str: PersonsDialogType | null) => void
   setCurrentRow: React.Dispatch<React.SetStateAction<Person | null>>
   setPreviewImage: React.Dispatch<React.SetStateAction<PreviewImageInfo | null>>
 }
 
-export interface PersonsContextType
+interface PersonsContextType
   extends PersonsStateContextType, PersonsActionsContextType {}
 
 const PersonsStateContext = createContext<PersonsStateContextType | null>(null)
@@ -43,20 +43,16 @@ export function PersonsProvider({ children }: { children: React.ReactNode }) {
   )
 
   const stateValue = useMemo<PersonsStateContextType>(
-    () => ({
-      open,
-      currentRow,
-      previewImage,
-    }),
+    () => ({ open, currentRow, previewImage }),
     [open, currentRow, previewImage]
   )
 
+  // 三个 setter 全部引用恒定（`useDialogState` 用 `useCallback`，`useState` 的
+  // setter 天然稳定），因此这个对象在整个 Provider 生命周期内只创建一次 ——
+  // 弹窗切换与行变化都不会让「只订阅动作」的消费者重渲染。曾经的依赖数组写的是
+  // `[setOpen]`，而当时的 `setOpen` 每次渲染都新建，等于没有 memo。
   const actionsValue = useMemo<PersonsActionsContextType>(
-    () => ({
-      setOpen,
-      setCurrentRow,
-      setPreviewImage,
-    }),
+    () => ({ setOpen, setCurrentRow, setPreviewImage }),
     [setOpen]
   )
 
@@ -95,11 +91,5 @@ export const usePersonsContext = (): PersonsContextType => {
   const state = usePersonsState()
   const actions = usePersonsActions()
 
-  return useMemo(
-    () => ({
-      ...state,
-      ...actions,
-    }),
-    [state, actions]
-  )
+  return useMemo(() => ({ ...state, ...actions }), [state, actions])
 }

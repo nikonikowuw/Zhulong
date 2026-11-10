@@ -29,7 +29,34 @@ type DataTableFacetedFilterProps<TData, TValue> = {
     value: string
     icon?: React.ComponentType<{ className?: string }>
   }[]
+  /** 关闭分面计数。手动分页时计数只覆盖当前页，会被读成全库统计。 */
   showFacets?: boolean
+  /**
+   * 单选模式。
+   *
+   * 对后端只接受单值的筛选项（如 `faceStatus`）必须开启：多选在提交时会被压成
+   * 一个值，界面上却显示两项都生效 —— 那是最糟的失败方式，用户以为在筛，实际
+   * 拿到的是全量。
+   */
+  single?: boolean
+}
+
+/**
+ * 把列过滤值归一化成字符串数组。
+ *
+ * `useTableUrlState` 的 column filter 有 string 与 array 两种形态，而这里同时
+ * 服务于两者。直接 `new Set(value as string[])` 会把字符串拆成单字符集合，
+ * 于是 `enrolled` 变成 `{'e','n','r','o','l','d'}` —— 每个选项都不匹配，筛选
+ * 触发器永远显示"未选中"。
+ */
+function toSelectedValues(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((v): v is string => typeof v === 'string')
+  }
+  if (typeof raw === 'string' && raw !== '') {
+    return [raw]
+  }
+  return []
 }
 
 export function DataTableFacetedFilter<TData, TValue>({
@@ -37,10 +64,21 @@ export function DataTableFacetedFilter<TData, TValue>({
   title,
   options,
   showFacets = true,
+  single = false,
 }: DataTableFacetedFilterProps<TData, TValue>) {
   const { t } = useTranslation('common')
   const facets = showFacets ? column?.getFacetedUniqueValues() : undefined
-  const selectedValues = new Set(column?.getFilterValue() as string[])
+  const selectedValues = toSelectedValues(column?.getFilterValue())
+
+  const commit = (next: string[]) => {
+    if (next.length === 0) {
+      column?.setFilterValue(undefined)
+      return
+    }
+    // 单选列过滤写回字符串，多选写回数组：`useTableUrlState` 会根据
+    // `type: 'string' | 'array'` 分别序列化到 URL。
+    column?.setFilterValue(single ? next[0] : next)
+  }
 
   return (
     <Popover>
@@ -48,26 +86,26 @@ export function DataTableFacetedFilter<TData, TValue>({
         <Button variant='outline' size='sm' className='h-8 border-dashed'>
           <PlusCircledIcon className='size-4' />
           {title}
-          {selectedValues?.size > 0 && (
+          {selectedValues.length > 0 && (
             <>
               <Separator orientation='vertical' className='mx-2 h-4' />
               <Badge
                 variant='secondary'
                 className='rounded-sm px-1 font-normal lg:hidden'
               >
-                {selectedValues.size}
+                {selectedValues.length}
               </Badge>
               <div className='hidden gap-1 lg:flex'>
-                {selectedValues.size > 2 ? (
+                {selectedValues.length > 2 ? (
                   <Badge
                     variant='secondary'
                     className='rounded-sm px-1 font-normal'
                   >
-                    {t('table.selectedCount', { count: selectedValues.size })}
+                    {t('table.selectedCount', { count: selectedValues.length })}
                   </Badge>
                 ) : (
                   options
-                    .filter((option) => selectedValues.has(option.value))
+                    .filter((option) => selectedValues.includes(option.value))
                     .map((option) => (
                       <Badge
                         variant='secondary'
@@ -90,25 +128,26 @@ export function DataTableFacetedFilter<TData, TValue>({
             <CommandEmpty>{t('filter.noResults')}</CommandEmpty>
             <CommandGroup>
               {options.map((option) => {
-                const isSelected = selectedValues.has(option.value)
+                const isSelected = selectedValues.includes(option.value)
                 return (
                   <CommandItem
                     key={option.value}
                     onSelect={() => {
-                      if (isSelected) {
-                        selectedValues.delete(option.value)
-                      } else {
-                        selectedValues.add(option.value)
+                      if (single) {
+                        commit(isSelected ? [] : [option.value])
+                        return
                       }
-                      const filterValues = Array.from(selectedValues)
-                      column?.setFilterValue(
-                        filterValues.length ? filterValues : undefined
-                      )
+                      const next = isSelected
+                        ? selectedValues.filter((v) => v !== option.value)
+                        : [...selectedValues, option.value]
+                      commit(next)
                     }}
                   >
                     <div
                       className={cn(
-                        'flex size-4 items-center justify-center rounded-sm border border-primary',
+                        'flex size-4 items-center justify-center border border-primary',
+                        // 单选渲染成圆点，多选渲染成方框：形状本身就是"能选几个"的提示。
+                        single ? 'rounded-full' : 'rounded-sm',
                         isSelected
                           ? 'bg-primary text-primary-foreground'
                           : 'opacity-50 [&_svg]:invisible'
@@ -129,7 +168,7 @@ export function DataTableFacetedFilter<TData, TValue>({
                 )
               })}
             </CommandGroup>
-            {selectedValues.size > 0 && (
+            {selectedValues.length > 0 && (
               <>
                 <CommandSeparator />
                 <CommandGroup>

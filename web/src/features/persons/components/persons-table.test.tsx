@@ -60,14 +60,16 @@ describe('PersonsTable', () => {
     )
 
     await expect.element(getByRole('table')).toBeInTheDocument()
+    // aria-label 已本地化（规范要求所有可见/可读文本走 i18n）
     await expect
-      .element(getByRole('checkbox', { name: /Select all/i }))
+      .element(getByRole('checkbox', { name: /全选本页/i }))
       .toBeInTheDocument()
     await expect.element(getByText(/人脸照片/i)).toBeInTheDocument()
     await expect.element(getByText('Alice Cooper')).toBeInTheDocument()
     await expect.element(getByText('EMP-001')).toBeInTheDocument()
+    // 底库列按钮带具体人名，避免与工具栏的「人脸底库」筛选触发器同名
     await expect
-      .element(getByRole('button', { name: /人脸底库/i }))
+      .element(getByRole('button', { name: /管理 Alice Cooper 的人脸底库/i }))
       .toBeInTheDocument()
   })
 
@@ -123,7 +125,7 @@ describe('PersonsTable', () => {
       </QueryClientProvider>
     )
 
-    const selectAllCheckbox = getByRole('checkbox', { name: /Select all/i })
+    const selectAllCheckbox = getByRole('checkbox', { name: /全选本页/i })
     await selectAllCheckbox.click()
 
     // 批量操作栏出现，带有批量删除按钮
@@ -163,7 +165,8 @@ describe('PersonsTable', () => {
     )
 
     await expect.element(getByText('Bob Unbound')).toBeInTheDocument()
-    await expect.element(getByText('-')).toBeInTheDocument()
+    // `exact` 必须开：录入时间里的 `2026-10-14 …` 也包含 `-`
+    await expect.element(getByText('-', { exact: true })).toBeInTheDocument()
     await expect.element(getByText('待采像')).toBeInTheDocument()
   })
 

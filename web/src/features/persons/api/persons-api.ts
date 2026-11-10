@@ -1,33 +1,63 @@
-import { apiClient, type ApiResponse } from '@/lib/api-client'
 import {
+  apiClient,
+  readBlobErrorEnvelope,
+  type ApiResponse,
+} from '@/lib/api-client'
+import { triggerDownload } from '@/lib/csv'
+import { getGalleryImageUrl } from '@/lib/media-url'
+import {
+  faceImportJobResponseSchema,
   faceListResponseSchema,
   faceSchema,
+  personImportCommitResponseSchema,
+  personImportPreviewResponseSchema,
   personListResponseSchema,
   personSchema,
-  faceImportJobResponseSchema,
-  type CreatePersonDto,
+  setPrimaryFaceSchema,
   type Face,
+  type FaceImportJobResponse,
   type FaceListResponse,
   type Person,
   type PersonImportCommitResponse,
   type PersonImportPreviewResponse,
   type PersonListResponse,
+  type CreatePersonDto,
   type UpdatePersonDto,
-  type FaceImportJobResponse,
-  personImportCommitResponseSchema,
-  personImportPreviewResponseSchema,
 } from '../data/schema'
 
 export interface GetPersonsParams {
   page?: number
   pageSize?: number
   search?: string
+  /** 单个人脸底库状态（`enrolled` / `missing`），后端只接受单值。 */
   faceStatus?: string
 }
 
-export interface GetFacesParams {
+interface GetFacesParams {
   page?: number
   pageSize?: number
+}
+
+/**
+ * 从 Content-Disposition 解析下载文件名。
+ *
+ * 优先 `filename*=UTF-8''…`（RFC 5987，中文名走这条），回落到 `filename="…"`。
+ */
+function parseContentDispositionFilename(
+  disposition: string | undefined,
+  fallback: string
+): string {
+  if (!disposition) return fallback
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1])
+    } catch {
+      return fallback
+    }
+  }
+  const match = /filename=["']?([^"';]+)["']?/.exec(disposition)
+  return match?.[1] ? match[1] : fallback
 }
 
 export const personsApi = {
@@ -35,23 +65,20 @@ export const personsApi = {
    * 获取人员分页列表
    */
   async getPersons(params?: GetPersonsParams): Promise<PersonListResponse> {
+    const page = params?.page ?? 1
+    const pageSize = params?.pageSize ?? 10
     const resp = await apiClient.get<ApiResponse<PersonListResponse>>(
       '/persons',
       {
         params: {
-          page: params?.page ?? 1,
-          pageSize: params?.pageSize ?? 10,
+          page,
+          pageSize,
           search: params?.search,
           faceStatus: params?.faceStatus,
         },
       }
     )
-    const raw = resp.data.data ?? {
-      items: [],
-      total: 0,
-      page: params?.page ?? 1,
-      pageSize: params?.pageSize ?? 10,
-    }
+    const raw = resp.data.data ?? { items: [], total: 0, page, pageSize }
     return personListResponseSchema.parse(raw)
   },
 
@@ -63,8 +90,7 @@ export const personsApi = {
     formData.append('file', file)
     const resp = await apiClient.post<ApiResponse<PersonImportPreviewResponse>>(
       '/persons/import/preview',
-      formData,
-      { headers: { 'Content-Type': 'multipart/form-data' } }
+      formData
     )
     return personImportPreviewResponseSchema.parse(resp.data.data)
   },
@@ -77,8 +103,7 @@ export const personsApi = {
     formData.append('file', file)
     const resp = await apiClient.post<ApiResponse<PersonImportCommitResponse>>(
       '/persons/import/commit',
-      formData,
-      { headers: { 'Content-Type': 'multipart/form-data' } }
+      formData
     )
     return personImportCommitResponseSchema.parse(resp.data.data)
   },
@@ -87,7 +112,9 @@ export const personsApi = {
    * 获取单个人员详情
    */
   async getPerson(id: string): Promise<Person> {
-    const resp = await apiClient.get<ApiResponse<Person>>(`/persons/${id}`)
+    const resp = await apiClient.get<ApiResponse<Person>>(
+      `/persons/${encodeURIComponent(id)}`
+    )
     return personSchema.parse(resp.data.data)
   },
 
@@ -104,7 +131,7 @@ export const personsApi = {
    */
   async updatePerson(id: string, data: UpdatePersonDto): Promise<Person> {
     const resp = await apiClient.put<ApiResponse<Person>>(
-      `/persons/${id}`,
+      `/persons/${encodeURIComponent(id)}`,
       data
     )
     return personSchema.parse(resp.data.data)
@@ -114,7 +141,9 @@ export const personsApi = {
    * 删除人员档案
    */
   async deletePerson(id: string): Promise<void> {
-    await apiClient.delete<ApiResponse<{ deleted: boolean }>>(`/persons/${id}`)
+    await apiClient.delete<ApiResponse<{ deleted: boolean }>>(
+      `/persons/${encodeURIComponent(id)}`
+    )
   },
 
   /**
@@ -124,26 +153,21 @@ export const personsApi = {
     personId: string,
     params?: GetFacesParams
   ): Promise<FaceListResponse> {
+    const page = params?.page ?? 1
+    const pageSize = params?.pageSize ?? 20
     const resp = await apiClient.get<ApiResponse<FaceListResponse>>(
-      `/persons/${personId}/faces`,
-      {
-        params: {
-          page: params?.page ?? 1,
-          pageSize: params?.pageSize ?? 20,
-        },
-      }
+      `/persons/${encodeURIComponent(personId)}/faces`,
+      { params: { page, pageSize } }
     )
-    const raw = resp.data.data ?? {
-      items: [],
-      total: 0,
-      page: params?.page ?? 1,
-      pageSize: params?.pageSize ?? 20,
-    }
+    const raw = resp.data.data ?? { items: [], total: 0, page, pageSize }
     return faceListResponseSchema.parse(raw)
   },
 
   /**
    * 录入新人脸底库（本地图片文件直传）
+   *
+   * 不显式设置 `Content-Type`：浏览器必须自己写 `multipart/form-data; boundary=…`。
+   * 手写成不带 boundary 的 `multipart/form-data` 在部分代理/网关下会被解析为空体。
    */
   async addFace(personId: string, data: File | FormData): Promise<Face> {
     const formData = data instanceof FormData ? data : new FormData()
@@ -152,20 +176,21 @@ export const personsApi = {
     }
 
     const resp = await apiClient.post<ApiResponse<Face>>(
-      `/persons/${personId}/faces`,
-      formData,
-      {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      }
+      `/persons/${encodeURIComponent(personId)}/faces`,
+      formData
     )
     return faceSchema.parse(resp.data.data)
   },
 
   /**
-   * 获取指定人脸底库图片的只读访问 URL
+   * 获取指定人脸底库图片的只读访问 URL。
+   *
+   * 统一委托给 `@/lib/media-url` 的 `getGalleryImageUrl`：那里做了
+   * `encodeURIComponent`，且是全站唯一的底库图片 URL 拼接点。曾经这里、API 层和
+   * image-search 各写一份，其中两份忘了转义，ID 含空格/斜杠就 404。
    */
   getFaceImageUrl(personId: string, faceId: string): string {
-    return `/api/v1/persons/${personId}/faces/${faceId}/image`
+    return getGalleryImageUrl(personId, faceId)
   },
 
   /**
@@ -173,7 +198,7 @@ export const personsApi = {
    */
   async deleteFace(personId: string, faceId: string): Promise<void> {
     await apiClient.delete<ApiResponse<{ deleted: boolean }>>(
-      `/persons/${personId}/faces/${faceId}`
+      `/persons/${encodeURIComponent(personId)}/faces/${encodeURIComponent(faceId)}`
     )
   },
 
@@ -181,9 +206,10 @@ export const personsApi = {
    * 设置指定人脸为主人脸
    */
   async setPrimaryFace(personId: string, faceId: string): Promise<Person> {
+    const payload = setPrimaryFaceSchema.parse({ faceId })
     const resp = await apiClient.put<ApiResponse<Person>>(
-      `/persons/${personId}/primary-face`,
-      { faceId }
+      `/persons/${encodeURIComponent(personId)}/primary-face`,
+      payload
     )
     return personSchema.parse(resp.data.data)
   },
@@ -196,8 +222,7 @@ export const personsApi = {
     formData.append('file', file)
     const resp = await apiClient.post<ApiResponse<FaceImportJobResponse>>(
       '/persons/import-face-jobs',
-      formData,
-      { headers: { 'Content-Type': 'multipart/form-data' } }
+      formData
     )
     return faceImportJobResponseSchema.parse(resp.data.data)
   },
@@ -207,20 +232,25 @@ export const personsApi = {
    */
   async getFaceImportJob(jobId: string): Promise<FaceImportJobResponse> {
     const resp = await apiClient.get<ApiResponse<FaceImportJobResponse>>(
-      `/persons/import-face-jobs/${jobId}`
+      `/persons/import-face-jobs/${encodeURIComponent(jobId)}`
     )
     return faceImportJobResponseSchema.parse(resp.data.data)
   },
 
   /**
-   * 获取失败报告 CSV 下载地址
+   * 获取失败报告 CSV 下载地址。相对路径，交给浏览器按当前 origin 解析。
    */
   getFaceImportFailedReportUrl(jobId: string): string {
-    return `/api/v1/persons/import-face-jobs/${jobId}/failed-report`
+    return `/api/v1/persons/import-face-jobs/${encodeURIComponent(jobId)}/failed-report`
   },
 
   /**
    * 导出人员照片采像清单 CSV（支持按关键词与底库状态过滤）
+   *
+   * 以 `responseType: 'blob'` 请求时，**服务端错误体也是 Blob**：直接
+   * `resp.data.message` 拿到的是 `undefined`，全局 toast 会退化成
+   * "Request failed with status code 500"。这里把 JSON 错误体读回文本并抛出
+   * `ApiError`，让错误链路拿到真正可展示的消息。
    */
   async exportManifest(params?: {
     search?: string
@@ -234,34 +264,15 @@ export const personsApi = {
       responseType: 'blob',
     })
 
-    const disposition = resp.headers['content-disposition'] as
-      | string
-      | undefined
-    let filename = 'person_photo_manifest.csv'
-    if (disposition) {
-      const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
-      if (utf8Match && utf8Match[1]) {
-        filename = decodeURIComponent(utf8Match[1])
-      } else {
-        const match = /filename=["']?([^"';]+)["']?/.exec(disposition)
-        if (match && match[1]) {
-          filename = match[1]
-        }
-      }
+    if (resp.data.type === 'application/json') {
+      const envelope = await readBlobErrorEnvelope(resp.data)
+      throw new Error(envelope?.message ?? 'Export failed')
     }
 
-    if (typeof document !== 'undefined') {
-      const blob = new Blob([resp.data], { type: 'text/csv;charset=utf-8;' })
-      const url = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = filename
-      document.body.appendChild(anchor)
-      anchor.click()
-      requestAnimationFrame(() => {
-        document.body.removeChild(anchor)
-        URL.revokeObjectURL(url)
-      })
-    }
+    const filename = parseContentDispositionFilename(
+      resp.headers['content-disposition'] as string | undefined,
+      'person_photo_manifest.csv'
+    )
+    triggerDownload(resp.data, filename)
   },
 }

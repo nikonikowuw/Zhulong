@@ -1,7 +1,7 @@
 import { memo, useCallback, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  Check,
+  CheckCircle2,
   Copy,
   Edit2,
   Expand,
@@ -14,6 +14,9 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { copyToClipboard } from '@/lib/clipboard'
+import { formatLocalDateTime } from '@/lib/csv'
+import { getGalleryImageUrl } from '@/lib/media-url'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -26,19 +29,22 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
-import { personsApi } from '../api/persons-api'
 import { type Face } from '../data/schema'
 import {
   PERSONS_QUERY_KEY,
+  personFacesQueryKey,
   useAddFace,
   useDeleteFace,
   usePersonFaces,
   useSetPrimaryFace,
 } from '../hooks/use-persons'
+import {
+  FACE_IMAGE_ACCEPT,
+  initialOf,
+  primaryFaceIdOf,
+  validateFaceImageFile,
+} from '../persons-helpers'
 import { usePersonsContext } from './persons-provider'
-
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
-const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 
 interface FaceCardProps {
   face: Face
@@ -63,7 +69,7 @@ const FaceCard = memo(function FaceCard({
 }: FaceCardProps) {
   const { t } = useTranslation('persons')
   const [imgError, setImgError] = useState(false)
-  const imageUrl = personsApi.getFaceImageUrl(personId, face.id)
+  const imageUrl = getGalleryImageUrl(personId, face.id)
 
   const displayName = face.imagePath
     ? face.imagePath.split('/').pop() || face.imagePath
@@ -81,19 +87,23 @@ const FaceCard = memo(function FaceCard({
       )}
     >
       {/* 照片展示区 */}
-      <div
-        onClick={() => !imgError && onPreview(imageUrl, displayName)}
-        className='relative aspect-square w-full cursor-pointer overflow-hidden bg-muted/40'
-      >
+      <div className='relative aspect-square w-full overflow-hidden bg-muted/40'>
         {!imgError ? (
-          <img
-            src={imageUrl}
-            alt={displayName}
-            onError={() => setImgError(true)}
-            className='h-full w-full object-cover transition-transform duration-300 group-hover:scale-105'
-            loading='lazy'
-            decoding='async'
-          />
+          <button
+            type='button'
+            onClick={() => onPreview(imageUrl, displayName)}
+            aria-label={t('imagePreview.enterFullscreen')}
+            className='h-full w-full cursor-zoom-in'
+          >
+            <img
+              src={imageUrl}
+              alt={displayName}
+              onError={() => setImgError(true)}
+              className='h-full w-full object-cover transition-transform duration-300 group-hover:scale-105'
+              loading='lazy'
+              decoding='async'
+            />
+          </button>
         ) : (
           <div className='flex h-full w-full flex-col items-center justify-center gap-1.5 p-2 text-center text-muted-foreground'>
             <ImageIcon className='h-6 w-6 text-muted-foreground/50' />
@@ -122,14 +132,10 @@ const FaceCard = memo(function FaceCard({
             type='button'
             variant='secondary'
             size='icon'
-            onClick={(e) => {
-              e.stopPropagation()
-              onPreview(imageUrl, displayName)
-            }}
+            onClick={() => onPreview(imageUrl, displayName)}
             className='h-7 w-7 rounded-full bg-background/85 shadow-xs backdrop-blur-xs hover:bg-background'
-            title={t('imagePreview.enterFullscreen', {
-              defaultValue: '查看大图',
-            })}
+            title={t('imagePreview.enterFullscreen')}
+            aria-label={t('imagePreview.enterFullscreen')}
           >
             <Expand className='h-3.5 w-3.5' />
           </Button>
@@ -139,15 +145,11 @@ const FaceCard = memo(function FaceCard({
       {/* 底部信息与常驻操作栏 */}
       <div className='flex flex-col gap-1.5 border-t border-border/50 bg-card p-2.5'>
         <div className='flex items-center justify-between text-[11px] text-muted-foreground'>
-          {!imgError ? (
-            <span className='truncate font-mono' title={displayName}>
-              {displayName}
-            </span>
-          ) : (
-            <span className='font-mono text-[10px]'>ID: {face.id}</span>
-          )}
+          <span className='truncate font-mono' title={displayName}>
+            {imgError ? `ID: ${face.id}` : displayName}
+          </span>
           <span className='shrink-0 text-[10px]'>
-            {new Date(face.createdAt).toLocaleDateString()}
+            {formatLocalDateTime(face.createdAt)}
           </span>
         </div>
 
@@ -158,10 +160,7 @@ const FaceCard = memo(function FaceCard({
               size='sm'
               variant='outline'
               disabled={isSettingPrimary || isDeleting}
-              onClick={(e) => {
-                e.stopPropagation()
-                onSetPrimary(face.id)
-              }}
+              onClick={() => onSetPrimary(face.id)}
               className='h-7 flex-1 gap-1 text-[11px] font-normal hover:bg-muted'
               title={t('actions.setPrimary')}
             >
@@ -174,7 +173,7 @@ const FaceCard = memo(function FaceCard({
             </Button>
           ) : (
             <div className='flex h-7 flex-1 items-center gap-1 text-[11px] font-medium text-teal-600 dark:text-teal-400'>
-              <Check className='h-3.5 w-3.5' />
+              <CheckCircle2 className='h-3.5 w-3.5' />
               <span className='font-mono text-[10px] text-muted-foreground/80'>
                 {face.id}
               </span>
@@ -186,10 +185,7 @@ const FaceCard = memo(function FaceCard({
             variant='ghost'
             size='icon'
             disabled={isDeleting || isSettingPrimary}
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete(face.id)
-            }}
+            onClick={() => onDelete(face.id)}
             className='h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
             aria-label={t('actions.deleteFace')}
             title={t('actions.deleteFace')}
@@ -225,9 +221,12 @@ export function PersonsFacesDialog() {
   const isOpen = open === 'faces' && Boolean(currentRow)
   const personId = currentRow?.id
 
-  const { data: facePage, isLoading: isLoadingFaces } = usePersonFaces(
-    isOpen ? personId : undefined
-  )
+  const {
+    data: facePage,
+    isLoading: isLoadingFaces,
+    isError: isFacesError,
+    refetch: refetchFaces,
+  } = usePersonFaces(isOpen ? personId : undefined)
   const faces = facePage?.items ?? []
   const faceTotal = facePage?.total ?? 0
 
@@ -236,74 +235,105 @@ export function PersonsFacesDialog() {
     suppressGlobalToast: true,
     suppressInvalidate: true,
   })
-  const deleteFaceMutation = useDeleteFace()
-  const setPrimaryMutation = useSetPrimaryFace()
+  // 单张删除/设主脸自带 toast 与错误横幅，交给全局 MutationCache 会重复弹窗。
+  const deleteFaceMutation = useDeleteFace({ suppressGlobalToast: true })
+  const setPrimaryMutation = useSetPrimaryFace({ suppressGlobalToast: true })
 
-  // 复制工号到剪贴板
-  const handleCopyPersonId = () => {
-    if (currentRow?.personId) {
-      navigator.clipboard.writeText(currentRow.personId)
+  // 复制工号到剪贴板。
+  //
+  // 不能直接 `navigator.clipboard.writeText`：边缘设备以 `http://192.168.x.x:8000`
+  // 暴露服务时它不是安全上下文，`navigator.clipboard` 是 `undefined`，裸调会在
+  // 同步求值阶段抛 TypeError；`copyToClipboard` 带 execCommand 降级。
+  const handleCopyPersonId = async () => {
+    const value = currentRow?.personId
+    if (!value) return
+    const ok = await copyToClipboard(value)
+    if (ok) {
       toast.success(t('sheet.idCopied'))
+    } else {
+      toast.error(t('sheet.idCopyFailed'))
     }
   }
 
   // 批量文件上传处理（整批完成统一刷新 Query，避免 Invalidation 洪水）
-  const handleFilesUpload = async (files: FileList | File[]) => {
-    if (!personId || files.length === 0) return
+  const handleFilesUpload = useCallback(
+    async (files: FileList | File[]) => {
+      if (!personId || files.length === 0) return
 
-    const validFiles: File[] = []
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      if (!ALLOWED_TYPES.includes(file.type)) {
-        toast.error(`${file.name}: ${t('validation.invalidFileType')}`)
-        continue
-      }
-      if (file.size > MAX_FILE_SIZE) {
-        toast.error(`${file.name}: ${t('validation.fileTooLarge')}`)
-        continue
-      }
-      validFiles.push(file)
-    }
-
-    if (validFiles.length === 0) return
-
-    setIsUploadingBatch(true)
-    setBatchProgress({ current: 0, total: validFiles.length })
-
-    let successCount = 0
-    for (let i = 0; i < validFiles.length; i++) {
-      const file = validFiles[i]
-      setBatchProgress({ current: i + 1, total: validFiles.length })
-      try {
-        const enrolled = await addFaceBatchMutation.mutateAsync({
-          personId,
-          data: file,
-        })
-        if (faces.length === 0 && i === 0 && currentRow) {
-          setCurrentRow({ ...currentRow, primaryFaceId: enrolled.id })
+      const validFiles: File[] = []
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        const problem = validateFaceImageFile(file)
+        if (problem) {
+          toast.error(
+            `${file.name}: ${
+              problem === 'invalidType'
+                ? t('validation.invalidFileType')
+                : t('validation.fileTooLarge')
+            }`
+          )
+          continue
         }
-        successCount++
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err)
-        toast.error(`${file.name}: ${msg}`)
+        validFiles.push(file)
       }
-    }
 
-    setIsUploadingBatch(false)
-    setBatchProgress(null)
+      if (validFiles.length === 0) return
 
-    if (successCount > 0) {
-      void queryClient.invalidateQueries({
-        queryKey: [...PERSONS_QUERY_KEY, personId, 'faces'],
-      })
-      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
-      toast.success(t('notifications.addFaceSuccess'))
-    }
-  }
+      setIsUploadingBatch(true)
+      setBatchProgress({ current: 0, total: validFiles.length })
+
+      let successCount = 0
+      for (let i = 0; i < validFiles.length; i++) {
+        const file = validFiles[i]
+        setBatchProgress({ current: i + 1, total: validFiles.length })
+        try {
+          const enrolled = await addFaceBatchMutation.mutateAsync({
+            personId,
+            data: file,
+          })
+          if (faces.length === 0 && i === 0 && currentRow) {
+            setCurrentRow({ ...currentRow, primaryFaceId: enrolled.id })
+          }
+          successCount++
+        } catch (err: unknown) {
+          // 每张失败单独报出文件名与原因；成功计数另有汇总提示。
+          const msg = err instanceof Error ? err.message : String(err)
+          toast.error(`${file.name}: ${msg}`)
+        }
+      }
+
+      setIsUploadingBatch(false)
+      setBatchProgress(null)
+
+      if (successCount > 0) {
+        void queryClient.invalidateQueries({
+          queryKey: personFacesQueryKey(personId),
+        })
+        void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+        toast.success(
+          successCount === validFiles.length
+            ? t('notifications.addFaceSuccess')
+            : t('notifications.addFacePartial', {
+                success: successCount,
+                failed: validFiles.length - successCount,
+              })
+        )
+      }
+    },
+    [
+      personId,
+      t,
+      addFaceBatchMutation,
+      faces.length,
+      currentRow,
+      setCurrentRow,
+      queryClient,
+    ]
+  )
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      handleFilesUpload(e.target.files)
+      void handleFilesUpload(e.target.files)
     }
     e.target.value = ''
   }
@@ -312,50 +342,38 @@ export function PersonsFacesDialog() {
     e.preventDefault()
     setIsDragOver(false)
     if (e.dataTransfer.files) {
-      handleFilesUpload(e.dataTransfer.files)
+      void handleFilesUpload(e.dataTransfer.files)
     }
   }
 
-  const handleSetPrimary = useCallback(
-    async (faceId: string) => {
-      if (!personId) return
-      setSettingPrimaryId(faceId)
-      try {
-        await setPrimaryMutation.mutateAsync({
-          personId,
-          faceId,
-        })
-        if (currentRow) {
-          setCurrentRow({ ...currentRow, primaryFaceId: faceId })
-        }
-        toast.success(t('notifications.setPrimarySuccess'))
-      } catch {
-        // 错误由全局 mutation 处理
-      } finally {
-        setSettingPrimaryId(null)
+  const handleSetPrimary = async (faceId: string) => {
+    if (!personId) return
+    setSettingPrimaryId(faceId)
+    try {
+      await setPrimaryMutation.mutateAsync({ personId, faceId })
+      if (currentRow) {
+        setCurrentRow({ ...currentRow, primaryFaceId: faceId })
       }
-    },
-    [personId, setPrimaryMutation, currentRow, setCurrentRow, t]
-  )
+      toast.success(t('notifications.setPrimarySuccess'))
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSettingPrimaryId(null)
+    }
+  }
 
-  const handleDeleteFace = useCallback(
-    async (faceId: string) => {
-      if (!personId) return
-      setDeletingId(faceId)
-      try {
-        await deleteFaceMutation.mutateAsync({
-          personId,
-          faceId,
-        })
-        toast.success(t('notifications.deleteFaceSuccess'))
-      } catch {
-        // 错误由全局 mutation 处理
-      } finally {
-        setDeletingId(null)
-      }
-    },
-    [personId, deleteFaceMutation, t]
-  )
+  const handleDeleteFace = async (faceId: string) => {
+    if (!personId) return
+    setDeletingId(faceId)
+    try {
+      await deleteFaceMutation.mutateAsync({ personId, faceId })
+      toast.success(t('notifications.deleteFaceSuccess'))
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   const handlePreview = useCallback(
     (url: string, title: string) => {
@@ -370,14 +388,11 @@ export function PersonsFacesDialog() {
   }
 
   // 头像与首字母
-  const primaryFaceId = currentRow?.primaryFaceId || faces[0]?.id
-  const avatarUrl =
-    personId && primaryFaceId
-      ? personsApi.getFaceImageUrl(personId, primaryFaceId)
-      : undefined
-  const fallbackChar = currentRow?.name
-    ? currentRow.name.trim().charAt(0).toUpperCase()
-    : '?'
+  const primaryFaceId = currentRow
+    ? primaryFaceIdOf({ ...currentRow, faces })
+    : undefined
+  const avatarUrl = getGalleryImageUrl(personId, primaryFaceId)
+  const fallbackChar = initialOf(currentRow?.name)
 
   return (
     <Sheet open={isOpen} onOpenChange={(v) => !v && handleClose()}>
@@ -385,7 +400,6 @@ export function PersonsFacesDialog() {
         side='right'
         className='flex h-full w-full flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl'
       >
-        {/* 顶部标题与描述（支持辅助技术与测试选择器） */}
         <SheetHeader className='border-b border-border px-6 py-4'>
           <div className='flex items-center justify-between'>
             <div className='space-y-1 pe-6'>
@@ -427,9 +441,10 @@ export function PersonsFacesDialog() {
                     <span>{currentRow.personId}</span>
                     <button
                       type='button'
-                      onClick={handleCopyPersonId}
+                      onClick={() => void handleCopyPersonId()}
                       className='cursor-pointer hover:text-foreground'
                       title={t('sheet.copyId')}
+                      aria-label={t('sheet.copyId')}
                     >
                       <Copy className='h-3 w-3' />
                     </button>
@@ -446,7 +461,7 @@ export function PersonsFacesDialog() {
               <p className='text-xs text-muted-foreground'>
                 {t('fields.createdAt')}:{' '}
                 {currentRow?.createdAt
-                  ? new Date(currentRow.createdAt).toLocaleString()
+                  ? formatLocalDateTime(currentRow.createdAt)
                   : '-'}
               </p>
             </div>
@@ -457,9 +472,7 @@ export function PersonsFacesDialog() {
               type='button'
               size='sm'
               variant='outline'
-              onClick={() => {
-                setOpen('edit')
-              }}
+              onClick={() => setOpen('edit')}
               className='h-8 gap-1 text-xs'
             >
               <Edit2 className='h-3.5 w-3.5' />
@@ -470,7 +483,6 @@ export function PersonsFacesDialog() {
 
         {/* 人脸底库主操作区与画廊 */}
         <div className='flex-1 space-y-5 overflow-y-auto px-6 py-5'>
-          {/* 标题栏与批量上传按钮 */}
           <div className='flex flex-wrap items-center justify-between gap-2'>
             <div>
               <h4 className='text-sm font-semibold text-foreground'>
@@ -501,12 +513,11 @@ export function PersonsFacesDialog() {
             type='file'
             ref={fileInputRef}
             multiple
-            accept='image/jpeg,image/png,image/webp'
+            accept={FACE_IMAGE_ACCEPT}
             onChange={handleInputChange}
             className='hidden'
           />
 
-          {/* 批量上传状态条 */}
           {batchProgress && (
             <div className='flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-primary'>
               <Loader2 className='h-4 w-4 shrink-0 animate-spin' />
@@ -546,9 +557,27 @@ export function PersonsFacesDialog() {
             </span>
           </div>
 
+          {/* 加载失败：不能落进"暂无人脸底库照片"的空态，否则用户会以为
+              数据丢了并开始重复上传。 */}
+          {isFacesError && (
+            <div className='flex flex-col items-center justify-center gap-2 rounded-xl border border-border bg-card py-8 text-center text-destructive'>
+              <ImageIcon className='h-6 w-6 opacity-40' />
+              <span className='text-sm font-medium'>
+                {t('table.loadFailed')}
+              </span>
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={() => void refetchFaces()}
+                className='mt-1'
+              >
+                {t('actions.retry')}
+              </Button>
+            </div>
+          )}
+
           {/* 画廊网格 */}
           <div className='grid grid-cols-2 gap-3.5 pb-6 sm:grid-cols-3'>
-            {/* 骨架屏加载态 */}
             {isLoadingFaces && (
               <>
                 <Skeleton className='aspect-[4/5] rounded-xl' />
@@ -557,8 +586,8 @@ export function PersonsFacesDialog() {
               </>
             )}
 
-            {/* 已录入底库卡片 */}
             {!isLoadingFaces &&
+              !isFacesError &&
               faces.map((face) => {
                 const isPrimary = currentRow?.primaryFaceId
                   ? currentRow.primaryFaceId === face.id
@@ -572,16 +601,15 @@ export function PersonsFacesDialog() {
                     isPrimary={isPrimary}
                     isDeleting={deletingId === face.id}
                     isSettingPrimary={settingPrimaryId === face.id}
-                    onDelete={handleDeleteFace}
-                    onSetPrimary={handleSetPrimary}
+                    onDelete={(id) => void handleDeleteFace(id)}
+                    onSetPrimary={(id) => void handleSetPrimary(id)}
                     onPreview={handlePreview}
                   />
                 )
               })}
           </div>
 
-          {/* 无人脸时的空状态引导 */}
-          {!isLoadingFaces && faces.length === 0 && (
+          {!isLoadingFaces && !isFacesError && faces.length === 0 && (
             <div className='flex flex-col items-center justify-center py-6 text-center'>
               <div className='mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground'>
                 <ImageIcon className='h-6 w-6' />

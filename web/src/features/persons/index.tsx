@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -21,6 +21,7 @@ import { usePerson, usePersons } from './hooks/use-persons'
 
 const route = getRouteApi('/_authenticated/persons/')
 
+/** 稳定的空数组常量：`data?.items ?? []` 每次渲染新建引用会让表格无谓重算。 */
 const EMPTY_PERSONS: Person[] = []
 
 function PersonsUrlSync({
@@ -79,24 +80,21 @@ function PersonsContent() {
       ? search.search.trim()
       : undefined
 
-  const selectedFaceStatuses = Array.isArray(search.faceStatus)
-    ? search.faceStatus
-    : search.faceStatus
-      ? [search.faceStatus]
-      : []
-  const faceStatus =
-    selectedFaceStatuses.length === 1 ? selectedFaceStatuses[0] : undefined
+  /**
+   * 人员列表的底库筛选是**单值**（后端 `faceStatus` 只接受 enrolled / missing）。
+   *
+   * 曾经的实现是「数组长度恰为 1 时才取值，否则 undefined」—— 用户同时勾两个
+   * 选项后，请求会悄悄变成「不过滤」，而界面和导出都还显示着筛选生效。现在
+   * 路由 schema 直接把它收敛成单值字符串（见 `search-schema.ts`）。
+   */
+  const faceStatus = search.faceStatus
 
-  const { data, isLoading, isError, refetch } = usePersons({
+  const { data, isLoading, isError, isPlaceholderData, refetch } = usePersons({
     page,
     pageSize,
     search: searchQuery,
     faceStatus,
   })
-
-  const handleRetry = useCallback(() => {
-    void refetch()
-  }, [refetch])
 
   const persons = data?.items ?? EMPTY_PERSONS
   const total = data?.total ?? 0
@@ -114,23 +112,35 @@ function PersonsContent() {
       <Main className='flex flex-1 flex-col gap-4 sm:gap-6'>
         {/* 页面标题与主操作区 */}
         <div className='flex flex-wrap items-end justify-between gap-2'>
-          <div>
+          <div className='min-w-0 flex-1'>
             <h2 className='text-2xl font-bold tracking-tight'>{t('title')}</h2>
-            <p className='text-sm text-muted-foreground'>{t('description')}</p>
+            <p className='max-w-3xl text-sm text-muted-foreground'>
+              {t('description')}
+            </p>
           </div>
           <PersonsPrimaryButtons search={searchQuery} faceStatus={faceStatus} />
         </div>
 
-        {/* 核心数据表格 */}
-        <PersonsTable
-          data={persons}
-          total={total}
-          isLoading={isLoading}
-          isError={isError}
-          onRetry={handleRetry}
-          search={search}
-          navigate={navigate}
-        />
+        {/* 核心数据表格。翻页时 `placeholderData` 会继续显示上一页，若不给任何
+            信号，用户会以为点击没生效 —— 用降低不透明度做弱提示。 */}
+        <div
+          aria-busy={isPlaceholderData}
+          className={
+            isPlaceholderData
+              ? 'opacity-60 transition-opacity'
+              : 'transition-opacity'
+          }
+        >
+          <PersonsTable
+            data={persons}
+            total={total}
+            isLoading={isLoading}
+            isError={isError}
+            onRetry={() => void refetch()}
+            search={search}
+            navigate={navigate}
+          />
+        </div>
       </Main>
 
       <PersonsUrlSync personId={search.personId} navigate={navigate} />

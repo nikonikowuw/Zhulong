@@ -99,9 +99,9 @@ export function PersonsImagePreviewDialog() {
           aria-describedby={undefined}
           className='fixed inset-0 z-50 flex h-screen w-screen flex-col justify-between overflow-hidden p-0 text-white select-none focus:outline-hidden'
         >
-          {/* 无障碍隐藏标题 */}
+          {/* 无障碍隐藏标题：无标题时回落本地化文案，不留英文硬编码。 */}
           <DialogPrimitive.Title className='sr-only'>
-            {previewImage.title || 'Full-Screen Face Preview'}
+            {previewImage.title || t('imagePreview.title')}
           </DialogPrimitive.Title>
 
           {/* 顶部悬浮控制栏 */}
