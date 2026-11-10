@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 	"go.uber.org/zap"
@@ -106,7 +109,7 @@ func TestStreamLogReaderAcceptsBrokerDisconnectEvent(t *testing.T) {
 		`{"status":"info","stage":"broker_disconnected","index":0,"frames_processed":9001}`+"\n"+
 			`{"status":"failed","stage":"broker_disconnected"}`+"\n"), "stderr", zapcore.WarnLevel)
 
-	if invalid := process.logStats[runnerSourceIndex("stderr")].invalid; invalid != 0 {
+	if invalid := process.logStats[runnerSourceIndex("stderr")].counts[runnerIssueInvalid]; invalid != 0 {
 		t.Fatalf("broker disconnect events counted as invalid runner output: %d", invalid)
 	}
 	entries := observed.All()
@@ -252,6 +255,165 @@ func TestStreamLogReaderRedactsTerminalReaderError(t *testing.T) {
 	}
 	if entries[1].Message != "runner output records dropped" || entries[1].ContextMap()["read_errors"] != uint64(1) {
 		t.Fatalf("reader error counter = %+v", entries[1])
+	}
+}
+
+// TestRunnerProcessTagsStderrLogsAndCounters drives the real stderr pipe of a
+// package process: the "stderr" tag is a literal on the Start wiring, and a
+// regression there would attribute package noise to stdout (or nowhere) while
+// every direct streamLogReader test kept passing.
+func TestRunnerProcessTagsStderrLogsAndCounters(t *testing.T) {
+	const noise = "package text that is not a protocol record"
+	oversized := strings.Repeat("x", maxRunnerLogLine+1)
+
+	// The oversized line lives in its own directory: the stub reads it through
+	// $OVERSIZED_LINE_FILE, so the two do not have to share a path.
+	oversizedFile := filepath.Join(t.TempDir(), "oversized-line")
+	if err := os.WriteFile(oversizedFile, []byte(oversized+"\n"), 0o644); err != nil {
+		t.Fatalf("write oversized line: %v", err)
+	}
+	body := "#!/bin/sh\nprintf '" + noise + "\\n' >&2\ncat \"$OVERSIZED_LINE_FILE\" >&2\nexit 0\n"
+	script := writeExecutableScript(t, "stderr_pkg", body)
+	t.Setenv("OVERSIZED_LINE_FILE", oversizedFile)
+
+	core, observed := observer.New(zapcore.DebugLevel)
+	process := NewRunnerProcess(ProcessConfig{
+		AlgorithmID:    "stderr_pkg",
+		ExecutablePath: script,
+		Logger:         zap.New(core),
+	})
+	if err := process.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	select {
+	case <-process.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("stub process did not exit within timeout")
+	}
+
+	foundNoise := false
+	foundOversized := false
+	for _, entry := range observed.All() {
+		fields := entry.ContextMap()
+		if fields["source"] != "stderr" {
+			continue
+		}
+		switch entry.Message {
+		case "runner output ignored":
+			if fields["line_bytes"] != int64(len(noise)) {
+				t.Fatalf("stderr record byte count = %v, want %d", fields["line_bytes"], len(noise))
+			}
+			foundNoise = true
+		case "runner output line exceeded limit":
+			if fields["line_bytes"] != int64(len(oversized)) {
+				t.Fatalf("oversized record byte count = %v, want %d", fields["line_bytes"], len(oversized))
+			}
+			foundOversized = true
+		}
+	}
+	if !foundNoise {
+		t.Fatalf("no stderr-tagged record for package stderr output; observed: %+v", observed.All())
+	}
+	if !foundOversized {
+		t.Fatalf("no stderr-tagged record for the oversized package line; observed: %+v", observed.All())
+	}
+
+	stderrSlot := runnerSourceIndex("stderr")
+	stdoutSlot := runnerSourceIndex("stdout")
+	process.logRateMu.Lock()
+	stderrOversized := process.logStats[stderrSlot].counts[runnerIssueOversized]
+	stdoutOversized := process.logStats[stdoutSlot].counts[runnerIssueOversized]
+	process.logRateMu.Unlock()
+	if stderrOversized != 1 {
+		t.Fatalf("stderr oversized counter = %d, want 1", stderrOversized)
+	}
+	if stdoutOversized != 0 {
+		t.Fatalf("stderr output was counted against the stdout slot: %d", stdoutOversized)
+	}
+}
+
+// TestRunnerOutputRateLimitUsesTheStderrSlot pins the second half of the stderr
+// accounting: a rate-limited stderr record must land in the stderr slot, through
+// the same counting entry point as every other drop category.
+func TestRunnerOutputRateLimitUsesTheStderrSlot(t *testing.T) {
+	core, observed := observer.New(zapcore.DebugLevel)
+	process := NewRunnerProcess(ProcessConfig{Logger: zap.New(core)})
+	for i := 0; i < runnerLogRate+10; i++ {
+		process.emitRunnerEvent("stderr", zapcore.DebugLevel, "runner output ignored")
+	}
+	process.reportRunnerIssues("stderr")
+
+	stderrSlot := runnerSourceIndex("stderr")
+	stdoutSlot := runnerSourceIndex("stdout")
+	process.logRateMu.Lock()
+	stderrLimited := process.logStats[stderrSlot].counts[runnerIssueRateLimited]
+	stdoutLimited := process.logStats[stdoutSlot].counts[runnerIssueRateLimited]
+	process.logRateMu.Unlock()
+	if stderrLimited != 10 {
+		t.Fatalf("stderr rate-limited counter = %d, want 10", stderrLimited)
+	}
+	if stdoutLimited != 0 {
+		t.Fatalf("stderr rate limiting was counted against the stdout slot: %d", stdoutLimited)
+	}
+	if len(observed.All()) == 0 {
+		t.Fatal("the drop report was not emitted")
+	}
+}
+
+// TestRunnerIssueDropReportNamesOversizedAndInvalidSeparately pins the two field
+// names that are easiest to swap in the drop report.
+//
+// The oversized drop and the invalid protocol record are triggered separately, so
+// each produces its own report: trading the "oversized" and "invalid" rows of
+// runnerLogCategoryFields would put the 1 under the wrong name in both reports,
+// which these assertions reject.
+func TestRunnerIssueDropReportNamesOversizedAndInvalidSeparately(t *testing.T) {
+	core, observed := observer.New(zapcore.DebugLevel)
+	process := NewRunnerProcess(ProcessConfig{Logger: zap.New(core)})
+
+	// One oversized line: counted as oversized and reported under "oversized".
+	process.emitLogLine("stderr", zapcore.WarnLevel, runnerLogLine{
+		oversized: true,
+		bytes:     maxRunnerLogLine + 1,
+	})
+	// Then one invalid protocol record: counted as invalid, reported under "invalid".
+	process.emitLogLine("stderr", zapcore.WarnLevel, runnerLogLine{
+		data: []byte(`{"status":"totally_new_status"}`),
+	})
+	// Flush anything the two emissions above did not already report.
+	process.reportRunnerIssues("stderr")
+
+	var reports []map[string]any
+	for _, entry := range observed.All() {
+		if entry.Message == "runner output records dropped" {
+			reports = append(reports, entry.ContextMap())
+		}
+	}
+	if len(reports) != 2 {
+		t.Fatalf("expected one drop report per kind, got %+v", reports)
+	}
+	if reports[0]["oversized"] != uint64(1) || reports[0]["invalid"] != uint64(0) {
+		t.Fatalf("an oversized drop was reported with the wrong field names: %+v", reports[0])
+	}
+	if reports[1]["invalid"] != uint64(1) || reports[1]["oversized"] != uint64(0) {
+		t.Fatalf("an invalid record was reported with the wrong field names: %+v", reports[1])
+	}
+}
+
+// TestRunnerLogCategoryFieldsAreNamed pins the promise runnerLogCategoryFields
+// makes: every drop counter has a report field name, and no two counters share
+// one. Without it a category could be added with an empty name (an unnamed
+// counter in the report) or collision (two counters folded into one field).
+func TestRunnerLogCategoryFieldsAreNamed(t *testing.T) {
+	seen := make(map[string]runnerIssueKind, runnerLogCategoryCount)
+	for kind, name := range runnerLogCategoryFields {
+		if name == "" {
+			t.Fatalf("category %d has no report field name", kind)
+		}
+		if other, exists := seen[name]; exists {
+			t.Fatalf("categories %d and %d share the report field name %q", other, kind, name)
+		}
+		seen[name] = runnerIssueKind(kind)
 	}
 }
 

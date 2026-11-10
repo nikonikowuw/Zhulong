@@ -64,8 +64,12 @@ var (
 	ErrAlgorithmNotInCrashLoop = errors.New("algorithm is not in CRASH_LOOP")
 	ErrAlgorithmAlreadyRunning = errors.New("algorithm worker is already running or supervised")
 	ErrNoBrokerSockets         = errors.New("cannot start runner without broker sockets")
-	ErrNoLifecycleStore        = errors.New("no lifecycle store configured")
 )
+
+// errNoLifecycleStore reports a RestartAlgorithm call on a supervisor built
+// without a store. It is unexported: only this package's own tests construct such
+// a supervisor.
+var errNoLifecycleStore = errors.New("no lifecycle store configured")
 
 // NewSupervisor creates a Supervisor instance.
 //
@@ -486,6 +490,13 @@ func (s *Supervisor) StopAlgorithm(ctx context.Context, algoID string) error {
 		return fmt.Errorf("wait for algorithm %q to stop: %w", algoID, ctx.Err())
 	}
 
+	// The complement stop in startProcess runs after stopProcess has already
+	// returned, so its failure cannot reach stopErr above. Reading it here — after
+	// doneCh, i.e. after the only writer has finished — keeps "the child is still
+	// running" from being reported as a clean stop. errors.Join(nil, nil) is nil,
+	// so the common path stays nil.
+	stopErr = errors.Join(stopErr, w.spawnedStopError())
+
 	// Only persist DISABLED when this call actually retired its own watcher. If a
 	// rollback/upgrade re-registered a live watcher under the same ID, the DB
 	// must keep reflecting that running process.
@@ -510,7 +521,7 @@ func (s *Supervisor) RestartAlgorithm(ctx context.Context, algoID string) error 
 		}
 	}
 	if s.store == nil {
-		return ErrNoLifecycleStore
+		return errNoLifecycleStore
 	}
 	algo, err := s.store.GetAlgorithmPackage(ctx, algoID)
 	if err != nil {

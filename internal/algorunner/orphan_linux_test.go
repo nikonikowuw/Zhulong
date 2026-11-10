@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,6 +18,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // installFakePackage materialises a package whose entry is a real ELF binary and
@@ -846,4 +849,261 @@ func waitForReparent(t *testing.T, pid int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("runner %d was never reparented away from the test process", pid)
+}
+
+// TestIsBrokerSocketPathAcceptsOnlyHostShapedPaths pins the predicate that gates
+// every path taken from a runner's cmdline: only files directly inside the broker
+// socket base directory with the broker socket prefix/suffix may be unlinked.
+func TestIsBrokerSocketPathAcceptsOnlyHostShapedPaths(t *testing.T) {
+	brokerDir := t.TempDir()
+	t.Setenv(brokerSockOverrideEnv, brokerDir)
+	elsewhere := t.TempDir()
+
+	resolvedBase, ok := resolveBrokerSocketBaseDir()
+	if !ok {
+		t.Fatalf("resolveBrokerSocketBaseDir(%q) failed", brokerDir)
+	}
+
+	cases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "broker socket in the base dir", path: filepath.Join(brokerDir, "zhulong_broker_1.sock"), want: true},
+		{name: "wrong prefix", path: filepath.Join(brokerDir, "other_1.sock"), want: false},
+		{name: "wrong suffix", path: filepath.Join(brokerDir, "zhulong_broker_1.tmp"), want: false},
+		{name: "outside the base dir", path: filepath.Join(elsewhere, "zhulong_broker_2.sock"), want: false},
+		{name: "subdirectory of the base dir", path: filepath.Join(brokerDir, "nested", "zhulong_broker_3.sock"), want: false},
+		{name: "empty", path: "", want: false},
+		// Fail-closed: an unresolvable base dir is passed as the empty string and
+		// must never widen the set of unlinkable paths.
+		{name: "unresolved base", path: filepath.Join(brokerDir, "zhulong_broker_4.sock"), want: false},
+	}
+	for _, tc := range cases {
+		base := resolvedBase
+		if tc.name == "unresolved base" {
+			base = ""
+		}
+		if got := isBrokerSocketPath(tc.path, base); got != tc.want {
+			t.Errorf("%s: isBrokerSocketPath(%q) = %v, want %v", tc.name, tc.path, got, tc.want)
+		}
+	}
+}
+
+// TestIsBrokerSocketPathRejectsAliasedPaths pins the two alias forms the predicate
+// has to survive: a non-canonical spelling the kernel resolves to some other file,
+// and a symlinked intermediate directory used as an unlink pivot. It also pins the
+// other direction — a socket named through the base dir's resolved spelling is
+// still the same directory — so the hardening cannot turn into "no broker socket
+// is ever reclaimed".
+func TestIsBrokerSocketPathRejectsAliasedPaths(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv(brokerSockOverrideEnv, base)
+	resolvedBase, ok := resolveBrokerSocketBaseDir()
+	if !ok {
+		t.Fatalf("resolveBrokerSocketBaseDir(%q) failed", base)
+	}
+
+	// The pivot directory exists on purpose: it makes the ".." case about the
+	// canonical-form check rather than about a missing directory, because
+	// EvalSymlinks would resolve base/pivot/.. back to base.
+	if err := os.Mkdir(filepath.Join(base, "zhulong_broker_pivot"), 0o755); err != nil {
+		t.Fatalf("create pivot directory: %v", err)
+	}
+	// Built by hand, NOT with filepath.Join: Join cleans the ".." away and would
+	// stop testing the spelling the kernel resolves.
+	pivot := base + "/zhulong_broker_pivot/../zhulong_broker_x.sock"
+	if isBrokerSocketPath(pivot, resolvedBase) {
+		t.Fatalf("isBrokerSocketPath(%q) accepted a non-canonical path", pivot)
+	}
+
+	// A symlinked directory inside the base dir that points elsewhere must not be
+	// usable as an unlink pivot: the resolved directory is no longer the base dir.
+	elsewhere := t.TempDir()
+	alias := filepath.Join(base, "zhulong_broker_alias")
+	if err := os.Symlink(elsewhere, alias); err != nil {
+		t.Fatalf("create symlinked subdirectory: %v", err)
+	}
+	aliased := filepath.Join(alias, brokerSocketPrefix+"9"+brokerSocketSuffix)
+	if isBrokerSocketPath(aliased, resolvedBase) {
+		t.Fatalf("isBrokerSocketPath(%q) followed a symlinked subdirectory out of the base dir", aliased)
+	}
+
+	// The shape the directory scan produces must still be accepted.
+	legit := filepath.Join(base, brokerSocketPrefix+"10"+brokerSocketSuffix)
+	if !isBrokerSocketPath(legit, resolvedBase) {
+		t.Fatalf("isBrokerSocketPath(%q) rejected the canonical broker socket path", legit)
+	}
+
+	// And so must the same directory spelled through a symlink: /proc/net/unix and
+	// a runner's cmdline report resolved paths, so resolving only one side would
+	// leave a real socket unreclaimable.
+	linkedBase := filepath.Join(t.TempDir(), "broker-base-link")
+	if err := os.Symlink(base, linkedBase); err != nil {
+		t.Fatalf("create symlinked base dir: %v", err)
+	}
+	t.Setenv(brokerSockOverrideEnv, linkedBase)
+	linkedResolved, ok := resolveBrokerSocketBaseDir()
+	if !ok {
+		t.Fatalf("resolveBrokerSocketBaseDir(%q) failed", linkedBase)
+	}
+	if linkedResolved != resolvedBase {
+		t.Fatalf("resolving the symlinked base dir = %q, want %q", linkedResolved, resolvedBase)
+	}
+	if !isBrokerSocketPath(legit, linkedResolved) {
+		t.Fatalf("isBrokerSocketPath(%q) rejected the base dir's resolved spelling", legit)
+	}
+
+	// Fail-closed: a base dir that cannot be resolved is never a broker socket dir,
+	// so a misconfigured override can never widen the set of unlinkable paths.
+	t.Setenv(brokerSockOverrideEnv, filepath.Join(t.TempDir(), "missing-base"))
+	if resolved, ok := resolveBrokerSocketBaseDir(); ok {
+		t.Fatalf("resolveBrokerSocketBaseDir accepted an unresolvable base dir: %q", resolved)
+	}
+	if isBrokerSocketPath(legit, "") {
+		t.Fatalf("isBrokerSocketPath(%q) accepted a path whose base dir does not resolve", legit)
+	}
+}
+
+// TestSweepReapedRunnerSocketsHonoursContextCancellation pins the ctx guard in the
+// per-candidate loop: a sweep that was cancelled must report the cancellation and
+// how far it got, rather than keep unlinking.
+func TestSweepReapedRunnerSocketsHonoursContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report := emptyOrphanCleanupReport()
+	failures := sweepReapedRunnerSockets(ctx, []orphanCandidate{{PID: 4242}, {PID: 4243}}, &report, zap.NewNop())
+	if len(failures) != 1 {
+		t.Fatalf("cancelled sweep failures = %v, want exactly one", failures)
+	}
+	if !errors.Is(failures[0], context.Canceled) {
+		t.Fatalf("cancelled sweep failure = %v, want context.Canceled", failures[0])
+	}
+	// The progress matters oncall: "aborted after 0/2 candidates" says nothing was
+	// reclaimed, which is what the operator has to retry.
+	if !strings.Contains(failures[0].Error(), "aborted after 0/2 candidates") {
+		t.Fatalf("cancelled sweep failure %q does not report its progress", failures[0])
+	}
+}
+
+// TestRemoveAbandonedBrokerSocketsHonoursContextCancellation pins the same ctx
+// guard on the directory pass. Without it a sweep truncated by the startup budget
+// still reported removed_sockets, i.e. the same boot logged both "aborted" and
+// "reclaimed these files".
+func TestRemoveAbandonedBrokerSocketsHonoursContextCancellation(t *testing.T) {
+	brokerDir := t.TempDir()
+	t.Setenv(brokerSockOverrideEnv, brokerDir)
+	sock := filepath.Join(brokerDir, brokerSocketPrefix+"13"+brokerSocketSuffix)
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatalf("create %s: %v", sock, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report := emptyOrphanCleanupReport()
+	failures := removeAbandonedBrokerSockets(ctx, &report)
+	if len(failures) != 1 || !errors.Is(failures[0], context.Canceled) {
+		t.Fatalf("cancelled directory sweep failures = %v, want exactly one context.Canceled", failures)
+	}
+	if len(report.RemovedSockets) != 0 {
+		t.Fatalf("a cancelled sweep still reported removed sockets: %v", report.RemovedSockets)
+	}
+	if _, err := os.Stat(sock); err != nil {
+		t.Fatalf("a cancelled sweep unlinked %s anyway: %v", sock, err)
+	}
+}
+
+// TestSweepReapedRunnerSockets_IgnoresForgedBrokerPaths pins the argv trust
+// boundary: --broker values are written by the package itself, so the sweep must
+// keep reclaiming the real socket while leaving a forged path untouched.
+func TestSweepReapedRunnerSockets_IgnoresForgedBrokerPaths(t *testing.T) {
+	fakeProcRoot(t)
+	brokerDir := t.TempDir()
+	t.Setenv(brokerSockOverrideEnv, brokerDir)
+
+	legit := filepath.Join(brokerDir, brokerSocketPrefix+"12"+brokerSocketSuffix)
+	forged := filepath.Join(t.TempDir(), "vendor_shared.sock")
+	for _, path := range []string{legit, forged} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("create %s: %v", path, err)
+		}
+	}
+
+	report := emptyOrphanCleanupReport()
+	report.Killed = append(report.Killed, 4242)
+	candidates := []orphanCandidate{{PID: 4242, brokerSocks: []string{legit, forged}}}
+
+	core, observed := observer.New(zapcore.DebugLevel)
+	if failures := sweepReapedRunnerSockets(context.Background(), candidates, &report, zap.New(core)); len(failures) != 0 {
+		t.Fatalf("sweep failures: %v", failures)
+	}
+	if _, err := os.Stat(forged); err != nil {
+		t.Fatalf("a broker path forged in argv was unlinked: %v", err)
+	}
+	if _, err := os.Stat(legit); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the real broker socket was not reclaimed: %v", err)
+	}
+	if len(report.RemovedSockets) != 1 || report.RemovedSockets[0] != legit {
+		t.Fatalf("removed sockets = %v, want [%s]", report.RemovedSockets, legit)
+	}
+
+	// The forged path is dropped silently in the report, so the Debug line is the
+	// only trace that "this package's --broker does not match the host's socket
+	// directory" exists. It must name both the path and the algorithm.
+	skips := observed.FilterMessage("skipping broker path from runner cmdline").All()
+	if len(skips) != 1 {
+		t.Fatalf("forged broker path logged %d time(s), want exactly 1: %+v", len(skips), observed.All())
+	}
+	fields := skips[0].ContextMap()
+	if fields["path"] != forged {
+		t.Fatalf("skip log path = %v, want %q", fields["path"], forged)
+	}
+	if _, ok := fields["algorithm_id"]; !ok {
+		t.Fatalf("skip log does not name the algorithm: %+v", fields)
+	}
+}
+
+// TestCandidateFromArgvRoundTripsRunnerArgs pins the read side of the argv
+// contract: the flags written by RunnerProcess.runnerArgs are the flags the sweep
+// parses back. A rename on one side compiles cleanly and silently stops reclaiming
+// the sockets a leftover runner named (only the directory-wide pass would remain).
+func TestCandidateFromArgvRoundTripsRunnerArgs(t *testing.T) {
+	cfg := ProcessConfig{
+		AlgorithmID:    "cand_rt",
+		AlgorithmName:  "Candidate Round Trip",
+		ExecutablePath: "/opt/zhulong/algorithms/cand_rt/1.0.0/cand_rt",
+		BrokerSocks:    []string{"/tmp/zhulong_broker_7.sock", "/tmp/zhulong_broker_8.sock"},
+		ConfigJSON:     `{"workers":2}`,
+	}
+	argv := append([]string{cfg.ExecutablePath}, NewRunnerProcess(cfg).runnerArgs()...)
+
+	cand := candidateFromArgv(4242, argv)
+	if cand.PID != 4242 {
+		t.Fatalf("candidate pid = %d, want 4242", cand.PID)
+	}
+	if !slices.Equal(cand.brokerSocks, cfg.BrokerSocks) {
+		t.Fatalf("broker sockets round trip = %v, want %v", cand.brokerSocks, cfg.BrokerSocks)
+	}
+	if cand.algorithmID != cfg.AlgorithmID {
+		t.Fatalf("algorithm id round trip = %q, want %q", cand.algorithmID, cfg.AlgorithmID)
+	}
+
+	// A dangling flag at the end of argv has no value: it must not panic and must
+	// not append an empty socket.
+	if got := candidateFromArgv(1, []string{cfg.ExecutablePath, flagBroker}); len(got.brokerSocks) != 0 {
+		t.Fatalf("a dangling %s produced sockets %v", flagBroker, got.brokerSocks)
+	}
+	// An explicitly empty value is skipped for the same reason: a socket path of ""
+	// is not a path this sweep could ever reclaim.
+	if got := candidateFromArgv(1, []string{cfg.ExecutablePath, flagBroker, ""}); len(got.brokerSocks) != 0 {
+		t.Fatalf("an empty %s value produced sockets %v", flagBroker, got.brokerSocks)
+	}
+	// The flag's value is consumed: an algorithm ID spelled like a flag must not be
+	// parsed as that flag.
+	got := candidateFromArgv(1, []string{cfg.ExecutablePath, flagBroker, flagAlgorithmID})
+	if !slices.Equal(got.brokerSocks, []string{flagAlgorithmID}) || got.algorithmID != "" {
+		t.Fatalf("flag value was not consumed: sockets=%v algorithmID=%q", got.brokerSocks, got.algorithmID)
+	}
 }

@@ -35,17 +35,30 @@ const (
 	// logDrainTimeout bounds how long the exit path waits for the pipe readers to
 	// consume what the child already wrote before closing the read ends.
 	logDrainTimeout = 100 * time.Millisecond
+
+	// flagBroker and flagAlgorithmID are the argv flags the host writes and the
+	// orphan sweep parses back out of a leftover runner's cmdline. They are shared
+	// constants because a rename compiles cleanly while the sweep silently stops
+	// matching: the first pass (delete exactly the sockets named by a reaped
+	// runner's argv) degrades to a no-op, and only the second, directory-wide pass
+	// still reclaims them.
+	flagBroker      = "--broker"
+	flagAlgorithmID = "--algorithm-id"
 )
 
 // Lifecycle errors. They are sentinels so callers can classify an outcome instead
 // of matching message text.
+//
+// They are unexported on purpose: nothing outside this package drives the process
+// lifecycle, and an exported sentinel becomes a compatibility promise the moment
+// it ships.
 var (
-	// ErrProcessAlreadyRunning reports a second Start on a live runner process.
-	ErrProcessAlreadyRunning = errors.New("runner process is already running")
+	// errProcessAlreadyRunning reports a second Start on a live runner process.
+	errProcessAlreadyRunning = errors.New("runner process is already running")
 
-	// ErrProcessNotTerminated reports a runner that survived both SIGTERM and
+	// errProcessNotTerminated reports a runner that survived both SIGTERM and
 	// SIGKILL within the stop timeout.
-	ErrProcessNotTerminated = errors.New("runner process failed to terminate after SIGKILL")
+	errProcessNotTerminated = errors.New("runner process failed to terminate after SIGKILL")
 )
 
 // exitDiagnosis is how a runner failure stage is reported.
@@ -147,7 +160,7 @@ type RunnerProcess struct {
 	logger *zap.Logger
 
 	// mu guards the process lifecycle fields below. Short readers (State, Done,
-	// PID, FailureStage, RunningDuration) take it, so it is never held across a
+	// PID, FailureStage, RunningDuration, LastRunDuration) take it, so it is never held across a
 	// signal or a wait on the child. Start is the one exception: it holds mu for
 	// the duration of the spawn, because cmd, state and doneCh must be published
 	// atomically — otherwise Stop could see a Starting process with no cmd, and
@@ -161,6 +174,11 @@ type RunnerProcess struct {
 	exitCode     int
 	failureStage string
 	startTime    time.Time
+	// lastRun is how long the most recent child ran, snapshotted by recordExit
+	// while state was still Running. RunningDuration cannot answer that after the
+	// exit: it returns 0 as soon as state leaves StatusRunning, which is exactly
+	// the moment the supervise loop asks.
+	lastRun time.Duration
 
 	// logRateMu guards the runner output rate limiter and drop counters. It is
 	// separate from mu because the log path is a hot loop that must never contend
@@ -191,14 +209,14 @@ func (p *RunnerProcess) runnerArgs() []string {
 	args := make([]string, 0, len(p.config.BrokerSocks)*2+4)
 	for _, sock := range p.config.BrokerSocks {
 		if sock != "" {
-			args = append(args, "--broker", sock)
+			args = append(args, flagBroker, sock)
 		}
 	}
 	if p.config.AlgorithmName != "" {
 		args = append(args, "--name", p.config.AlgorithmName)
 	}
 	if p.config.AlgorithmID != "" {
-		args = append(args, "--algorithm-id", p.config.AlgorithmID)
+		args = append(args, flagAlgorithmID, p.config.AlgorithmID)
 	}
 	if p.config.ConfigJSON != "" {
 		args = append(args, "--config", p.config.ConfigJSON)
@@ -292,6 +310,14 @@ func mergeEnviron(base []string, overlay map[string]string) []string {
 //
 // The package .env is read before mu is taken; the spawn itself runs under mu, as
 // described on the field comment.
+//
+// It deliberately does not use StartPinned, even though both spawn a child that
+// must survive its caller's goroutine: StartPinned returns as soon as cmd.Start
+// succeeds, while RunnerProcess.Start must additionally publish cmd/state/doneCh
+// atomically and wire up the stdout/stderr log readers before the child is
+// reaped. Start therefore owns the pinned goroutine itself (see the comment at the
+// spawn below); StartPinned is the smaller contract for callers that only need the
+// thread discipline.
 func (p *RunnerProcess) Start() error {
 	env := p.runnerEnv()
 
@@ -299,7 +325,7 @@ func (p *RunnerProcess) Start() error {
 	defer p.mu.Unlock()
 
 	if p.state == StatusRunning || p.state == StatusStarting {
-		return ErrProcessAlreadyRunning
+		return errProcessAlreadyRunning
 	}
 	p.beginStart()
 
@@ -391,6 +417,7 @@ func (p *RunnerProcess) beginStart() {
 	p.exitErr = nil
 	p.exitCode = 0
 	p.failureStage = ""
+	p.lastRun = 0
 }
 
 // failStart publishes "not running" after a spawn that never produced a child.
@@ -435,6 +462,11 @@ func (p *RunnerProcess) drainRunnerLogs(pipes *runnerPipes, logWg *sync.WaitGrou
 func (p *RunnerProcess) recordExit(cmd *exec.Cmd, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// Snapshot the uptime BEFORE the state flips: RunningDuration reports 0 from
+	// then on, and the supervise loop needs this value to decide whether a
+	// dependency failure starts a fresh restart ladder (watcher.handleExit).
+	p.lastRun = time.Since(p.startTime)
 
 	p.exitErr = err
 	switch {
@@ -568,7 +600,7 @@ func (p *RunnerProcess) terminate(cmd *exec.Cmd, doneCh <-chan struct{}, timeout
 		return nil
 	case <-killTimer.C:
 		p.logger.Error("runner process did not exit after SIGKILL timeout", zap.Int("pid", cmd.Process.Pid))
-		return ErrProcessNotTerminated
+		return errProcessNotTerminated
 	}
 }
 
@@ -604,4 +636,15 @@ func (p *RunnerProcess) RunningDuration() time.Duration {
 		return 0
 	}
 	return time.Since(p.startTime)
+}
+
+// LastRunDuration returns how long the most recent child ran before it exited.
+//
+// Unlike RunningDuration it is meaningful after the exit — which is when the
+// supervise loop reads it — because recordExit snapshots the uptime before the
+// state leaves StatusRunning.
+func (p *RunnerProcess) LastRunDuration() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastRun
 }

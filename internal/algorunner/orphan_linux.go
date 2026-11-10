@@ -176,13 +176,13 @@ func sweepOrphanArtifacts(
 	}
 	defer lock.release()
 
-	failures := sweepReapedRunnerSockets(ctx, candidates, report)
+	failures := sweepReapedRunnerSockets(ctx, candidates, report, logger)
 
 	// Second pass: artefacts left by a host whose runners were already reaped by
 	// Pdeathsig (or that never got as far as spawning one). These have no live
 	// candidate to derive paths from, so they are judged by their own liveness.
 	failures = append(failures, report.mergeShmBatch(removeUnheldShmSegments(ctx, logger))...)
-	failures = append(failures, report.mergeSocketBatch(removeAbandonedBrokerSockets())...)
+	failures = append(failures, removeAbandonedBrokerSockets(ctx, report)...)
 	return failures
 }
 
@@ -193,16 +193,42 @@ func sweepReapedRunnerSockets(
 	ctx context.Context,
 	candidates []orphanCandidate,
 	report *OrphanCleanupReport,
+	logger *zap.Logger,
 ) []error {
+	resolvedBase, baseOK := resolveBrokerSocketBaseDir()
+	if !baseOK {
+		// Fail-closed, and once for the whole pass: an unresolvable base dir is
+		// never a broker socket directory, so nothing here is eligible.
+		logger.Debug("skipping reaped runner socket sweep: broker socket base dir is unresolvable")
+		return nil
+	}
+
 	failures := []error{}
-	for _, cand := range candidates {
-		if ctx.Err() != nil {
-			return failures
+	for i, cand := range candidates {
+		if err := ctx.Err(); err != nil {
+			return append(failures, fmt.Errorf("orphan socket sweep aborted after %d/%d candidates: %w",
+				i, len(candidates), err))
 		}
 		if !slices.Contains(report.Killed, cand.PID) {
 			continue
 		}
 		for _, sock := range cand.brokerSocks {
+			// argv is untrusted: a package (or anyone who can spawn one) writes its
+			// own --broker values, so the sweep must not unlink whatever path those
+			// point at. Only paths that look like a broker socket this host creates
+			// are eligible; anything else is skipped rather than recorded, because
+			// reporting forged paths as "unverified" would be pure noise.
+			if !isBrokerSocketPath(sock, resolvedBase) {
+				// Debug, not Warn: production keeps the default level at Info, so
+				// this is a trace for the one case worth chasing ("this package's
+				// --broker does not match the host's socket directory") without
+				// letting any local process forge argv to spam the log.
+				logger.Debug("skipping broker path from runner cmdline",
+					zap.String("path", sock),
+					zap.String("algorithm_id", cand.algorithmID),
+				)
+				continue
+			}
 			failures = append(failures, report.recordSocket(sock, removeStaleBrokerSocket(sock))...)
 		}
 	}
@@ -328,14 +354,14 @@ func candidateFromArgv(pid int, argv []string) orphanCandidate {
 	cand := orphanCandidate{PID: pid}
 	for i := 1; i < len(argv); i++ {
 		switch argv[i] {
-		case "--broker":
+		case flagBroker:
 			sock, ok := argValue(argv, i)
 			if !ok || sock == "" {
 				continue
 			}
 			cand.brokerSocks = append(cand.brokerSocks, sock)
 			i++ // consume the value so it is not parsed as a flag
-		case "--algorithm-id":
+		case flagAlgorithmID:
 			id, ok := argValue(argv, i)
 			if !ok {
 				continue

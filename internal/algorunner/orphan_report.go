@@ -39,7 +39,9 @@ func emptyOrphanCleanupReport() OrphanCleanupReport {
 	}
 }
 
-// recordSocket folds one socket decision into the report.
+// recordSocket folds one socket decision into the report. It is the only path
+// that writes the socket outcome slices, so the three states cannot be handled
+// differently in different sweeps.
 func (r *OrphanCleanupReport) recordSocket(sock string, outcome socketSweepResult) []error {
 	switch {
 	case outcome.removed:
@@ -50,13 +52,6 @@ func (r *OrphanCleanupReport) recordSocket(sock string, outcome socketSweepResul
 		r.UnverifiedSockets = append(r.UnverifiedSockets, sock)
 	}
 	return nil
-}
-
-// mergeSocketBatch folds one socket batch into the report.
-func (r *OrphanCleanupReport) mergeSocketBatch(batch sweepBatch) []error {
-	r.RemovedSockets = append(r.RemovedSockets, batch.removed...)
-	r.UnverifiedSockets = append(r.UnverifiedSockets, batch.unverified...)
-	return batch.failures
 }
 
 // mergeShmBatch folds one shm batch into the report.

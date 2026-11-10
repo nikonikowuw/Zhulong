@@ -7,6 +7,8 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type recordedBroadcast struct {
@@ -67,7 +69,8 @@ func TestTaskConfigBroadcasterRoutesPerStream(t *testing.T) {
 
 func TestTaskConfigBroadcasterSkipsInvalidJSON(t *testing.T) {
 	broadcaster := &fakeBroadcaster{}
-	b := NewTaskConfigBroadcaster(broadcaster, zap.NewNop())
+	core, observed := observer.New(zapcore.WarnLevel)
+	b := NewTaskConfigBroadcaster(broadcaster, zap.New(core))
 
 	configs := map[uint64]string{
 		1: `{"threshold":0.5}`,
@@ -78,6 +81,20 @@ func TestTaskConfigBroadcasterSkipsInvalidJSON(t *testing.T) {
 	}
 	if len(broadcaster.records) != 1 || broadcaster.records[0].streamID != 1 {
 		t.Fatalf("malformed config must be skipped, got %+v", broadcaster.records)
+	}
+
+	// The skip shares its message and its algorithm_id/stream_id fields with a real
+	// failure — but it must not carry an error, and it must not become firstErr.
+	skips := observed.FilterMessage("skipping task config that is not valid JSON").All()
+	if len(skips) != 1 {
+		t.Fatalf("skipped configs logged %d time(s), want exactly 1: %+v", len(skips), observed.All())
+	}
+	fields := skips[0].ContextMap()
+	if fields["stream_id"] != uint64(2) || fields["algorithm_id"] != "face_recognition" {
+		t.Fatalf("skip log fields = %+v", fields)
+	}
+	if _, hasError := fields["error"]; hasError {
+		t.Fatalf("a skipped config was logged as an error: %+v", fields)
 	}
 }
 
@@ -150,10 +167,21 @@ func TestSupervisorPushTaskConfigsWithoutWiringIsNoop(t *testing.T) {
 type staticTaskRegionProvider struct {
 	staticTaskConfigProvider
 	regions map[uint64]string
+	err     error
 }
 
 func (p *staticTaskRegionProvider) TaskRegionsFor(_ context.Context, _ string) (map[uint64]string, error) {
-	return p.regions, nil
+	return p.regions, p.err
+}
+
+// loggedMessage reports whether message was emitted at least once.
+func loggedMessage(observed *observer.ObservedLogs, message string) bool {
+	for _, entry := range observed.All() {
+		if entry.Message == message {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSupervisorPushRegionsAndUnchangedParams(t *testing.T) {
@@ -189,5 +217,51 @@ func TestSupervisorPushRegionsAndUnchangedParams(t *testing.T) {
 	}
 	if string(broadcaster.records[0].payload[algoipc.TaskConfigHeaderSize:]) != "{}" {
 		t.Fatal("clear snapshot missing")
+	}
+}
+
+// TestSupervisorPushTaskConfigsLogsRegionResolveFailure pins the first half of the
+// two-message contract: a region lookup that fails names the lookup and pushes
+// nothing (a stale or missing snapshot must not reach a broker as if resolved).
+func TestSupervisorPushTaskConfigsLogsRegionResolveFailure(t *testing.T) {
+	core, observed := observer.New(zapcore.WarnLevel)
+	broadcaster := &fakeBroadcaster{}
+	provider := &staticTaskRegionProvider{
+		staticTaskConfigProvider: staticTaskConfigProvider{err: nil},
+		err:                      errors.New("region lookup failed"),
+	}
+	s := &Supervisor{logger: zap.New(core)}
+	s.SetTaskConfig(provider, NewTaskConfigBroadcaster(broadcaster, zap.NewNop()))
+
+	s.pushTaskConfigs("face")
+
+	if len(broadcaster.records) != 0 {
+		t.Fatalf("a failed region lookup broadcast something: %+v", broadcaster.records)
+	}
+	if !loggedMessage(observed, "failed to resolve task regions") {
+		t.Fatalf("missing resolve-failure log; observed: %+v", observed.All())
+	}
+	if loggedMessage(observed, "failed to push task regions") {
+		t.Fatalf("a resolve failure was reported as a push failure: %+v", observed.All())
+	}
+}
+
+// TestSupervisorPushTaskConfigsLogsRegionPushFailure pins the second half: a
+// snapshot that resolved but could not be delivered must be reported as a push
+// failure, so an operator does not go looking at the region query.
+func TestSupervisorPushTaskConfigsLogsRegionPushFailure(t *testing.T) {
+	core, observed := observer.New(zapcore.WarnLevel)
+	broadcaster := &fakeBroadcaster{err: errors.New("broker gone")}
+	provider := &staticTaskRegionProvider{regions: map[uint64]string{5: `{}`}}
+	s := &Supervisor{logger: zap.New(core)}
+	s.SetTaskConfig(provider, NewTaskConfigBroadcaster(broadcaster, zap.NewNop()))
+
+	s.pushTaskConfigs("face")
+
+	if !loggedMessage(observed, "failed to push task regions") {
+		t.Fatalf("missing push-failure log; observed: %+v", observed.All())
+	}
+	if loggedMessage(observed, "failed to resolve task regions") {
+		t.Fatalf("a push failure was reported as a resolve failure: %+v", observed.All())
 	}
 }

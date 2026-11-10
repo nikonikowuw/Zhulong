@@ -2,6 +2,8 @@ package algorunner
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -184,5 +186,92 @@ func TestStopAlgorithmDisablesWhenItRetiresItsOwnWatcher(t *testing.T) {
 	}
 	if _, exists := supervisor.watchers[algoID]; exists {
 		t.Fatalf("StopAlgorithm must remove the watcher it retired")
+	}
+}
+
+// TestRestartAlgorithmWithoutStoreReturnsSentinel pins the nil-store guard: a
+// supervisor built without a store cannot reload the package, and callers must be
+// able to classify that outcome instead of matching message text.
+func TestRestartAlgorithmWithoutStoreReturnsSentinel(t *testing.T) {
+	supervisor := newInternalTestSupervisor(nil)
+
+	err := supervisor.RestartAlgorithm(context.Background(), "algo_no_store")
+	if !errors.Is(err, errNoLifecycleStore) {
+		t.Fatalf("RestartAlgorithm without a store = %v, want errNoLifecycleStore", err)
+	}
+}
+
+// TestStopAlgorithmWrapsContextCancellation pins the %w on the watcher wait: a
+// caller whose context expired must be able to test the cause with errors.Is, and
+// the message must still say which step was abandoned. The watcher's done channel
+// is never closed, so the wait really does depend on the context.
+func TestStopAlgorithmWrapsContextCancellation(t *testing.T) {
+	supervisor := newInternalTestSupervisor(nil)
+
+	const algoID = "algo_stop_wait"
+	w := &workerWatcher{
+		supervisor: supervisor,
+		algo:       PackageMeta{ID: algoID},
+		stopCh:     make(chan struct{}),
+		doneCh:     make(chan struct{}),
+		status:     StatusRunning,
+	}
+	supervisor.watchers[algoID] = w
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := supervisor.StopAlgorithm(ctx, algoID)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("StopAlgorithm = %v, want a wrapped context.Canceled", err)
+	}
+	if !strings.Contains(err.Error(), "wait for algorithm") {
+		t.Fatalf("StopAlgorithm error %q does not name the step it gave up on", err)
+	}
+	if _, exists := supervisor.watchers[algoID]; !exists {
+		t.Fatal("a stop that never observed its watcher finish must not retire it")
+	}
+}
+
+// TestStopAlgorithmReturnsSpawnedStopFailure pins the join of the complement-stop
+// failure into StopAlgorithm's result.
+//
+// The complement stop in startProcess runs after w.stopProcess has already
+// returned nil, so without this join StopAlgorithm reports a clean stop for a
+// runner that survived SIGTERM and SIGKILL. The failure is injected directly
+// because a runner that ignores SIGKILL cannot be produced without mocking the
+// signal ladder; the propagation is what this test pins.
+func TestStopAlgorithmReturnsSpawnedStopFailure(t *testing.T) {
+	supervisor := newInternalTestSupervisor(nil)
+
+	const algoID = "algo_spawned_stop_failure"
+	w := &workerWatcher{
+		supervisor: supervisor,
+		algo:       PackageMeta{ID: algoID},
+		stopCh:     make(chan struct{}),
+		doneCh:     make(chan struct{}),
+		status:     StatusRunning,
+	}
+	supervisor.watchers[algoID] = w
+
+	stopErr := make(chan error, 1)
+	go func() { stopErr <- supervisor.StopAlgorithm(context.Background(), algoID) }()
+
+	// Wait until StopAlgorithm has captured w and entered stopProcess, i.e. until
+	// its own stopErr is settled as nil.
+	select {
+	case <-w.stopCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopAlgorithm never reached stopProcess")
+	}
+
+	w.setSpawnedStopError(errProcessNotTerminated)
+	close(w.doneCh)
+
+	if err := <-stopErr; !errors.Is(err, errProcessNotTerminated) {
+		t.Fatalf("StopAlgorithm = %v, want the complement-stop failure to surface", err)
+	}
+	if _, exists := supervisor.watchers[algoID]; exists {
+		t.Fatal("StopAlgorithm must still retire the watcher it stopped")
 	}
 }

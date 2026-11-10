@@ -138,34 +138,102 @@ func unixSocketPaths() (map[string]struct{}, error) {
 	return paths, nil
 }
 
+// resolveBrokerSocketBaseDir returns the broker socket base directory with every
+// symlink resolved, reporting false when it cannot be resolved.
+//
+// It is resolved once per sweep pass, not per candidate: the answer is a loop
+// invariant, and EvalSymlinks is a chain of lstats the sweep must not pay for
+// every entry of a directory as busy as /tmp.
+func resolveBrokerSocketBaseDir() (string, bool) {
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(brokerSocketBaseDir()))
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
+}
+
+// isBrokerSocketPath reports whether path is a broker socket file this host could
+// have created: it must live directly in the broker socket base directory and
+// carry the broker socket prefix/suffix.
+//
+// resolvedBase is the base directory as returned by resolveBrokerSocketBaseDir;
+// an empty value means "unresolvable" and rejects everything (fail-closed).
+//
+// It is the single place that answers that question, because it also gates the
+// paths read out of a leftover runner's cmdline. Those are untrusted input — a
+// package writes its own --broker values — and unlinking an arbitrary path just
+// because a process named it is not something the sweep may do.
+//
+// The checks run cheapest-first. The name's prefix/suffix is pure lexical work, so
+// an entry that cannot be a broker socket costs no system call at all; only the
+// few that pass it get the two EvalSymlinks below.
+//
+// Two forms of alias are rejected explicitly:
+//
+//   - A path whose lexical form is not canonical (filepath.Clean(path) != path,
+//     i.e. "..", "//" or a trailing slash). unlink resolves the path through the
+//     kernel while the checks here are lexical, so the two must agree on the file
+//     before anything is claimed about its directory.
+//   - A directory that only reaches the base dir through a symlink. Both sides are
+//     compared AFTER EvalSymlinks, so a symlinked intermediate directory cannot be
+//     used as a pivot to unlink something outside the base dir. Any resolution
+//     failure is fail-closed: an unreadable or non-existent directory is never a
+//     broker socket directory.
+func isBrokerSocketPath(path, resolvedBase string) bool {
+	if path == "" || resolvedBase == "" {
+		return false
+	}
+	// Shape first: a directory full of unrelated files must not cost a single
+	// lstat here.
+	name := filepath.Base(path)
+	if !strings.HasPrefix(name, brokerSocketPrefix) || !strings.HasSuffix(name, brokerSocketSuffix) {
+		return false
+	}
+	// Reject non-canonical spellings before touching the filesystem: the kernel
+	// would resolve them to a different file than this lexical form names.
+	if filepath.Clean(path) != path {
+		return false
+	}
+	resolvedDir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return false
+	}
+	return resolvedDir == resolvedBase
+}
+
 // removeAbandonedBrokerSockets sweeps the broker socket directory for socket files
-// that nothing is bound to.
-func removeAbandonedBrokerSockets() sweepBatch {
+// that nothing is bound to, folding each decision into report.
+//
+// The caller's context is checked on every entry: once the startup budget is gone,
+// continuing to unlink files would let the same sweep report both "truncated" and
+// "removed these sockets".
+func removeAbandonedBrokerSockets(ctx context.Context, report *OrphanCleanupReport) []error {
+	resolvedBase, baseOK := resolveBrokerSocketBaseDir()
+	if !baseOK {
+		// Fail-closed, and once for the whole pass: an unresolvable base dir is
+		// never a broker socket directory.
+		return nil
+	}
 	baseDir := brokerSocketBaseDir()
-	result := newSweepBatch()
 
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
-		return result // Unreadable dir is not a sweep failure.
+		return nil // Unreadable dir is not a sweep failure.
 	}
 
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, brokerSocketPrefix) || !strings.HasSuffix(name, brokerSocketSuffix) {
+	failures := []error{}
+	for i, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return append(failures, fmt.Errorf("orphan socket sweep aborted after %d/%d candidates: %w",
+				i, len(entries), err))
+		}
+		full := filepath.Join(baseDir, entry.Name())
+		if !isBrokerSocketPath(full, resolvedBase) {
 			continue
 		}
-		full := filepath.Join(baseDir, name)
-		outcome := removeStaleBrokerSocket(full)
-		switch {
-		case outcome.removed:
-			result.removed = append(result.removed, full)
-		case outcome.err != nil:
-			result.failures = append(result.failures, outcome.err)
-		case outcome.unverified:
-			result.unverified = append(result.unverified, full)
-		}
+		failures = append(failures, report.recordSocket(full, removeStaleBrokerSocket(full))...)
 	}
-	return result
+	return failures
 }
 
 // shmRoot is where POSIX shm objects live on Linux. frame_broker.cpp builds the

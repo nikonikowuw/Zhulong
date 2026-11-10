@@ -96,17 +96,30 @@ func (b *TaskConfigBroadcaster) broadcast(
 
 	var firstErr error
 
-	// fail records the first failure and logs it against the stream that caused
-	// it. The loop keeps going: one broken stream must not starve the others.
-	fail := func(streamID uint64, message string, err error) {
-		if firstErr == nil {
-			firstErr = err
-		}
+	// warn emits the per-stream line shared by skip and fail. zap.Error(nil)
+	// contributes no field, so both paths keep the exact same message and fields.
+	warn := func(streamID uint64, message string, err error) {
 		b.logger.Warn(message,
 			zap.String("algorithm_id", algorithmID),
 			zap.Uint64("stream_id", streamID),
 			zap.Error(err),
 		)
+	}
+
+	// fail records the first real failure and logs it against the stream that
+	// caused it. The loop keeps going: one broken stream must not starve the
+	// others.
+	fail := func(streamID uint64, message string, err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+		warn(streamID, message, err)
+	}
+
+	// skip logs a stream this call deliberately does not broadcast. It is not a
+	// failure: nothing will be retried, and the other streams are unaffected.
+	skip := func(streamID uint64, message string) {
+		warn(streamID, message, nil)
 	}
 
 	for _, streamID := range streamIDs {
@@ -115,10 +128,7 @@ func (b *TaskConfigBroadcaster) broadcast(
 			// A malformed config would otherwise be applied by the package's own
 			// tolerant parser *or* silently ignored there. Reject it here, where the
 			// value originated from our own storage.
-			b.logger.Warn("skipping task config that is not valid JSON",
-				zap.String("algorithm_id", algorithmID),
-				zap.Uint64("stream_id", streamID),
-			)
+			skip(streamID, "skipping task config that is not valid JSON")
 			continue
 		}
 

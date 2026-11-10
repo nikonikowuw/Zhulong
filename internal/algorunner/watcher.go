@@ -19,14 +19,39 @@ type workerWatcher struct {
 	doneCh      chan struct{}
 	brokerSocks []string
 
-	// mu guards process and status. It is only held for field access, never
-	// across ResolveEntry/Start/Stop.
+	// mu guards process, status and spawnStopErr. It is only held for field
+	// access, never across ResolveEntry/Start/Stop.
 	mu      sync.RWMutex
 	process *RunnerProcess
 	status  string
 
+	// spawnStopErr is the failure of startProcess's complement stop, i.e. of a
+	// runner that was spawned concurrently with a stop request and did not die.
+	//
+	// It has to live on the watcher because that stop happens after stopProcess
+	// has already returned nil: StopAlgorithm reads it once doneCh has closed
+	// (the only writer, the supervise loop, is finished by then) and joins it into
+	// its own result, so "the child is still running" is never reported as a clean
+	// stop.
+	spawnStopErr error
+
 	// stopMu serialises stopProcess so two concurrent stops cannot signal the
-	// same process group twice.
+	// same process group twice. It also closes the "stop requested, spawn not yet
+	// published" window: startProcess holds it across the stop-request re-check
+	// and the publication only (Start runs outside it, see its comment), while
+	// stopProcess holds it across requestStop + Stop(currentProcess()).
+	//
+	// That gives exactly two interleavings, both safe:
+	//   - stopProcess takes the lock first: stopCh is already closed, so
+	//     startProcess sees stopRequested and never spawns anything.
+	//   - startProcess takes the lock first: the process it publishes is the one
+	//     stopProcess reads from currentProcess() afterwards, so the child it
+	//     starts is the child that gets stopped.
+	//
+	// Without the publication under the lock a stop could land between the
+	// stopRequested check and the spawn: StopAlgorithm would stop the OLD (already
+	// exited) process, return, write DISABLED, while the loop's freshly spawned
+	// child kept running with nobody left to reap it.
 	stopMu   sync.Mutex
 	stopOnce sync.Once
 
@@ -108,6 +133,23 @@ func (w *workerWatcher) currentStatus() string {
 	return w.status
 }
 
+// setSpawnedStopError records why the complement stop in startProcess failed.
+func (w *workerWatcher) setSpawnedStopError(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.spawnStopErr = err
+}
+
+// spawnedStopError reports the complement-stop failure, if any.
+//
+// Callers must read it only after doneCh has closed: the supervise loop is the
+// single writer and has provably finished by then.
+func (w *workerWatcher) spawnedStopError() error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.spawnStopErr
+}
+
 // processDone exposes the current process's termination channel, so the loop can
 // select on it without reading the field outside its lock.
 func (w *workerWatcher) processDone() <-chan struct{} {
@@ -126,6 +168,33 @@ func (w *workerWatcher) runningDuration() time.Duration {
 	}
 	return process.RunningDuration()
 }
+
+// lastRunDuration reports how long the process that just exited ran.
+//
+// It must NOT be runningDuration: by the time the loop reacts to the exit the
+// process state has left StatusRunning, so RunningDuration already reports 0 and
+// the dependency ladder could never be reset.
+func (w *workerWatcher) lastRunDuration() time.Duration {
+	process := w.currentProcess()
+	if process == nil {
+		return 0
+	}
+	return process.LastRunDuration()
+}
+
+// supervisionVerdict is the supervise loop's answer to "keep watching?".
+//
+// It replaces a bare bool whose polarity was easy to misread: `if w.handleExit()
+// { return }` read like "if the exit was handled, return", which is the opposite
+// of what it meant.
+type supervisionVerdict int
+
+const (
+	// supervisionContinues keeps the loop watching and restarting.
+	supervisionContinues supervisionVerdict = iota
+	// supervisionEnds stops the loop: a clean stop, a rollback, or CRASH_LOOP.
+	supervisionEnds
+)
 
 // superviseLoop is the watcher state machine: it reacts to stops, the rollback
 // observation window, stable uptime and process exits.
@@ -152,7 +221,7 @@ func (w *workerWatcher) superviseLoop() {
 				)
 			}
 		case <-w.processDone():
-			if w.handleExit() {
+			if w.handleExit() == supervisionEnds {
 				return
 			}
 		}
@@ -217,13 +286,13 @@ func dependencyBackoff(attempt int, maxDelay time.Duration) time.Duration {
 }
 
 // handleExit reacts to one process exit, reporting whether supervision must end.
-func (w *workerWatcher) handleExit() bool {
+func (w *workerWatcher) handleExit() supervisionVerdict {
 	crashTime := time.Now()
 
 	// A stop was requested: this is a clean shutdown, not a crash.
 	if w.stopRequested() {
 		w.setStatus(StatusDisabled)
-		return true
+		return supervisionEnds
 	}
 
 	// 依赖不可用（broker socket 没了）不是包缺陷。
@@ -234,7 +303,10 @@ func (w *workerWatcher) handleExit() bool {
 	// 宁可待命，也不要虚假熔断」是同一条原则。
 	if isDependencyFailure(w.exitFailureStage()) {
 		// 上一轮跑够久说明依赖是刚断的，重新起算阶梯；否则继续沿用。
-		if w.runningDuration() >= w.supervisor.opts.dependencyStableReset() {
+		//
+		// 这里读的是 LastRunDuration 而不是 RunningDuration：进程退出后状态已不是
+		// StatusRunning，RunningDuration 恒返回 0，阶梯就永远不会重置。
+		if w.lastRunDuration() >= w.supervisor.opts.dependencyStableReset() {
 			w.dependencyRetries = 0
 		}
 		w.dependencyRetries++
@@ -254,18 +326,18 @@ func (w *workerWatcher) handleExit() bool {
 	if w.guard != nil && w.guard.ShouldRollback(crashTime) {
 		w.setStatus(StatusRollingBack)
 		w.rollbackToPreviousVersion()
-		return true
+		return supervisionEnds
 	}
 
 	shouldRestart, delay, circuitBroken := w.sm.RecordCrash(crashTime)
 	if circuitBroken {
 		w.enterCrashLoop()
-		return true
+		return supervisionEnds
 	}
 
 	w.setStatus(StatusCrashed)
 	if !shouldRestart {
-		return true
+		return supervisionEnds
 	}
 	return w.restartAfterBackoff(delay)
 }
@@ -308,7 +380,7 @@ func (w *workerWatcher) rollbackToPreviousVersion() {
 
 // restartAfterBackoff waits out the backoff delay and respawns, reporting whether
 // supervision must end (the same polarity as handleExit).
-func (w *workerWatcher) restartAfterBackoff(delay time.Duration) bool {
+func (w *workerWatcher) restartAfterBackoff(delay time.Duration) supervisionVerdict {
 	w.supervisor.logger.Info("restarting crashed algorithm after backoff delay",
 		zap.String("algorithm", w.algo.ID),
 		zap.Duration("delay", delay),
@@ -318,7 +390,7 @@ func (w *workerWatcher) restartAfterBackoff(delay time.Duration) bool {
 	defer backoff.Stop()
 	select {
 	case <-w.stopCh:
-		return true
+		return supervisionEnds
 	case <-backoff.C:
 	}
 
@@ -330,7 +402,7 @@ func (w *workerWatcher) restartAfterBackoff(delay time.Duration) bool {
 
 	if w.stopRequested() {
 		w.setStatus(StatusDisabled)
-		return true
+		return supervisionEnds
 	}
 	return w.respawn()
 }
@@ -359,11 +431,11 @@ func (w *workerWatcher) refreshBrokerSocks() {
 
 // respawn creates and starts a fresh process for the watcher, reporting whether
 // supervision must end.
-func (w *workerWatcher) respawn() bool {
+func (w *workerWatcher) respawn() supervisionVerdict {
 	w.setStatus(StatusStarting)
 
-	// Entry resolution and the spawn are IO: they must not run under w.mu, which
-	// GetStatus / ResetAlgorithm / stopProcess take.
+	// Entry resolution is IO: it must not run under w.mu, which GetStatus /
+	// ResetAlgorithm / stopProcess take.
 	cfg, cfgErr := w.supervisor.processConfig(w.algo, w.brokerSocks)
 	if cfgErr != nil {
 		// 入口不可执行是包缺陷，重试不会自愈：直接停在 CRASH_LOOP，
@@ -373,23 +445,118 @@ func (w *workerWatcher) respawn() bool {
 			zap.String("algorithm", w.algo.ID),
 			zap.Error(cfgErr),
 		)
-		return true
+		return supervisionEnds
 	}
 
 	process := NewRunnerProcess(cfg)
+	switch w.startProcess(process) {
+	case spawnStopped:
+		return supervisionEnds
+	case spawnFailed:
+		// The failed start closed the process's done channel, so the next loop
+		// iteration observes that exit and counts the crash.
+		return supervisionContinues
+	case spawnStarted:
+		w.supervisor.triggerGallerySyncAsync()
+		return supervisionContinues
+	}
+	// Every constant of spawnOutcome has a case above, so this return exists only
+	// for the compiler's exhaustiveness check; it is not a decision about a state.
+	// A fallback arm labelled "spawnStarted" would be worse: a state added later
+	// would be silently treated as a running child.
+	return supervisionEnds
+}
+
+// spawnOutcome is startProcess's single three-way answer.
+//
+// The states are mutually exclusive, and spawnStopped is deliberately not "the
+// child never ran": it covers both stop sources — a stop that was already
+// requested before anything was spawned, and a start that had to be undone by the
+// complement stop after it had already run (see startProcess).
+type spawnOutcome int
+
+const (
+	// spawnStopped means a stop was requested. In the common case nothing was
+	// spawned; when the stop raced the start, this function stopped the child it
+	// had already spawned. A stop that times out is only recorded as an Error:
+	// the leftover is collected by Pdeathsig or the next boot's orphan sweep.
+	spawnStopped spawnOutcome = iota
+	// spawnFailed means Start failed; the process's done channel is closed.
+	spawnFailed
+	// spawnStarted means the child is running.
+	spawnStarted
+)
+
+// startProcess publishes and starts a freshly built process so that it cannot be
+// orphaned by a concurrent stop.
+//
+// Under stopMu it does exactly two things: re-check the stop request, then publish
+// the process. Everything else — the fork/exec and the ready handshake — happens
+// outside it, because §6「锁外 IO 铁律」 of the algorithm guidelines forbids IO
+// under a lock: stopProcess needs the same stopMu, and nothing in the start path
+// bounds fork/exec, so a spawn under the lock would make every stop wait for it.
+// The ordering argument that makes the two interleavings safe is written once, on
+// workerWatcher.stopMu.
+//
+// One window survives that ordering, and it is why this function re-checks after
+// Start: Stop may take stopMu after the publication but reach RunnerProcess.Stop
+// before Start has taken the process's own mu, in which case Stop sees cmd == nil
+// and returns nil without killing anything. By then Start has spawned a child that
+// belongs to nobody, so this function has to stop it itself.
+func (w *workerWatcher) startProcess(process *RunnerProcess) spawnOutcome {
+	w.stopMu.Lock()
+	if w.stopRequested() {
+		w.stopMu.Unlock()
+		w.setStatus(StatusDisabled)
+		return spawnStopped
+	}
+
 	// Publish before Start: a start that fails closes the process's done channel,
 	// and the next loop iteration must observe that exit to count the crash.
 	w.setProcess(process)
+	w.stopMu.Unlock()
+
+	// 锁外 fork/exec：Start 会一直持有进程自己的 mu 直到 ready 握手完成，放进 stopMu
+	// 只会让停止路径无谓地等一次完全无关的 spawn。
 	if err := process.Start(); err != nil {
 		w.setStatus(StatusCrashed)
 		w.supervisor.logger.Warn("failed to restart runner process",
 			zap.String("algorithm", w.algo.ID),
 			zap.Error(err),
 		)
-		return false
+		return spawnFailed
 	}
 
+	// 见上：Stop 可能在 Start 拿到进程 mu 之前看到 cmd == nil 而直接返回 nil。此时
+	// 子进程已经真实存在，必须在这里补一次 Stop，否则它无人回收。
+	if w.stopRequested() {
+		stopStarted := time.Now()
+		stopErr := process.Stop(stopAlgorithmTimeout)
+		// How long the complement stop itself took: a value close to
+		// stopAlgorithmTimeout means the raced child ignored SIGTERM and needed
+		// SIGKILL, which is what oncall needs to tell apart from a clean handoff.
+		stopDelay := time.Since(stopStarted)
+		if stopErr != nil {
+			// stopProcess already returned nil for this watcher, so the failure is
+			// recorded on the watcher for StopAlgorithm to pick up: a runner that
+			// survived the complement stop must not be reported as stopped.
+			w.setSpawnedStopError(stopErr)
+			w.supervisor.logger.Error("failed to stop runner spawned concurrently with a stop request",
+				zap.String("algorithm", w.algo.ID),
+				zap.Int("pid", process.PID()),
+				zap.Duration("delay", stopDelay),
+				zap.Error(stopErr),
+			)
+		} else {
+			w.supervisor.logger.Info("stopped runner spawned concurrently with a stop request",
+				zap.String("algorithm", w.algo.ID),
+				zap.Int("pid", process.PID()),
+				zap.Duration("delay", stopDelay),
+			)
+		}
+		w.setStatus(StatusDisabled)
+		return spawnStopped
+	}
 	w.setStatus(StatusRunning)
-	w.supervisor.triggerGallerySyncAsync()
-	return false
+	return spawnStarted
 }

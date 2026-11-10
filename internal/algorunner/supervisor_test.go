@@ -5,7 +5,6 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -106,7 +105,7 @@ func TestConcurrentStartAlgorithmRegistersOnce(t *testing.T) {
 		switch {
 		case err == nil:
 			successes++
-		case err != nil && strings.Contains(err.Error(), "already running"):
+		case errors.Is(err, algorunner.ErrAlgorithmAlreadyRunning):
 			alreadyRunning++
 		default:
 			t.Fatalf("unexpected StartAlgorithm error: %v", err)

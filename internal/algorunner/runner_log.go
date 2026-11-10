@@ -42,38 +42,57 @@ type runnerLogWindow struct {
 // runnerLogStats counts records a source produced but that could not be emitted.
 //
 // The same type holds both the running totals and the last reported snapshot, so
-// reportRunnerIssues' diff cannot silently miss a counter added later.
+// reportRunnerIssues' diff cannot silently miss a counter added later: minus and
+// total iterate the same array, and a new category is one row in runnerIssueKind.
 type runnerLogStats struct {
-	rateLimited uint64
-	invalid     uint64
-	oversized   uint64
-	readErrors  uint64
+	counts [runnerLogCategoryCount]uint64
 }
 
 // minus returns the counters that changed since prev.
 func (s runnerLogStats) minus(prev runnerLogStats) runnerLogStats {
-	return runnerLogStats{
-		rateLimited: s.rateLimited - prev.rateLimited,
-		invalid:     s.invalid - prev.invalid,
-		oversized:   s.oversized - prev.oversized,
-		readErrors:  s.readErrors - prev.readErrors,
+	var delta runnerLogStats
+	for kind := range delta.counts {
+		delta.counts[kind] = s.counts[kind] - prev.counts[kind]
 	}
+	return delta
 }
 
 // total returns the number of dropped records across every category.
 func (s runnerLogStats) total() uint64 {
-	return s.rateLimited + s.invalid + s.oversized + s.readErrors
+	var sum uint64
+	for _, count := range s.counts {
+		sum += count
+	}
+	return sum
 }
 
-// runnerIssueKind is a drop-reason counter selector. It is a type rather than a
-// bare string so a typo cannot silently count nothing.
+// runnerIssueKind indexes the per-source drop counters. It is a typed index into
+// runnerLogStats.counts rather than a struct field so that a category cannot be
+// added without the array, minus and total picking it up.
 type runnerIssueKind int
 
 const (
-	runnerIssueInvalid runnerIssueKind = iota
+	// runnerIssueRateLimited counts records dropped by the per-source rate limit.
+	runnerIssueRateLimited runnerIssueKind = iota
+	runnerIssueInvalid
 	runnerIssueOversized
 	runnerIssueReadError
+
+	// runnerLogCategoryCount is the number of categories above, and therefore the
+	// length of every per-category counter array.
+	runnerLogCategoryCount
 )
+
+// runnerLogCategoryFields names each counter in the drop report, in emission
+// order. Adding a category means adding its name here as well:
+// TestRunnerLogCategoryFieldsAreNamed checks that every counter is named and that
+// no two counters share a name.
+var runnerLogCategoryFields = [runnerLogCategoryCount]string{
+	runnerIssueRateLimited: "rate_limited",
+	runnerIssueInvalid:     "invalid",
+	runnerIssueOversized:   "oversized",
+	runnerIssueReadError:   "read_errors",
+}
 
 // runnerLogLine is one line read from a runner stream.
 type runnerLogLine struct {
@@ -443,7 +462,7 @@ func (p *RunnerProcess) emitRunnerEvent(source string, level zapcore.Level, mess
 		window.emitted = 0
 	}
 	if window.emitted >= runnerLogRate {
-		p.logStats[index].rateLimited++
+		p.countRunnerIssueLocked(source, runnerIssueRateLimited)
 		p.logRateMu.Unlock()
 		return
 	}
@@ -466,15 +485,13 @@ func (p *RunnerProcess) countRunnerIssue(source string, kind runnerIssueKind) {
 	p.logRateMu.Lock()
 	defer p.logRateMu.Unlock()
 
-	stats := &p.logStats[runnerSourceIndex(source)]
-	switch kind {
-	case runnerIssueInvalid:
-		stats.invalid++
-	case runnerIssueOversized:
-		stats.oversized++
-	case runnerIssueReadError:
-		stats.readErrors++
-	}
+	p.countRunnerIssueLocked(source, kind)
+}
+
+// countRunnerIssueLocked is the single counting entry point for every drop
+// category, including the rate limiter's own drops. Callers must hold logRateMu.
+func (p *RunnerProcess) countRunnerIssueLocked(source string, kind runnerIssueKind) {
+	p.logStats[runnerSourceIndex(source)].counts[kind]++
 }
 
 // reportRunnerIssues emits the drops that happened since the last report, so a
@@ -490,11 +507,10 @@ func (p *RunnerProcess) reportRunnerIssues(source string) {
 	if delta.total() == 0 {
 		return
 	}
-	p.logger.Warn("runner output records dropped",
-		zap.String("source", source),
-		zap.Uint64("rate_limited", delta.rateLimited),
-		zap.Uint64("invalid", delta.invalid),
-		zap.Uint64("oversized", delta.oversized),
-		zap.Uint64("read_errors", delta.readErrors),
-	)
+	fields := make([]zap.Field, 0, runnerLogCategoryCount+1)
+	fields = append(fields, zap.String("source", source))
+	for kind, name := range runnerLogCategoryFields {
+		fields = append(fields, zap.Uint64(name, delta.counts[kind]))
+	}
+	p.logger.Warn("runner output records dropped", fields...)
 }
