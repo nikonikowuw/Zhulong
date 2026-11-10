@@ -40,7 +40,7 @@ int packed_bytes_per_pixel(zhulong_pixel_format_t format) noexcept {
 inline void sample_packed_channels(
     const uint8_t* src, int w, int h, int stride,
     float fx, float fy, float& out_c0, float& out_c1, float& out_c2
-) {
+) noexcept {
     fx = std::clamp(fx, 0.0f, static_cast<float>(w - 1));
     fy = std::clamp(fy, 0.0f, static_cast<float>(h - 1));
 
@@ -52,7 +52,9 @@ inline void sample_packed_channels(
     const float dx = fx - static_cast<float>(x0);
     const float dy = fy - static_cast<float>(y0);
 
-    const auto row = [&](int y) { return src + static_cast<std::size_t>(y) * static_cast<std::size_t>(stride); };
+    const auto row = [&](int y) noexcept {
+        return src + static_cast<std::size_t>(y) * static_cast<std::size_t>(stride);
+    };
     const uint8_t* p00 = row(y0) + static_cast<std::size_t>(x0) * 3;
     const uint8_t* p01 = row(y0) + static_cast<std::size_t>(x1) * 3;
     const uint8_t* p10 = row(y1) + static_cast<std::size_t>(x0) * 3;
@@ -81,7 +83,7 @@ inline void sample_packed_channels(
 inline void sample_pixel_bgr(
     const zhulong_frame_view& raw,
     float fx, float fy, float& out_b, float& out_g, float& out_r
-) {
+) noexcept {
     const int w = raw.width;
     const int h = raw.height;
     const int uv_w = (w + 1) / 2;
@@ -89,7 +91,7 @@ inline void sample_pixel_bgr(
     const float uv_x = (fx + 0.5f) * static_cast<float>(uv_w) / static_cast<float>(w) - 0.5f;
     const float uv_y = (fy + 0.5f) * static_cast<float>(uv_h) / static_cast<float>(h) - 0.5f;
 
-    const auto y_plane = [&] {
+    const auto y_plane = [&]() noexcept {
         return zhulong::sample_plane_bilinear(raw.planes[0], w, h, raw.strides[0] > 0 ? raw.strides[0] : w, fx, fy);
     };
 
@@ -132,41 +134,52 @@ inline void sample_pixel_bgr(
     }
 }
 
+/** @brief 识别输出 logits 的 [T, C] 维度解释 */
+struct LogitsShape {
+    std::size_t timesteps{0};
+    std::size_t classes{0};
+};
+
 /**
  * @brief 从识别输出形状推断 [T, C] 布局
  *
  * 支持 [1, T, C] / [T, C]；形状缺失或退化时按元素总数与固定时间步回退。
  */
-void resolve_logits_shape(const zhulong::Tensor& tensor, std::size_t& timesteps, std::size_t& classes) {
-    timesteps = 0;
-    classes = 0;
+LogitsShape resolve_logits_shape(const zhulong::Tensor& tensor) {
+    LogitsShape result;
 
     std::vector<std::size_t> dims;
     for (const int64_t dim : tensor.shape()) {
         if (dim == 1) continue; // 忽略 batch/squeeze 维
-        if (dim <= 0) return;
+        if (dim <= 0) return {};
         dims.push_back(static_cast<std::size_t>(dim));
     }
 
     const std::size_t total = tensor.element_count();
     if (dims.size() >= 2) {
-        timesteps = dims[dims.size() - 2];
-        classes = dims.back();
+        result.timesteps = dims[dims.size() - 2];
+        result.classes = dims.back();
     }
-    if (timesteps == 0 || classes == 0) {
+    if (result.timesteps == 0 || result.classes == 0) {
         // 回退：该权重固定 21 时间步；类别数由元素总数反推（不做任何类别数硬编码）
-        timesteps = kFallbackTimesteps;
-        if (total < timesteps) {
-            timesteps = 0;
-            return;
+        if (total < kFallbackTimesteps) {
+            return {};
         }
-        classes = total / timesteps;
+        result.timesteps = kFallbackTimesteps;
+        result.classes = total / kFallbackTimesteps;
     }
-    if (classes < 2 || timesteps == 0 || timesteps > total || timesteps * classes > total) {
-        timesteps = 0;
-        classes = 0;
+    if (result.classes < 2 || result.timesteps == 0 || result.timesteps > total ||
+        result.timesteps * result.classes > total) {
+        return {};
     }
+    return result;
 }
+
+/** @brief 单步 logits 的 argmax 结果 */
+struct ArgmaxResult {
+    std::size_t index{0};
+    float max_value{0.0f};
+};
 
 /**
  * @brief logits 上的 argmax
@@ -178,24 +191,22 @@ void resolve_logits_shape(const zhulong::Tensor& tensor, std::size_t& timesteps,
  * 全部非有限时返回索引 0（空白符）与 max_value = 0：调用方据此把该步当作空白，
  * 且 softmax 分母不会被 NaN 污染。
  */
-void argmax_index(const float* logits, std::size_t count, std::size_t& best_index, float& max_value) {
-    best_index = 0;
-    max_value = -std::numeric_limits<float>::infinity();
+ArgmaxResult argmax_index(const float* logits, std::size_t count) noexcept {
+    ArgmaxResult result{0, -std::numeric_limits<float>::infinity()};
     for (std::size_t i = 0; i < count; ++i) {
         const float value = logits[i];
         if (!std::isfinite(value)) {
             continue;
         }
-        if (value > max_value) {
-            max_value = value;
-            best_index = i;
+        if (value > result.max_value) {
+            result.max_value = value;
+            result.index = i;
         }
     }
-    if (!std::isfinite(max_value)) {
-        max_value = 0.0f;
-        best_index = 0;
-        return;
+    if (!std::isfinite(result.max_value)) {
+        return {};
     }
+    return result;
 }
 
 /**
@@ -205,7 +216,7 @@ void argmax_index(const float* logits, std::size_t count, std::size_t& best_inde
  * 计算 `exp(x_max - max) / Σ exp(x - max)`；若将来换成带 Softmax 的导出，分数会
  * 整体变小，必须同步修改此处与参考实现。
  */
-float softmax_probability(const float* logits, std::size_t count, float max_value) {
+float softmax_probability(const float* logits, std::size_t count, float max_value) noexcept {
     float denominator = 0.0f;
     for (std::size_t i = 0; i < count; ++i) {
         if (!std::isfinite(logits[i])) {
@@ -235,8 +246,11 @@ bool frame_view_supported(const zhulong_frame_view& raw) noexcept {
 
     // 正 stride 必须容得下一行像素（stride == 0 = 紧凑排列，由调用方按自然行宽推导）。
     // 不查这一条就会按声明的 stride 越界读 —— 与 SDK 视觉后端的入参校验口径保持一致。
-    const int uv_w = (raw.width + 1) / 2;
-    const auto row_bytes_ok = [](int stride, int minimum) { return stride == 0 || stride >= minimum; };
+    const int64_t width = static_cast<int64_t>(raw.width);
+    const int64_t uv_w = (width + 1) / 2;
+    const auto row_bytes_ok = [](int32_t stride, int64_t minimum) noexcept {
+        return stride == 0 || static_cast<int64_t>(stride) >= minimum;
+    };
 
     switch (raw.format) {
     case ZHULONG_PIXEL_FORMAT_RGB24:
@@ -245,20 +259,20 @@ bool frame_view_supported(const zhulong_frame_view& raw) noexcept {
         if (bytes_per_pixel == 0) {
             return false;
         }
-        return row_bytes_ok(raw.strides[0], raw.width * bytes_per_pixel);
+        return row_bytes_ok(raw.strides[0], width * static_cast<int64_t>(bytes_per_pixel));
     }
     case ZHULONG_PIXEL_FORMAT_YUV420P:
         if (raw.planes[1] == nullptr || raw.planes[2] == nullptr) {
             return false;
         }
-        return row_bytes_ok(raw.strides[0], raw.width) && row_bytes_ok(raw.strides[1], uv_w) &&
+        return row_bytes_ok(raw.strides[0], width) && row_bytes_ok(raw.strides[1], uv_w) &&
                row_bytes_ok(raw.strides[2], uv_w);
     case ZHULONG_PIXEL_FORMAT_NV12:
         if (raw.planes[1] == nullptr) {
             return false;
         }
         // 交错 UV 平面一行是 2 * ceil(width/2) 字节（奇数宽下比 width 大 1）
-        return row_bytes_ok(raw.strides[0], raw.width) && row_bytes_ok(raw.strides[1], 2 * uv_w);
+        return row_bytes_ok(raw.strides[0], width) && row_bytes_ok(raw.strides[1], 2 * uv_w);
     default:
         // RGBA32 / UNKNOWN：检测侧的 letterbox 同样拒绝（SDK 视觉后端契约），
         // 两处必须给出一致结论，否则会出现「检出成功、识别恒空」的半死状态。
@@ -268,7 +282,7 @@ bool frame_view_supported(const zhulong_frame_view& raw) noexcept {
 
 PlateSamplePoint plate_sample_point(int x, int y, int target_w, int target_h,
                                     float crop_x, float crop_y, float crop_w, float crop_h,
-                                    PlateKind kind) {
+                                    PlateKind kind) noexcept {
     PlateSamplePoint point;
 
     if (kind == PlateKind::DoubleLine && target_w > 1 && target_h > 0) {
@@ -301,15 +315,24 @@ RecognizedPlate PlateRecognizer::recognize(
     const zhulong_frame_view& raw,
     const std::array<float, 4>& box,
     PlateKind kind
-) {
+) const {
     if (!session.valid() || !frame_view_supported(raw)) {
         return {};
     }
 
-    const int x1 = std::clamp(static_cast<int>(box[0] * static_cast<float>(raw.width)), 0, raw.width - 1);
-    const int y1 = std::clamp(static_cast<int>(box[1] * static_cast<float>(raw.height)), 0, raw.height - 1);
-    const int x2 = std::clamp(static_cast<int>(box[2] * static_cast<float>(raw.width)), x1 + 1, raw.width);
-    const int y2 = std::clamp(static_cast<int>(box[3] * static_cast<float>(raw.height)), y1 + 1, raw.height);
+    const float raw_w = static_cast<float>(raw.width);
+    const float raw_h = static_cast<float>(raw.height);
+    const float box_w = (box[2] - box[0]) * raw_w;
+    const float box_h = (box[3] - box[1]) * raw_h;
+    constexpr float kHorizontalPadRatio = 0.045f;
+    constexpr float kVerticalPadRatio = 0.04f;
+    const float pad_x = box_w * kHorizontalPadRatio;
+    const float pad_y = box_h * kVerticalPadRatio;
+
+    const int x1 = std::clamp(static_cast<int>(std::floor(box[0] * raw_w - pad_x)), 0, raw.width - 1);
+    const int y1 = std::clamp(static_cast<int>(std::floor(box[1] * raw_h - pad_y)), 0, raw.height - 1);
+    const int x2 = std::clamp(static_cast<int>(std::ceil(box[2] * raw_w + pad_x)), x1 + 1, raw.width);
+    const int y2 = std::clamp(static_cast<int>(std::ceil(box[3] * raw_h + pad_y)), y1 + 1, raw.height);
     const int crop_w = x2 - x1;
     const int crop_h = y2 - y1;
     if (crop_w <= 0 || crop_h <= 0) {
@@ -342,7 +365,8 @@ RecognizedPlate PlateRecognizer::recognize(
             float r = 0.0f;
             sample_pixel_bgr(raw, point.fx, point.fy, b, g, r);
 
-            const std::size_t index = static_cast<std::size_t>(y * kRecognitionWidth + x);
+            const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(kRecognitionWidth) +
+                                      static_cast<std::size_t>(x);
             plane_b[index] = b * kNormalizeScale - kNormalizeShift;
             plane_g[index] = g * kNormalizeScale - kNormalizeShift;
             plane_r[index] = r * kNormalizeScale - kNormalizeShift;
@@ -359,10 +383,8 @@ RecognizedPlate PlateRecognizer::recognize(
         return {};
     }
 
-    std::size_t timesteps = 0;
-    std::size_t num_classes = 0;
-    resolve_logits_shape(outputs[0], timesteps, num_classes);
-    if (timesteps == 0 || num_classes < 2) {
+    const LogitsShape shape = resolve_logits_shape(outputs[0]);
+    if (shape.timesteps == 0 || shape.classes < 2) {
         return {};
     }
 
@@ -374,20 +396,18 @@ RecognizedPlate PlateRecognizer::recognize(
     std::size_t recognized_chars = 0;
     float confidence_sum = 0.0f;
     std::string plate_number;
-    plate_number.reserve(timesteps);
+    plate_number.reserve(shape.timesteps);
 
-    for (std::size_t t = 0; t < timesteps; ++t) {
-        const float* step_logits = char_logits + t * num_classes;
-        std::size_t best_index = 0;
-        float max_value = 0.0f;
-        argmax_index(step_logits, num_classes, best_index, max_value);
+    for (std::size_t t = 0; t < shape.timesteps; ++t) {
+        const float* step_logits = char_logits + t * shape.classes;
+        const ArgmaxResult best = argmax_index(step_logits, shape.classes);
 
-        if (best_index != 0 && best_index != previous_index && best_index < kNumPlateChars) {
-            plate_number += kPlateNames[best_index];
-            confidence_sum += softmax_probability(step_logits, num_classes, max_value);
+        if (best.index != 0 && best.index != previous_index && best.index < kNumPlateChars) {
+            plate_number += kPlateNames[best.index];
+            confidence_sum += softmax_probability(step_logits, shape.classes, best.max_value);
             ++recognized_chars;
         }
-        previous_index = best_index;
+        previous_index = best.index;
     }
 
     if (plate_number.empty() || recognized_chars == 0) {
@@ -400,10 +420,8 @@ RecognizedPlate PlateRecognizer::recognize(
     if (outputs.size() > 1 && outputs[1].element_count() >= kNumColors) {
         const float* color_logits = outputs[1].data<float>();
         if (color_logits != nullptr) {
-            std::size_t best_color = 0;
-            float max_value = 0.0f;
-            argmax_index(color_logits, kNumColors, best_color, max_value);
-            result.plate_color = kColorNames[best_color];
+            const ArgmaxResult best_color = argmax_index(color_logits, kNumColors);
+            result.plate_color = kColorNames[best_color.index];
         }
     }
 

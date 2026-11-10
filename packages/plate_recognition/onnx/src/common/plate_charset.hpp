@@ -14,8 +14,8 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
-#include <iterator>
 #include <string_view>
 
 namespace zhulong::plate {
@@ -36,7 +36,7 @@ namespace zhulong::plate {
  *    除 ZHULONG_PLATE_DEBUG 外没有任何信号）。所以字符表扩容时，务必把新增的尾字
  *    放进 [kFirstExtraSuffixIndex, kLastExtraSuffixIndex]，两处同源。
  */
-inline constexpr const char* kPlateNames[] = {
+inline constexpr std::array<std::string_view, 78> kPlateNames = {
     "#", "京", "沪", "津", "渝", "冀", "晋", "蒙", "辽", "吉", "黑",
     "苏", "浙", "皖", "闽", "赣", "鲁", "豫", "鄂", "湘", "粤",
     "桂", "琼", "川", "贵", "云", "藏", "陕", "甘", "青", "宁",
@@ -47,7 +47,7 @@ inline constexpr const char* kPlateNames[] = {
     "W", "X", "Y", "Z", "险", "品"
 };
 
-inline constexpr std::size_t kNumPlateChars = std::size(kPlateNames);
+inline constexpr std::size_t kNumPlateChars = kPlateNames.size();
 
 /** @brief 空白符类别索引（CTC 解码时跳过） */
 inline constexpr std::size_t kBlankCharIndex = 0;
@@ -61,21 +61,21 @@ inline constexpr std::size_t kLastSpecialIndex = 41;
 inline constexpr std::size_t kFirstExtraSuffixIndex = 76;
 inline constexpr std::size_t kLastExtraSuffixIndex = 77;
 
-static_assert(std::string_view{kPlateNames[kBlankCharIndex]} == "#");
-static_assert(std::string_view{kPlateNames[kFirstProvinceIndex]} == "京");
-static_assert(std::string_view{kPlateNames[kLastProvinceIndex]} == "新");
-static_assert(std::string_view{kPlateNames[kFirstSpecialIndex]} == "学");
-static_assert(std::string_view{kPlateNames[kLastSpecialIndex]} == "危");
+static_assert(kPlateNames[kBlankCharIndex] == "#");
+static_assert(kPlateNames[kFirstProvinceIndex] == "京");
+static_assert(kPlateNames[kLastProvinceIndex] == "新");
+static_assert(kPlateNames[kFirstSpecialIndex] == "学");
+static_assert(kPlateNames[kLastSpecialIndex] == "危");
 // 分区之后必须是数字 0，否则说明有人往表中间插了字符而没更新分区常量
-static_assert(std::string_view{kPlateNames[kLastSpecialIndex + 1]} == "0");
-static_assert(std::string_view{kPlateNames[kFirstExtraSuffixIndex]} == "险");
-static_assert(std::string_view{kPlateNames[kLastExtraSuffixIndex]} == "品");
+static_assert(kPlateNames[kLastSpecialIndex + 1] == "0");
+static_assert(kPlateNames[kFirstExtraSuffixIndex] == "险");
+static_assert(kPlateNames[kLastExtraSuffixIndex] == "品");
 // 额外尾字区间必须一直延伸到表尾：往后追加字符会同时改变「合法尾字」的语义
 static_assert(kLastExtraSuffixIndex + 1 == kNumPlateChars);
 
 /** @brief 颜色分类类别表（顺序即模型类别顺序） */
-inline constexpr const char* kColorNames[] = {"黑色", "蓝色", "绿色", "白色", "黄色"};
-inline constexpr std::size_t kNumColors = std::size(kColorNames);
+inline constexpr std::array<std::string_view, 5> kColorNames = {"黑色", "蓝色", "绿色", "白色", "黄色"};
+inline constexpr std::size_t kNumColors = kColorNames.size();
 
 /** @brief 颜色类别索引（与 kColorNames 顺序一致） */
 inline constexpr std::size_t kColorBlackIndex = 0;
@@ -84,10 +84,10 @@ inline constexpr std::size_t kColorGreenIndex = 2;
 inline constexpr std::size_t kColorWhiteIndex = 3;
 inline constexpr std::size_t kColorYellowIndex = 4;
 
-static_assert(std::string_view{kColorNames[kColorBlackIndex]} == "黑色");
-static_assert(std::string_view{kColorNames[kColorBlueIndex]} == "蓝色");
-static_assert(std::string_view{kColorNames[kColorGreenIndex]} == "绿色");
-static_assert(std::string_view{kColorNames[kColorWhiteIndex]} == "白色");
-static_assert(std::string_view{kColorNames[kColorYellowIndex]} == "黄色");
+static_assert(kColorNames[kColorBlackIndex] == "黑色");
+static_assert(kColorNames[kColorBlueIndex] == "蓝色");
+static_assert(kColorNames[kColorGreenIndex] == "绿色");
+static_assert(kColorNames[kColorWhiteIndex] == "白色");
+static_assert(kColorNames[kColorYellowIndex] == "黄色");
 
 } // namespace zhulong::plate

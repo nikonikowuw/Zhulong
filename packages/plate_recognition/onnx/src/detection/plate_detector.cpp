@@ -14,8 +14,9 @@ namespace zhulong::plate {
 
 namespace {
 
-/// 检测模型输入边长：该权重导出固定 640×640（anchors 数由输出形状反推，不写死 8400）
-constexpr int kModelInputSize = 640;
+/// 检测模型输入尺寸：16:9 CCTV 档位固定 640×384（anchors 数由输出形状反推，不写死 5040）
+constexpr int kModelInputWidth = 640;
+constexpr int kModelInputHeight = 384;
 
 /// 输出通道数上限：4 个框分量 + 类别分；超出即判定该张量不是检测头输出
 constexpr int64_t kMaxOutputChannels = 256;
@@ -24,7 +25,7 @@ constexpr int64_t kMaxOutputChannels = 256;
  * @brief NMS 前的候选上限
  *
  * `zhulong::ops::nms` 是逐框贪心的 O(N²)（`native/src/algorithm/runtime/detection_postprocess.cpp`）。
- * schema 允许把置信度阈值调到 0.1，而 640 输入有 8400 个锚点 —— 低阈值下活下来的候选
+ * schema 允许把置信度阈值调到 0.1，而 640×384 输入有 5040 个锚点 —— 低阈值下活下来的候选
  * 足以让单帧 NMS 从微秒级涨到几十毫秒。留 top-K 与 ultralytics 的 `max_nms` 同构：
  * 只截候选池，不改变「被截掉的框本来也进不了结果」这一事实（final NMS 只留极少数）。
  */
@@ -36,7 +37,7 @@ constexpr std::size_t kMaxCandidatesBeforeNms = 300;
 struct OutputLayout {
     bool valid{false};
     int channels{0};          /**< 4 + 类别数 */
-    int num_anchors{0};       /**< 候选框数（640 输入通常是 8400，但随输入尺寸变化） */
+    int num_anchors{0};       /**< 候选框数（640×384 输入为 5040，随输入尺寸变化） */
     bool channel_first{true}; /**< true: [C, N]；false: [N, C] */
 };
 
@@ -77,7 +78,7 @@ OutputLayout resolve_output_layout(const std::vector<int64_t>& shape) {
 }
 
 /** @brief 把超限的类别数写成一次告警（宿主日志可解析，见 common/runner_log.hpp） */
-void report_head_mismatch(int channels) {
+void report_head_mismatch(int channels) noexcept {
     char detail[96];
     const int written = std::snprintf(detail, sizeof(detail), "channels=%d classes=%d", channels, channels - 4);
     log_warning("plate_recognition", "detection output is not a plate head",
@@ -99,14 +100,15 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session,
     // 1. 前处理：等比缩放 + 居中补边，统一到 RGB24（与训练侧的 BGR→RGB 翻转一致）
     zhulong::Tensor letterboxed;
     zhulong::LetterboxParams params;
-    params.target_width = kModelInputSize;
-    params.target_height = kModelInputSize;
+    params.target_width = kModelInputWidth;
+    params.target_height = kModelInputHeight;
     params.target_format = ZHULONG_PIXEL_FORMAT_RGB24;
 
     if (zhulong::ops::letterbox(image, letterboxed, params) != ZHULONG_PLUGIN_OK) {
         return {};
     }
-    constexpr std::size_t kExpectedElements = static_cast<std::size_t>(kModelInputSize) * kModelInputSize * 3;
+    constexpr std::size_t kExpectedElements =
+        static_cast<std::size_t>(kModelInputWidth) * static_cast<std::size_t>(kModelInputHeight) * 3;
     if (letterboxed.element_count() < kExpectedElements) {
         return {};
     }
@@ -114,16 +116,16 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session,
     // 2. 前向推理：本 target 只有 ONNX 一条路径，模型吃 [1, 3, H, W] FLOAT32 NCHW 归一化输入。
     //    （另一个 target 的 RKNN 实现直接喂 letterbox 的 HWC 原始像素张量——两份实现
     //      互不引用，因此这里没有、也不允许出现运行期布局分支。）
-    zhulong::Tensor model_input({1, 3, kModelInputSize, kModelInputSize}, zhulong::DataType::FLOAT32);
+    zhulong::Tensor model_input({1, 3, kModelInputHeight, kModelInputWidth}, zhulong::DataType::FLOAT32);
     const uint8_t* source = letterboxed.data<uint8_t>();
     float* destination = model_input.data<float>();
     if (source == nullptr || destination == nullptr) {
         return {};
     }
-    // ⚠️ 每帧分配 ~4.9MB（640×640×3×4B）后做一次 HWC→CHW 重排。检测器可被多个
+    // ⚠️ 每帧分配 ~2.95MB（640×384×3×4B）后做一次 HWC→CHW 重排。检测器可被多个
     //    Worker 线程并发调用，因此这些缓冲必须是调用栈局部量：一旦提成成员变量
     //    就会在多 Worker 下互相覆盖（Session 才是线程独占的最小单位）。
-    constexpr int kPlane = kModelInputSize * kModelInputSize;
+    constexpr int kPlane = kModelInputWidth * kModelInputHeight;
     float* plane_r = destination;
     float* plane_g = destination + kPlane;
     float* plane_b = destination + kPlane * 2;
@@ -234,9 +236,7 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session,
     results.reserve(kept.size());
     for (const auto& detection : kept) {
         PlateBoxDetection box;
-        for (std::size_t k = 0; k < box.box.size(); ++k) {
-            box.box[k] = detection.box[k];
-        }
+        std::copy_n(detection.box, box.box.size(), box.box.begin());
         box.score = detection.confidence;
         box.kind = plate_kind_from_index(detection.class_id);
         results.push_back(box);

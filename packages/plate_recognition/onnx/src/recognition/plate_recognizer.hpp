@@ -66,7 +66,7 @@ bool frame_view_supported(const zhulong_frame_view& raw) noexcept;
  */
 PlateSamplePoint plate_sample_point(int x, int y, int target_w, int target_h,
                                     float crop_x, float crop_y, float crop_w, float crop_h,
-                                    PlateKind kind);
+                                    PlateKind kind) noexcept;
 
 /**
  * @brief 单块车牌的识别结果
@@ -90,7 +90,7 @@ public:
         const zhulong_frame_view& raw,
         const std::array<float, 4>& box,
         PlateKind kind
-    );
+    ) const;
 };
 
 } // namespace zhulong::plate

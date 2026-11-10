@@ -32,12 +32,14 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
-#include <cstring>
-#include <utility>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -47,7 +49,7 @@ struct DetailRow {
     std::string kind;
     std::string label;
     float score{0.0f};
-    float box[4]{0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<float, 4> box{0.0f, 0.0f, 0.0f, 0.0f};
     std::string text;
 };
 
@@ -57,8 +59,8 @@ struct DetailRow {
  * 不引字体：label 打不出来就打到终端表里。图的作用是「框对不对」，
  * 字号/字体/渲染顺序一旦进断言就会天天假红。
  */
-void draw_box(uint8_t* canvas, int width, int height, const float box[4], uint8_t r, uint8_t g, uint8_t b,
-              int thickness = 2) {
+void draw_box(uint8_t* canvas, int width, int height, const std::array<float, 4>& box,
+              uint8_t r, uint8_t g, uint8_t b, int thickness = 2) noexcept {
     int x1 = static_cast<int>(box[0] * static_cast<float>(width));
     int y1 = static_cast<int>(box[1] * static_cast<float>(height));
     int x2 = static_cast<int>(box[2] * static_cast<float>(width));
@@ -70,7 +72,7 @@ void draw_box(uint8_t* canvas, int width, int height, const float box[4], uint8_
     if (x2 >= width) x2 = width - 1;
     if (y2 >= height) y2 = height - 1;
 
-    const auto put = [&](int x, int y) {
+    const auto put = [&](int x, int y) noexcept {
         if (x < 0 || y < 0 || x >= width || y >= height) return;
         uint8_t* pixel = canvas + (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
                                    static_cast<std::size_t>(x)) * 3;
@@ -139,19 +141,21 @@ int main(int argc, char** argv) {
     int width = 0;
     int height = 0;
     int channels = 0;
-    uint8_t* pixels = stbi_load(sample_path.c_str(), &width, &height, &channels, 3);
+    std::unique_ptr<uint8_t, decltype(&stbi_image_free)> pixels(
+        stbi_load(sample_path.c_str(), &width, &height, &channels, 3),
+        &stbi_image_free);
     if (pixels == nullptr) {
         std::fprintf(stderr, "failed to decode sample %s: %s\n", sample_path.c_str(), stbi_failure_reason());
         return 1;
     }
     const std::size_t pixel_bytes =
         static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3;
-    std::vector<uint8_t> canvas(pixels, pixels + pixel_bytes);
-    stbi_image_free(pixels);
+    std::vector<uint8_t> canvas(pixels.get(), pixels.get() + pixel_bytes);
+    pixels.reset();
 
     // 直接调用本 target 的产品类（不走 C ABI 表）：dev 工具就该像算法作者那样用它。
     zhulong::plate::PlateRecognitionPlugin plugin;
-    zhulong_status_t rc = plugin.init(config_json);
+    const zhulong_status_t rc = plugin.init(config_json);
     if (rc != ZHULONG_PLUGIN_OK) {
         std::fprintf(stderr, "init failed: %d (models/ 是否与可执行文件同级？)\n", static_cast<int>(rc));
         return 1;
@@ -162,8 +166,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    zhulong_frame_view frame;
-    std::memset(&frame, 0, sizeof(frame));
+    zhulong_frame_view frame{};
     frame.frame_id = 1;
     frame.pts = 0;
     frame.width = width;
@@ -188,7 +191,7 @@ int main(int argc, char** argv) {
         row_vehicle.kind = "vehicle";
         row_vehicle.label = vehicle.vehicle_type;
         row_vehicle.score = vehicle.vehicle_score;
-        std::memcpy(row_vehicle.box, vehicle.vehicle_box, sizeof(row_vehicle.box));
+        std::copy_n(vehicle.vehicle_box, row_vehicle.box.size(), row_vehicle.box.begin());
         draw_box(canvas.data(), width, height, row_vehicle.box, 0, 255, 0);
         rows.push_back(row_vehicle);
 
@@ -197,7 +200,7 @@ int main(int argc, char** argv) {
             row_plate.kind = "plate";
             row_plate.label = plate.plate_color;
             row_plate.score = plate.score;
-            std::memcpy(row_plate.box, plate.box, sizeof(row_plate.box));
+            std::copy_n(plate.box, row_plate.box.size(), row_plate.box.begin());
             row_plate.text = plate.plate_number;
             draw_box(canvas.data(), width, height, row_plate.box, 0, 128, 255);
             rows.push_back(row_plate);

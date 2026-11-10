@@ -9,7 +9,7 @@
  * 样本：`native/tests/fixtures/onnx/plate_sample.ppm`（与包根 sample.jpg 同一张图，
  * netpbm 版可由本用例直接解码，不引入图像库）。
  *
- * ⚠️ 复合断言顺序有意义：NMS 按置信度降序保留（0.770 > 0.763），因此结果顺序是稳定的；
+ * ⚠️ 复合断言顺序有意义：NMS 按置信度降序保留（640×384 下 0.653 > 0.629），因此结果顺序是稳定的；
  *    如果哪天顺序变了，多半是检测/NMS 语义改了，而不是「测试太脆」。
  */
 
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
     const auto vehicles = plugin.detect_vehicles(session, zhulong::Image(frame), task_context);
     assert(vehicles.size() == 2);
 
-    const std::vector<std::string> expected_numbers = {"豫B2V9L7", "辽DU4356"};
+    const std::vector<std::string> expected_numbers = {"辽DU4356", "豫B2V9L7"};
     for (std::size_t i = 0; i < vehicles.size() && i < expected_numbers.size(); ++i) {
         const auto& vehicle = vehicles[i];
         // 退化模式语义：车 == 车牌框，无跟踪 ID，车型未知
