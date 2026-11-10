@@ -34,9 +34,9 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 
   推理/视觉后端是编译期开关，只作用于 `libZhulongAlgoRuntime`；宿主 `Zhulong` 不链它们，
   所以没有「宿主 rknn 版 / rga 版」之分。快捷目标不重建前端，发版前先 `make frontend-build`。
-- 收工前过 `make check`（前端 lint/type-check/test + native-test + api-docs + go-check）。
+- 收工前过 `make check`（前端 format/lint/type-check/test + pkg-drift-check + native-test + api-docs + go-check）。
 - 算法包/SDK 相关：`make sdk-install BUNDLE_RUNTIME=1`（前缀）、`make sdk-dist`（分发 tarball）、
-  `make sdk-clean-check`（干净容器里从零构建两个包 + 脚手架 round-trip）、
+  `make sdk-clean-check`（干净容器里从零构建内置算法包 + 脚手架 round-trip）、
   `make board-check`（交叉产 aarch64 前缀后在 RK3568 上构建/自测/验包）。后两者分别要
   docker+网络、真实硬件，**都不进** `make check`。
 
@@ -46,19 +46,19 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 
 **Go 宿主（`internal/app`，Uber Fx）**
 
-- 每个领域暴露一个 `New*Components(...)`。构造函数必须纯粹：不开文件、不分配原生状态、不绑 socket ——
-  那些放生命周期钩子。
-- 路由走 Fx value group（`public_routes` / `protected_routes` / `upload_routes`），不是中央列表；
-  新增端点实现 `RegisterRoutes(*gin.RouterGroup)` 并挂进对应 group。
+- 业务包零 `fx` 依赖，只暴露纯构造函数（如 `New*Components(...)`）：不开文件、不分配原生状态、不绑 socket；
+  有资源依赖的启停与回滚统一接入 `internal/app` 的 `lifecycleRuntime`（`stopSequence`），不各自挂无序 Fx 钩子。
+- 路由走 Fx value group（`public_routes` / `protected_routes` / `upload_routes` / `openapi_routes`），不是中央列表；
+  新增端点实现 `RegisterRoutes(*gin.RouterGroup)` 挂进对应 group，新增带端点的包须同步加入 `Makefile` 的 `api-docs --dir` 白名单。
 - 健康检查的 `ready` 只代表数据库**与**引擎就绪，与摄像头无关。
 
 **HTTP 层**
 
-- 响应一律用 `internal/httputil` 的信封 `{code,message,data,details?}`，成功恒为 `code: "OK"`；
+- JSON 响应一律用 `internal/httputil` 的信封 `{code,message,data,details?}`，成功恒为 `code: "OK"`；
   handler 里**绝不**写裸 `c.JSON`。
 - 错误返回 `apperr.Error`（`Kind` + 稳定机器码 + 内部 cause）。`httputil.WriteError` 负责映射 HTTP 状态码、
   按 `Accept-Language` 选本地化文案、且只在服务端记录 cause；code 与文案在 `internal/httputil/locale.go`。
-- 未匹配的 `/api/*` 返回 JSON 错误信封，其余未匹配 GET/HEAD 回退到内嵌 SPA。
+- 未匹配的 `/api/*` 与 `/swagger/*` 返回 JSON 错误信封，其余未匹配 GET/HEAD 回退到内嵌 SPA。
 - `internal/httpmiddleware` 必须与业务无关。
 - **不直接收发 GORM Model。** 请求/响应类型名按位置取后缀：`*Request` / `*Response`（顶层载荷）/ `*Info`（嵌套投影）/ `*Status`（状态载荷）；**类型名不用 `*DTO`**。详见 `.trellis/spec/backend/http-api-guidelines.md` §4「命名约定」。
 
@@ -70,10 +70,10 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 
 **原生引擎边界**
 
-- `native/include/Zhulong/engine.h` 是唯一公开头文件；`internal/engine` 是唯一可 `import "C"` 的包。
+- `native/include/Zhulong/engine.h` 是宿主对 Go 暴露的唯一 C ABI 公开头文件；`internal/engine` 是唯一可 `import "C"` 的包。
 - 绝不向 C 传 Go 指针（回调 token 是 `cgo.Handle` 整数）；C++ 异常绝不穿越 ABI
   （每个导出函数隔离异常并返回状态码）。
-- packet 视图**仅在同步回调期间**有效，要保留就拷贝。
+- 回调借用视图（`PacketView` / `AIResultView`）**仅在同步回调期间**有效，要保留就拷贝。
 - 所有权显式：`Engine.Start` → `engine_create`，`Engine.Close` → `engine_destroy`；不靠 GC 释放 C 内存。
 - `make native-deps` 是唯一联网的构建步骤（固定版 FFmpeg + SHA-256 校验）；其余离线且做缓存身份校验，
   构建期不下载、不动态链接 FFmpeg。
