@@ -3,6 +3,7 @@
 package algorunner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,30 +18,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// OrphanCleanupReport summarises what a startup sweep reclaimed. Every field is
-// what was actually acted on, so an operator reading the log can tell a no-op
-// sweep from one that reaped real leftovers.
-type OrphanCleanupReport struct {
-	// Killed lists the PIDs of orphaned runners that were terminated.
-	Killed []int
-	// RemovedSockets lists broker socket files that no live listener owned.
-	RemovedSockets []string
-	// RemovedShm lists /dev/shm segments no live process still mapped.
-	RemovedShm []string
-	// Skipped lists PIDs that matched the runner binary but are owned by a live
-	// host (the current process or another running instance) and were left alone.
-	Skipped []int
-	// UnverifiedShm lists segments that were left in place because the sweep could
-	// not prove no live process still held them (unreadable /proc state). They are
-	// reported instead of deleted: a false "nobody holds it" answer deletes a
-	// segment a running stream still maps.
-	UnverifiedShm []string
-	// UnverifiedSockets is the socket counterpart of UnverifiedShm.
-	UnverifiedSockets []string
-}
-
 // orphanExitTimeout bounds how long a SIGKILLed orphan may keep its resources.
 const orphanExitTimeout = 3 * time.Second
+
+// orphanExitPollInterval is how often the sweep re-checks whether a killed orphan
+// has released its resources.
+const orphanExitPollInterval = 20 * time.Millisecond
 
 // procRoot is /proc in production. It is a variable so tests can drive the
 // inspection logic against a synthetic process tree instead of depending on which
@@ -51,17 +34,6 @@ var procRoot = "/proc"
 // errMalformedProcStat marks a /proc/<pid>/stat line that cannot be parsed. It is
 // distinct from a read error: "gone" and "unparseable" lead to opposite decisions.
 var errMalformedProcStat = errors.New("malformed /proc stat line")
-
-func emptyOrphanCleanupReport() OrphanCleanupReport {
-	return OrphanCleanupReport{
-		Killed:            []int{},
-		RemovedSockets:    []string{},
-		RemovedShm:        []string{},
-		Skipped:           []int{},
-		UnverifiedShm:     []string{},
-		UnverifiedSockets: []string{},
-	}
-}
 
 // ReapOrphanRunners terminates runners left behind by a previous host process and
 // reclaims the broker sockets and shared-memory segments they were holding.
@@ -121,10 +93,12 @@ func ReapOrphanRunners(ctx context.Context, algorithmsDir string, logger *zap.Lo
 // data directory reached through a symlink (bind mount, relocated volume) never
 // matches and the sweep silently stops working.
 func resolveSweepRoot(algorithmsDir string) (string, error) {
-	isEmpty := algorithmsDir == "" || algorithmsDir == "."
-	root, absErr := filepath.Abs(algorithmsDir)
-	if isEmpty || absErr != nil {
+	if algorithmsDir == "" || algorithmsDir == "." {
 		return "", fmt.Errorf("orphan sweep: algorithms directory %q is unusable", algorithmsDir)
+	}
+	root, err := filepath.Abs(algorithmsDir)
+	if err != nil {
+		return "", fmt.Errorf("orphan sweep: resolve algorithms directory %q: %w", algorithmsDir, err)
 	}
 	if resolved, evalErr := filepath.EvalSymlinks(root); evalErr == nil {
 		return resolved, nil
@@ -142,8 +116,8 @@ func sweepOrphanProcesses(
 ) []error {
 	failures := []error{}
 	for _, cand := range candidates {
-		if ctx.Err() != nil {
-			return append(failures, ctx.Err())
+		if err := ctx.Err(); err != nil {
+			return append(failures, err)
 		}
 		if !parentIsReaper(cand.PID) {
 			report.Skipped = append(report.Skipped, cand.PID)
@@ -169,7 +143,7 @@ func sweepOrphanProcesses(
 		// until it actually dies, so wait for the kernel to retire it before
 		// deciding the files are reclaimable.
 		if waitErr := waitForProcessExit(ctx, cand.PID, orphanExitTimeout); waitErr != nil {
-			failures = append(failures, fmt.Errorf("orphan runner %d did not exit after SIGKILL", cand.PID))
+			failures = append(failures, fmt.Errorf("orphan runner %d did not exit after SIGKILL: %w", cand.PID, waitErr))
 		}
 	}
 	return failures
@@ -258,39 +232,6 @@ func logSweepOutcome(report *OrphanCleanupReport, logger *zap.Logger) {
 	}
 }
 
-// sweepBatch is the outcome of one artefact batch sweep: what was removed, what
-// was left because ownership could not be proven, and what failed.
-type sweepBatch struct {
-	removed    []string
-	unverified []string
-	failures   []error
-}
-
-// recordSocket folds one socket decision into the report.
-func (r *OrphanCleanupReport) recordSocket(sock string, outcome socketSweepResult) []error {
-	switch {
-	case outcome.removed:
-		r.RemovedSockets = append(r.RemovedSockets, sock)
-	case outcome.err != nil:
-		return []error{outcome.err}
-	case outcome.unverified:
-		r.UnverifiedSockets = append(r.UnverifiedSockets, sock)
-	}
-	return nil
-}
-
-func (r *OrphanCleanupReport) mergeSocketBatch(batch sweepBatch) []error {
-	r.RemovedSockets = append(r.RemovedSockets, batch.removed...)
-	r.UnverifiedSockets = append(r.UnverifiedSockets, batch.unverified...)
-	return batch.failures
-}
-
-func (r *OrphanCleanupReport) mergeShmBatch(batch sweepBatch) []error {
-	r.RemovedShm = append(r.RemovedShm, batch.removed...)
-	r.UnverifiedShm = append(r.UnverifiedShm, batch.unverified...)
-	return batch.failures
-}
-
 type orphanCandidate struct {
 	PID         int
 	brokerSocks []string
@@ -351,7 +292,7 @@ func findOrphanCandidates(algorithmsRoot string) ([]orphanCandidate, error) {
 	}
 
 	self := os.Getpid()
-	candidates := make([]orphanCandidate, 0, 4)
+	candidates := []orphanCandidate{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -371,13 +312,13 @@ func findOrphanCandidates(algorithmsRoot string) ([]orphanCandidate, error) {
 		if !isPackageEntryPath(exePath, algorithmsRoot) {
 			continue
 		}
-		argv, readErr := readCmdline(pid)
-		if readErr != nil {
-			// The executable is ours but the arguments are gone; still a candidate,
-			// just without broker bookkeeping.
-			argv = nil
+		// An unreadable cmdline is not disqualifying: the executable is ours, so
+		// the process is a candidate, just without broker bookkeeping.
+		if argv, readErr := readCmdline(pid); readErr == nil {
+			candidates = append(candidates, candidateFromArgv(pid, argv))
+			continue
 		}
-		candidates = append(candidates, candidateFromArgv(pid, argv))
+		candidates = append(candidates, orphanCandidate{PID: pid})
 	}
 	return candidates, nil
 }
@@ -388,18 +329,30 @@ func candidateFromArgv(pid int, argv []string) orphanCandidate {
 	for i := 1; i < len(argv); i++ {
 		switch argv[i] {
 		case "--broker":
-			if i+1 < len(argv) && argv[i+1] != "" {
-				cand.brokerSocks = append(cand.brokerSocks, argv[i+1])
-				i++
+			sock, ok := argValue(argv, i)
+			if !ok || sock == "" {
+				continue
 			}
+			cand.brokerSocks = append(cand.brokerSocks, sock)
+			i++ // consume the value so it is not parsed as a flag
 		case "--algorithm-id":
-			if i+1 < len(argv) {
-				cand.algorithmID = argv[i+1]
-				i++
+			id, ok := argValue(argv, i)
+			if !ok {
+				continue
 			}
+			cand.algorithmID = id
+			i++ // consume the value so it is not parsed as a flag
 		}
 	}
 	return cand
+}
+
+// argValue returns the token following argv[i], reporting whether there is one.
+func argValue(argv []string, i int) (string, bool) {
+	if i+1 >= len(argv) {
+		return "", false
+	}
+	return argv[i+1], true
 }
 
 // readCmdline returns the NUL-separated argv of pid.
@@ -428,7 +381,7 @@ func procStatFields(pid int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	closeParen := strings.LastIndexByte(string(raw), ')')
+	closeParen := bytes.LastIndexByte(raw, ')')
 	if closeParen < 0 || closeParen+2 >= len(raw) {
 		return nil, errMalformedProcStat
 	}
@@ -437,6 +390,16 @@ func procStatFields(pid int) ([]string, error) {
 		return nil, errMalformedProcStat
 	}
 	return fields, nil
+}
+
+// isReaperName reports whether name is an init/systemd reaper.
+func isReaperName(name string) bool {
+	switch name {
+	case "systemd", "init":
+		return true
+	default:
+		return false
+	}
 }
 
 // parentIsReaper reports whether pid was reparented to an init/systemd reaper,
@@ -474,8 +437,7 @@ func parentIsReaper(pid int) bool {
 	// across some security boundaries (observed: reading systemd --user's exe as its
 	// own user returned an empty link here). comm is the reliable signal.
 	if comm, commErr := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(ppid), "comm")); commErr == nil {
-		name := strings.TrimSpace(string(comm))
-		if name == "systemd" || name == "init" {
+		if isReaperName(strings.TrimSpace(string(comm))) {
 			return true
 		}
 	}
@@ -486,8 +448,7 @@ func parentIsReaper(pid int) bool {
 		// Parent vanished between the stat and the readlink: also orphaned.
 		return errors.Is(linkErr, os.ErrNotExist)
 	}
-	base := filepath.Base(strings.TrimSuffix(parentExe, " (deleted)"))
-	return base == "systemd" || base == "init"
+	return isReaperName(filepath.Base(strings.TrimSuffix(parentExe, " (deleted)")))
 }
 
 // killOrphan terminates the candidate's whole process group when it leads one
@@ -504,21 +465,22 @@ func killOrphan(pid int) error {
 	if groupErr == nil {
 		return nil
 	}
-	if !errors.Is(groupErr, syscall.ESRCH) {
-		// EPERM and friends are real failures worth reporting, but still attempt
-		// the direct signal so a group-permission quirk cannot mask a killable pid.
-		if dirErr := syscall.Kill(pid, syscall.SIGKILL); dirErr != nil && !errors.Is(dirErr, syscall.ESRCH) {
-			return errors.Join(groupErr, dirErr)
-		}
-		return nil
-	}
 
-	if dirErr := syscall.Kill(pid, syscall.SIGKILL); dirErr != nil && !errors.Is(dirErr, syscall.ESRCH) {
-		return dirErr
+	// EPERM and friends are real failures worth reporting, but still attempt the
+	// direct signal so a group-permission quirk cannot mask a killable pid.
+	directErr := syscall.Kill(pid, syscall.SIGKILL)
+	switch {
+	case directErr == nil || errors.Is(directErr, syscall.ESRCH):
+		return nil
+	case errors.Is(groupErr, syscall.ESRCH):
+		return directErr
+	default:
+		return errors.Join(groupErr, directErr)
 	}
-	return nil
 }
 
+// waitForProcessExit waits for pid to release its resources, bounded by timeout
+// and the caller's context.
 func waitForProcessExit(ctx context.Context, pid int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -536,10 +498,10 @@ func waitForProcessExit(ctx context.Context, pid int, timeout time.Duration) err
 		if time.Now().After(deadline) {
 			return fmt.Errorf("process %d still present after %s", pid, timeout)
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(orphanExitPollInterval)
 	}
 }
 

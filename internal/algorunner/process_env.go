@@ -19,7 +19,7 @@ func LoadDotEnv(filePath string) (map[string]string, error) {
 		}
 		return nil, err
 	}
-	defer file.Close()
+	defer closeFileBestEffort(file)
 
 	env := map[string]string{}
 	scanner := bufio.NewScanner(file)

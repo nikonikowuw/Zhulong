@@ -53,9 +53,8 @@ func newWorkerWatcher(s *Supervisor, algo PackageMeta, brokerSocks []string) *wo
 
 // withRollbackGuard arms the observation window that turns a crash into a
 // rollback. Only a watcher created by an upgrade has one.
-func (w *workerWatcher) withRollbackGuard(opts RollbackGuardOptions) *workerWatcher {
+func (w *workerWatcher) withRollbackGuard(opts RollbackGuardOptions) {
 	w.guard = NewRollbackGuard(opts)
-	return w
 }
 
 func (w *workerWatcher) requestStop() {
@@ -147,7 +146,11 @@ func (w *workerWatcher) superviseLoop() {
 			w.markGuardStable()
 			guardCh = nil
 		case <-stableTicker.C:
-			w.sm.CheckStableReset(w.runningDuration())
+			if w.sm.CheckStableReset(w.runningDuration()) {
+				w.supervisor.logger.Info("algorithm stayed stable, crash history reset",
+					zap.String("algorithm", w.algo.ID),
+				)
+			}
 		case <-w.processDone():
 			if w.handleExit() {
 				return
@@ -192,18 +195,23 @@ func isDependencyFailure(stage string) bool {
 }
 
 // dependencyBackoff is the restart ladder for an unavailable dependency:
-// 5s, 10s, 20s, 40s … capped at max.
+// 5s, 10s, 20s, 40s … capped at maxDelay (zero or negative means uncapped).
 //
 // It never trips the circuit breaker: the camera coming back must be enough to
 // bring the algorithm back, without an operator resetting the crash counter.
-func dependencyBackoff(attempt int, max time.Duration) time.Duration {
+func dependencyBackoff(attempt int, maxDelay time.Duration) time.Duration {
 	const base = 5 * time.Second
 	delay := base
-	for i := 1; i < attempt && (max <= 0 || delay < max); i++ {
+	for range max(attempt-1, 0) {
+		if maxDelay > 0 && delay >= maxDelay {
+			break
+		}
 		delay *= 2
 	}
-	if max > 0 && delay > max {
-		delay = max
+	// The trailing clamp is load-bearing: with attempt == 1 and a maxDelay below
+	// the base, the loop body never runs, so this is the only cap.
+	if maxDelay > 0 && delay > maxDelay {
+		delay = maxDelay
 	}
 	return delay
 }
@@ -226,7 +234,7 @@ func (w *workerWatcher) handleExit() bool {
 	// 宁可待命，也不要虚假熔断」是同一条原则。
 	if isDependencyFailure(w.exitFailureStage()) {
 		// 上一轮跑够久说明依赖是刚断的，重新起算阶梯；否则继续沿用。
-		if w.runningDuration() >= w.supervisor.opts.MaxBackoff {
+		if w.runningDuration() >= w.supervisor.opts.dependencyStableReset() {
 			w.dependencyRetries = 0
 		}
 		w.dependencyRetries++
@@ -237,7 +245,7 @@ func (w *workerWatcher) handleExit() bool {
 			zap.Int("consecutive", w.dependencyRetries),
 			zap.Duration("delay", delay),
 		)
-		return !w.restartAfterBackoff(delay)
+		return w.restartAfterBackoff(delay)
 	}
 	w.dependencyRetries = 0
 
@@ -259,7 +267,7 @@ func (w *workerWatcher) handleExit() bool {
 	if !shouldRestart {
 		return true
 	}
-	return !w.restartAfterBackoff(delay)
+	return w.restartAfterBackoff(delay)
 }
 
 // enterCrashLoop halts auto-restart and records the state. The watcher stays
@@ -299,7 +307,7 @@ func (w *workerWatcher) rollbackToPreviousVersion() {
 }
 
 // restartAfterBackoff waits out the backoff delay and respawns, reporting whether
-// supervision should continue.
+// supervision must end (the same polarity as handleExit).
 func (w *workerWatcher) restartAfterBackoff(delay time.Duration) bool {
 	w.supervisor.logger.Info("restarting crashed algorithm after backoff delay",
 		zap.String("algorithm", w.algo.ID),
@@ -310,7 +318,7 @@ func (w *workerWatcher) restartAfterBackoff(delay time.Duration) bool {
 	defer backoff.Stop()
 	select {
 	case <-w.stopCh:
-		return false
+		return true
 	case <-backoff.C:
 	}
 
@@ -322,7 +330,7 @@ func (w *workerWatcher) restartAfterBackoff(delay time.Duration) bool {
 
 	if w.stopRequested() {
 		w.setStatus(StatusDisabled)
-		return false
+		return true
 	}
 	return w.respawn()
 }
@@ -350,7 +358,7 @@ func (w *workerWatcher) refreshBrokerSocks() {
 }
 
 // respawn creates and starts a fresh process for the watcher, reporting whether
-// supervision should continue.
+// supervision must end.
 func (w *workerWatcher) respawn() bool {
 	w.setStatus(StatusStarting)
 
@@ -365,7 +373,7 @@ func (w *workerWatcher) respawn() bool {
 			zap.String("algorithm", w.algo.ID),
 			zap.Error(cfgErr),
 		)
-		return false
+		return true
 	}
 
 	process := NewRunnerProcess(cfg)
@@ -378,10 +386,10 @@ func (w *workerWatcher) respawn() bool {
 			zap.String("algorithm", w.algo.ID),
 			zap.Error(err),
 		)
-		return true
+		return false
 	}
 
 	w.setStatus(StatusRunning)
 	w.supervisor.triggerGallerySyncAsync()
-	return true
+	return false
 }

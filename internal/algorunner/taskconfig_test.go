@@ -158,9 +158,13 @@ func (p *staticTaskRegionProvider) TaskRegionsFor(_ context.Context, _ string) (
 
 func TestSupervisorPushRegionsAndUnchangedParams(t *testing.T) {
 	broadcaster := &fakeBroadcaster{}
+	tripwires := `{"tripwires":[{"id":"entry","name":"入口",` +
+		`"points":[[0,0.5],[1,0.5]],"direction":"both"}]}`
 	provider := &staticTaskRegionProvider{
-		staticTaskConfigProvider: staticTaskConfigProvider{configs: map[uint64]string{5: `{"threshold":0.7}`}},
-		regions:                  map[uint64]string{5: `{"tripwires":[{"id":"entry","name":"入口","points":[[0,0.5],[1,0.5]],"direction":"both"}]}`},
+		staticTaskConfigProvider: staticTaskConfigProvider{
+			configs: map[uint64]string{5: `{"threshold":0.7}`},
+		},
+		regions: map[uint64]string{5: tripwires},
 	}
 	s := &Supervisor{logger: zap.NewNop()}
 	s.SetTaskConfig(provider, NewTaskConfigBroadcaster(broadcaster, zap.NewNop()))

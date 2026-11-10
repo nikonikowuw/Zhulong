@@ -211,13 +211,20 @@ func (l *brokerResourceLock) release() {
 	if l == nil {
 		return
 	}
-	for i := len(l.files) - 1; i >= 0; i-- {
-		if err := syscall.Flock(int(l.files[i].Fd()), syscall.LOCK_UN); err != nil {
-			// best effort: close() releases the advisory flock anyway
-		}
-		closeFileBestEffort(l.files[i])
+	for _, file := range slices.Backward(l.files) {
+		unlockFlockBestEffort(file)
+		closeFileBestEffort(file)
 	}
 	l.files = nil
+}
+
+// unlockFlockBestEffort drops one advisory lock. The error is intentionally
+// ignored for the same reason closeFileBestEffort drops close errors: the
+// descriptor is closed immediately afterwards, which releases the flock anyway.
+func unlockFlockBestEffort(file *os.File) {
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
+		// Intentionally ignored — see the function comment.
+	}
 }
 
 // isResourceLockBusy reports whether a non-blocking acquire lost the race with a

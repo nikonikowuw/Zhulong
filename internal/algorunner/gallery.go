@@ -24,13 +24,11 @@ type GallerySyncShardPayload struct {
 }
 
 // GalleryUpsertPayload represents MSG_GALLERY_UPSERT.
-type GalleryUpsertPayload struct {
-	FaceID     string    `json:"face_id"`
-	PersonID   string    `json:"person_id"`
-	PersonName string    `json:"person_name"`
-	ImagePath  string    `json:"image_path,omitempty"`
-	Features   []float32 `json:"features,omitempty"`
-}
+//
+// It is an alias, not a second struct: the wire shape is identical to
+// GallerySyncItem by construction, and two definitions drift the moment a field
+// is added to one of them.
+type GalleryUpsertPayload = GallerySyncItem
 
 // GalleryDeletePayload represents MSG_GALLERY_DELETE.
 type GalleryDeletePayload struct {
@@ -116,8 +114,7 @@ func galleryShardOverhead(syncID string) (int, error) {
 // plus one comma.
 func packGalleryShards(items []GallerySyncItem, itemSizes []int, overhead int) ([]galleryShardRange, error) {
 	ranges := []galleryShardRange{}
-	start := 0
-	used := 0
+	var start, used int
 	for i, size := range itemSizes {
 		if overhead+size > shardBudget {
 			return nil, fmt.Errorf("gallery sync item %q exceeds the shard budget (%d bytes > %d)",

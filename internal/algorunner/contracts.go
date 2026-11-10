@@ -30,11 +30,14 @@ type LifecycleStore interface {
 	RollbackAlgorithmVersion(ctx context.Context, id string, targetVersion, failedVersion string) error
 }
 
-// BrokerSubscriptionResolver 解析指定算法包当前应当订阅的 Broker Socket 路径列表，
-// 并把订阅关系（哪一路 AI 流因哪个包而保活）同步到该算法包的最新任务集合。
+// BrokerSubscriptionResolver resolves the Broker Socket paths the given package
+// must subscribe to now, and syncs those subscriptions (which AI stream is kept
+// alive for which package) onto the package's current task set.
 //
-// ⚠️ 命名刻意不用 Resolve*：它不只是查询，还会在实现侧建立/撤销订阅关系。
-// 实现方必须是幂等的，并保证失败时不留下半提交的订阅。
+// ⚠️ The name deliberately avoids Resolve*: this does not only query, it also
+// establishes and tears down subscriptions on the implementation side. An
+// implementation must be idempotent and must not leave half-committed
+// subscriptions behind on failure.
 type BrokerSubscriptionResolver interface {
 	SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error)
 }

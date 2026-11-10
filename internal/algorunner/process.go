@@ -31,6 +31,21 @@ const (
 	// runnerExitWorkerStalled is the runner's exit code when one per-stream worker
 	// stopped making progress and the skeleton's watchdog ended the process.
 	runnerExitWorkerStalled = algoipc.RunnerExitWorkerStalled
+
+	// logDrainTimeout bounds how long the exit path waits for the pipe readers to
+	// consume what the child already wrote before closing the read ends.
+	logDrainTimeout = 100 * time.Millisecond
+)
+
+// Lifecycle errors. They are sentinels so callers can classify an outcome instead
+// of matching message text.
+var (
+	// ErrProcessAlreadyRunning reports a second Start on a live runner process.
+	ErrProcessAlreadyRunning = errors.New("runner process is already running")
+
+	// ErrProcessNotTerminated reports a runner that survived both SIGTERM and
+	// SIGKILL within the stop timeout.
+	ErrProcessNotTerminated = errors.New("runner process failed to terminate after SIGKILL")
 )
 
 // exitDiagnosis is how a runner failure stage is reported.
@@ -131,8 +146,13 @@ type RunnerProcess struct {
 	config ProcessConfig
 	logger *zap.Logger
 
-	// mu guards the process lifecycle fields below. It is never held while
-	// spawning or signalling: those do IO and belong outside the lock.
+	// mu guards the process lifecycle fields below. Short readers (State, Done,
+	// PID, FailureStage, RunningDuration) take it, so it is never held across a
+	// signal or a wait on the child. Start is the one exception: it holds mu for
+	// the duration of the spawn, because cmd, state and doneCh must be published
+	// atomically — otherwise Stop could see a Starting process with no cmd, and
+	// recordExit could publish an exit before cmd is set. Everything that only
+	// depends on the immutable config (the .env read) is done before the lock.
 	mu           sync.Mutex
 	cmd          *exec.Cmd
 	state        string
@@ -268,60 +288,18 @@ func mergeEnviron(base []string, overlay map[string]string) []string {
 	return env
 }
 
-// runnerPipes holds both output pipes of a spawn so every failure path can close
-// them through one call.
-type runnerPipes struct {
-	stdoutR *os.File
-	stdoutW *os.File
-	stderrR *os.File
-	stderrW *os.File
-}
-
-func openRunnerPipes() (*runnerPipes, error) {
-	stdoutR, stdoutW, err := os.Pipe()
-	if err != nil {
-		return nil, fmt.Errorf("create stdout pipe: %w", err)
-	}
-	stderrR, stderrW, err := os.Pipe()
-	if err != nil {
-		closePipes(stdoutR, stdoutW)
-		return nil, fmt.Errorf("create stderr pipe: %w", err)
-	}
-	return &runnerPipes{stdoutR: stdoutR, stdoutW: stdoutW, stderrR: stderrR, stderrW: stderrW}, nil
-}
-
-// closePipes closes whatever is non-nil. Close errors are deliberately ignored:
-// these descriptors belong to a spawn that is already failing, and a close error
-// cannot change that outcome.
-func closePipes(files ...*os.File) {
-	for _, file := range files {
-		closeFileBestEffort(file)
-	}
-}
-
-// closeFileBestEffort closes an inspection handle (a pipe end, a /proc read, a
-// lock descriptor).
-//
-// The close error is ignored and documented once here rather than at each call
-// site: the handle is read-only and its data is already consumed, so a close
-// failure cannot change any decision; callers are either on a path that already
-// has a more specific failure or on a success path with nothing left to do.
-func closeFileBestEffort(file *os.File) {
-	if file == nil {
-		return
-	}
-	if err := file.Close(); err != nil {
-		// best effort: nothing left to flush, no decision depends on it
-	}
-}
-
 // Start launches the runner subprocess with environment injection and output logging.
+//
+// The package .env is read before mu is taken; the spawn itself runs under mu, as
+// described on the field comment.
 func (p *RunnerProcess) Start() error {
+	env := p.runnerEnv()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.state == StatusRunning || p.state == StatusStarting {
-		return errors.New("process is already running")
+		return ErrProcessAlreadyRunning
 	}
 	p.beginStart()
 
@@ -333,7 +311,7 @@ func (p *RunnerProcess) Start() error {
 	// arms Pdeathsig, the only defence that survives host death without Go code
 	// running (SIGKILL / OOM / native crash). See runnerSysProcAttr.
 	cmd.SysProcAttr = runnerSysProcAttr()
-	cmd.Env = p.runnerEnv()
+	cmd.Env = env
 
 	// Create pipes manually so cmd.Wait() does not close them prematurely while scanning.
 	pipes, err := openRunnerPipes()
@@ -392,12 +370,12 @@ func (p *RunnerProcess) Start() error {
 	logWg.Add(2)
 	go func() {
 		defer logWg.Done()
-		p.streamLogs(pipes.stdoutR, zapcore.DebugLevel, false)
+		p.streamLogReader(pipes.stdoutR, "stdout", zapcore.DebugLevel)
 		closePipes(pipes.stdoutR)
 	}()
 	go func() {
 		defer logWg.Done()
-		p.streamLogs(pipes.stderrR, zapcore.WarnLevel, true)
+		p.streamLogReader(pipes.stderrR, "stderr", zapcore.WarnLevel)
 		closePipes(pipes.stderrR)
 	}()
 
@@ -420,16 +398,6 @@ func (p *RunnerProcess) beginStart() {
 func (p *RunnerProcess) failStart() {
 	p.state = StatusDisabled
 	close(p.doneCh)
-}
-
-// close closes every pipe end of a spawn.
-func (pipes *runnerPipes) close() {
-	closePipes(
-		pipes.stdoutR,
-		pipes.stdoutW,
-		pipes.stderrR,
-		pipes.stderrW,
-	)
 }
 
 // watchExit reaps the child and records how it ended. It runs on the goroutine
@@ -457,7 +425,7 @@ func (p *RunnerProcess) drainRunnerLogs(pipes *runnerPipes, logWg *sync.WaitGrou
 
 	select {
 	case <-logDone:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(logDrainTimeout):
 		closePipes(pipes.stdoutR, pipes.stderrR)
 		<-logDone
 	}
@@ -510,10 +478,13 @@ func (p *RunnerProcess) logCrashLocked(err error) {
 	p.logger.Log(diagnosis.level, diagnosis.message, fields...)
 }
 
-// FailureStage 返回本次退出的失败阶段诊断（空字符串表示未识别）。
+// FailureStage returns the failure-stage diagnosis for this exit (an empty string
+// means unrecognised).
 //
-// 看护循环用它区分「环境依赖不可用」与「算法包缺陷」：两者的自愈策略必须不同，
-// 把相机掉线算成包崩溃会让一次网络抖动固化成 CRASH_LOOP。
+// The supervise loop uses it to tell "an environment dependency is unavailable"
+// apart from "the package is defective": the two need different self-healing
+// strategies, and counting a camera disconnect as a package crash would turn one
+// network blip into a sticky CRASH_LOOP.
 func (p *RunnerProcess) FailureStage() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -597,7 +568,7 @@ func (p *RunnerProcess) terminate(cmd *exec.Cmd, doneCh <-chan struct{}, timeout
 		return nil
 	case <-killTimer.C:
 		p.logger.Error("runner process did not exit after SIGKILL timeout", zap.Int("pid", cmd.Process.Pid))
-		return errors.New("runner process failed to terminate after SIGKILL")
+		return ErrProcessNotTerminated
 	}
 }
 

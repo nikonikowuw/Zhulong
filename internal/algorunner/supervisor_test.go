@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
-	"go.uber.org/zap"
 )
 
 // TestGetStatusNotBlockedByBrokerResolution reproduces R3: resolving broker
@@ -25,7 +24,7 @@ func TestGetStatusNotBlockedByBrokerResolution(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolver := newBlockingBrokerPathResolver([]string{"/tmp/r3_broker.sock"})
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newTestSupervisor(t, store, algo, algorunner.DefaultRecoveryOptions())
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	t.Cleanup(func() {
 		resolver.unblock()
@@ -68,7 +67,7 @@ func TestConcurrentStartAlgorithmRegistersOnce(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolver := newBlockingBrokerPathResolver([]string{"/tmp/r3_race.sock"})
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newTestSupervisor(t, store, algo, algorunner.DefaultRecoveryOptions())
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	t.Cleanup(func() {
 		resolver.unblock()
@@ -114,7 +113,7 @@ func TestConcurrentStartAlgorithmRegistersOnce(t *testing.T) {
 		}
 	}
 	if successes != 1 || alreadyRunning != 1 {
-		t.Fatalf("expected exactly one success and one 'already running' error, got successes=%d alreadyRunning=%d (errors=%v)",
+		t.Fatalf("want one success and one 'already running', got %d/%d (%v)",
 			successes, alreadyRunning, results)
 	}
 }
@@ -129,7 +128,7 @@ func TestSupervisorResetAllowsRestartAfterCrashLoop(t *testing.T) {
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
 	options.MaxCrashes = 1
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, options, zap.NewNop())
+	supervisor := newTestSupervisorWithRoot(t, store, stubPackageRoot(t, algo, runnerScript), options)
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -169,7 +168,7 @@ func TestSupervisorCrashRestartReResolvesBrokerList(t *testing.T) {
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, options, zap.NewNop())
+	supervisor := newTestSupervisorWithRoot(t, store, stubPackageRoot(t, algo, runnerScript), options)
 
 	initialSocks := []string{"/tmp/zhulong_broker_1.sock"}
 	newSocks := []string{"/tmp/zhulong_broker_2.sock", "/tmp/zhulong_broker_3.sock"}
@@ -207,7 +206,8 @@ func TestSupervisorCrashRestartReResolvesBrokerList(t *testing.T) {
 	gotSecond := brokerFlagsIn(second[1])
 	t.Logf("first invocation --broker=%v; second invocation --broker=%v", brokerFlagsIn(first[0]), gotSecond)
 	if !reflect.DeepEqual(gotSecond, newSocks) {
-		t.Fatalf("restart broker flags = %v, want %v (R6: crash restart must re-resolve the broker list)", gotSecond, newSocks)
+		t.Fatalf("restart broker flags = %v, want %v (R6: crash restart must re-resolve the broker list)",
+			gotSecond, newSocks)
 	}
 }
 
@@ -227,7 +227,7 @@ func TestSupervisorCrashRestartFallsBackWhenResolveFails(t *testing.T) {
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, options, zap.NewNop())
+	supervisor := newTestSupervisorWithRoot(t, store, stubPackageRoot(t, algo, runnerScript), options)
 
 	cachedSocks := []string{"/tmp/zhulong_broker_keep.sock"}
 	resolver := newMutableBrokerPathResolver(cachedSocks)
@@ -283,7 +283,7 @@ func TestSupervisorCrashRestartKeepsUsableBrokerList(t *testing.T) {
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, options, zap.NewNop())
+	supervisor := newTestSupervisorWithRoot(t, store, stubPackageRoot(t, algo, runnerScript), options)
 
 	wantSocks := []string{"/tmp/zhulong_broker_7.sock", "/tmp/zhulong_broker_9.sock"}
 	supervisor.SetBrokerSubscriptionResolver(&mockBrokerPathResolver{paths: wantSocks})
@@ -328,7 +328,8 @@ func TestSupervisorBrokerPathResolverAndRestart(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	runnerScript := idlePackageScript()
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	root := stubPackageRoot(t, algo, runnerScript)
+	supervisor := newTestSupervisorWithRoot(t, store, root, algorunner.DefaultRecoveryOptions())
 	resolver := &mockBrokerPathResolver{
 		paths: []string{"/tmp/mock_b1.sock", "/tmp/mock_b2.sock"},
 	}
@@ -363,7 +364,7 @@ func TestSupervisorStartFailsWhenBrokerResolutionFails(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolveErr := errors.New("camera lookup exploded")
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newTestSupervisor(t, store, algo, algorunner.DefaultRecoveryOptions())
 	supervisor.SetBrokerSubscriptionResolver(&failingBrokerPathResolver{err: resolveErr})
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
@@ -386,7 +387,7 @@ func TestSupervisorRestartPreservesActiveStatus(t *testing.T) {
 	algo := supervisorTestPackage()
 	store.packages[algo.ID] = algo
 
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newTestSupervisor(t, store, algo, algorunner.DefaultRecoveryOptions())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})

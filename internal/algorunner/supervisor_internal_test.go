@@ -9,6 +9,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// newInternalTestSupervisor builds a supervisor without a store or install root:
+// the white-box tests below only exercise the watcher registry.
+func newInternalTestSupervisor(store LifecycleStore) *Supervisor {
+	return NewSupervisor(
+		store,
+		Runtime{},
+		DefaultRecoveryOptions(),
+		zap.NewNop(),
+	)
+}
+
 // stubLifecycleStore is a minimal in-memory LifecycleStore for white-box tests.
 type stubLifecycleStore struct {
 	mu       sync.Mutex
@@ -32,7 +43,12 @@ func (s *stubLifecycleStore) UpdateAlgorithmStatus(ctx context.Context, id strin
 	return nil
 }
 
-func (s *stubLifecycleStore) RollbackAlgorithmVersion(ctx context.Context, id, targetVersion, failedVersion string) error {
+func (s *stubLifecycleStore) RollbackAlgorithmVersion(
+	ctx context.Context,
+	id string,
+	targetVersion string,
+	failedVersion string,
+) error {
 	return nil
 }
 
@@ -47,7 +63,7 @@ func (s *stubLifecycleStore) statusOf(id string) (string, bool) {
 // status-write guard sound: retireWatcher reports whether it actually removed
 // the caller's watcher, and never disturbs a replacement watcher.
 func TestRetireWatcherReportsWhetherItRemoved(t *testing.T) {
-	supervisor := NewSupervisor(nil, Runtime{}, DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newInternalTestSupervisor(nil)
 
 	const algoID = "algo_retire"
 	w1 := &workerWatcher{supervisor: supervisor, algo: PackageMeta{ID: algoID}}
@@ -79,7 +95,7 @@ func TestRetireWatcherReportsWhetherItRemoved(t *testing.T) {
 // process runs).
 func TestStopAlgorithmDoesNotDisableAReplacedWatcher(t *testing.T) {
 	store := newStubLifecycleStore()
-	supervisor := NewSupervisor(store, Runtime{}, DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newInternalTestSupervisor(store)
 
 	const algoID = "algo_replaced"
 	w1 := &workerWatcher{
@@ -136,7 +152,7 @@ func TestStopAlgorithmDoesNotDisableAReplacedWatcher(t *testing.T) {
 // would still pass.
 func TestStopAlgorithmDisablesWhenItRetiresItsOwnWatcher(t *testing.T) {
 	store := newStubLifecycleStore()
-	supervisor := NewSupervisor(store, Runtime{}, DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := newInternalTestSupervisor(store)
 
 	const algoID = "algo_owned_stop"
 	w := &workerWatcher{

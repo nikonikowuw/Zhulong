@@ -16,12 +16,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// socketSweepResult is the outcome of one socket-file decision.
-type socketSweepResult struct {
-	removed    bool
-	unverified bool
-	err        error
-}
+// socketSweepResult, sweepBatch and OrphanCleanupReport live in orphan_report.go:
+// they describe the sweep's outcome and are shared with the other platforms.
 
 // removeStaleBrokerSocket unlinks sockPath only when it can prove no process
 // still owns the socket.
@@ -146,20 +142,13 @@ func unixSocketPaths() (map[string]struct{}, error) {
 // that nothing is bound to.
 func removeAbandonedBrokerSockets() sweepBatch {
 	baseDir := brokerSocketBaseDir()
+	result := newSweepBatch()
+
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
-		return sweepBatch{
-			removed:    []string{},
-			unverified: []string{},
-			failures:   []error{},
-		} // Unreadable dir is not a sweep failure.
+		return result // Unreadable dir is not a sweep failure.
 	}
 
-	result := sweepBatch{
-		removed:    []string{},
-		unverified: []string{},
-		failures:   []error{},
-	}
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasPrefix(name, brokerSocketPrefix) || !strings.HasSuffix(name, brokerSocketSuffix) {
@@ -201,11 +190,7 @@ const (
 // unlinking while mapped would not corrupt them (POSIX semantics keep the mapping
 // alive) but would make a running stream look broken on restart.
 func removeUnheldShmSegments(ctx context.Context, logger *zap.Logger) sweepBatch {
-	result := sweepBatch{
-		removed:    []string{},
-		unverified: []string{},
-		failures:   []error{},
-	}
+	result := newSweepBatch()
 	entries, err := os.ReadDir(shmRoot)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -216,8 +201,8 @@ func removeUnheldShmSegments(ctx context.Context, logger *zap.Logger) sweepBatch
 	}
 
 	for _, entry := range entries {
-		if ctx.Err() != nil {
-			result.failures = append(result.failures, ctx.Err())
+		if err := ctx.Err(); err != nil {
+			result.failures = append(result.failures, err)
 			break
 		}
 		name := entry.Name()
@@ -269,7 +254,7 @@ func shmHoldState(path string) (holdState, error) {
 	if err != nil {
 		return holdUnknown, fmt.Errorf("orphan sweep: read %q: %w", procRoot, err)
 	}
-	unknown := false
+	var unknown bool
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -326,11 +311,11 @@ func processMapsFile(procDir string, id fileID) (bool, holdState) {
 	}
 	mapped, readErr := mapsFileContains(mapsFile, id)
 	closeFileBestEffort(mapsFile)
-	if readErr == nil && !mapped {
-		return false, holdNone
-	}
 	if readErr != nil {
 		return false, stateForProcError(readErr)
+	}
+	if !mapped {
+		return false, holdNone
 	}
 	return true, holdLive
 }
@@ -411,10 +396,16 @@ func processVanished(err error) bool {
 // unreliable exactly when it matters: it gains a " (deleted)" suffix once the
 // segment has been unlinked, and it is rewritten by a rename.
 func mapsFileContains(file *os.File, id fileID) (bool, error) {
+	const (
+		// A maps line is short; the pathname column is the only unbounded part.
+		mapsInitialReadBuffer = 64 * 1024
+		mapsMaxReadBuffer     = 1024 * 1024
+	)
+
 	wantDev := fmt.Sprintf("%02x:%02x", id.devMajor, id.devMinor)
 	wantIno := strconv.FormatUint(id.ino, 10)
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, mapsInitialReadBuffer), mapsMaxReadBuffer)
 	for scanner.Scan() {
 		// Format: addr perms offset dev inode [pathname]
 		fields := strings.Fields(scanner.Text())

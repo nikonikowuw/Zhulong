@@ -87,7 +87,12 @@ func copyBinary(t *testing.T, src, dst string) {
 // ⚠️ 必须用 bash 而不是 /bin/sh：Debian 的 dash 不支持 `exec -a`，用 sh 时命令会直接
 //
 //	失败，测试就变成「什么都没启动、也没杀任何人」的空断言（绿灯但没验证任何东西）。
-func startReparentedWithArgv0(t *testing.T, binary, argv0 string, args ...string) int {
+func startReparentedWithArgv0(
+	t *testing.T,
+	binary string,
+	argv0 string,
+	args ...string,
+) int {
 	t.Helper()
 	if _, err := os.Stat("/bin/bash"); err != nil {
 		t.Skip("bash is required for `exec -a` (dash does not support it)")
@@ -402,7 +407,8 @@ func fakeProcRoot(t *testing.T) string {
 		t.Fatalf("create net dir: %v", err)
 	}
 	// An empty, readable socket table: no endpoints, so nothing is "bound".
-	if err := os.WriteFile(filepath.Join(root, "net", "unix"), []byte("Num RefCount Protocol Flags Type St Inode Path\n"), 0o644); err != nil {
+	socketTable := []byte("Num RefCount Protocol Flags Type St Inode Path\n")
+	if err := os.WriteFile(filepath.Join(root, "net", "unix"), socketTable, 0o644); err != nil {
 		t.Fatalf("write net/unix: %v", err)
 	}
 	return root

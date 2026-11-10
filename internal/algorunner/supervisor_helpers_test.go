@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
+	"go.uber.org/zap"
 )
 
 type mockLifecycleStore struct {
@@ -47,7 +48,12 @@ func (m *mockLifecycleStore) UpdateAlgorithmStatus(ctx context.Context, id strin
 	return nil
 }
 
-func (m *mockLifecycleStore) RollbackAlgorithmVersion(ctx context.Context, id string, targetVersion, failedVersion string) error {
+func (m *mockLifecycleStore) RollbackAlgorithmVersion(
+	ctx context.Context,
+	id string,
+	targetVersion string,
+	failedVersion string,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	pkg, ok := m.packages[id]
@@ -78,6 +84,35 @@ func supervisorTestPackage() algorunner.PackageMeta {
 // to be installed at the exact path the supervisor resolves
 // (<root>/<id>/<version>/<id>). Keeping the installation in one helper means the
 // tests exercise the real resolution path instead of bypassing it.
+
+// newTestSupervisor returns a supervisor whose algorithms root holds one stub
+// package for algo, running the idle package script.
+func newTestSupervisor(
+	t *testing.T,
+	store algorunner.LifecycleStore,
+	algo algorunner.PackageMeta,
+	opts algorunner.RecoveryOptions,
+) *algorunner.Supervisor {
+	t.Helper()
+	return newTestSupervisorWithRoot(t, store, stubPackageRoot(t, algo, idlePackageScript()), opts)
+}
+
+// newTestSupervisorWithRoot is the variant for tests that install several
+// versions into one root or need a custom package script.
+func newTestSupervisorWithRoot(
+	t *testing.T,
+	store algorunner.LifecycleStore,
+	algorithmsDir string,
+	opts algorunner.RecoveryOptions,
+) *algorunner.Supervisor {
+	t.Helper()
+	return algorunner.NewSupervisor(
+		store,
+		algorunner.Runtime{AlgorithmsDir: algorithmsDir},
+		opts,
+		zap.NewNop(),
+	)
+}
 
 // stubPackageRoot installs script as pkg's entry executable and returns the
 // install root to hand to Runtime{AlgorithmsDir: ...}.
@@ -119,7 +154,10 @@ func idlePackageScript() string {
 
 // argRecordingPackageScript records every argv it receives, once per start.
 func argRecordingPackageScript() string {
-	return "#!/bin/sh\nprintf 'start\\n' >> \"$RUN_ARG_FILE\"\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> \"$RUN_ARG_FILE\"; done\nsleep 30\n"
+	return "#!/bin/sh\n" +
+		"printf 'start\\n' >> \"$RUN_ARG_FILE\"\n" +
+		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> \"$RUN_ARG_FILE\"; done\n" +
+		"sleep 30\n"
 }
 
 func readRecordedRunnerInvocations(t *testing.T, path string) [][]string {
@@ -314,7 +352,10 @@ func (r *blockingBrokerPathResolver) unblock() {
 	r.releaseOnce.Do(func() { close(r.release) })
 }
 
-func (r *blockingBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error) {
+func (r *blockingBrokerPathResolver) SyncBrokerSubscriptions(
+	ctx context.Context,
+	algorithmID string,
+) ([]string, error) {
 	r.mu.Lock()
 	r.calls = append(r.calls, algorithmID)
 	r.mu.Unlock()

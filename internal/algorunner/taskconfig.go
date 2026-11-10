@@ -95,6 +95,20 @@ func (b *TaskConfigBroadcaster) broadcast(
 	slices.Sort(streamIDs)
 
 	var firstErr error
+
+	// fail records the first failure and logs it against the stream that caused
+	// it. The loop keeps going: one broken stream must not starve the others.
+	fail := func(streamID uint64, message string, err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+		b.logger.Warn(message,
+			zap.String("algorithm_id", algorithmID),
+			zap.Uint64("stream_id", streamID),
+			zap.Error(err),
+		)
+	}
+
 	for _, streamID := range streamIDs {
 		configJSON := configs[streamID]
 		if !json.Valid([]byte(configJSON)) {
@@ -110,15 +124,9 @@ func (b *TaskConfigBroadcaster) broadcast(
 
 		payload, err := algoipc.EncodeTaskConfigPayload(algorithmID, []byte(configJSON))
 		if err != nil {
-			err = fmt.Errorf("encode task config for stream %d: %w", streamID, err)
-			b.logger.Warn("failed to encode task config",
-				zap.String("algorithm_id", algorithmID),
-				zap.Uint64("stream_id", streamID),
-				zap.Error(err),
+			fail(streamID, "failed to encode task config",
+				fmt.Errorf("encode task config for stream %d: %w", streamID, err),
 			)
-			if firstErr == nil {
-				firstErr = err
-			}
 			continue
 		}
 		if err := b.broadcaster.BroadcastAIMessage(
@@ -127,15 +135,9 @@ func (b *TaskConfigBroadcaster) broadcast(
 			msgType,
 			payload,
 		); err != nil {
-			err = fmt.Errorf("broadcast task config for stream %d: %w", streamID, err)
-			b.logger.Warn("failed to broadcast task config",
-				zap.String("algorithm_id", algorithmID),
-				zap.Uint64("stream_id", streamID),
-				zap.Error(err),
+			fail(streamID, "failed to broadcast task config",
+				fmt.Errorf("broadcast task config for stream %d: %w", streamID, err),
 			)
-			if firstErr == nil {
-				firstErr = err
-			}
 		}
 	}
 	return firstErr
