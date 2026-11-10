@@ -163,7 +163,7 @@ export const ImageSearchDropzone = memo(function ImageSearchDropzone({
       {selectedFile && previewUrl ? (
         <div className='flex h-[340px] w-full flex-col justify-between gap-3'>
           {/* 上半部：图片预览框（自适应填充高度，带 HUD 瞄准四角） */}
-          <div className='relative flex min-h-0 flex-1 w-full items-center justify-center overflow-hidden rounded-xl border border-primary/20 bg-muted/40 p-2'>
+          <div className='relative flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-xl border border-primary/20 bg-muted/40 p-2'>
             {/* 背景科技微网格 */}
             <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,color-mix(in_oklch,var(--primary)_6%,transparent)_0,transparent_70%)]' />
 

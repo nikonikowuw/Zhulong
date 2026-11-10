@@ -1,6 +1,13 @@
 import { memo } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRightLeft, Crown, Images, Map, User, UserCheck } from 'lucide-react'
+import {
+  ArrowRightLeft,
+  Crown,
+  Images,
+  Map,
+  User,
+  UserCheck,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -72,7 +79,7 @@ export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
   const getRankBadge = () => {
     if (rank === 1) {
       return (
-        <span className='inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/20 px-1.5 py-0.5 font-mono text-[11px] font-bold text-amber-600 dark:text-amber-400 shadow-xs backdrop-blur-xs'>
+        <span className='inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/20 px-1.5 py-0.5 font-mono text-[11px] font-bold text-amber-600 shadow-xs backdrop-blur-xs dark:text-amber-400'>
           <Crown className='h-3 w-3 fill-amber-500/30 text-amber-500' />
           <span>#1</span>
         </span>
@@ -80,14 +87,14 @@ export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
     }
     if (rank === 2) {
       return (
-        <span className='inline-flex items-center gap-1 rounded-md border border-slate-400/40 bg-slate-400/20 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-700 dark:text-slate-200 shadow-xs backdrop-blur-xs'>
+        <span className='inline-flex items-center gap-1 rounded-md border border-slate-400/40 bg-slate-400/20 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-700 shadow-xs backdrop-blur-xs dark:text-slate-200'>
           <span>#2</span>
         </span>
       )
     }
     if (rank === 3) {
       return (
-        <span className='inline-flex items-center gap-1 rounded-md border border-amber-700/30 bg-amber-700/20 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-800 dark:text-amber-300 shadow-xs backdrop-blur-xs'>
+        <span className='inline-flex items-center gap-1 rounded-md border border-amber-700/30 bg-amber-700/20 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-800 shadow-xs backdrop-blur-xs dark:text-amber-300'>
           <span>#3</span>
         </span>
       )
@@ -124,9 +131,7 @@ export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
         </div>
 
         {/* 左上角排名 */}
-        <div className='absolute start-2.5 top-2.5 z-20'>
-          {getRankBadge()}
-        </div>
+        <div className='absolute start-2.5 top-2.5 z-20'>{getRankBadge()}</div>
 
         {/* 右上角相似度胶囊 */}
         <div

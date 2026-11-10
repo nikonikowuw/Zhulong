@@ -182,7 +182,7 @@ export const ImageSearchControls = memo(function ImageSearchControls({
           type='button'
           className={`relative h-9.5 flex-1 gap-2 overflow-hidden text-xs font-semibold shadow-xs transition-all duration-200 active:scale-[0.99] ${
             canSearch && !isSearching
-              ? 'ring-2 ring-primary/25 shadow-primary/20 hover:shadow-md'
+              ? 'ring-2 shadow-primary/20 ring-primary/25 hover:shadow-md'
               : ''
           }`}
           disabled={!canSearch || isSearching}

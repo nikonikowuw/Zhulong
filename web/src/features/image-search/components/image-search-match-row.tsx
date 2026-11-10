@@ -1,6 +1,13 @@
 import { memo } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRightLeft, Crown, Images, Map, User, UserCheck } from 'lucide-react'
+import {
+  ArrowRightLeft,
+  Crown,
+  Images,
+  Map,
+  User,
+  UserCheck,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'

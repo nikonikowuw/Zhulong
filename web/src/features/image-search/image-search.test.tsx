@@ -441,9 +441,7 @@ describe('ImageSearch Workbench', () => {
     await expect.element(getByText('VS')).toBeInTheDocument()
     await expect
       .element(
-        getByText(
-          /512 维特征向量余弦相似度匹配|512-d Vector Cosine Similarity/
-        )
+        getByText(/512 维特征向量余弦相似度匹配|512-d Vector Cosine Similarity/)
       )
       .toBeInTheDocument()
 
@@ -476,7 +474,9 @@ describe('ImageSearch Workbench', () => {
     window.dispatchEvent(pasteEvent)
 
     await expect
-      .element(getByText(/已选择文件：clipboard\.png|Selected file: clipboard\.png/))
+      .element(
+        getByText(/已选择文件：clipboard\.png|Selected file: clipboard\.png/)
+      )
       .toBeInTheDocument()
   })
 })
