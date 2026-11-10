@@ -60,6 +60,51 @@ class BuildContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "symlink escapes target tree"):
                 build.tree_digest(sysroot)
 
+    def test_onnx_layout_accepts_linux_and_homebrew_prefixes(self):
+        """测试 ORT 前缀解析同时接受 Linux tarball 与 Homebrew/macOS 布局"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            linux = root / "linux"
+            (linux / "include").mkdir(parents=True)
+            (linux / "lib").mkdir()
+            (linux / "include/onnxruntime_cxx_api.h").write_text("")
+            (linux / "lib/libonnxruntime.so").write_text("")
+            self.assertEqual(build.onnx_layout(linux),
+                             ((linux / "include").resolve(), (linux / "lib/libonnxruntime.so").resolve()))
+
+            brew = root / "brew"
+            (brew / "include/onnxruntime").mkdir(parents=True)
+            (brew / "lib").mkdir()
+            (brew / "include/onnxruntime/onnxruntime_cxx_api.h").write_text("")
+            (brew / "lib/libonnxruntime.1.31.1.dylib").write_text("")
+            (brew / "lib/libonnxruntime.dylib").symlink_to("libonnxruntime.1.31.1.dylib")
+            include, library = build.onnx_layout(brew)
+            self.assertEqual(include, (brew / "include/onnxruntime").resolve())
+            self.assertEqual(library.name, "libonnxruntime.1.31.1.dylib")
+
+    def test_onnx_layout_auto_detects_homebrew_on_darwin(self):
+        """测试 macOS 上 brew install 的 ORT 无需显式环境变量即可被发现"""
+        with tempfile.TemporaryDirectory() as directory:
+            brew = Path(directory)
+            (brew / "include/onnxruntime").mkdir(parents=True)
+            (brew / "lib").mkdir()
+            (brew / "include/onnxruntime/onnxruntime_cxx_api.h").write_text("")
+            (brew / "lib/libonnxruntime.dylib").write_text("")
+            with patch("platform.system", return_value="Darwin"), \
+                 patch.dict(os.environ, {}, clear=False), \
+                 patch.object(build, "ONNX_MAC_PREFIXES", (brew,)):
+                os.environ.pop("ZHULONG_ONNX_ROOT", None)
+                include, library = build.onnx_layout()
+            self.assertEqual(include, (brew / "include/onnxruntime").resolve())
+            self.assertEqual(library.name, "libonnxruntime.dylib")
+
+    def test_onnx_layout_reports_actionable_error(self):
+        """测试前缀不完整时错误信息给出平台相关的可操作步骤"""
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "brew install onnxruntime"):
+                build.onnx_layout(directory)
+
     def test_cross_profile_rejects_host_compiler(self):
         """测试交叉编译配置中若编译器 Target Triple 与目标架构不符时拒绝构建"""
         with tempfile.TemporaryDirectory() as directory:

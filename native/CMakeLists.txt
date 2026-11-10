@@ -180,7 +180,9 @@ set_property(CACHE ZHULONG_INFERENCE_BACKEND PROPERTY STRINGS onnx rknn test_stu
 set(ZHULONG_VISION_BACKEND "cpu" CACHE STRING "算法运行库视觉前处理后端: cpu | rga")
 set_property(CACHE ZHULONG_VISION_BACKEND PROPERTY STRINGS cpu rga)
 set(ZHULONG_RKNN_ROOT "" CACHE PATH "RKNN 前缀（include/rknn_api.h + lib/librknnrt.so）；仅 ZHULONG_INFERENCE_BACKEND=rknn 需要")
-set(ZHULONG_ONNX_ROOT "" CACHE PATH "ONNX Runtime 前缀（include/onnxruntime_cxx_api.h + lib/libonnxruntime.so）；仅 ZHULONG_INFERENCE_BACKEND=onnx 需要")
+set(ZHULONG_ONNX_ROOT "" CACHE PATH "ONNX Runtime 前缀（诊断用；实际编译/链接走下面两个变量）")
+set(ZHULONG_ONNX_INCLUDE_DIR "" CACHE PATH "ONNX Runtime 头文件目录（含 onnxruntime_cxx_api.h）；由 build.py 规范化")
+set(ZHULONG_ONNX_LIBRARY "" CACHE FILEPATH "ONNX Runtime 动态库文件（.so/.dylib）；由 build.py 规范化")
 set(ZHULONG_RGA_ROOT "" CACHE PATH "RGA 前缀（include/rga/im2d.h + lib/librga.so*）；仅 ZHULONG_VISION_BACKEND=rga 需要")
 
 if(ZHULONG_INFERENCE_BACKEND STREQUAL "")
@@ -234,17 +236,47 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
 endif()
 
 # ONNX Runtime 推理后端：include 目录 PRIVATE，库以绝对文件路径链接。
+#
+# 布局解析统一在 build.py 的 onnx_layout()：Linux 官方包是 include/ + lib/libonnxruntime.so，
+# macOS 官方包/Homebrew 是 include/onnxruntime/ + libonnxruntime*.dylib。这里只校验
+# 规范化后的两个变量，避免把「<root>/include」和「<root>/lib/libonnxruntime.so」写死。
+# 兼容手工 cmake 调用：未传规范化变量时从 ZHULONG_ONNX_ROOT 推一次（仅 Linux 布局）。
 if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
+    if(NOT ZHULONG_ONNX_INCLUDE_DIR)
+        if(ZHULONG_ONNX_ROOT AND EXISTS "${ZHULONG_ONNX_ROOT}/include/onnxruntime_cxx_api.h")
+            set(ZHULONG_ONNX_INCLUDE_DIR "${ZHULONG_ONNX_ROOT}/include")
+        elseif(ZHULONG_ONNX_ROOT AND EXISTS "${ZHULONG_ONNX_ROOT}/include/onnxruntime/onnxruntime_cxx_api.h")
+            set(ZHULONG_ONNX_INCLUDE_DIR "${ZHULONG_ONNX_ROOT}/include/onnxruntime")
+        endif()
+    endif()
+    if(NOT ZHULONG_ONNX_LIBRARY AND ZHULONG_ONNX_ROOT)
+        foreach(_candidate IN ITEMS
+                "${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so"
+                "${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.dylib")
+            if(EXISTS "${_candidate}")
+                set(ZHULONG_ONNX_LIBRARY "${_candidate}")
+                break()
+            endif()
+        endforeach()
+    endif()
     if(NOT ZHULONG_ONNX_ROOT)
-        message(FATAL_ERROR "ZHULONG_INFERENCE_BACKEND=onnx 需要 -DZHULONG_ONNX_ROOT=<onnxruntime 前缀>")
+        message(FATAL_ERROR
+            "ZHULONG_INFERENCE_BACKEND=onnx 需要 ONNX Runtime 前缀。"
+            "请用 native/scripts/build.py（--onnx-root / ZHULONG_ONNX_ROOT），"
+            "或显式传 -DZHULONG_ONNX_ROOT=<prefix>（须含 include/onnxruntime_cxx_api.h 与 lib/libonnxruntime.so|.dylib）")
     endif()
-    if(NOT EXISTS "${ZHULONG_ONNX_ROOT}/include/onnxruntime_cxx_api.h")
-        message(FATAL_ERROR "ONNX Runtime 前缀缺少 include/onnxruntime_cxx_api.h: ${ZHULONG_ONNX_ROOT}")
+    if(NOT ZHULONG_ONNX_INCLUDE_DIR OR NOT EXISTS "${ZHULONG_ONNX_INCLUDE_DIR}/onnxruntime_cxx_api.h")
+        message(FATAL_ERROR "ONNX Runtime 头文件缺失：${ZHULONG_ONNX_INCLUDE_DIR}/onnxruntime_cxx_api.h")
     endif()
-    if(NOT EXISTS "${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so")
-        message(FATAL_ERROR "ONNX Runtime 前缀缺少 lib/libonnxruntime.so: ${ZHULONG_ONNX_ROOT}")
+    if(NOT ZHULONG_ONNX_LIBRARY OR NOT EXISTS "${ZHULONG_ONNX_LIBRARY}")
+        message(FATAL_ERROR "ONNX Runtime 动态库缺失：${ZHULONG_ONNX_LIBRARY}（Linux .so / macOS .dylib）")
     endif()
-    add_link_options(-Wl,-rpath-link,${ZHULONG_ONNX_ROOT}/lib)
+    get_filename_component(ZHULONG_ONNX_LIB_DIR "${ZHULONG_ONNX_LIBRARY}" DIRECTORY)
+    # -rpath-link 是 GNU ld 选项，Apple ld 会直接报 unknown options；macOS 用 DYLD_LIBRARY_PATH
+    # 给测试进程找依赖（运行期），链接期由库文件的绝对路径与 install_name 负责。
+    if(NOT APPLE)
+        add_link_options(-Wl,-rpath-link,${ZHULONG_ONNX_LIB_DIR})
+    endif()
 endif()
 
 # ==============================================================================
@@ -324,8 +356,8 @@ endif()
 # ONNX Runtime 推理后端：只进运行库，宿主 ZhulongEngine 绝不链接。
 if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
     target_sources(ZhulongAlgoRuntimeObjects PRIVATE src/backends/onnx/onnx_inference_backend.cpp)
-    target_include_directories(ZhulongAlgoRuntimeObjects SYSTEM PRIVATE ${ZHULONG_ONNX_ROOT}/include)
-    list(APPEND ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS ${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so Threads::Threads)
+    target_include_directories(ZhulongAlgoRuntimeObjects SYSTEM PRIVATE ${ZHULONG_ONNX_INCLUDE_DIR})
+    list(APPEND ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS ${ZHULONG_ONNX_LIBRARY} Threads::Threads)
     list(APPEND ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS ZHULONG_INFERENCE_ONNX=1)
     set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
 endif()
@@ -955,26 +987,33 @@ if(BUILD_TESTING)
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongOnnxTests tests/onnx_backend_test.cpp)
         target_compile_features(ZhulongOnnxTests PRIVATE cxx_std_17)
-        target_include_directories(ZhulongOnnxTests SYSTEM PRIVATE ${ZHULONG_ONNX_ROOT}/include)
+        target_include_directories(ZhulongOnnxTests SYSTEM PRIVATE ${ZHULONG_ONNX_INCLUDE_DIR})
         target_include_directories(ZhulongOnnxTests PRIVATE src)
         target_compile_definitions(ZhulongOnnxTests PRIVATE
             ZHULONG_ONNX_TEST_MODEL_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/onnx/add_const.onnx"
         )
         target_compile_options(ZhulongOnnxTests PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
-        target_link_libraries(ZhulongOnnxTests PRIVATE ZhulongAlgoRuntime ${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so Threads::Threads)
+        target_link_libraries(ZhulongOnnxTests PRIVATE ZhulongAlgoRuntime ${ZHULONG_ONNX_LIBRARY} Threads::Threads)
         if(NOT CMAKE_CROSSCOMPILING)
             # 独立进程替换 operator new，避免 OOM 注入影响并发/真实模型回归。
             add_executable(ZhulongOnnxLoadOomTests tests/onnx_load_oom_test.cpp)
             target_include_directories(ZhulongOnnxLoadOomTests PRIVATE src)
             target_link_libraries(ZhulongOnnxLoadOomTests PRIVATE ZhulongAlgoRuntime)
+            # Linux 用 LD_LIBRARY_PATH；macOS 的等价变量是 DYLD_LIBRARY_PATH。两者都只在
+            # 测试进程里生效，不写进任何产物，避免把开发机绝对路径烧进 SDK / 二进制。
+            if(APPLE)
+                set(_zhulong_onnx_test_env "DYLD_LIBRARY_PATH=${ZHULONG_ONNX_LIB_DIR}:$ENV{DYLD_LIBRARY_PATH}")
+            else()
+                set(_zhulong_onnx_test_env "LD_LIBRARY_PATH=${ZHULONG_ONNX_LIB_DIR}:$ENV{LD_LIBRARY_PATH}")
+            endif()
             add_test(NAME ZhulongOnnxLoadOom COMMAND ZhulongOnnxLoadOomTests)
             set_tests_properties(ZhulongOnnxLoadOom PROPERTIES
                 TIMEOUT 15
-                ENVIRONMENT "LD_LIBRARY_PATH=${ZHULONG_ONNX_ROOT}/lib:$ENV{LD_LIBRARY_PATH}")
+                ENVIRONMENT "${_zhulong_onnx_test_env}")
             add_test(NAME ZhulongOnnxBackend COMMAND ZhulongOnnxTests)
             set_tests_properties(ZhulongOnnxBackend PROPERTIES
                 TIMEOUT 60
-                ENVIRONMENT "LD_LIBRARY_PATH=${ZHULONG_ONNX_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+                ENVIRONMENT "${_zhulong_onnx_test_env}"
             )
         endif()
     endif()

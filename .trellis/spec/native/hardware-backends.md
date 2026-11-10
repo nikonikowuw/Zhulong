@@ -10,16 +10,17 @@
 
 | 变量 | 取值 | 说明 |
 | :--- | :--- | :--- |
-| `ZHULONG_INFERENCE_BACKEND` | `cpu`（测试桩）\| `rknn` \| `onnx` | 推理后端选择；`cpu` 不代表真实 CPU 模型推理 |
+| `ZHULONG_INFERENCE_BACKEND` | `onnx` \| `rknn` \| `test_stub` | 推理后端选择（`test_stub` 仅测试夹具，产物不可交付） |
 | `ZHULONG_VISION_BACKEND` | `cpu`（默认）\| `rga` | 视觉前处理后端选择 |
 | `ZHULONG_RKNN_ROOT` | 路径 | 仅 `rknn` 需要；须含 `include/rknn_api.h` 与 `lib/librknnrt.so` |
-| `ZHULONG_ONNX_ROOT` | 路径 | 仅 `onnx` 需要；须含 `include/onnxruntime_cxx_api.h` 与 `lib/libonnxruntime.so` |
+| `ZHULONG_ONNX_ROOT` | 路径 | 仅 `onnx` 需要；官方布局 `include/onnxruntime_cxx_api.h` + `lib/libonnxruntime.so`；macOS Homebrew 布局 `include/onnxruntime/` + `libonnxruntime*.dylib` 自动识别 |
+| `ZHULONG_ONNX_INCLUDE_DIR` / `ZHULONG_ONNX_LIBRARY` | 路径 | `build.py` 规范化后传给 CMake 的真实头目录与库文件；手工调用 CMake 时可省略（从 `ZHULONG_ONNX_ROOT` 推导） |
 | `ZHULONG_RGA_ROOT` | 路径 | 仅 `rga` 需要；须含 `include/rga/im2d.h` 与 `lib/librga.so` |
 
 - **编译防御**：`rknn` 缺 `ZHULONG_RKNN_ROOT`、`onnx` 缺 `ZHULONG_ONNX_ROOT` 或 `rga` 缺 `ZHULONG_RGA_ROOT` 时，CMake 触发 `FATAL_ERROR`（fail closed）。
 - **正交性**：两个开关完全解耦，支持任意组合（如「RKNN 推理 + CPU 前处理」、「RKNN 推理 + RGA 前处理」等）。
 - **目标产物归属**：后端实现直接编译进 `libzhulong_algo_runtime.so`。宿主二进制 `Zhulong` 仅静态链接 `libZhulongEngine.a`，**严禁向宿主引入任何厂商 SDK 动态库依赖**。
-- **产品后端只有 `onnx` / `rknn`，无默认值**：`ZHULONG_INFERENCE_BACKEND` 未显式指定时 CMake 直接 `FATAL_ERROR`；`runtime_factory` 的 `#else` 分支是 `#error`。交叉 profile 必须声明 `inference_backend`，Host 缺省 `onnx`（ORT 前缀缺失则报可操作错误，提示 `make native-deps`）。
+- **产品后端只有 `onnx` / `rknn`，无默认值**：`ZHULONG_INFERENCE_BACKEND` 未显式指定时 CMake 直接 `FATAL_ERROR`；`runtime_factory` 的 `#else` 分支是 `#error`。交叉 profile 必须声明 `inference_backend`，Host 缺省 `onnx`（ORT 前缀缺失时报可操作错误：macOS 用 `brew install onnxruntime`，Linux 用官方 tarball 或 `ZHULONG_ONNX_ROOT`）。`make native-deps` 只提供 FFmpeg，**不**安装 ONNX Runtime。
 - **Profile 分流**：`native/profiles/rk3568-stub.json`（`test_stub` 夹具后端，服务板端 mock/broker 回归）与 `rk3568-rknn.json` / `rk3568-rknn-rga.json`（`rknn` 推理后端）。夹具 profile 的产物**不可交付**，`pack_package.py` 遇到 `runtime: test_stub` 拒绝出包。
 - **测试桩不属于产品面**：桩实现位于 `native/tests/fixtures/stub_inference_backend.cpp`，只在 `test_stub` 构建里被编译进运行时；产品构建与 SDK 分发物中不得出现（`ar t` 可验）。`StubInferenceBackend::load_model` 只接受 `test_stub:` 前缀的显式夹具标记，任何真实模型路径一律返回 `nullptr`，插件 `init` 硬失败、Runner 以 `model_create` 失败退出。
   - 诊断：Runner 在 `plugin_model_create_failed` 日志里附带 `backend=<onnx|rknn|test_stub>`（来自 `zhulong::default_inference_backend_name()` 自由函数，**不得**做成 HAL 虚函数）。
@@ -38,9 +39,9 @@
 | 1 | `--inference-backend <v>`（CLI） | 写入 profile 字典，覆盖同名字段；仅对当次调用生效 |
 | 2 | profile JSON 的 `inference_backend` | 交叉 profile 的声明值（如 `rk3568-rknn.json` → `rknn`）**优先于环境变量** |
 | 3 | `ZHULONG_INFERENCE_BACKEND` 环境变量 | 仅在 profile 未声明该键时生效；Air（`.air.toml` 的 build cmd 独立调用 build.py）由此继承 |
-| 4 | `cpu` | 兜底默认 |
+| 4 | `onnx`（仅 Host） | Host 兜底；交叉 profile 未声明则报错，不存在静默兜底 |
 
-- 实现为 `value = p.get(key) or os.environ.get(env_key) or "cpu"`，取值必须落在白名单内，否则 `ValueError`（fail closed）。
+- 实现为 `value = p.get(key) or os.environ.get(env_key)`，Host 再兜底 `onnx`；取值必须落在白名单 `onnx|rknn|test_stub` 内，否则 `ValueError`（fail closed）。
 - `Makefile` 暴露 `INFERENCE_BACKEND` 并将其 `export` 为 `ZHULONG_INFERENCE_BACKEND`，使 `make` 与 Air 看到同一选择：`make INFERENCE_BACKEND=onnx check`。由于 profile 优先级更高，该变量实际作用于未声明后端的 profile（Host），交叉构建仍沿用 profile 内的声明。
 - ⚠️ **不要无条件注入 `--inference-backend cpu`**：CLI 优先级最高，那会覆盖交叉 profile 的 `rknn` 选择。留空即「沿用 profile」。
 

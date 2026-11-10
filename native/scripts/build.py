@@ -265,14 +265,53 @@ def rknn_prefix():
 
 ONNX_VENDOR = ROOT / "native/vendor/onnxruntime"
 ONNX_DEPS = ROOT / "build/deps/onnxruntime"
+# macOS 开发原型：brew install onnxruntime 后不应再要求额外 export。仅 Darwin 生效，
+# Linux 仍走显式前缀（避免静默捡到系统里版本不明的 ORT）。
+ONNX_MAC_PREFIXES = (
+    Path("/opt/homebrew/opt/onnxruntime"),
+    Path("/usr/local/opt/onnxruntime"),
+)
 
 
-def onnx_prefix(explicit_root=None):
-    """解析并校验 ONNX Runtime 前缀目录（离线，不联网）
+ONNX_HEADER = "onnxruntime_cxx_api.h"
+
+
+def _onnx_include_dir(prefix):
+    """定位 ORT 头文件所在目录。
+
+    官方 tarball 是 <prefix>/include/onnxruntime_cxx_api.h；Homebrew/macOS 包多套一层
+    <prefix>/include/onnxruntime/，两种都接受——头文件里的 #include "onnxruntime_c_api.h"
+    要求 include 目录就是头文件所在目录。
+    """
+    for candidate in (prefix / "include", prefix / "include/onnxruntime"):
+        if (candidate / ONNX_HEADER).is_file():
+            return candidate
+    return None
+
+
+def _onnx_library(prefix):
+    """定位 ORT 动态库（Linux .so / macOS .dylib，含 Homebrew 的版本化软链）。
+
+    Linux 官方包只带 libonnxruntime.so；发行版运行时可能只有 libonnxruntime.so.1。
+    macOS 官方包与 Homebrew 都是 libonnxruntime*.dylib。返回真实文件，不返回 -l 名称。
+    """
+    libdir = prefix / "lib"
+    if not libdir.is_dir():
+        return None
+    for pattern in ("libonnxruntime.so", "libonnxruntime.so.*", "libonnxruntime*.dylib"):
+        for candidate in sorted(libdir.glob(pattern)):
+            if candidate.is_file() or candidate.is_symlink():
+                if candidate.resolve().is_file():
+                    return candidate.resolve()
+    return None
+
+
+def onnx_layout(explicit_root=None):
+    """解析并校验 ONNX Runtime 前缀，返回 (include_dir, library_file)。
 
     优先级：显式参数 (--onnx-root / profile.onnx_root) > 环境变量 ZHULONG_ONNX_ROOT >
-    native/vendor/onnxruntime > build/deps/onnxruntime。
-    校验 include/onnxruntime_cxx_api.h 与 lib/libonnxruntime.so 必须存在。
+    native/vendor/onnxruntime > build/deps/onnxruntime > (Darwin) Homebrew 前缀。
+    额外接受 Homebrew 风格的 /opt/homebrew/opt/onnxruntime（include/onnxruntime/ + .dylib）。
     """
     candidates = []
     if explicit_root:
@@ -281,21 +320,42 @@ def onnx_prefix(explicit_root=None):
     if env_root:
         candidates.append(Path(env_root))
     if not candidates:
-        for default_dir in (ONNX_VENDOR, ONNX_DEPS):
-            if (default_dir / "include/onnxruntime_cxx_api.h").is_file() and (default_dir / "lib/libonnxruntime.so").is_file():
+        defaults = [ONNX_VENDOR, ONNX_DEPS]
+        if platform.system() == "Darwin":
+            defaults.extend(ONNX_MAC_PREFIXES)
+        for default_dir in defaults:
+            if _onnx_include_dir(default_dir) and _onnx_library(default_dir):
                 candidates.append(default_dir)
                 break
     if not candidates:
-        raise ValueError("ONNX Runtime prefix not found; pass --onnx-root or set ZHULONG_ONNX_ROOT")
+        raise ValueError(
+            "ONNX Runtime prefix not found; pass --onnx-root or set ZHULONG_ONNX_ROOT. "
+            "macOS: brew install onnxruntime (layout is auto-detected); "
+            "Linux: extract the official onnxruntime tarball to build/deps/onnxruntime"
+        )
 
     prefix = candidates[0].resolve()
-    header = prefix / "include/onnxruntime_cxx_api.h"
-    library = prefix / "lib/libonnxruntime.so"
-    if not header.is_file():
-        raise ValueError(f"ONNX Runtime prefix missing include/onnxruntime_cxx_api.h: {prefix}")
-    if not library.is_file():
-        raise ValueError(f"ONNX Runtime prefix missing lib/libonnxruntime.so: {prefix}")
-    return prefix
+    hint = ("macOS: brew install onnxruntime (Homebrew layout is auto-detected); "
+            "Linux: extract the official onnxruntime tarball to build/deps/onnxruntime")
+    include = _onnx_include_dir(prefix)
+    if include is None:
+        raise ValueError(
+            f"ONNX Runtime prefix missing {ONNX_HEADER}: {prefix} "
+            f"(expected include/ or include/onnxruntime/). {hint}"
+        )
+    library = _onnx_library(prefix)
+    if library is None:
+        raise ValueError(
+            f"ONNX Runtime prefix missing libonnxruntime.so/.dylib: {prefix}/lib. {hint}"
+        )
+    return include, library
+
+
+def onnx_prefix(explicit_root=None):
+    """兼容入口：返回已校验的 ORT 前缀根目录。"""
+    include, _ = onnx_layout(explicit_root)
+    return include.parent.parent if include.name == "onnxruntime" else include.parent
+
 
 
 def rga_prefix():
@@ -471,7 +531,14 @@ def configure(p, sanitizer):
     if p.get("inference_backend") == "rknn":
         args.append(f"-DZHULONG_RKNN_ROOT={rknn_prefix()}")
     elif p.get("inference_backend") == "onnx":
-        args.append(f"-DZHULONG_ONNX_ROOT={onnx_prefix(p.get('onnx_root'))}")
+        include, library = onnx_layout(p.get("onnx_root"))
+        # 传规范化后的 include/lib，而不是让 CMake 自己拼 <root>/include 与 <root>/lib/<name>：
+        # Homebrew 的头文件在 include/onnxruntime/、库是 .dylib，拼接规则会直接 miss。
+        # ROOT 仅供诊断/SDK 配置提示，真正的编译与链接都用上面两个绝对路径。
+        root = include.parent.parent if include.name == "onnxruntime" else include.parent
+        args.append(f"-DZHULONG_ONNX_ROOT={root}")
+        args.append(f"-DZHULONG_ONNX_INCLUDE_DIR={include}")
+        args.append(f"-DZHULONG_ONNX_LIBRARY={library}")
     # 同理，只有 rga 才校验 RGA 前缀。
     if p.get("vision_backend", "cpu") == "rga":
         args.append(f"-DZHULONG_RGA_ROOT={rga_prefix()}")

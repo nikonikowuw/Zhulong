@@ -47,7 +47,10 @@ target_include_directories(plate_recognition PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 # 自有符号不外泄：静态归档里的 zhulong 符号不进 .dynsym
-target_link_options(plate_recognition PRIVATE "LINKER:--exclude-libs,ALL")
+# --exclude-libs 是 GNU ld 专属（Apple ld 报 unknown options）；macOS 开发机跳过即可。
+if(NOT APPLE)
+    target_link_options(plate_recognition PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
 target_link_libraries(plate_recognition PRIVATE Zhulong::AlgoSDK Zhulong::AlgoRuntime)
 
 # 开发期自测（EXCLUDE_FROM_ALL、无安装规则 → 物理上进不了归档）
