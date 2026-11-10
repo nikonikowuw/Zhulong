@@ -56,6 +56,14 @@ struct CpuFrameView {
 };
 
 /**
+ * @brief 把请求像素矩形 clamp 到画面内并按 2 像素对齐（供软/硬编码器共用）
+ *
+ * @return true 矩形有效（对齐后宽高均 >= 2）；false 退化
+ */
+bool normalize_crop_rect(int x, int y, int w, int h, uint32_t frame_w, uint32_t frame_h,
+                         int &out_x, int &out_y, int &out_w, int &out_h) noexcept;
+
+/**
  * @brief 把 CPU 可见帧的一个矩形区域拷贝为紧凑 YuvFrame
  *
  * 支持的源格式：FRAME_FORMAT_NV12 与 FRAME_FORMAT_YUV420P。

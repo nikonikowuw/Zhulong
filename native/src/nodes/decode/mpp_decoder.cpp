@@ -203,12 +203,16 @@ int MppDecodeNode::configure_buffer_group(mpp::MppFrame frame) {
 
     const uint32_t width = api.frame_get_width(frame);
     const uint32_t height = api.frame_get_height(frame);
+    if (width == 0 || height == 0) {
+        ZL_LOGE(stream_id_, log_module, "mpp_info_change_invalid_dimensions width=%u height=%u", width, height);
+        return decode_backend_failure;
+    }
     const uint32_t hor_stride_in = api.frame_get_hor_stride(frame);
     const uint32_t ver_stride_in = api.frame_get_ver_stride(frame);
     const size_t raw_buf_size = api.frame_get_buf_size ? api.frame_get_buf_size(frame) : 0;
 
-    const uint32_t hor_stride = hor_stride_in > 0 ? hor_stride_in : align_up(width, stride_align);
-    const uint32_t ver_stride = ver_stride_in > 0 ? ver_stride_in : align_up(height, stride_align);
+    const uint32_t hor_stride = hor_stride_in >= width ? hor_stride_in : align_up(width, stride_align);
+    const uint32_t ver_stride = ver_stride_in >= height ? ver_stride_in : align_up(height, stride_align);
     const size_t buf_size =
         raw_buf_size > 0 ? raw_buf_size : static_cast<size_t>(hor_stride) * ver_stride * 3 / 2;
     const int32_t count = buffer_count_for(width, height);
@@ -382,6 +386,17 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
             continue;
         }
 
+        // 3.5 几何尺寸校验：丢弃宽高为 0 的异常帧，步长缺失时按 16 对齐补齐（与 configure_buffer_group 口径一致）
+        const uint32_t width = api.frame_get_width(frame);
+        const uint32_t height = api.frame_get_height(frame);
+        if (width == 0 || height == 0) {
+            continue;
+        }
+        const uint32_t hor_stride_in = api.frame_get_hor_stride(frame);
+        const uint32_t ver_stride_in = api.frame_get_ver_stride(frame);
+        const uint32_t hor_stride = hor_stride_in >= width ? hor_stride_in : align_up(width, stride_align);
+        const uint32_t ver_stride = ver_stride_in >= height ? ver_stride_in : align_up(height, stride_align);
+
         // 4. 提取底层物理 MppBuffer 与内核 DMA-BUF 文件描述符
         mpp::MppBuffer mpp_buf = api.frame_get_buffer(frame);
         if (!mpp_buf) {
@@ -430,10 +445,10 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         // ⚠️ 先在局部装配、最后一步才写入 out_frame：任何一步抛出（如 std::function 分配失败）
         // 都不会让调用方看到半成品输出，契约「失败时 out_frame 被置空」始终成立。
         auto frame_obj = std::make_shared<HardwareFrame>();
-        frame_obj->width = api.frame_get_width(frame);
-        frame_obj->height = api.frame_get_height(frame);
-        frame_obj->stride = api.frame_get_hor_stride(frame);
-        frame_obj->vstride = api.frame_get_ver_stride(frame);
+        frame_obj->width = width;
+        frame_obj->height = height;
+        frame_obj->stride = hor_stride;
+        frame_obj->vstride = ver_stride;
         frame_obj->format = FRAME_FORMAT_NV12;
         frame_obj->dma_fd = owned_fd;
 

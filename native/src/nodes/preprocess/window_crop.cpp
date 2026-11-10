@@ -73,6 +73,9 @@ private:
 
 /** @brief 为分平面/连续布局计算需要 mmap 的源字节数。 */
 size_t source_map_size(const HardwareFrame& frame) noexcept {
+    if (frame.vstride != 0 && frame.vstride < frame.height) {
+        return 0;
+    }
     if (frame.format == FRAME_FORMAT_NV12) {
         const size_t uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
         return frame.y_plane_size() + uv_stride * ((static_cast<size_t>(frame.height) + 1) / 2);
@@ -99,6 +102,9 @@ bool resolve_source(const HardwareFrame& frame, const uint8_t* base,
         return false;
     }
     if (frame.width == 0 || frame.height == 0 || frame.stride < frame.width) {
+        return false;
+    }
+    if (frame.vstride != 0 && frame.vstride < frame.height) {
         return false;
     }
 
@@ -130,20 +136,23 @@ bool resolve_source(const HardwareFrame& frame, const uint8_t* base,
         return false;
     }
     out.y = base;
-    out.y_stride = frame.stride;
+    out.y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+    if (out.y_stride < frame.width) {
+        return false;
+    }
     if (frame.format == FRAME_FORMAT_NV12) {
         out.u = base + frame.y_plane_size();
-        out.u_stride = frame.stride;
-        return true;
+        out.u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
+        return out.u_stride >= frame.width;
     }
     const size_t y_size = static_cast<size_t>(frame.stride) * frame.height;
     const size_t chroma_stride = (frame.stride + 1) / 2;
     const size_t chroma_rows = (static_cast<size_t>(frame.height) + 1) / 2;
     out.u = base + y_size;
     out.v = out.u + chroma_stride * chroma_rows;
-    out.u_stride = static_cast<uint32_t>(chroma_stride);
-    out.v_stride = static_cast<uint32_t>(chroma_stride);
-    return true;
+    out.u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : static_cast<uint32_t>(chroma_stride);
+    out.v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : static_cast<uint32_t>(chroma_stride);
+    return out.u_stride >= (frame.width + 1) / 2 && out.v_stride >= (frame.width + 1) / 2;
 }
 
 } // namespace
@@ -169,6 +178,9 @@ bool WindowCrop::copy(const HardwareFrame& frame, const ViewWindow& view, uint8_
 
     // 目标为 DMA 槽位时覆盖整个 CPU 写入窗口；shm（-1）不做。
     platform::ScopedFdSync dst_sync(dst_dma_fd, platform::kDmaSyncWrite);
+    if (dst_dma_fd >= 0 && !dst_sync.active()) {
+        return false;
+    }
 
     std::optional<platform::ScopedFdSync> src_sync;
 #if defined(__linux__)
@@ -185,6 +197,9 @@ bool WindowCrop::copy(const HardwareFrame& frame, const ViewWindow& view, uint8_
                 return false;
             }
             src_sync.emplace(frame.dma_fd, platform::kDmaSyncRead);
+            if (!src_sync->active()) {
+                return false;
+            }
 #if defined(__linux__)
             base = mapped.open(frame.dma_fd, map_size);
 #endif
@@ -234,6 +249,12 @@ bool WindowCrop::copy(const HardwareFrame& frame, const ViewWindow& view, uint8_
             std::memcpy(dst_v + static_cast<size_t>(r) * dst_chroma_stride,
                         src_v + static_cast<size_t>(r) * planes.v_stride, chroma_w);
         }
+    }
+
+    const bool src_finished = !src_sync.has_value() || src_sync->finish();
+    const bool dst_finished = dst_sync.finish();
+    if (!src_finished || !dst_finished) {
+        return false;
     }
 
     cpu_count_.fetch_add(1, std::memory_order_relaxed);

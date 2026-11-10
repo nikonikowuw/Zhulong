@@ -187,6 +187,29 @@ void test_rejects_invalid_inputs() {
     empty.format = FRAME_FORMAT_NV12;
     assert(!crop.copy(empty, ViewWindow{true, 0, 0, 64, 64}, dst.data(), dst.size(),
                       static_cast<int>(layout.stride), -1));
+
+    // vstride 非零但小于 height：必须拒绝，防止 y_plane_size 低估映射范围
+    HardwareFrame bad_vstride;
+    bad_vstride.width = kWidth;
+    bad_vstride.height = kHeight;
+    bad_vstride.stride = src.frame.stride;
+    bad_vstride.vstride = kHeight - 2;
+    bad_vstride.format = FRAME_FORMAT_NV12;
+    bad_vstride.host_ptr = src.buffer.data();
+    assert(!crop.copy(bad_vstride, ViewWindow{true, 0, 0, 64, 64}, dst.data(), dst.size(),
+                      static_cast<int>(layout.stride), -1));
+
+    // 连续缓冲帧（host_ptr）显式提供了非法 plane_strides（小于最小行字节数）：必须拒绝
+    HardwareFrame bad_plane_stride;
+    bad_plane_stride.width = kWidth;
+    bad_plane_stride.height = kHeight;
+    bad_plane_stride.stride = src.frame.stride;
+    bad_plane_stride.vstride = src.frame.vstride;
+    bad_plane_stride.format = FRAME_FORMAT_NV12;
+    bad_plane_stride.host_ptr = src.buffer.data();
+    bad_plane_stride.plane_strides[0] = kWidth - 2;
+    assert(!crop.copy(bad_plane_stride, ViewWindow{true, 0, 0, 64, 64}, dst.data(), dst.size(),
+                      static_cast<int>(layout.stride), -1));
 }
 
 } // namespace

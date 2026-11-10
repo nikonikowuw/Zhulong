@@ -43,7 +43,8 @@ IDecodeNode::Ptr IDecodeNode::create(int32_t codec, const uint8_t *extradata, si
     }
 
     try {
-        return std::make_unique<FFmpegDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den);
+        return std::make_unique<FFmpegDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den,
+                                                  stream_id);
     } catch (...) {
         // ⚠️ 日志纪律：只输出稳定 token + 数值上下文，不回写可能导致泄漏的异常文本
         ZL_LOGE(stream_id, "nodes.decode", "ffmpeg_decoder_init_failed codec=%d", codec);

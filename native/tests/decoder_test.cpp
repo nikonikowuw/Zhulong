@@ -944,8 +944,10 @@ int main() {
             const std::vector<uint8_t> main10 = read_binary_fixture("tests/fixtures/h265_main10_16x16.h265");
             CHECK(!main10.empty());
 
+            CapturedNativeLog runtime_log;
+            CHECK(zhulong::set_log_sink(capture_native_log, reinterpret_cast<uintptr_t>(&runtime_log)));
             auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000,
-                                               zhulong::DecoderBackend::ffmpeg_sw);
+                                               zhulong::DecoderBackend::ffmpeg_sw, 88);
             CHECK(decoder != nullptr);
             CHECK(decoder->send_packet(main10.data(), main10.size(), 7000, 7000) >= 0);
             CHECK(decoder->send_packet(nullptr, 0, 0, 0) >= 0);
@@ -955,12 +957,16 @@ int main() {
             for (int i = 0; i < 50 && recv_ret == zhulong::decode_again; ++i) {
                 recv_ret = decoder->receive_frame(frame);
             }
+            CHECK(zhulong::set_log_sink(nullptr, 0));
             CHECK(recv_ret == zhulong::decode_ok);
             CHECK(frame != nullptr);
             CHECK(frame->width == 16 && frame->height == 16);
             // 10bit 像素格式不在受支持集合内：必须 fail closed 标记 UNKNOWN，由下游显式拒绝
             CHECK(frame->format == zhulong::FRAME_FORMAT_UNKNOWN);
             CHECK(frame->format != zhulong::FRAME_FORMAT_NV12);
+            // 验证 IDecodeNode::create 将 stream_id 透传至 FFmpegDecodeNode 运行期日志
+            CHECK(runtime_log.stream_id == 88);
+            CHECK(runtime_log.message.find("ffmpeg_unsupported_pix_fmt") != std::string::npos);
         }
 
         // ====================================================================

@@ -245,6 +245,20 @@ void test_degenerate_rect_rejected() {
     // 完全在画面外的矩形：对齐/clamp 后退化，应拒绝而不是产出空图
     CHECK(!backend.encode(view, 400, 400, 40, 40, 85, jpeg));
     CHECK(jpeg.empty());
+
+    // 非法源 stride（小于 width）或缺失色度平面：必须在修改输出前拒绝
+    zhulong::YuvFrame untouched;
+    untouched.width = 42;
+    CpuFrameView bad_stride = view;
+    bad_stride.strides[0] = 80; // < width (160)
+    CHECK(!zhulong::extract_yuv_region(bad_stride, 0, 0, 64, 64, untouched));
+    CHECK(untouched.width == 42 && untouched.y.empty());
+    CHECK(!backend.encode(bad_stride, 0, 0, 64, 64, 85, jpeg));
+
+    CpuFrameView missing_uv = view;
+    missing_uv.planes[1] = nullptr;
+    CHECK(!zhulong::extract_yuv_region(missing_uv, 0, 0, 64, 64, untouched));
+    CHECK(untouched.width == 42 && untouched.y.empty());
 }
 
 /**

@@ -169,14 +169,6 @@ int align_stride(int value) {
     return (value + 15) & ~15;
 }
 
-int floor_even(int value) {
-    return value < 0 ? 0 : (value & ~1);
-}
-
-int ceil_even(int value) {
-    return value <= 0 ? 0 : ((value + 1) & ~1);
-}
-
 /** @brief 一个待编码的像素矩形（已对齐并 clamp 进画面） */
 struct Rect {
     int x{0};
@@ -186,33 +178,10 @@ struct Rect {
 };
 
 /**
- * @brief 把请求矩形对齐并 clamp，语义与 `extract_yuv_region` 完全一致
- *
- * 两条路径（硬件 / 软件）必须产出**同尺寸**图像，否则调用方的 box_index →
- * 图像尺寸约定会因后端不同而漂移。
+ * @brief 把请求矩形对齐并 clamp，委托给 `normalize_crop_rect` 以确保软/硬编码几何完全一致
  */
 bool normalize_rect(int x, int y, int w, int h, uint32_t frame_w, uint32_t frame_h, Rect &out) {
-    if (w <= 0 || h <= 0 || frame_w < 2 || frame_h < 2) {
-        return false;
-    }
-    // ⚠️ 用 64 位中间量算右/下边界：x + w 的 int 溢出是 UB，而本函数对任意调用方开放。
-    int x0 = floor_even(x < 0 ? 0 : x);
-    int y0 = floor_even(y < 0 ? 0 : y);
-    int x1 = ceil_even(static_cast<int>(std::min<long long>(static_cast<long long>(x) + w,
-                                                            frame_w)));
-    int y1 = ceil_even(static_cast<int>(std::min<long long>(static_cast<long long>(y) + h,
-                                                            frame_h)));
-    if (x1 > static_cast<int>(frame_w)) {
-        x1 = floor_even(static_cast<int>(frame_w));
-    }
-    if (y1 > static_cast<int>(frame_h)) {
-        y1 = floor_even(static_cast<int>(frame_h));
-    }
-    if (x1 <= x0 || y1 <= y0) {
-        return false;
-    }
-    out = Rect{x0, y0, x1 - x0, y1 - y0};
-    return out.w >= 2 && out.h >= 2;
+    return normalize_crop_rect(x, y, w, h, frame_w, frame_h, out.x, out.y, out.w, out.h);
 }
 
 /**
@@ -445,8 +414,27 @@ struct MppJpegEncoder::Impl {
         }
         const size_t hstride = static_cast<size_t>(s.hor_stride);
         const size_t y_stride = src.strides[0] != 0 ? src.strides[0] : src.width;
-        if (src.planes[0] == nullptr || src.planes[1] == nullptr) {
+        if (src.planes[0] == nullptr || src.planes[1] == nullptr || y_stride < src.width) {
             return false;
+        }
+        size_t u_stride = 0;
+        size_t v_stride = 0;
+        size_t uv_stride = 0;
+        if (src.format == FRAME_FORMAT_YUV420P) {
+            if (src.planes[2] == nullptr) {
+                return false;
+            }
+            const size_t min_chroma_stride = src.width / 2;
+            u_stride = src.strides[1] != 0 ? src.strides[1] : min_chroma_stride;
+            v_stride = src.strides[2] != 0 ? src.strides[2] : min_chroma_stride;
+            if (u_stride < min_chroma_stride || v_stride < min_chroma_stride) {
+                return false;
+            }
+        } else {
+            uv_stride = src.strides[1] != 0 ? src.strides[1] : y_stride;
+            if (uv_stride < src.width) {
+                return false;
+            }
         }
 
         // 1. 亮度平面
@@ -461,11 +449,6 @@ struct MppJpegEncoder::Impl {
         const int cw = r.w / 2;
         const int ch = r.h / 2;
         if (src.format == FRAME_FORMAT_YUV420P) {
-            if (src.planes[2] == nullptr) {
-                return false;
-            }
-            const size_t u_stride = src.strides[1] != 0 ? src.strides[1] : (src.width / 2);
-            const size_t v_stride = src.strides[2] != 0 ? src.strides[2] : (src.width / 2);
             const int cx = r.x / 2;
             const int cy = r.y / 2;
             for (int row = 0; row < ch; ++row) {
@@ -478,12 +461,11 @@ struct MppJpegEncoder::Impl {
                 }
             }
         } else {
-            // NV12：UV 交错且与 Y 共用 stride；交错平面里一个色度样本占 2 字节，
-            // 因此 x 偏移的字节数等于像素偏移。
+            // NV12：UV 交错；交错平面里一个色度样本占 2 字节，因此 x 偏移的字节数等于像素偏移。
             const int cy = r.y / 2;
             for (int row = 0; row < ch; ++row) {
                 const uint8_t *uvp =
-                    src.planes[1] + y_stride * static_cast<size_t>(cy + row) + r.x;
+                    src.planes[1] + uv_stride * static_cast<size_t>(cy + row) + r.x;
                 std::memcpy(duv + hstride * static_cast<size_t>(row), uvp,
                             static_cast<size_t>(r.w));
             }
@@ -669,14 +651,16 @@ bool MppJpegEncoder::encode_dma_frame(const HardwareFrame &frame, int quality,
         frame.height < 2) {
         return false;
     }
-    // ⚠️ stride 必须原样取自帧：解码器可能给 2048 这类非 16 对齐宽度的行跨度，
-    //    用 align16(width) 顶替会让 VEPU 按错误行宽读取，产出斜切图。
+    // ⚠️ stride 必须原样取自帧（见 hardware-backends.md §7.6）：解码器可能给 2048 这类
+    //    非 16 对齐宽度的行跨度，绝不可用 align16(width) 顶替；若帧未填合法 stride，直接拒绝直通。
     const int w = static_cast<int>(frame.width) & ~1;
     const int h = static_cast<int>(frame.height) & ~1;
-    const int hor_stride =
-        frame.stride >= static_cast<uint32_t>(w) ? static_cast<int>(frame.stride) : align_stride(w);
-    const int ver_stride =
-        frame.vstride >= static_cast<uint32_t>(h) ? static_cast<int>(frame.vstride) : h;
+    if (frame.stride < static_cast<uint32_t>(w) ||
+        (frame.vstride != 0 && frame.vstride < static_cast<uint32_t>(h))) {
+        return false;
+    }
+    const int hor_stride = static_cast<int>(frame.stride);
+    const int ver_stride = frame.vstride != 0 ? static_cast<int>(frame.vstride) : h;
 
     try {
         std::lock_guard<std::mutex> lock(impl_->mutex);

@@ -48,6 +48,10 @@ FFmpegDecodeNode::FFmpegDecodeNode(int32_t codec, const uint8_t *extradata, size
 
     // 配置 extradata (SPS/PPS/VPS 参数集)，补充尾部填充字节以防止 FFmpeg SIMD 优化越界读取
     if (extradata && extradata_size > 0) {
+        if (extradata_size > static_cast<size_t>(INT_MAX) - AV_INPUT_BUFFER_PADDING_SIZE) {
+            avcodec_free_context(&codec_ctx_);
+            throw std::invalid_argument("Extradata size exceeds INT_MAX");
+        }
         codec_ctx_->extradata = static_cast<uint8_t *>(av_mallocz(extradata_size + AV_INPUT_BUFFER_PADDING_SIZE));
         if (!codec_ctx_->extradata) {
             avcodec_free_context(&codec_ctx_);

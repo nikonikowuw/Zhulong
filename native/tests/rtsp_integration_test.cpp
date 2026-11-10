@@ -802,6 +802,12 @@ static void credentials_redaction_case() {
     CHECK(twice.find("1@") == std::string::npos);
     CHECK(twice.find("2@") == std::string::npos);
     CHECK(twice == "rtsp://***@10.0.0.1/x -> rtsp://***@10.0.0.2/y");
+
+    // 截断防御：超长日志行在 '@' 之前被截断时仍能抹掉疑似 user:password，但不误伤 host:port
+    const auto truncated_cred = zhulong::redact_credentials("DESCRIBE rtsp://admin:secret_truncated");
+    CHECK(truncated_cred == "DESCRIBE rtsp://***");
+    CHECK(zhulong::redact_credentials("DESCRIBE rtsp://10.0.0.9:8554") ==
+        "DESCRIBE rtsp://10.0.0.9:8554");
 }
 
 struct AudioCallbackState {
