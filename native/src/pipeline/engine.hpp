@@ -34,9 +34,40 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 
 namespace zhulong {
+
+/**
+ * @brief 在 control 锁内摘下、锁外停止的退役资源包
+ *
+ * 锁内只做「从池里移出」，`finish()` 在锁外按固定顺序停机：
+ * publisher（汇合发布线程）→ broker → 解码会话 → 需立即退役的流 → 释放 Stream 保活引用。
+ *
+ * ⚠️ 成员声明顺序即析构安全网：publisher 声明在 broker 之后，因此即使 finish() 未被调用，
+ *    隐式析构也是先 publisher（其析构会 stop() 汇合）再 broker，绝不让发布线程触碰已释放的 broker。
+ * ⚠️ 析构函数会兜底调用 finish()（含 join），因此本对象必须声明在 control 锁守卫**之前**，
+ *    保证异常路径上也是先解锁、后汇合。
+ */
+struct RetiredResources {
+    std::unique_ptr<ipc::FrameBroker> broker;      /**< 待停止的 FrameBroker */
+    std::shared_ptr<FramePublisher> publisher;     /**< 待停止的发布线程（持有 broker 裸指针） */
+    std::shared_ptr<DecodeSession> session;        /**< 待汇合的解码会话 */
+    std::shared_ptr<Stream> stream_to_stop;        /**< 已从池中移除、需立即停止并汇合的流 */
+    /** 会话汇合前 Stream 不得析构：DecodeSession 的熔断回调捕获的是 Stream 裸 this */
+    std::shared_ptr<Stream> keepalive;
+
+    RetiredResources() = default;
+    ~RetiredResources();
+    RetiredResources(const RetiredResources &) = delete;
+    RetiredResources &operator=(const RetiredResources &) = delete;
+    RetiredResources(RetiredResources &&) = delete;
+    RetiredResources &operator=(RetiredResources &&) = delete;
+
+    /** @brief 锁外按序停止并汇合全部资源（幂等，必须在 control 锁外调用） */
+    void finish();
+};
 
 /**
  * @brief Native 引擎核心控制器
@@ -62,6 +93,12 @@ struct Engine {
     // per-stream FrameBroker 与 FramePublisher 池 (受 control 互斥锁保护)
     std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>> brokers; /**< AI 帧分发 Broker 实例池 */
     std::map<Zhulong_stream_id, std::shared_ptr<FramePublisher>> publishers; /**< AI 帧发布线程池 */
+    /**
+     * 正在锁外启动 broker 的流 ID（受 control 保护）。同一流的 broker 共用 shm 名与 socket 路径，
+     * 并发启动第二个会与第一个争抢同名资源，因此后到者在 broker_settled 上等待前者落定。
+     */
+    std::set<Zhulong_stream_id> brokers_pending;
+    std::condition_variable broker_settled;     /**< brokers_pending 变化或引擎停机时广播 */
     std::string broker_base_dir{"/tmp"};        /**< Broker socket 存放目录 (读取环境变量覆写) */
     std::shared_ptr<WindowCrop> window_crop{std::make_shared<WindowCrop>()}; /**< 宿主侧窗口物化器（与 publisher 共享） */
 
@@ -153,15 +190,40 @@ struct Engine {
     Video probe(const std::string &url, const Options &options);
 
     /**
-     * @brief 为该流按需创建 FrameBroker 与 FramePublisher
+     * @brief 锁外创建并启动该流的 FrameBroker（含结果回调登记）
      *
-     * 仅在 kind == Zhulong_CONSUMER_AI 且该流尚无 broker 时生效。
-     * @param rollback broker 启动失败时由调用方执行的补偿动作（回滚消费者注册等）
-     * @return 创建成功返回 true；失败时已执行 rollback 并返回 false
+     * broker 启动会阻塞获取与 Go 侧清扫互斥的目录锁、申请 32MB 槽位内存，
+     * 因此**必须在 control 锁外**调用，否则一次慢启动会卡住 status/acquire 等全部控制操作。
      *
-     * ⚠️ 必须在持有 control 锁时调用；失败时本函数不改变 brokers/publishers。
+     * @return 启动成功的 broker；失败返回空指针（已记录日志）
      */
-    bool ensure_frame_broker(const std::shared_ptr<Stream> &stream, int32_t kind, const std::function<void()> &rollback);
+    std::unique_ptr<ipc::FrameBroker> start_frame_broker(Zhulong_stream_id id, const std::string &base_dir);
+
+    /**
+     * @brief 持 control 锁把已启动的 broker 连同新建的 FramePublisher 提交进池
+     *
+     * @param[in,out] broker  成功时被移入池；失败时移入 discard
+     * @param[out]    discard 失败时需在锁外停止的 publisher/broker
+     * @return 提交成功返回 true
+     *
+     * ⚠️ 必须在持有 control 锁时调用；失败时 brokers/publishers 保持调用前状态。
+     */
+    bool commit_frame_broker_locked(const std::shared_ptr<Stream> &stream,
+                                    std::unique_ptr<ipc::FrameBroker> &broker,
+                                    RetiredResources &discard);
+
+    /**
+     * @brief 持 control 锁注销一个消费者，并把因此退役的资源摘入 out
+     *
+     * 统一 release() 与 acquire() 回滚两条路径：解码计数、解码会话、无 AI 消费者时的
+     * publisher/broker、以及流空闲后的宽限期（或立即退役）。
+     *
+     * @param retire_immediately 流变为无消费者时立即从池中移除并停止（用于新建流的回滚），
+     *                           否则进入宽限期等待 Reaper
+     * ⚠️ 必须在持有 control 锁时调用；out 必须在锁外 finish()。
+     */
+    void detach_consumer_locked(const std::shared_ptr<Stream> &stream, uint64_t consumer,
+                                bool retire_immediately, RetiredResources &out);
 
     /** @brief 获取指定流关联的 FrameBroker socket 绝对路径 */
     std::string get_broker_path(Zhulong_stream_id id);

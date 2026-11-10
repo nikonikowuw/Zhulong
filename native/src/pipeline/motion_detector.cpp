@@ -248,11 +248,18 @@ bool MotionDetector::detect(const HardwareFrame& frame, const ViewWindow& view,
         }
     }
 
-    // 2. 全屏光照突变防抖（Anti-flash / Scene change）
+    // 2. 大面积突变（光照跳档 / 红外切换 / 近处大目标 / 小窗口内有人经过）
+    //    区分不了「环境光变了」和「目标占满了画面」，因此一律 fail-open：本帧全帧放行
+    //    （box_count = 0），并以本帧为新底图——光照跳变只会多推理这一帧，而持续的
+    //    大面积运动每帧都会再次落到这里继续放行，绝不会被判静等到心跳才恢复。
+    //    不设置 hold：单帧突变不应连带 10 帧放行。
     const float active_ratio =
         static_cast<float>(total_active_pixels) / static_cast<float>(grid_size);
     if (active_ratio > max_active_ratio) {
-        report_static(out_result);
+        std::memcpy(prev_grid_.data(), curr_grid_.data(), grid_size);
+        still_frames_count_ = 0;
+        out_result.has_motion = true;
+        out_result.box_count = 0;
         return true;
     }
 

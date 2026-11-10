@@ -145,10 +145,16 @@ void test_anti_flash_scene_change() {
     auto frame2 = create_dummy_nv12(1920, 1080, 200);
     MotionResult res2{};
     assert(detector.detect(frame2, res2));
-    // 光照跳变被抑制：判为无有效运动，且不产生运动外接框（此路径 hold-off 尚为 0，
-    // 因为跳变前从未检测到运动）
-    assert(!res2.has_motion);
+    // 大面积突变无法与「目标占满画面」区分：fail-open 全帧放行，不产生外接框
+    assert(res2.has_motion);
     assert(res2.box_count == 0);
+
+    // 突变帧已成为新底图：画面稳定后立即回到静止，不连带 hold-off 放行
+    auto frame3 = create_dummy_nv12(1920, 1080, 200);
+    MotionResult res3{};
+    assert(detector.detect(frame3, res3));
+    assert(!res3.has_motion);
+    assert(res3.box_count == 0);
 
     std::cout << "[PASS] test_anti_flash_scene_change" << std::endl;
 }

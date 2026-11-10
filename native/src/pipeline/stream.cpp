@@ -95,6 +95,12 @@ void DecodeSession::recycle_buffer(std::vector<uint8_t> &&buffer) noexcept {
     pooled_bytes_ += capacity;
 }
 
+void DecodeSession::recycle_packets(std::deque<QueuedPacket> &&packets) noexcept {
+    for (auto &packet : packets) {
+        recycle_buffer(std::move(packet.data));
+    }
+}
+
 DecodeSession::~DecodeSession() {
     request_stop();
     join();
@@ -126,8 +132,9 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
             return false;
         }
         waiting_keyframe_.store(false, std::memory_order_relaxed);
-        // 新的关键帧到达：清空此前积压的旧包队列 (仅清空元素，不改变取消标记)
-        packet_queue_.clear();
+        // 新的关键帧到达：清空此前积压的旧包队列 (仅清空元素，不改变取消标记)，
+        // 积压包的缓冲回收进复用池——拥塞恰恰是最需要复用的时刻
+        recycle_packets(packet_queue_.drain());
     }
 
     QueuedPacket qp;
@@ -148,10 +155,12 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
     qp.key_frame = is_key;
 
     if (!packet_queue_.push(std::move(qp))) {
+        // drop_newest 拒收时 qp 未被移动（push_internal 在 push_back 前就返回），缓冲仍可回收
+        recycle_buffer(std::move(qp.data));
         // 队列已满溢出：立即丢弃全部积压并等待下一个关键帧重同步。
         // 否则 AI 将长期消费一条落后约一个队列深度 (60 包) 的陈旧画面，延迟无法自愈。
         const bool already_waiting = waiting_keyframe_.exchange(true, std::memory_order_relaxed);
-        packet_queue_.clear();
+        recycle_packets(packet_queue_.drain());
         // 仅在队列未被取消时计数：停机竞态下的 push 失败不是拥塞，不污染统计
         if (!packet_queue_.is_cancelled()) {
             congestion_resyncs_.fetch_add(1, std::memory_order_relaxed);
@@ -209,7 +218,8 @@ void DecodeSession::decode_loop() noexcept {
         active_.store(false, std::memory_order_relaxed);
         // 取消队列与熔断回调都可能分配内存（`std::deque` 默认构造、Stream 侧容器），
         // 而本 lambda 已在异常收口路径上：二次异常穿出 noexcept 就是 std::terminate。
-        // 二者都不是恢复正确性所必需——`active_` 已置 false，发布线程最迟 50ms 超时退出。
+        // 二者都不是恢复正确性所必需——`active_` 已置 false 后 is_active() 即为 false，
+        // Stream::acquire_frame 会按 timeout 节拍阻塞返回，发布线程不会空转。
         try {
             packet_queue_.cancel();
             frame_queue_.cancel();
@@ -298,21 +308,8 @@ void DecodeSession::decode_loop_body() {
                         static_cast<long long>(retry_delay.count()));
                 }
             }
-        } catch (const std::exception &) {
-            decoder.reset();
-            if (target_backend == DecoderBackend::mpp_hw) {
-                ZL_LOGE(stream_id_, "pipeline.stream", "hardware_decode_fail_closed codec=%d", selected_codec);
-                if (on_fatal_error_) {
-                    on_fatal_error_(Zhulong_ERR_HARDWARE_UNAVAILABLE);
-                }
-                active_.store(false, std::memory_order_relaxed);
-                return nullptr;
-            }
-            next_create_attempt = SteadyClock::now() + retry_delay;
-            retry_delay = std::min(retry_delay * 2, max_retry_delay);
-            ZL_LOGW(stream_id_, "pipeline.stream", "decoder_create_failed retry_delay_ms=%lld",
-                static_cast<long long>(retry_delay.count()));
         } catch (...) {
+            // std::exception 与其他异常的处置完全一致：硬解 fail-closed，其余退避重试
             decoder.reset();
             if (target_backend == DecoderBackend::mpp_hw) {
                 ZL_LOGE(stream_id_, "pipeline.stream", "hardware_decode_fail_closed codec=%d", selected_codec);
@@ -451,9 +448,9 @@ Stream::~Stream() {
     join();
 }
 
-void Stream::start() {
-    // 检查并按需初始化解码节点
-    stop_decode_session(sync_decode_pipeline());
+void Stream::start(const Zhulong_decode_policy_t &policy) {
+    // 按引擎全局解码策略初始化解码节点（AI 消费者在 start 前已登记）
+    stop_decode_session(sync_decode_pipeline(policy));
     // 启动拉流 Worker 工作线程
     worker = std::thread(&Stream::capture, this);
 }
@@ -540,8 +537,20 @@ bool Stream::acquire_frame(HardwareFrame::ConstPtr &out_frame, std::chrono::mill
         std::lock_guard<std::mutex> lock(mutex);
         session = decode_session_;
     }
-    if (!session) return false;
-    return session->pop_frame(out_frame, timeout);
+    // 无会话或会话已熔断/取消：已取消队列的 pop 会立即返回 false，必须由这里补足等待，
+    // 否则轮询型消费者会空转烧满一个核（pipeline-guidelines §1「杜绝 100% CPU 空转」）。
+    if (!session || !session->is_active()) {
+        std::this_thread::sleep_for(timeout);
+        return false;
+    }
+    if (session->pop_frame(out_frame, timeout)) {
+        return true;
+    }
+    // pop 期间会话被取消（熔断 / 停机）同样会立即返回：补一次等待，保证失败返回有节拍
+    if (!session->is_active()) {
+        std::this_thread::sleep_for(timeout);
+    }
+    return false;
 }
 
 size_t Stream::frame_queue_size() const {
@@ -637,15 +646,25 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
         return;
     }
 
+    const int64_t arrival_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        Clock::now().time_since_epoch()).count();
     if (!preview_normalizer_.origin_ready()) {
-        video_origin_arrival_us_ = std::chrono::duration_cast<std::chrono::microseconds>(
-            Clock::now().time_since_epoch()).count();
+        video_origin_arrival_us_ = arrival_us;
+        video_epoch_arrival_us_ = arrival_us;
+        video_epoch_generation_ = preview_normalizer_.discontinuity_generation();
     }
 
     // 预览契约整形：单调微秒时间戳 + 帧分类 + 参数集注入。
     // 返回值中的 data 可能借用整形器内部缓冲，仅在下一次 dispatch 前有效，
     // 与 engine.h 的「回调期间借用」契约一致；解码队列会在 push_packet 内深拷贝。
     const Zhulong_packet_view shaped = preview_normalizer_.normalize(packet);
+
+    // 视频不连续：timestamp_shift 被重置为「跳变时刻的绝对输出位置」，源时钟从 0 重新起算。
+    // 记下该包的到达时刻作为新纪元，音频据此重锚（否则连续的音频时钟会把偏移再叠加一遍）。
+    if (preview_normalizer_.discontinuity_generation() != video_epoch_generation_) {
+        video_epoch_generation_ = preview_normalizer_.discontinuity_generation();
+        video_epoch_arrival_us_ = arrival_us;
+    }
 
     // 1. 优先推送至 AI 解码队列 (先于 Preview 回调，避免慢回调延迟 AI 处理)
     if (session && !cancel.stopped.load()) {
@@ -679,7 +698,7 @@ void Stream::dispatch_audio(const Zhulong_packet_view &packet) {
     const Zhulong_packet_view shaped = audio_normalizer_.normalize(
         packet,
         preview_normalizer_.origin_ready(),
-        video_origin_arrival_us_,
+        video_epoch_arrival_us_,
         preview_normalizer_.timestamp_shift_us(),
         preview_normalizer_.discontinuity_generation(),
         now_us);

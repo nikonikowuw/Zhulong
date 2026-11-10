@@ -52,7 +52,7 @@ int64_t AudioNormalizer::rescale_to_microseconds(int64_t ticks, int32_t num, int
 
 Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
                                               bool video_origin_ready,
-                                              int64_t video_origin_arrival_us,
+                                              int64_t video_epoch_arrival_us,
                                               int64_t video_shift_us,
                                               uint64_t video_discontinuity_gen,
                                               int64_t audio_arrival_us) noexcept {
@@ -109,7 +109,7 @@ Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
         anchor_abs_us_ = audio_abs_us;
         // base 允许为负：音频包可能比视频原点更早到达（交织顺序），此时它本来就该输出在 0 之前。
         // 夹到 0 会变成一个最多半帧的系统性滞后，不如保留真实值——老的包由前端按 `due` 丢弃。
-        base_offset_us_ = audio_arrival_us - video_origin_arrival_us;
+        base_offset_us_ = audio_arrival_us - video_epoch_arrival_us;
         last_video_gen_ = video_discontinuity_gen;
     } else if (!anchor_from_real_pts_ && in.has_pts) {
         // 首枚音频包缺 PTS 时锚点落在合成时间轴（0 起算）上。若后续恢复了真实 PTS，
@@ -117,16 +117,23 @@ Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
         // 而单调保护只拦回拨、拦不住前跳，音频会整场不再响。首枚真实 PTS 只重锚一次。
         anchor_from_real_pts_ = true;
         anchor_abs_us_ = audio_abs_us;
-        base_offset_us_ = audio_arrival_us - video_origin_arrival_us;
+        base_offset_us_ = audio_arrival_us - video_epoch_arrival_us;
         // 重锚允许一次回拨（合成轴可能已涨到数十毫秒），故清掉单调基准。
         has_last_out_ = false;
         flags |= ZHULONG_PKT_FLAG_DISCONTINUITY;
     }
 
-    // 4. 检测视频时间轴跳变（discontinuity generation 递增）
+    // 4. 视频时间轴跳变（discontinuity generation 递增）：重锚到视频新纪元。
+    //    视频跳变后 video_shift_us 被重置为「跳变时刻的绝对输出位置」，源时钟从 0 重新起算；
+    //    音频时钟却是连续的。若沿用旧锚点，(audio_abs - A) 已包含跳变前的全部时长，再叠加
+    //    绝对位置的 shift 就会把这段时长算两遍——第 T 秒跳变，音频整体前跳 T。
+    //    因此按与首次建锚同构的方式，以新纪元的到达时刻重建 base（base = a - 纪元到达时刻）。
     if (video_discontinuity_gen != last_video_gen_) {
         flags |= ZHULONG_PKT_FLAG_DISCONTINUITY;
         last_video_gen_ = video_discontinuity_gen;
+        anchor_abs_us_ = audio_abs_us;
+        anchor_from_real_pts_ = in.has_pts != 0;
+        base_offset_us_ = audio_arrival_us - video_epoch_arrival_us;
     }
 
     // 5. 映射至视频输出时间轴
