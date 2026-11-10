@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderHook } from 'vitest-browser-react'
-import { type Algorithm } from '@/features/algorithms/data/schema'
+import { type Algorithm } from '@/features/algorithms/contract'
 import { parseRegionConfig } from '../data/region-config'
 import { type Task } from '../data/schema'
 import { useChannelTaskDrafts } from './use-channel-task-drafts'

@@ -12,6 +12,7 @@ import { toast } from 'sonner'
 import {
   STATUS_DOT_CLASS,
   STATUS_LEVEL_CLASS,
+  STATUS_TEXT_CLASS,
   type StatusLevel,
 } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
@@ -214,7 +215,9 @@ export function ChannelStatusCell({ row }: { row: Row<ChannelTaskGroup> }) {
           task.enabled &&
             (isStreamOffline || camera.health !== 'online') &&
             'font-medium text-destructive',
-          task.enabled && isStreamReconnecting && 'font-medium text-amber-500'
+          task.enabled &&
+            isStreamReconnecting &&
+            cn('font-medium', STATUS_TEXT_CLASS.warning)
         )}
       >
         {statusText}

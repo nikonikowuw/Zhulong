@@ -73,7 +73,10 @@ function GroupCard({
           </button>
           <span className='font-mono text-[10px] text-muted-foreground'>
             {ranges.length > 0
-              ? `${ranges.length} 个时段`
+              ? t('schedule.rangeCount', {
+                  count: ranges.length,
+                  defaultValue: `${ranges.length} 个时段`,
+                })
               : t('schedule.dormant', '休眠')}
           </span>
         </div>
@@ -97,7 +100,7 @@ function GroupCard({
       <div className='flex flex-col gap-1.5 pt-1'>
         {ranges.map((r, idx) => (
           <div
-            key={idx}
+            key={`${r.start}-${r.end}`}
             className='flex items-center justify-between rounded-md border border-border/50 bg-muted/30 px-2 py-1 text-xs'
           >
             <div className='flex items-center gap-1.5'>
@@ -113,7 +116,9 @@ function GroupCard({
                 onChange={(val) => onUpdateRange(idx, 'end', val)}
               />
               <span className='font-mono text-[10px] text-muted-foreground tabular-nums'>
-                ({formatDuration(r.start, r.end)})
+                (
+                {formatDuration(r.start, r.end, t('schedule.crossDay', '跨天'))}
+                )
               </span>
             </div>
 
@@ -124,7 +129,8 @@ function GroupCard({
               disabled={disabled}
               onClick={() => onRemoveInterval(idx)}
               className='size-6 text-muted-foreground hover:text-destructive'
-              title='删除时段'
+              title={t('schedule.removeRange', '删除时段')}
+              aria-label={t('schedule.removeRange', '删除时段')}
             >
               <Trash2 className='size-3' />
             </Button>
@@ -167,9 +173,12 @@ export function ScheduleGroupedView({
         targetDays={WORKDAY_KEYS}
         ranges={workdayRanges}
         disabled={disabled}
-        addLabel={t('schedule.addRange', '添加工作日时段')}
-        toggleTitle='点击切换工作日全天/清空'
-        clearTitle='清空工作日时段'
+        addLabel={t('schedule.addWorkdayRange', '添加工作日时段')}
+        toggleTitle={t(
+          'schedule.toggleWorkdaysTitle',
+          '点击切换工作日全天/清空'
+        )}
+        clearTitle={t('schedule.clearWorkdaysTitle', '清空工作日时段')}
         onToggleAll={() => onToggleGroupAll(WORKDAY_KEYS)}
         onClear={() => onClearGroup(WORKDAY_KEYS)}
         onUpdateRange={(idx, field, val) =>
@@ -184,9 +193,9 @@ export function ScheduleGroupedView({
         targetDays={WEEKEND_KEYS}
         ranges={weekendRanges}
         disabled={disabled}
-        addLabel={t('schedule.addRange', '添加周末时段')}
-        toggleTitle='点击切换周末全天/清空'
-        clearTitle='清空周末时段'
+        addLabel={t('schedule.addWeekendRange', '添加周末时段')}
+        toggleTitle={t('schedule.toggleWeekendsTitle', '点击切换周末全天/清空')}
+        clearTitle={t('schedule.clearWeekendsTitle', '清空周末时段')}
         onToggleAll={() => onToggleGroupAll(WEEKEND_KEYS)}
         onClear={() => onClearGroup(WEEKEND_KEYS)}
         onUpdateRange={(idx, field, val) =>

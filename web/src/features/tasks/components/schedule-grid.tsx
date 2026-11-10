@@ -257,7 +257,14 @@ export function ScheduleGrid({
             </Badge>
           ) : (
             <Badge variant='default' className='h-5 font-mono text-[10px]'>
-              {coveragePercent}% 覆盖 ({totalHours}h/周)
+              {t(
+                'schedule.coverage',
+                '每周运行 {{hours}} 小时 ({{percent}}% 覆盖)',
+                {
+                  hours: totalHours,
+                  percent: coveragePercent,
+                }
+              )}
             </Badge>
           )}
         </div>

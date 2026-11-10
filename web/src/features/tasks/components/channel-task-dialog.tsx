@@ -3,10 +3,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
-import { algorithmsApi } from '@/features/algorithms/api/algorithms-api'
-import { type Algorithm } from '@/features/algorithms/data/schema'
-import { ALGORITHMS_QUERY_KEY } from '@/features/algorithms/hooks/use-algorithms'
-import { type Camera as CameraSchema } from '@/features/cameras/data/schema'
+import {
+  ALGORITHMS_QUERY_KEY,
+  algorithmsApi,
+  type Algorithm,
+} from '@/features/algorithms/contract'
+import { type Camera as CameraSchema } from '@/features/cameras/contract'
 import { type FrameSurfaceState } from '@/features/live'
 import {
   buildConfigFormSchema,
@@ -215,9 +217,19 @@ function ChannelTaskDialogContent({
             const algoName = algo.name || algoId
             const firstIssue = result.error.issues[0]
             const fieldPath = firstIssue?.path?.join('.')
+            const issueMsg =
+              firstIssue?.message ||
+              t('dialog.validationFailed', '参数校验失败')
             const detailMsg = fieldPath
-              ? `（字段「${fieldPath}」：${firstIssue.message}）`
-              : `（${firstIssue?.message || '参数校验失败'}）`
+              ? t('dialog.invalidConfigFieldDetail', {
+                  field: fieldPath,
+                  message: issueMsg,
+                  defaultValue: `（字段「${fieldPath}」：${issueMsg}）`,
+                })
+              : t('dialog.invalidConfigGeneralDetail', {
+                  message: issueMsg,
+                  defaultValue: `（${issueMsg}）`,
+                })
             toast.error(
               t('dialog.invalidConfigError', {
                 name: algoName,

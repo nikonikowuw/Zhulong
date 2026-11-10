@@ -14,12 +14,12 @@ import {
 } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
-import { type Algorithm } from '@/features/algorithms/data/schema'
-import { type Camera } from '@/features/cameras/data/schema'
+import { type Algorithm } from '@/features/algorithms/contract'
+import { type Camera } from '@/features/cameras/contract'
 import { type ChannelTaskGroup, type Task } from '../data/schema'
 import { useChannelTasks } from '../hooks/use-channel-tasks'
 import { createTasksColumns } from './tasks-columns'
-import { useTasksContext } from './tasks-provider'
+import { useTasksActions } from './tasks-provider'
 import { TasksTableDetail } from './tasks-table-detail'
 import { TasksTableToolbar } from './tasks-table-toolbar'
 
@@ -48,7 +48,7 @@ export function TasksTable({
 }: TasksTableProps) {
   const { t } = useTranslation('tasks')
   const { setOpen, setCurrentRow, setTargetCameraId, setTargetAlgorithmId } =
-    useTasksContext()
+    useTasksActions()
 
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
@@ -79,18 +79,29 @@ export function TasksTable({
     ],
   })
 
-  const cameraOptions = cameras.map((camera) => ({
-    label: camera.name,
-    value: camera.id,
-  }))
-  const algorithmOptions = algorithms.map((algorithm) => ({
-    label: algorithm.name,
-    value: algorithm.id,
-  }))
-  const statusOptions = [
-    { label: t('table.statusRunning', '运行中'), value: 'running' },
-    { label: t('table.statusPaused', '已暂停'), value: 'paused' },
-  ]
+  const cameraOptions = useMemo(
+    () =>
+      cameras.map((camera) => ({
+        label: camera.name,
+        value: camera.id,
+      })),
+    [cameras]
+  )
+  const algorithmOptions = useMemo(
+    () =>
+      algorithms.map((algorithm) => ({
+        label: algorithm.name,
+        value: algorithm.id,
+      })),
+    [algorithms]
+  )
+  const statusOptions = useMemo(
+    () => [
+      { label: t('table.statusRunning', '运行中'), value: 'running' },
+      { label: t('table.statusPaused', '已暂停'), value: 'paused' },
+    ],
+    [t]
+  )
 
   const isFiltered = Boolean(globalFilter) || columnFilters.length > 0
 
@@ -98,32 +109,34 @@ export function TasksTable({
    * 筛选语义：筛选命中通道（卡片和二级表格共享），不裁剪卡内算法
    */
   const channelGroups = useMemo(() => {
-    const filterValues = (columnId: string) =>
-      (columnFilters.find((f) => f.id === columnId)?.value as
-        | string[]
-        | undefined) ?? []
+    const filterSet = (columnId: string) =>
+      new Set(
+        (columnFilters.find((f) => f.id === columnId)?.value as
+          | string[]
+          | undefined) ?? []
+      )
 
-    const cameraFilter = filterValues('camera')
-    const algorithmFilter = filterValues('algorithm')
-    const statusFilter = filterValues('status')
+    const cameraFilter = filterSet('camera')
+    const algorithmFilter = filterSet('algorithm')
+    const statusFilter = filterSet('status')
     const keyword = (globalFilter ?? '').trim().toLowerCase()
 
     return allChannelGroups.filter((group) => {
-      if (cameraFilter.length > 0 && !cameraFilter.includes(group.camera.id)) {
+      if (cameraFilter.size > 0 && !cameraFilter.has(group.camera.id)) {
         return false
       }
 
       if (
-        algorithmFilter.length > 0 &&
+        algorithmFilter.size > 0 &&
         !group.items.some((item) =>
-          algorithmFilter.includes(item.algorithmItem.algorithmId)
+          algorithmFilter.has(item.algorithmItem.algorithmId)
         )
       ) {
         return false
       }
 
       if (
-        statusFilter.length > 0 &&
+        statusFilter.size > 0 &&
         !group.items.some((item) => {
           const isItemRunning =
             item.task.enabled &&
@@ -134,7 +147,7 @@ export function TasksTable({
             item.algorithm?.status !== 'DISABLED' &&
             item.algorithm?.status !== 'CRASHED' &&
             item.algorithm?.status !== 'CRASH_LOOP'
-          return statusFilter.includes(isItemRunning ? 'running' : 'paused')
+          return statusFilter.has(isItemRunning ? 'running' : 'paused')
         })
       ) {
         return false
@@ -142,17 +155,13 @@ export function TasksTable({
 
       if (!keyword) return true
 
-      const haystack = [
-        group.camera.name,
-        group.camera.id,
-        group.task?.id ?? '',
-        ...group.items.map((item) => item.algorithm?.name ?? ''),
-        ...group.items.map((item) => item.algorithmItem.algorithmId),
-      ]
-        .join(' ')
-        .toLowerCase()
+      const parts = [group.camera.name, group.camera.id, group.task?.id ?? '']
+      for (const item of group.items) {
+        if (item.algorithm?.name) parts.push(item.algorithm.name)
+        parts.push(item.algorithmItem.algorithmId)
+      }
 
-      return haystack.includes(keyword)
+      return parts.join(' ').toLowerCase().includes(keyword)
     })
   }, [allChannelGroups, columnFilters, globalFilter])
 

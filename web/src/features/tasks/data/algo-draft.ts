@@ -1,4 +1,4 @@
-import { type Algorithm } from '@/features/algorithms/data/schema'
+import { type Algorithm } from '@/features/algorithms/contract'
 import { getDefaultConfigJson } from './algo-config-schema'
 import { type Task } from './schema'
 

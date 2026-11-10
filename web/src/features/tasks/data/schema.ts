@@ -1,7 +1,8 @@
 import { z } from 'zod'
-import { type Algorithm } from '@/features/algorithms/data/schema'
-import { type Camera } from '@/features/cameras/data/schema'
-import { cropRectSchema } from './region-config'
+import { type Algorithm } from '@/features/algorithms/contract'
+import { type Camera } from '@/features/cameras/contract'
+import { cropRectSchema, type RegionConfig } from './region-config'
+import { type WeekSchedule } from './schedule-config'
 
 /**
  * 算法配置子项实体契约 (映射后端 TaskAlgorithm 实体)
@@ -97,6 +98,8 @@ export interface ChannelTaskItem {
   algorithmItem: TaskAlgorithm
   algorithm: Algorithm | undefined
   computePoints: number
+  region?: RegionConfig
+  schedule?: WeekSchedule
 }
 
 /**

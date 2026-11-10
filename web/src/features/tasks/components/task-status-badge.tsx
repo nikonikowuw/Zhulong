@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   STATUS_DOT_CLASS,
@@ -6,7 +7,7 @@ import {
 } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
-import { type AlgorithmStatus } from '@/features/algorithms/data/schema'
+import { type AlgorithmStatus } from '@/features/algorithms/contract'
 import {
   type CameraHealth,
   type CameraSession,
@@ -15,6 +16,7 @@ import {
   isScheduleActiveAt,
   isScheduleAlwaysActive,
   parseSchedule,
+  type WeekSchedule,
 } from '../data/schedule-config'
 
 export interface TaskStatusBadgeProps {
@@ -24,6 +26,7 @@ export interface TaskStatusBadgeProps {
   cameraHealth?: CameraHealth
   cameraSession?: CameraSession
   isCameraEnabled?: boolean
+  schedule?: WeekSchedule
   scheduleJson?: string
   className?: string
 }
@@ -35,10 +38,15 @@ export function TaskStatusBadge({
   cameraHealth,
   cameraSession,
   isCameraEnabled,
+  schedule,
   scheduleJson,
   className = '',
 }: TaskStatusBadgeProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
+  const resolvedSchedule = useMemo(
+    () => schedule ?? parseSchedule(scheduleJson),
+    [schedule, scheduleJson]
+  )
 
   let level: StatusLevel = 'inactive'
   let label =
@@ -49,9 +57,8 @@ export function TaskStatusBadge({
         : t('table.statusPaused', '已暂停')
 
   if (enabled && isChannelEnabled !== false && isCameraEnabled !== false) {
-    const sched = parseSchedule(scheduleJson)
-    const hasCustomSchedule = !isScheduleAlwaysActive(sched)
-    const inSchedule = isScheduleActiveAt(sched)
+    const hasCustomSchedule = !isScheduleAlwaysActive(resolvedSchedule)
+    const inSchedule = isScheduleActiveAt(resolvedSchedule)
 
     if (hasCustomSchedule && !inSchedule) {
       level = 'inactive'

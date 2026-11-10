@@ -1,7 +1,7 @@
 import { type Task } from './schema'
 
 /**
- * 把整条通道的算法订阅拍成 `UpdateTaskDto.algorithms` 载荷。
+ * 把整条通道的算法订阅拍成 `UpdateTaskRequest.algorithms` 载荷。
  *
  * 后端 update 对 `algorithms` 是**整体替换**语义，因此必须回传全部子项；
  * `override` 只用于就地翻转单个订阅项的开关。

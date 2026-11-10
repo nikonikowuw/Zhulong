@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
-import { type Algorithm } from '@/features/algorithms/data/schema'
-import { type Camera } from '@/features/cameras/data/schema'
+import { type Algorithm } from '@/features/algorithms/contract'
+import { type Camera } from '@/features/cameras/contract'
+import { parseRegionConfig } from '../data/region-config'
+import { parseSchedule } from '../data/schedule-config'
 import {
   type ChannelTaskGroup,
   type ChannelTaskItem,
@@ -44,6 +46,8 @@ export function useChannelTasks(
             algorithmItem: sub,
             algorithm,
             computePoints: points,
+            region: parseRegionConfig(sub.regionConfigJson),
+            schedule: parseSchedule(sub.scheduleJson),
           })
         }
       }
