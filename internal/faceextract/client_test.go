@@ -78,7 +78,13 @@ func validFrame() faceextract.Frame {
 	for i := range pixels {
 		pixels[i] = byte(i % 251)
 	}
-	return faceextract.Frame{Width: width, Height: height, Stride: width * 3, Format: faceextract.FormatRGB24, Pixels: pixels}
+	return faceextract.Frame{
+		Width:  width,
+		Height: height,
+		Stride: width * 3,
+		Format: faceextract.FormatRGB24,
+		Pixels: pixels,
+	}
 }
 
 // echoProvider reads exactly the 28-byte header plus payload the client writes and
@@ -91,8 +97,13 @@ func echoProvider(dim int, status string, code string) string {
 		features[i] = fmt.Sprintf("%.6f", float64(i+1)/10)
 	}
 	// 失败时维度与特征都为空：客户端必须只信 status/code，不能从空数组推断成功。
-	reply := fmt.Sprintf(`{"status":"%s","code":"%s","feature_dim":%d,"features":[%s]}`,
-		status, code, dim, strings.Join(features, ","))
+	reply := fmt.Sprintf(
+		`{"status":"%s","code":"%s","feature_dim":%d,"features":[%s]}`,
+		status,
+		code,
+		dim,
+		strings.Join(features, ","),
+	)
 	if status != "passed" {
 		reply = fmt.Sprintf(`{"status":"%s","code":"%s","feature_dim":0,"features":[]}`, status, code)
 	}
@@ -139,12 +150,16 @@ func TestExtractHappyPath(t *testing.T) {
 func TestExtractReusesProcess(t *testing.T) {
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "spawns")
-	body := strings.Replace(echoProvider(2, "passed", ""), "import json, struct, sys",
-		"import json, struct, sys, os\nopen('"+counter+"', 'a').write('x')\n", 1)
+	body := strings.Replace(
+		echoProvider(2, "passed", ""),
+		"import json, struct, sys",
+		"import json, struct, sys, os\nopen('"+counter+"', 'a').write('x')\n",
+		1,
+	)
 	entry := stubEntry(t, body)
 	client := newClient(t, faceextract.Options{Entry: staticEntry(entry)})
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := client.Extract(context.Background(), validFrame()); err != nil {
 			t.Fatalf("extract %d: %v", i, err)
 		}
@@ -164,12 +179,12 @@ func TestExtractMapsFailureCodes(t *testing.T) {
 		code    string
 		wantErr error
 	}{
-		{"no face", "NO_FACE_DETECTED", faceextract.ErrNoFaceDetected},
-		{"invalid input", "INVALID_INPUT", faceextract.ErrInvalidArgument},
-		{"unsupported", "UNSUPPORTED", faceextract.ErrUnsupported},
-		{"model unavailable", "MODEL_UNAVAILABLE", faceextract.ErrUnsupported},
-		{"multiple faces", "MULTIPLE_FACES", faceextract.ErrAmbiguous},
-		{"internal", "INTERNAL", faceextract.ErrInternal},
+		{name: "no face", code: "NO_FACE_DETECTED", wantErr: faceextract.ErrNoFaceDetected},
+		{name: "invalid input", code: "INVALID_INPUT", wantErr: faceextract.ErrInvalidArgument},
+		{name: "unsupported", code: "UNSUPPORTED", wantErr: faceextract.ErrUnsupported},
+		{name: "model unavailable", code: "MODEL_UNAVAILABLE", wantErr: faceextract.ErrUnsupported},
+		{name: "multiple faces", code: "MULTIPLE_FACES", wantErr: faceextract.ErrAmbiguous},
+		{name: "internal", code: "INTERNAL", wantErr: faceextract.ErrInternal},
 	}
 
 	for _, tc := range tests {
@@ -331,9 +346,14 @@ time.sleep(60)
 	}
 	// 进程被 SIGKILL 后不应再存活（僵尸不算存活，-0 探测仍会成功直到被回收；
 	// 客户端会 Wait，所以这里应为「不存在」）。
-	waitUntil(t, 3*time.Second, fmt.Sprintf("provider pid %d to disappear", pid), func() bool {
-		return processAlive(pid) != nil || aliveIsZombie(pid)
-	})
+	waitUntil(
+		t,
+		3*time.Second,
+		fmt.Sprintf("provider pid %d to disappear", pid),
+		func() bool {
+			return processAlive(pid) != nil || aliveIsZombie(pid)
+		},
+	)
 }
 
 // TestExtractRejectsNonJSONStdout pins the "stdout is protocol only" rule: a package
@@ -395,10 +415,14 @@ func TestExtractIdleRetires(t *testing.T) {
 	dir := t.TempDir()
 	spawns := filepath.Join(dir, "spawns")
 	pidFile := filepath.Join(dir, "pid")
-	body := strings.Replace(echoProvider(2, "passed", ""), "import json, struct, sys",
+	body := strings.Replace(
+		echoProvider(2, "passed", ""),
+		"import json, struct, sys",
 		"import json, struct, sys, os\n"+
 			"open('"+spawns+"', 'a').write('x')\n"+
-			"open('"+pidFile+"', 'w').write(str(os.getpid()))\n", 1)
+			"open('"+pidFile+"', 'w').write(str(os.getpid()))\n",
+		1,
+	)
 	entry := stubEntry(t, body)
 
 	client := newClient(t, faceextract.Options{
@@ -411,9 +435,14 @@ func TestExtractIdleRetires(t *testing.T) {
 	firstPID := readPID(t, pidFile)
 
 	// 等 reaper 真的回收：以「子进程消失」为观察到的事实，而不是猜时间。
-	waitUntil(t, 10*time.Second, fmt.Sprintf("idle reaper to retire provider pid %d", firstPID), func() bool {
-		return processAlive(firstPID) != nil
-	})
+	waitUntil(
+		t,
+		10*time.Second,
+		fmt.Sprintf("idle reaper to retire provider pid %d", firstPID),
+		func() bool {
+			return processAlive(firstPID) != nil
+		},
+	)
 
 	if _, err := client.Extract(context.Background(), validFrame()); err != nil {
 		t.Fatalf("second extract: %v", err)
@@ -426,18 +455,23 @@ func TestExtractIdleRetires(t *testing.T) {
 func readPID(t *testing.T, path string) int {
 	t.Helper()
 	var pid int
-	waitUntil(t, 5*time.Second, fmt.Sprintf("provider to publish its pid to %s", path), func() bool {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return false
-		}
-		got, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
-		if convErr != nil {
-			return false
-		}
-		pid = got
-		return true
-	})
+	waitUntil(
+		t,
+		5*time.Second,
+		fmt.Sprintf("provider to publish its pid to %s", path),
+		func() bool {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return false
+			}
+			got, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if convErr != nil {
+				return false
+			}
+			pid = got
+			return true
+		},
+	)
 	return pid
 }
 
@@ -456,11 +490,26 @@ func TestExtractRejectsBadFrames(t *testing.T) {
 		name  string
 		frame faceextract.Frame
 	}{
-		{"zero width", faceextract.Frame{Width: 0, Height: 1, Format: faceextract.FormatRGB24}},
-		{"zero height", faceextract.Frame{Width: 1, Height: 0, Format: faceextract.FormatRGB24}},
-		{"bad format", faceextract.Frame{Width: 2, Height: 2, Format: 9, Pixels: make([]byte, 12)}},
-		{"short stride", faceextract.Frame{Width: 4, Height: 2, Stride: 4, Format: faceextract.FormatRGB24, Pixels: make([]byte, 8)}},
-		{"payload mismatch", faceextract.Frame{Width: 4, Height: 2, Format: faceextract.FormatRGB24, Pixels: make([]byte, 23)}},
+		{
+			name:  "zero width",
+			frame: faceextract.Frame{Width: 0, Height: 1, Format: faceextract.FormatRGB24},
+		},
+		{
+			name:  "zero height",
+			frame: faceextract.Frame{Width: 1, Height: 0, Format: faceextract.FormatRGB24},
+		},
+		{
+			name:  "bad format",
+			frame: faceextract.Frame{Width: 2, Height: 2, Format: 9, Pixels: make([]byte, 12)},
+		},
+		{
+			name:  "short stride",
+			frame: faceextract.Frame{Width: 4, Height: 2, Stride: 4, Format: faceextract.FormatRGB24, Pixels: make([]byte, 8)},
+		},
+		{
+			name:  "payload mismatch",
+			frame: faceextract.Frame{Width: 4, Height: 2, Format: faceextract.FormatRGB24, Pixels: make([]byte, 23)},
+		},
 	}
 	for _, tc := range badFrames {
 		t.Run(tc.name, func(t *testing.T) {
@@ -495,11 +544,15 @@ func TestExtractFrameVerdictKeepsProcess(t *testing.T) {
 		t.Run(code, func(t *testing.T) {
 			dir := t.TempDir()
 			counter := filepath.Join(dir, "spawns")
-			body := strings.Replace(echoProvider(0, "failed", code), "import json, struct, sys",
-				"import json, struct, sys, os\nopen('"+counter+"', 'a').write('x')\n", 1)
+			body := strings.Replace(
+				echoProvider(0, "failed", code),
+				"import json, struct, sys",
+				"import json, struct, sys, os\nopen('"+counter+"', 'a').write('x')\n",
+				1,
+			)
 			client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
 
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				if _, err := client.Extract(context.Background(), validFrame()); !errors.Is(err, faceextract.ErrNoFaceDetected) &&
 					!errors.Is(err, faceextract.ErrInvalidArgument) {
 					t.Fatalf("extract %d: error = %v, want a frame-level verdict", i, err)
@@ -593,8 +646,12 @@ while True:
 func TestExtractAcceptsPaddedStride(t *testing.T) {
 	dir := t.TempDir()
 	strideFile := filepath.Join(dir, "stride")
-	body := strings.Replace(echoProvider(2, "passed", ""), "    payload = sys.stdin.buffer.read(payload_len)",
-		"    payload = sys.stdin.buffer.read(payload_len)\n    open('"+strideFile+"', 'w').write('%d,%d' % (stride, len(payload)))", 1)
+	body := strings.Replace(
+		echoProvider(2, "passed", ""),
+		"    payload = sys.stdin.buffer.read(payload_len)",
+		"    payload = sys.stdin.buffer.read(payload_len)\n    open('"+strideFile+"', 'w').write('%d,%d' % (stride, len(payload)))",
+		1,
+	)
 	client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
 
 	const width, height, stride = uint32(8), uint32(6), uint32(8*3 + 4)
@@ -646,8 +703,12 @@ sys.stdin.read()
 func TestCloseIsIdempotentAndStopsExtraction(t *testing.T) {
 	dir := t.TempDir()
 	spawns := filepath.Join(dir, "spawns")
-	body := strings.Replace(echoProvider(2, "passed", ""), "import json, struct, sys",
-		"import json, struct, sys, os\nopen('"+spawns+"', 'a').write('x')\n", 1)
+	body := strings.Replace(
+		echoProvider(2, "passed", ""),
+		"import json, struct, sys",
+		"import json, struct, sys, os\nopen('"+spawns+"', 'a').write('x')\n",
+		1,
+	)
 	client := faceextract.New(faceextract.Options{
 		Entry:          staticEntry(stubEntry(t, body)),
 		RequestTimeout: 5 * time.Second,

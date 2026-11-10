@@ -24,6 +24,31 @@ const MaxImageDimension = 4096
 // decoder (or the file is corrupt). The caller's input, not a server fault.
 var ErrUnsupportedImageFormat = errors.New("unsupported image format")
 
+// orientationTransform 把一个 EXIF 方向编译成仿射映射，使 packRGB24 的内层循环
+// 与方向无关：
+//
+//	ox = a*x + b*y + c
+//	oy = d*x + e*y + f
+//
+// 逐像素 switch 是循环不变量，放在内层等于给每个像素付一次分支；
+// 这里一次性算出系数，内层只剩两次乘加。
+type orientationTransform struct {
+	a, b, c  int
+	d, e, f  int
+	outWidth int
+}
+
+// DecodeToRGB24 decodes an image into packed RGB24 pixels, normalising EXIF
+// orientation, and returns the resulting dimensions.
+//
+// It lives in this package because image decoding is *not* part of the inference
+// path: the package skeleton links no codec, so the host must flatten pixels before
+// they cross the process boundary. Keeping it beside the client makes that pairing
+// obvious instead of leaving it in a package that no longer extracts anything.
+func DecodeToRGB24(data []byte) (pixels []byte, width int, height int, err error) {
+	return decodeToRGB24(data, MaxImageDimension)
+}
+
 // decodeToRGB24 解码图片字节流，按 EXIF 方向归一化后输出打包连续的 RGB24 像素。
 //
 // 返回的错误区分两类失败，上层据此给出不同的 HTTP 语义：
@@ -40,10 +65,21 @@ func decodeToRGB24(data []byte, maxDimension int) ([]byte, int, int, error) {
 		return nil, 0, 0, fmt.Errorf("%w: read image header: %v", ErrUnsupportedImageFormat, err)
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 {
-		return nil, 0, 0, fmt.Errorf("%w: invalid image dimensions (%dx%d)", ErrInvalidArgument, cfg.Width, cfg.Height)
+		return nil, 0, 0, fmt.Errorf(
+			"%w: invalid image dimensions (%dx%d)",
+			ErrInvalidArgument,
+			cfg.Width,
+			cfg.Height,
+		)
 	}
 	if cfg.Width > maxDimension || cfg.Height > maxDimension {
-		return nil, 0, 0, fmt.Errorf("%w: image dimensions %dx%d exceed maximum allowed %d", ErrInvalidArgument, cfg.Width, cfg.Height, maxDimension)
+		return nil, 0, 0, fmt.Errorf(
+			"%w: image dimensions %dx%d exceed maximum allowed %d",
+			ErrInvalidArgument,
+			cfg.Width,
+			cfg.Height,
+			maxDimension,
+		)
 	}
 
 	img, _, err := image.Decode(bytes.NewReader(data))
@@ -70,45 +106,31 @@ func orientedDimensions(img image.Image, orientation int) (int, int) {
 	return w, h
 }
 
-// orientationTransform 把一个 EXIF 方向编译成仿射映射，使 packRGB24 的内层循环
-// 与方向无关：
-//
-//	ox = a*x + b*y + c
-//	oy = d*x + e*y + f
-//
-// 逐像素 switch 是循环不变量，放在内层等于给每个像素付一次分支；
-// 这里一次性算出系数，内层只剩两次乘加。
-type orientationTransform struct {
-	a, b, c  int
-	d, e, f  int
-	outWidth int
-}
-
 // newOrientationTransform 按 EXIF Orientation 语义（0th row / 0th column 的视觉位置）
 // 生成映射系数：
 //
 //	1 正立   2 水平镜像   3 旋转 180   4 垂直镜像
 //	5 转置   6 顺时针 90   7 反转置     8 逆时针 90
 func newOrientationTransform(srcWidth, srcHeight, orientation int) orientationTransform {
-	// 方向 1（以及任何未知值）是恒等映射：宽高不变、坐标原样。
-	t := orientationTransform{a: 1, e: 1, outWidth: srcWidth}
 	switch orientation {
 	case 2:
-		t.a, t.c = -1, srcWidth-1
+		return orientationTransform{a: -1, c: srcWidth - 1, e: 1, outWidth: srcWidth}
 	case 3:
-		t.a, t.c, t.e, t.f = -1, srcWidth-1, -1, srcHeight-1
+		return orientationTransform{a: -1, c: srcWidth - 1, e: -1, f: srcHeight - 1, outWidth: srcWidth}
 	case 4:
-		t.e, t.f = -1, srcHeight-1
+		return orientationTransform{a: 1, e: -1, f: srcHeight - 1, outWidth: srcWidth}
 	case 5:
-		t.a, t.b, t.d, t.e, t.outWidth = 0, 1, 1, 0, srcHeight
+		return orientationTransform{b: 1, d: 1, outWidth: srcHeight}
 	case 6:
-		t.a, t.b, t.c, t.d, t.e, t.outWidth = 0, -1, srcHeight-1, 1, 0, srcHeight
+		return orientationTransform{b: -1, c: srcHeight - 1, d: 1, outWidth: srcHeight}
 	case 7:
-		t.a, t.b, t.c, t.d, t.e, t.f, t.outWidth = 0, -1, srcHeight-1, -1, 0, srcWidth-1, srcHeight
+		return orientationTransform{b: -1, c: srcHeight - 1, d: -1, f: srcWidth - 1, outWidth: srcHeight}
 	case 8:
-		t.a, t.b, t.d, t.e, t.f, t.outWidth = 0, 1, -1, 0, srcWidth-1, srcHeight
+		return orientationTransform{b: 1, d: -1, f: srcWidth - 1, outWidth: srcHeight}
+	default:
+		// 方向 1（以及任何未知值）是恒等映射：宽高不变、坐标原样。
+		return orientationTransform{a: 1, e: 1, outWidth: srcWidth}
 	}
-	return t
 }
 
 // packRGB24 按 EXIF 方向把 img 映射为打包连续的 RGB24 像素（行优先，stride = 输出宽度*3）。
@@ -124,12 +146,12 @@ func packRGB24(img image.Image, orientation int, dst []byte) {
 	tx := newOrientationTransform(w, h, orientation)
 	rowBytes := tx.outWidth * 3
 
-	for y := 0; y < h; y++ {
+	for y := range h {
 		// 每行只算一次行基址，内层循环里只剩 ox/oy 的增量。
 		oxRow, oyRow := tx.b*y+tx.c, tx.e*y+tx.f
 		srcY := bounds.Min.Y + y
 
-		for x := 0; x < w; x++ {
+		for x := range w {
 			r, g, b, _ := img.At(bounds.Min.X+x, srcY).RGBA()
 			idx := (tx.d*x+oyRow)*rowBytes + (tx.a*x+oxRow)*3
 			dst[idx] = byte(r >> 8)
@@ -149,7 +171,8 @@ func packRGB24(img image.Image, orientation int, dst []byte) {
 // 而 WebP 几乎总是由工具转换而来（转换时方向已烘进像素），因此暂不处理。
 func exifOrientation(data []byte) int {
 	// JPEG 以 SOI(0xFFD8) 开头，之后是一串 marker 段；EXIF 位于 APP1(0xFFE1)。
-	if len(data) < 4 || data[0] != 0xff || data[1] != 0xd8 {
+	hasJPEGSOI := len(data) >= 4 && data[0] == 0xff && data[1] == 0xd8
+	if !hasJPEGSOI {
 		return 1
 	}
 
@@ -159,7 +182,7 @@ func exifOrientation(data []byte) int {
 		}
 		marker := data[i+1]
 		switch {
-		case marker == 0xd8 || marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7):
+		case isStandaloneJPEGMarker(marker):
 			i += 2 // 无载荷的独立 marker
 			continue
 		case marker == 0xda || marker == 0xd9:
@@ -171,12 +194,17 @@ func exifOrientation(data []byte) int {
 			return 1
 		}
 		payload := data[i+4 : i+2+segLen]
-		if marker == 0xe1 && len(payload) > 6 && string(payload[:6]) == "Exif\x00\x00" {
+		if marker == 0xe1 && bytes.HasPrefix(payload, []byte("Exif\x00\x00")) {
 			return parseTIFFOrientation(payload[6:])
 		}
 		i += 2 + segLen
 	}
 	return 1
+}
+
+func isStandaloneJPEGMarker(marker byte) bool {
+	isRestart := marker >= 0xd0 && marker <= 0xd7
+	return marker == 0xd8 || marker == 0x01 || isRestart
 }
 
 // parseTIFFOrientation 在 EXIF 的 TIFF 头之后查找 IFD0 里的 Orientation 标签。
@@ -204,7 +232,7 @@ func parseTIFFOrientation(tiff []byte) int {
 	}
 	entryCount := int(order.Uint16(tiff[ifdOffset : ifdOffset+2]))
 
-	for i := 0; i < entryCount; i++ {
+	for i := range entryCount {
 		entry := ifdOffset + 2 + i*12
 		if entry+12 > len(tiff) {
 			return 1
@@ -221,15 +249,4 @@ func parseTIFFOrientation(tiff []byte) int {
 		return 1
 	}
 	return 1
-}
-
-// DecodeToRGB24 decodes an image into packed RGB24 pixels, normalising EXIF
-// orientation, and returns the resulting dimensions.
-//
-// It lives in this package because image decoding is *not* part of the inference
-// path: the package skeleton links no codec, so the host must flatten pixels before
-// they cross the process boundary. Keeping it beside the client makes that pairing
-// obvious instead of leaving it in a package that no longer extracts anything.
-func DecodeToRGB24(data []byte) (pixels []byte, width int, height int, err error) {
-	return decodeToRGB24(data, MaxImageDimension)
 }
