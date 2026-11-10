@@ -14,8 +14,7 @@ import (
 var errSentinel = errors.New("operation failed")
 
 func TestServiceAsyncBatchAndDrain(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
 	cfg := Config{
 		BufferSize:    100,
@@ -48,18 +47,13 @@ func TestServiceAsyncBatchAndDrain(t *testing.T) {
 		t.Fatalf("Stop failed: %v", err)
 	}
 
-	total, err := svc.Count(ctx)
-	if err != nil {
-		t.Fatalf("Count failed: %v", err)
-	}
-	if total != 8 {
+	if total := countRows(t, store); total != 8 {
 		t.Fatalf("expected 8 persisted entries, got %d", total)
 	}
 }
 
 func TestServiceBufferFullNonBlocking(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
 	// Capacity 2, worker NOT started so nothing is drained
 	cfg := Config{
@@ -92,8 +86,7 @@ func TestServiceBufferFullNonBlocking(t *testing.T) {
 }
 
 func TestServicePruneOnBatch(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
 	cfg := Config{
 		BufferSize:    100,
@@ -124,19 +117,14 @@ func TestServicePruneOnBatch(t *testing.T) {
 		t.Fatalf("Stop failed: %v", err)
 	}
 
-	total, err := svc.Count(ctx)
-	if err != nil {
-		t.Fatalf("Count failed: %v", err)
-	}
 	// MaxEntries is 6, so prune should have trimmed it down to 6
-	if total != 6 {
+	if total := countRows(t, store); total != 6 {
 		t.Fatalf("expected 6 entries after prune, got %d", total)
 	}
 }
 
 func TestServiceRecordEventResolvesActorFromContext(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
 	svc := NewService(store, zap.NewNop(), Config{
 		BufferSize:    100,
@@ -209,10 +197,9 @@ func TestServiceRecordEventResolvesActorFromContext(t *testing.T) {
 }
 
 func TestServiceClearWithAuditUsesContextActor(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
-	svc := NewService(store, zap.NewNop())
+	svc := NewService(store, zap.NewNop(), Config{})
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
@@ -242,10 +229,9 @@ func TestServiceClearWithAuditUsesContextActor(t *testing.T) {
 }
 
 func TestServiceClearWithAuditWithoutActorIsUnknown(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	store := setupTestStore(t)
 
-	svc := NewService(store, zap.NewNop())
+	svc := NewService(store, zap.NewNop(), Config{})
 	ctx := context.Background()
 
 	if _, err := svc.ClearWithAudit(ctx, "audit_logs", nil); err != nil {
@@ -268,25 +254,25 @@ func TestServiceClearWithAuditWithoutActorIsUnknown(t *testing.T) {
 }
 
 func TestNewServiceAppliesConfigDefaults(t *testing.T) {
-	cases := map[string][]Config{
-		"no config":                 nil,
-		"partial config":            {{BatchSize: -1}},
-		"all fields set explicitly": {{BufferSize: 7, BatchSize: 3, FlushInterval: 2 * time.Second, MaxEntries: 42}},
-	}
-	expected := map[string]Config{
-		"no config":                 DefaultConfig(),
-		"partial config":            DefaultConfig(),
-		"all fields set explicitly": {BufferSize: 7, BatchSize: 3, FlushInterval: 2 * time.Second, MaxEntries: 42},
+	explicit := Config{BufferSize: 7, BatchSize: 3, FlushInterval: 2 * time.Second, MaxEntries: 42}
+	cases := []struct {
+		name string
+		cfg  Config
+		want Config
+	}{
+		{name: "zero config uses defaults", cfg: Config{}, want: DefaultConfig()},
+		{name: "negative batch size falls back", cfg: Config{BatchSize: -1}, want: DefaultConfig()},
+		{name: "all fields set explicitly", cfg: explicit, want: explicit},
 	}
 
-	for name, cfgs := range cases {
-		t.Run(name, func(t *testing.T) {
-			svc := NewService(NewStore(mockNilDBProvider{}), nil, cfgs...)
-			if svc.cfg != expected[name] {
-				t.Fatalf("expected config %+v, got %+v", expected[name], svc.cfg)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewService(NewStore(mockNilDBProvider{}), nil, tc.cfg)
+			if svc.cfg != tc.want {
+				t.Fatalf("expected config %+v, got %+v", tc.want, svc.cfg)
 			}
-			if cap(svc.queue) != expected[name].BufferSize {
-				t.Fatalf("expected queue capacity %d, got %d", expected[name].BufferSize, cap(svc.queue))
+			if cap(svc.queue) != tc.want.BufferSize {
+				t.Fatalf("expected queue capacity %d, got %d", tc.want.BufferSize, cap(svc.queue))
 			}
 		})
 	}

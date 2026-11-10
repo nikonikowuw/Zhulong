@@ -22,6 +22,9 @@ type Config struct {
 const (
 	defaultBatchSize     = 50
 	defaultFlushInterval = 1 * time.Second
+	// flushTimeout bounds one background write so a stalled database cannot park
+	// the worker forever and leave the queue to overflow.
+	flushTimeout = 5 * time.Second
 )
 
 // DefaultConfig returns recommended production defaults.
@@ -66,15 +69,14 @@ type Service struct {
 	stopped bool
 }
 
-// NewService constructs an AuditService with the given store, logger, and configuration.
-func NewService(store *Store, logger *zap.Logger, cfgs ...Config) *Service {
+// NewService constructs an AuditService with the given store, logger, and
+// configuration. Zero or negative Config fields fall back to the production
+// defaults, so Config{} is a valid "use the defaults" call.
+func NewService(store *Store, logger *zap.Logger, cfg Config) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	cfg := DefaultConfig()
-	if len(cfgs) > 0 {
-		cfg = cfgs[0].withDefaults()
-	}
+	cfg = cfg.withDefaults()
 
 	return &Service{
 		store:      store,
@@ -87,6 +89,9 @@ func NewService(store *Store, logger *zap.Logger, cfgs ...Config) *Service {
 }
 
 // Start launches the background batch writer goroutine.
+//
+// ctx is part of the lifecycle-hook signature; starting is non-blocking, so it
+// is intentionally unused here. Stop is the call that honours cancellation.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,11 +147,7 @@ func entryToLog(entry Entry) *AuditLog {
 		Status:    entry.Status,
 		ErrorMsg:  entry.ErrorMsg,
 	}
-	if log.CreatedAt.IsZero() {
-		log.CreatedAt = time.Now().UTC()
-	} else {
-		log.CreatedAt = log.CreatedAt.UTC()
-	}
+	log.CreatedAt = normalizeCreatedAt(log.CreatedAt, time.Now().UTC())
 	if log.Username == "" {
 		log.Username = UsernameUnknown
 	}
@@ -171,9 +172,10 @@ func (s *Service) RecordSystem(action, target, detail string, opErr error) {
 	s.Record(systemEntry(action, target, detail, opErr))
 }
 
-// eventEntry builds an Entry for a human-initiated operation from ctx.
-func eventEntry(ctx context.Context, action, target, detail string, opErr error) Entry {
-	actor := ActorFromContext(ctx)
+// newEntry builds an Entry for actor and maps the operation outcome onto the
+// status fields. Every recorded event goes through it, so the success/failure
+// mapping cannot drift between the human and system paths.
+func newEntry(actor Actor, action, target, detail string, opErr error) Entry {
 	entry := Entry{
 		IP:       actor.IP,
 		Username: actor.Username,
@@ -189,21 +191,16 @@ func eventEntry(ctx context.Context, action, target, detail string, opErr error)
 	return entry
 }
 
-// systemEntry builds an Entry for an explicitly recorded system event.
+// eventEntry builds an Entry for a human-initiated operation from ctx.
+func eventEntry(ctx context.Context, action, target, detail string, opErr error) Entry {
+	return newEntry(ActorFromContext(ctx), action, target, detail, opErr)
+}
+
+// systemEntry builds an Entry for an explicitly recorded system event. The actor
+// carries no IP: background work has no client origin, so the source address is
+// left empty rather than faked as a loopback address.
 func systemEntry(action, target, detail string, opErr error) Entry {
-	entry := Entry{
-		IP:       "",
-		Username: UsernameSystem,
-		Action:   action,
-		Target:   target,
-		Detail:   detail,
-		Status:   StatusSuccess,
-	}
-	if opErr != nil {
-		entry.Status = StatusFailed
-		entry.ErrorMsg = opErr.Error()
-	}
-	return entry
+	return newEntry(Actor{Username: UsernameSystem}, action, target, detail, opErr)
 }
 
 // Record queues an audit entry asynchronously without blocking the caller.
@@ -270,11 +267,6 @@ func (s *Service) ClearWithAudit(ctx context.Context, target string, before *tim
 	return cleared, nil
 }
 
-// Count returns total number of audit logs.
-func (s *Service) Count(ctx context.Context) (int64, error) {
-	return s.store.Count(ctx)
-}
-
 // worker batches audit logs and periodically flushes them to the store.
 func (s *Service) worker() {
 	defer close(s.workerDone)
@@ -282,24 +274,26 @@ func (s *Service) worker() {
 	ticker := time.NewTicker(s.cfg.FlushInterval)
 	defer ticker.Stop()
 
-	var batch []*AuditLog
+	batch := []*AuditLog{}
 
 	flush := func() {
 		if len(batch) == 0 {
 			return
 		}
 		toWrite := batch
-		batch = nil
+		batch = []*AuditLog{}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), flushTimeout)
 		defer cancel()
 
 		if err := s.store.CreateBatch(ctx, toWrite); err != nil {
 			s.logger.Error("failed to persist audit batch", zap.Error(err), zap.Int("count", len(toWrite)))
-		} else {
-			if _, pruneErr := s.store.Prune(ctx, s.cfg.MaxEntries); pruneErr != nil {
-				s.logger.Warn("failed to prune audit records", zap.Error(pruneErr))
-			}
+			// Skip pruning: trimming the table after a failed write would delete
+			// older evidence to make room for rows that were never stored.
+			return
+		}
+		if _, pruneErr := s.store.Prune(ctx, s.cfg.MaxEntries); pruneErr != nil {
+			s.logger.Warn("failed to prune audit records", zap.Error(pruneErr))
 		}
 	}
 

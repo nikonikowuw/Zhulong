@@ -107,11 +107,7 @@ func (h *Handler) ClearLogs(c *gin.Context) {
 		return
 	}
 
-	cleared, err := h.service.ClearWithAudit(
-		c.Request.Context(),
-		audit.AuditLog{}.TableName(),
-		before,
-	)
+	cleared, err := h.service.ClearWithAudit(c.Request.Context(), audit.TableName, before)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return

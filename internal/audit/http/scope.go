@@ -1,7 +1,6 @@
 package audithttp
 
 import (
-	"context"
 	"net/http"
 	"sync"
 
@@ -141,14 +140,20 @@ func (s *scope) resolve(c *gin.Context) (resolvedEntry, bool) {
 	}
 
 	entry.status = audit.StatusFailed
-	if safe, found := httputil.SafeErrorFromContext(c); found {
-		entry.errorMsg = safeErrorSummary(safe.Code, safe.Message)
-	} else {
-		// No sanitized metadata is available, so record a generic summary
-		// instead of leaking whatever raw error produced the status.
-		entry.errorMsg = "REQUEST_FAILED"
-	}
+	// The generic fallback is used when no sanitized metadata is available, so a
+	// raw error that produced the status never reaches the record.
+	entry.errorMsg = failureSummary(c, "REQUEST_FAILED")
 	return entry, true
+}
+
+// failureSummary returns the sanitized error summary recorded for a failed
+// response, falling back to a generic marker when no sanitized metadata exists so
+// the raw cause is never persisted.
+func failureSummary(c *gin.Context, fallback string) string {
+	if safe, found := httputil.SafeErrorFromContext(c); found {
+		return safeErrorSummary(safe.Code, safe.Message)
+	}
+	return fallback
 }
 
 // safeErrorSummary builds the persisted error summary from already-sanitized
@@ -177,20 +182,28 @@ func scopeFrom(c *gin.Context) (*scope, bool) {
 	return state, ok
 }
 
-// Tag declares the audited action for the current request. Handlers call it
-// before binding or side effects so that validation and business failures still
-// produce a record.
-func Tag(c *gin.Context, action, target, detail string) {
+// updateScope applies mutate to the request scope under its mutex. Every Tag*
+// helper goes through it, so the locking discipline lives in exactly one place.
+func updateScope(c *gin.Context, mutate func(*scope)) {
 	state, ok := scopeFrom(c)
 	if !ok {
 		return
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.declared = true
-	state.action = action
-	state.target = target
-	state.detail = detail
+	mutate(state)
+}
+
+// Tag declares the audited action for the current request. Handlers call it
+// before binding or side effects so that validation and business failures still
+// produce a record.
+func Tag(c *gin.Context, action, target, detail string) {
+	updateScope(c, func(s *scope) {
+		s.declared = true
+		s.action = action
+		s.target = target
+		s.detail = detail
+	})
 }
 
 // TagMiddleware declares the audited action as middleware, so it can run before
@@ -206,38 +219,22 @@ func TagMiddleware(action, target, detail string) gin.HandlerFunc {
 // share one route but distinguish operations by the request body, such as
 // camera update versus toggle.
 func TagAction(c *gin.Context, action string) {
-	state, ok := scopeFrom(c)
-	if !ok {
-		return
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.declared = true
-	state.action = action
+	updateScope(c, func(s *scope) {
+		s.declared = true
+		s.action = action
+	})
 }
 
 // TagTarget sets or replaces the audit target, typically once the business
 // result produced an identifier.
 func TagTarget(c *gin.Context, target string) {
-	state, ok := scopeFrom(c)
-	if !ok {
-		return
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.target = target
+	updateScope(c, func(s *scope) { s.target = target })
 }
 
 // TagDetail sets or replaces the audit detail. Callers must pass an explicitly
 // whitelisted, non-sensitive summary; the audit core does not inspect it.
 func TagDetail(c *gin.Context, detail string) {
-	state, ok := scopeFrom(c)
-	if !ok {
-		return
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.detail = detail
+	updateScope(c, func(s *scope) { s.detail = detail })
 }
 
 // TagActor records the authenticated account name once login or initialization
@@ -263,24 +260,12 @@ func TagActor(c *gin.Context, username string) {
 // response is successful, for example an NTP sync that returns 200 while its
 // reported state is failed. Both arguments must already be safe to persist.
 func TagError(c *gin.Context, code, safeMessage string) {
-	state, ok := scopeFrom(c)
-	if !ok {
-		return
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.declared = true
-	state.domainFailed = true
-	state.domainCode = code
-	state.domainMessage = safeMessage
-}
-
-// requestContext returns the standard context used for audit lookups.
-func requestContext(c *gin.Context) context.Context {
-	if c == nil || c.Request == nil {
-		return context.Background()
-	}
-	return c.Request.Context()
+	updateScope(c, func(s *scope) {
+		s.declared = true
+		s.domainFailed = true
+		s.domainCode = code
+		s.domainMessage = safeMessage
+	})
 }
 
 // httpStatusFailure reports whether a status code represents a failure.

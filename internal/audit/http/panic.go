@@ -3,7 +3,6 @@ package audithttp
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
-	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
 // panicObserver turns a recovered handler panic into a failed audit record.
@@ -45,11 +44,9 @@ func (o *panicObserver) OnPanic(c *gin.Context) {
 
 	// A panic is always a failure regardless of the status recorded so far.
 	entry.status = audit.StatusFailed
-	if safe, found := httputil.SafeErrorFromContext(c); found {
-		entry.errorMsg = safeErrorSummary(safe.Code, safe.Message)
-	} else {
-		entry.errorMsg = "INTERNAL_ERROR"
-	}
+	// Recovery wrote a sanitized 500 first, so its code and outward message are
+	// the only error text allowed to reach the record.
+	entry.errorMsg = failureSummary(c, "INTERNAL_ERROR")
 
-	recordResolved(o.service, entry, audit.ActorFromContext(requestContext(c)))
+	recordResolved(o.service, entry, audit.ActorFromContext(c.Request.Context()))
 }

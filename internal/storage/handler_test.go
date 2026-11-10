@@ -41,7 +41,7 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *Service, string, func()) {
 	cleaner := NewCleanerEngine(inspector, zap.NewNop())
 
 	auditStore := audit.NewStore(dbStore)
-	auditSvc := audit.NewService(auditStore, zap.NewNop())
+	auditSvc := audit.NewService(auditStore, zap.NewNop(), audit.Config{})
 
 	svc := NewService(ServiceDeps{
 		Repo:      repo,
