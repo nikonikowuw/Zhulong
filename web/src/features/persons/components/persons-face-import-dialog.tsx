@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useRef } from 'react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -12,7 +11,10 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { toCsv, triggerDownload } from '@/lib/csv'
+import { toCsv, triggerDownload, triggerUrlDownload } from '@/lib/csv'
+import { errorMessageOf } from '@/lib/handle-server-error'
+import { STATUS_LEVEL_CLASS, statusTextClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -25,12 +27,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { personsApi } from '../api/persons-api'
-import {
-  PERSONS_QUERY_KEY,
-  useCreateFaceImportJob,
-  useFaceImportJob,
-} from '../hooks/use-persons'
-import { usePersonsActions, usePersonsState } from './persons-provider'
+import { useCreateFaceImportJob, useFaceImportJob } from '../hooks/use-persons'
+import { usePersonsContext, usePersonsState } from './persons-provider'
 
 /** 状态 → 本地化文案 key。查表而不是链式三元：新增状态时不会漏一个分支。 */
 const STATUS_LABEL_KEYS = {
@@ -60,16 +58,20 @@ function downloadManifestTemplate() {
 export function PersonsFaceImportDialog() {
   const { t } = useTranslation('persons')
   const { open } = usePersonsState()
-  const { setOpen } = usePersonsActions()
+  const {
+    setOpen,
+    faceImportJobId: activeJobId,
+    setFaceImportJobId,
+  } = usePersonsContext()
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [activeJobId, setActiveJobId] = useState<string | null>(null)
 
   const createMutation = useCreateFaceImportJob()
   const isOpen = open === 'import-faces'
 
-  const jobQuery = useFaceImportJob(activeJobId, isOpen)
+  // 任务 id 与轮询都挂在 Provider 上：弹窗关闭（组件卸载）期间任务照常推进，
+  // 完成后由 Provider 统一刷新列表。这里只读状态。
+  const jobQuery = useFaceImportJob(activeJobId, true)
   const job = jobQuery.data ?? null
-  const queryClient = useQueryClient()
 
   const isTerminal =
     job?.status === 'COMPLETED' ||
@@ -78,26 +80,16 @@ export function PersonsFaceImportDialog() {
   const isBusy = createMutation.isPending || (Boolean(job) && !isTerminal)
   const isJobQueryError = Boolean(activeJobId) && jobQuery.isError
 
-  // 任务完成时刷新人员列表：底库数量与主人脸都变了。轮询本身由 query 负责，
-  // 这里只做一次性副作用，依赖 status 而不是整个 job 对象。
-  useEffect(() => {
-    if (job?.status === 'COMPLETED') {
-      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
-    }
-  }, [job?.status, queryClient])
-
   const reset = () => {
-    setActiveJobId(null)
+    setFaceImportJobId(null)
     createMutation.reset()
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const handleClose = () => {
     if (isBusy) {
+      // 轮询与完成后的失效都在 Provider 上，关闭弹窗不会中断任务跟踪。
       toast.info(t('faceImport.runningInBackground'))
-      // 任务在后台继续跑，但"完成后刷新列表"的 effect 会随组件卸载消失，
-      // 因此关闭前主动失效一次，保证用户回到列表时看到最新进度。
-      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
     }
     setOpen(null)
   }
@@ -115,23 +107,19 @@ export function PersonsFaceImportDialog() {
 
     try {
       const resp = await createMutation.mutateAsync(selected)
-      setActiveJobId(resp.jobId)
+      setFaceImportJobId(resp.jobId)
       toast.success(t('faceImport.jobStarted'))
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : String(err))
+      toast.error(errorMessageOf(err))
     }
   }
 
   const downloadFailedReport = () => {
     if (!activeJobId) return
-    const anchor = document.createElement('a')
-    anchor.href = personsApi.getFaceImportFailedReportUrl(activeJobId)
-    anchor.download = `failed_report_${activeJobId}.csv`
-    document.body.appendChild(anchor)
-    anchor.click()
-    requestAnimationFrame(() => {
-      document.body.removeChild(anchor)
-    })
+    triggerUrlDownload(
+      personsApi.getFaceImportFailedReportUrl(activeJobId),
+      `failed_report_${activeJobId}.csv`
+    )
   }
 
   const total = job?.total ?? 0
@@ -234,7 +222,9 @@ export function PersonsFaceImportDialog() {
                 {isBusy ? (
                   <Loader2 className='size-5 animate-spin text-primary' />
                 ) : job?.status === 'COMPLETED' ? (
-                  <CheckCircle2 className='size-5 text-emerald-500' />
+                  <CheckCircle2
+                    className={cn('size-5', statusTextClass('active'))}
+                  />
                 ) : (
                   <XCircle className='size-5 text-destructive' />
                 )}
@@ -286,21 +276,23 @@ export function PersonsFaceImportDialog() {
                 </div>
                 <div className='text-lg font-semibold'>{processed}</div>
               </div>
-              <div className='rounded-md border border-emerald-500/30 bg-emerald-500/10 p-2'>
-                <div className='text-xs text-emerald-600 dark:text-emerald-400'>
-                  {t('faceImport.succeeded')}
-                </div>
-                <div className='text-lg font-semibold text-emerald-600 dark:text-emerald-400'>
-                  {succeeded}
-                </div>
+              <div
+                className={cn(
+                  'rounded-md border p-2',
+                  STATUS_LEVEL_CLASS.active
+                )}
+              >
+                <div className='text-xs'>{t('faceImport.succeeded')}</div>
+                <div className='text-lg font-semibold'>{succeeded}</div>
               </div>
-              <div className='rounded-md border border-destructive/30 bg-destructive/10 p-2'>
-                <div className='text-xs text-destructive'>
-                  {t('faceImport.failed')}
-                </div>
-                <div className='text-lg font-semibold text-destructive'>
-                  {failed}
-                </div>
+              <div
+                className={cn(
+                  'rounded-md border p-2',
+                  STATUS_LEVEL_CLASS.destructive
+                )}
+              >
+                <div className='text-xs'>{t('faceImport.failed')}</div>
+                <div className='text-lg font-semibold'>{failed}</div>
               </div>
             </div>
 
@@ -315,8 +307,8 @@ export function PersonsFaceImportDialog() {
             )}
 
             {job?.status === 'COMPLETED' && (
-              <Alert className='border-emerald-500/30 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300'>
-                <CheckCircle2 className='size-4 text-emerald-600' />
+              <Alert className={cn('border', STATUS_LEVEL_CLASS.active)}>
+                <CheckCircle2 className='size-4' />
                 <AlertTitle>{t('faceImport.completeTitle')}</AlertTitle>
                 <AlertDescription>
                   {t('faceImport.completeSummary', { succeeded, failed })}
