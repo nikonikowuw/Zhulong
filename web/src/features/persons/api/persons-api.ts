@@ -1,6 +1,6 @@
 import {
+  MULTIPART_HEADERS,
   apiClient,
-  readBlobErrorEnvelope,
   type ApiResponse,
 } from '@/lib/api-client'
 import { triggerDownload } from '@/lib/csv'
@@ -90,7 +90,8 @@ export const personsApi = {
     formData.append('file', file)
     const resp = await apiClient.post<ApiResponse<PersonImportPreviewResponse>>(
       '/persons/import/preview',
-      formData
+      formData,
+      { headers: MULTIPART_HEADERS }
     )
     return personImportPreviewResponseSchema.parse(resp.data.data)
   },
@@ -103,7 +104,8 @@ export const personsApi = {
     formData.append('file', file)
     const resp = await apiClient.post<ApiResponse<PersonImportCommitResponse>>(
       '/persons/import/commit',
-      formData
+      formData,
+      { headers: MULTIPART_HEADERS }
     )
     return personImportCommitResponseSchema.parse(resp.data.data)
   },
@@ -164,10 +166,11 @@ export const personsApi = {
   },
 
   /**
-   * 录入新人脸底库（本地图片文件直传）
+   * 录入新人脸底库（本地图片文件直传）。
    *
-   * 不显式设置 `Content-Type`：浏览器必须自己写 `multipart/form-data; boundary=…`。
-   * 手写成不带 boundary 的 `multipart/form-data` 在部分代理/网关下会被解析为空体。
+   * 必须显式传 `MULTIPART_HEADERS`：不传会继承客户端默认的
+   * `application/json`，Axios 在 `transformRequest` 阶段把 FormData 序列化成
+   * `{"file":{}}`，文件字节整段丢失，后端 `c.FormFile` 报 422。
    */
   async addFace(personId: string, data: File | FormData): Promise<Face> {
     const formData = data instanceof FormData ? data : new FormData()
@@ -177,7 +180,8 @@ export const personsApi = {
 
     const resp = await apiClient.post<ApiResponse<Face>>(
       `/persons/${encodeURIComponent(personId)}/faces`,
-      formData
+      formData,
+      { headers: MULTIPART_HEADERS }
     )
     return faceSchema.parse(resp.data.data)
   },
@@ -222,7 +226,8 @@ export const personsApi = {
     formData.append('file', file)
     const resp = await apiClient.post<ApiResponse<FaceImportJobResponse>>(
       '/persons/import-face-jobs',
-      formData
+      formData,
+      { headers: MULTIPART_HEADERS }
     )
     return faceImportJobResponseSchema.parse(resp.data.data)
   },
@@ -245,12 +250,11 @@ export const personsApi = {
   },
 
   /**
-   * 导出人员照片采像清单 CSV（支持按关键词与底库状态过滤）
+   * 导出人员照片采像清单 CSV（支持按关键词与底库状态过滤）。
    *
-   * 以 `responseType: 'blob'` 请求时，**服务端错误体也是 Blob**：直接
-   * `resp.data.message` 拿到的是 `undefined`，全局 toast 会退化成
-   * "Request failed with status code 500"。这里把 JSON 错误体读回文本并抛出
-   * `ApiError`，让错误链路拿到真正可展示的消息。
+   * 错误处理不在本函数：`responseType: 'blob'` 下服务端错误体也是 Blob，
+   * `@/lib/api-client` 的响应拦截器会把它读回文本并把服务端消息写到
+   * `error.message`。这里只负责 2xx 的成功路径。
    */
   async exportManifest(params?: {
     search?: string
@@ -263,11 +267,6 @@ export const personsApi = {
       },
       responseType: 'blob',
     })
-
-    if (resp.data.type === 'application/json') {
-      const envelope = await readBlobErrorEnvelope(resp.data)
-      throw new Error(envelope?.message ?? 'Export failed')
-    }
 
     const filename = parseContentDispositionFilename(
       resp.headers['content-disposition'] as string | undefined,

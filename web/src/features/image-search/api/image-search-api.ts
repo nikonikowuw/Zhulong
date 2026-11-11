@@ -1,4 +1,8 @@
-import { apiClient, type ApiResponse } from '@/lib/api-client'
+import {
+  MULTIPART_HEADERS,
+  apiClient,
+  type ApiResponse,
+} from '@/lib/api-client'
 import { getGalleryImageUrl } from '@/lib/media-url'
 import {
   imageSearchResponseSchema,
@@ -21,7 +25,7 @@ export const imageSearchApi = {
       '/persons/search-by-image',
       formData,
       {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: MULTIPART_HEADERS,
         onUploadProgress: params.onUploadProgress,
       }
     )
