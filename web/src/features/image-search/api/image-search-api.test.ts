@@ -1,6 +1,10 @@
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apiClient, type ApiResponse } from '@/lib/api-client'
+import {
+  MULTIPART_HEADERS,
+  apiClient,
+  type ApiResponse,
+} from '@/lib/api-client'
 import { imageSearchApi } from './image-search-api'
 
 function mockResponse<T>(
@@ -82,7 +86,10 @@ describe('imageSearchApi', () => {
       expect(adapter).toHaveBeenCalledTimes(1)
       const [config] = adapter.mock.calls[0]
       expect(config.url).toBe('/persons/search-by-image')
-      expect(config.headers.getContentType()).toBe('multipart/form-data')
+      // 与 `MULTIPART_HEADERS` 单一来源保持一致：常量改了这里必须一起变。
+      expect(config.headers.getContentType()).toBe(
+        MULTIPART_HEADERS['Content-Type']
+      )
       expect(config.onUploadProgress).toBe(onUploadProgress)
 
       const formData = config.data

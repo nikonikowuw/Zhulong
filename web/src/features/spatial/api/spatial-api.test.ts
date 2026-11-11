@@ -1,7 +1,13 @@
-import type { AxiosResponse } from 'axios'
-import { describe, expect, it, vi } from 'vitest'
+import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiClient, type ApiResponse } from '@/lib/api-client'
 import { spatialApi } from './spatial-api'
+
+const defaultAdapter = apiClient.defaults.adapter
+
+afterEach(() => {
+  apiClient.defaults.adapter = defaultAdapter
+})
 
 function mockResponse<T>(data: T, status = 200): AxiosResponse<ApiResponse<T>> {
   return {
@@ -119,5 +125,52 @@ describe('spatialApi', () => {
       endTime: '2026-10-29T11:00:00Z',
     })
     expect(res).toEqual(mockTraj)
+  })
+
+  it('uploadMap keeps FormData (and the file bytes) through real serialization', async () => {
+    // 只替换 transport，让 Axios 的默认头合并与 `transformRequest` 真跑一遍：
+    // 若请求头仍是默认的 application/json，FormData 会被序列化成
+    // `{"file":{},"name":"…"}`，文件字节整段丢失（规范 §2.8）。
+    const uploaded = {
+      id: 'map-2',
+      name: 'New Campus',
+      imageUrl: '/api/v1/spatial/maps/map-2/image',
+      width: 800,
+      height: 600,
+      createdAt: '2026-10-29T10:00:00Z',
+      updatedAt: '2026-10-29T10:00:00Z',
+    }
+    const adapter = vi.fn(
+      async (config: InternalAxiosRequestConfig<unknown>) => ({
+        data: { code: 'OK', message: 'success', data: uploaded },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      })
+    )
+    apiClient.defaults.adapter = adapter
+
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+    const file = new File([bytes], 'campus.png', { type: 'image/png' })
+    await expect(spatialApi.uploadMap('New Campus', file)).resolves.toEqual(
+      uploaded
+    )
+
+    const [config] = adapter.mock.calls[0]
+    expect(config.url).toBe('/spatial/maps')
+    expect(String(config.headers.getContentType())).toBe('multipart/form-data')
+
+    const formData = config.data
+    if (!(formData instanceof FormData)) {
+      throw new Error('uploadMap must send FormData, not a JSON string')
+    }
+    expect(formData.get('name')).toBe('New Campus')
+    const sent = formData.get('file')
+    if (!(sent instanceof File)) {
+      throw new Error('the file part must remain a File after serialization')
+    }
+    expect(sent.name).toBe('campus.png')
+    expect(new Uint8Array(await sent.arrayBuffer())).toEqual(bytes)
   })
 })

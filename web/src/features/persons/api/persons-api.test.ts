@@ -1,4 +1,8 @@
-import type { AxiosResponse } from 'axios'
+import {
+  AxiosError,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiClient, type ApiResponse } from '@/lib/api-client'
 import { personsApi } from './persons-api'
@@ -11,6 +15,60 @@ function mockResponse<T>(data: T, status = 200): AxiosResponse<ApiResponse<T>> {
     headers: {},
     config: {} as AxiosResponse['config'],
   }
+}
+
+/**
+ * 只替换 transport adapter，让 Axios 的 default headers 合并与
+ * `transformRequest` **真实跑一遍**。
+ *
+ * 直接 `vi.spyOn(apiClient, 'post')` 会把这两步全部跳掉 —— 曾经整个上传
+ * 链路就是因此变成证白的：代码里漏了 `MULTIPART_HEADERS`，`FormData` 被
+ * 序列化成 `{"file":{}}`，而 mock 测试仍然全绿。
+ */
+const defaultAdapter = apiClient.defaults.adapter
+
+afterEach(() => {
+  apiClient.defaults.adapter = defaultAdapter
+})
+
+function installAdapter<T>(data: T) {
+  const adapter = vi.fn(
+    async (
+      config: InternalAxiosRequestConfig<unknown>
+    ): Promise<AxiosResponse<ApiResponse<T>>> => ({
+      data: { code: 'OK', message: 'success', data },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    })
+  )
+  apiClient.defaults.adapter = adapter
+  return adapter
+}
+
+/** 断言 adapter 收到的是真正的 FormData，且文件字节完整。 */
+async function expectMultipartFile(
+  adapter: ReturnType<typeof installAdapter>,
+  expectedName: string,
+  expectedBytes: number
+) {
+  expect(adapter).toHaveBeenCalledTimes(1)
+  const [config] = adapter.mock.calls[0]
+  // 转换前必须覆盖掉默认的 application/json，否则 FormData 会被 JSON 化
+  expect(String(config.headers.getContentType())).toBe('multipart/form-data')
+  const formData = config.data
+  if (!(formData instanceof FormData)) {
+    throw new Error(
+      `expected FormData, got ${Object.prototype.toString.call(formData)}`
+    )
+  }
+  const file = formData.get('file')
+  if (!(file instanceof File)) {
+    throw new Error('form field "file" must be a File')
+  }
+  expect(file.name).toBe(expectedName)
+  expect(file.size).toBe(expectedBytes)
 }
 
 describe('personsApi', () => {
@@ -68,20 +126,13 @@ describe('personsApi', () => {
       importable: 1,
       failed: 0,
     }
-    const file = new File(['name,personId\nAlice,EMP001\n'], 'people.csv', {
-      type: 'text/csv',
-    })
-    const spy = vi
-      .spyOn(apiClient, 'post')
-      .mockResolvedValueOnce(mockResponse(preview))
+    const csv = 'name,personId\nAlice,EMP001\n'
+    const file = new File([csv], 'people.csv', { type: 'text/csv' })
+    const adapter = installAdapter(preview)
 
     await expect(personsApi.previewImport(file)).resolves.toEqual(preview)
-    // 不显式设置 Content-Type：浏览器必须自己写 multipart boundary，
-    // 手写成不带 boundary 的 multipart/form-data 在部分网关下会被解析成空体。
-    expect(spy).toHaveBeenCalledWith(
-      '/persons/import/preview',
-      expect.any(FormData)
-    )
+    expect(adapter.mock.calls[0][0].url).toBe('/persons/import/preview')
+    await expectMultipartFile(adapter, 'people.csv', csv.length)
   })
 
   it('commitImport uploads the same CSV file as multipart form data', async () => {
@@ -100,18 +151,13 @@ describe('personsApi', () => {
       imported: 1,
       failed: 0,
     }
-    const file = new File(['name,personId\nAlice,EMP001\n'], 'people.csv', {
-      type: 'text/csv',
-    })
-    const spy = vi
-      .spyOn(apiClient, 'post')
-      .mockResolvedValueOnce(mockResponse(result))
+    const csv = 'name,personId\nAlice,EMP001\n'
+    const file = new File([csv], 'people.csv', { type: 'text/csv' })
+    const adapter = installAdapter(result)
 
     await expect(personsApi.commitImport(file)).resolves.toEqual(result)
-    expect(spy).toHaveBeenCalledWith(
-      '/persons/import/commit',
-      expect.any(FormData)
-    )
+    expect(adapter.mock.calls[0][0].url).toBe('/persons/import/commit')
+    await expectMultipartFile(adapter, 'people.csv', csv.length)
   })
 
   it('getPerson calls GET /persons/:id', async () => {
@@ -215,25 +261,43 @@ describe('personsApi', () => {
     })
   })
 
-  it('addFace uploads file with multipart/form-data', async () => {
-    const file = new File(['dummy-bytes'], 'avatar.png', { type: 'image/png' })
+  it('addFace uploads the image bytes as multipart form data', async () => {
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
+    const file = new File([bytes], 'avatar.png', { type: 'image/png' })
     const createdFace = {
       id: 'f-02',
       ownerRowId: 'p-01',
       imagePath: '/data/faces/avatar.png',
       createdAt: '2026-10-14T00:00:00Z',
     }
-
-    const spy = vi
-      .spyOn(apiClient, 'post')
-      .mockResolvedValueOnce(mockResponse(createdFace, 201))
+    const adapter = installAdapter(createdFace)
 
     const res = await personsApi.addFace('p-01', file)
     expect(res).toEqual(createdFace)
-    expect(spy).toHaveBeenCalledWith(
-      '/persons/p-01/faces',
-      expect.any(FormData)
-    )
+    expect(adapter.mock.calls[0][0].url).toBe('/persons/p-01/faces')
+    await expectMultipartFile(adapter, 'avatar.png', bytes.length)
+  })
+
+  it('createFaceImportJob uploads the ZIP archive as multipart form data', async () => {
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04])
+    const file = new File([bytes], 'faces.zip', { type: 'application/zip' })
+    const job = {
+      jobId: 'j-01',
+      status: 'PENDING' as const,
+      total: 0,
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      createdAt: '2026-10-14T00:00:00Z',
+      updatedAt: '2026-10-14T00:00:00Z',
+    }
+    const adapter = installAdapter(job)
+
+    await expect(personsApi.createFaceImportJob(file)).resolves.toMatchObject({
+      jobId: 'j-01',
+    })
+    expect(adapter.mock.calls[0][0].url).toBe('/persons/import-face-jobs')
+    await expectMultipartFile(adapter, 'faces.zip', bytes.length)
   })
 
   it('getFaceImageUrl returns image URL path', () => {
@@ -363,28 +427,66 @@ describe('personsApi', () => {
     vi.useRealTimers()
   })
 
-  it('exportManifest surfaces the server message when the error body is a JSON blob', async () => {
-    // `responseType: 'blob'` 下错误体也是 Blob：不显式识别就会退化成
-    // "Request failed with status code 500"，用户看不到服务端的真实原因。
-    vi.spyOn(apiClient, 'get').mockResolvedValueOnce({
-      data: new Blob(
-        [
-          JSON.stringify({
-            code: 'INTERNAL_ERROR',
-            message: '导出失败：磁盘写入错误',
-            data: null,
-          }),
-        ],
-        { type: 'application/json' }
-      ),
-      status: 500,
-      statusText: 'OK',
-      headers: {},
-      config: {} as AxiosResponse['config'],
-    })
+  it('exportManifest surfaces the server message when the 500 body is a JSON blob', async () => {
+    // `responseType: 'blob'` 下错误体也是 Blob，且 5xx 一定走 reject：
+    // 断言必须搭在 adapter **抛 AxiosError** 上。旧版这里 mock 成
+    // `mockResolvedValueOnce({ status: 500 })` —— 一个真实 axios 永远不会
+    // 产生的响应形态，于是断言永远是绿的，而线上用户看到的是
+    // "Request failed with status code 500"。
+    apiClient.defaults.adapter = async (
+      config: InternalAxiosRequestConfig<unknown>
+    ) => {
+      throw new AxiosError(
+        'Request failed with status code 500',
+        AxiosError.ERR_BAD_RESPONSE,
+        config,
+        null,
+        {
+          data: new Blob(
+            [
+              JSON.stringify({
+                code: 'INTERNAL_ERROR',
+                message: '导出失败：磁盘写入错误',
+                data: null,
+              }),
+            ],
+            // 真实网络里 Content-Type 带 charset：旧实现的严格等值比较会漏判
+            { type: 'application/json; charset=utf-8' }
+          ),
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: {},
+          config,
+        }
+      )
+    }
 
     await expect(personsApi.exportManifest()).rejects.toThrow(
       '导出失败：磁盘写入错误'
+    )
+  })
+
+  it('exportManifest keeps the raw message when a 500 body is not an envelope', async () => {
+    apiClient.defaults.adapter = async (
+      config: InternalAxiosRequestConfig<unknown>
+    ) => {
+      throw new AxiosError(
+        'Request failed with status code 500',
+        AxiosError.ERR_BAD_RESPONSE,
+        config,
+        null,
+        {
+          data: new Blob(['<html>nginx 502</html>'], { type: 'text/html' }),
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: {},
+          config,
+        }
+      )
+    }
+
+    await expect(personsApi.exportManifest()).rejects.toThrow(
+      'Request failed with status code 500'
     )
   })
 })

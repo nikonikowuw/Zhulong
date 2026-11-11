@@ -1,14 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { apiClient } from '@/lib/api-client'
+import { MULTIPART_HEADERS, apiClient } from '@/lib/api-client'
 import { algorithmsApi } from './algorithms-api'
 
-vi.mock('@/lib/api-client', () => ({
-  apiClient: {
-    get: vi.fn(),
-    post: vi.fn(),
-    delete: vi.fn(),
-  },
-}))
+// 只桩掉 transport，保留真实的 `MULTIPART_HEADERS` 等共享常量：
+// 把整个模块替换成手写对象会让「代码引用了一个不存在的导出」在运行期才炸。
+vi.mock('@/lib/api-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api-client')>()
+  return {
+    ...actual,
+    apiClient: {
+      get: vi.fn(),
+      post: vi.fn(),
+      delete: vi.fn(),
+    },
+  }
+})
 
 describe('algorithms-api', () => {
   beforeEach(() => {
@@ -73,9 +79,7 @@ describe('algorithms-api', () => {
     expect(apiClient.post).toHaveBeenCalledWith(
       '/algorithms/install',
       expect.any(FormData),
-      expect.objectContaining({
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
+      expect.objectContaining({ headers: MULTIPART_HEADERS })
     )
   })
 
@@ -209,9 +213,7 @@ describe('algorithms-api', () => {
     expect(apiClient.post).toHaveBeenCalledWith(
       '/algorithms/algo_1/trial',
       expect.any(FormData),
-      expect.objectContaining({
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
+      expect.objectContaining({ headers: MULTIPART_HEADERS })
     )
   })
 })
