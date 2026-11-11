@@ -5,3 +5,4 @@
  * 统一从这里取，不穿透 `features/persons/hooks/*` 或 `features/persons/api/*`。
  */
 export { useAllPersons } from './hooks/use-persons'
+export { type Person } from './data/schema'

@@ -142,7 +142,7 @@ export const updatePersonSchema = createPersonSchema
 export type CreatePersonDto = z.infer<typeof createPersonSchema>
 export type UpdatePersonDto = z.infer<typeof updatePersonSchema>
 
-const faceImportJobStatusSchema = z.enum([
+export const faceImportJobStatusSchema = z.enum([
   'PENDING',
   'EXTRACTING',
   'PROCESSING',
@@ -150,6 +150,8 @@ const faceImportJobStatusSchema = z.enum([
   'FAILED',
   'CANCELLED',
 ])
+
+export type FaceImportJobStatus = z.infer<typeof faceImportJobStatusSchema>
 
 export const faceImportJobResponseSchema = z.object({
   jobId: z.string(),

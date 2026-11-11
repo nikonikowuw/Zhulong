@@ -8,6 +8,7 @@ import { personsApi, type GetPersonsParams } from '../api/persons-api'
 import {
   PERSONS_MAX_PAGE_SIZE,
   type CreatePersonDto,
+  type FaceImportJobStatus,
   type FaceListResponse,
   type Person,
   type PersonImportCommitResponse,
@@ -24,6 +25,23 @@ export function personFacesQueryKey(personId: string) {
 }
 
 /**
+ * 把可选参数归一化成**固定字段**的查询键。
+ *
+ * 调用方每次渲染都会新建一个对象字面量，`{a:1}` 与 `{a:1,b:undefined}` 在
+ * TanStack Query 的结构哈希里是两个不同的 key。值一样就不应该重新请求，
+ * 因此这里只给有值的字段留位。
+ */
+function personsQueryKey(params?: GetPersonsParams) {
+  return [
+    ...PERSONS_QUERY_KEY,
+    params?.page ?? 1,
+    params?.pageSize ?? 10,
+    params?.search ?? '',
+    params?.faceStatus ?? '',
+  ] as const
+}
+
+/**
  * 获取人员分页列表
  *
  * `placeholderData` 让翻页时保留上一页内容，避免整表闪成骨架屏；同时把
@@ -33,7 +51,7 @@ export function usePersons(
   params?: GetPersonsParams
 ): UseQueryResult<PersonListResponse, Error> {
   return useQuery({
-    queryKey: [...PERSONS_QUERY_KEY, params],
+    queryKey: personsQueryKey(params),
     queryFn: () => personsApi.getPersons(params),
     placeholderData: (previousData) => previousData,
   })
@@ -293,18 +311,18 @@ export function useExportPersonsManifest() {
   })
 }
 
-/** 人脸批量导入任务的终态集合。 */
-const FACE_IMPORT_TERMINAL_STATUSES = [
+/** 人脸批量导入任务的终态集合。用 `Set` 而非数组：不需要逐个 `as` 断言。 */
+const FACE_IMPORT_TERMINAL_STATUSES = new Set<FaceImportJobStatus>([
   'COMPLETED',
   'FAILED',
   'CANCELLED',
-] as const
+])
 
 /**
  * 轮询/查询人脸批量导入任务状态
  *
  * 轮询间隔随进度收敛：刚开始 1s 一次，任务进入中后段后 2s 一次即可，
- * 完成后立刻停表。终态判断与展示层共用同一个常量，避免两处列表漂移。
+ * 完成后立刻停表。
  */
 export function useFaceImportJob(jobId: string | null, enabled: boolean) {
   return useQuery({
@@ -314,13 +332,7 @@ export function useFaceImportJob(jobId: string | null, enabled: boolean) {
     refetchInterval: (query) => {
       const data = query.state.data
       if (!data) return 1000
-      if (
-        FACE_IMPORT_TERMINAL_STATUSES.includes(
-          data.status as (typeof FACE_IMPORT_TERMINAL_STATUSES)[number]
-        )
-      ) {
-        return false
-      }
+      if (FACE_IMPORT_TERMINAL_STATUSES.has(data.status)) return false
       return data.processed >= data.total / 2 ? 2000 : 1000
     },
   })
