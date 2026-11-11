@@ -140,12 +140,16 @@ export const camerasApi = {
 
     const items = [...first.items]
     const pageCount = Math.ceil(first.total / CAMERA_FETCH_PAGE_SIZE)
-    for (let page = 2; page <= pageCount; page += 1) {
-      const next = await camerasApi.getCameras({
-        page,
-        pageSize: CAMERA_FETCH_PAGE_SIZE,
-      })
-      items.push(...next.items)
+    const remainingPages = await Promise.all(
+      Array.from({ length: pageCount - 1 }, (_, i) =>
+        camerasApi.getCameras({
+          page: i + 2,
+          pageSize: CAMERA_FETCH_PAGE_SIZE,
+        })
+      )
+    )
+    for (const page of remainingPages) {
+      items.push(...page.items)
     }
 
     return { ...first, items, total: first.total }

@@ -1,4 +1,5 @@
 import { type ColumnDef } from '@tanstack/react-table'
+import i18n from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import { LongText } from '@/components/long-text'
@@ -76,6 +77,8 @@ export const camerasColumns: ColumnDef<Camera>[] = [
   },
   {
     id: 'rtspUrl',
+    accessorFn: (row) =>
+      row.streams?.find((s) => s.role === 'main')?.rtspUrl ?? '',
     header: ({ column }) => (
       <CameraColumnHeader column={column} titleKey='table.columns.rtspUrl' />
     ),
@@ -126,7 +129,7 @@ export const camerasColumns: ColumnDef<Camera>[] = [
       const date = new Date(raw)
       return (
         <span className='text-xs whitespace-nowrap text-muted-foreground'>
-          {date.toLocaleString()}
+          {date.toLocaleString(i18n.language || undefined)}
         </span>
       )
     },

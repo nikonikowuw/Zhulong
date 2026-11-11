@@ -12,7 +12,7 @@ import { CamerasPrimaryButtons } from './components/cameras-primary-buttons'
 import { CamerasProvider } from './components/cameras-provider'
 import { CamerasTable } from './components/cameras-table'
 import { useCameraEvents } from './hooks/use-camera-events'
-import { useCameras } from './hooks/use-cameras'
+import { useAllCameras } from './hooks/use-cameras'
 
 const route = getRouteApi('/_authenticated/cameras/')
 
@@ -21,23 +21,13 @@ function CamerasContent() {
   const search = route.useSearch()
   const navigate = route.useNavigate()
 
-  // 双轨状态 1: RESTful 分页查询 (与 URL 参数同步)
-  const page = typeof search.page === 'number' ? search.page : 1
-  const pageSize = typeof search.pageSize === 'number' ? search.pageSize : 10
-  const searchQuery =
-    typeof search.search === 'string' ? search.search : undefined
+  const { data, isLoading, isError, refetch } = useAllCameras()
 
-  const { data, isLoading, isError, refetch } = useCameras({
-    page,
-    pageSize,
-    search: searchQuery,
-  })
-
-  // 双轨状态 2: SSE 实时事件订阅 (零轮询原地 patch)
+  // 双轨状态: SSE 实时事件订阅 (零轮询原地 patch)
   useCameraEvents(true)
 
   const cameras = data?.items ?? []
-  const total = data?.total ?? 0
+  const total = data?.total ?? cameras.length
 
   return (
     <>

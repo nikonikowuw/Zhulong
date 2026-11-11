@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { type Table } from '@tanstack/react-table'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -8,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { type Camera } from '../data/schema'
-import { useDeleteCamera } from '../hooks/use-cameras'
+import { CAMERAS_QUERY_KEY, useDeleteCamera } from '../hooks/use-cameras'
 
 type CamerasMultiDeleteDialogProps = {
   open: boolean
@@ -26,7 +27,11 @@ export function CamerasMultiDeleteDialog({
   const { t } = useTranslation('cameras')
   const [value, setValue] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
-  const deleteMutation = useDeleteCamera({ suppressGlobalToast: true })
+  const queryClient = useQueryClient()
+  const deleteMutation = useDeleteCamera({
+    suppressGlobalToast: true,
+    suppressQueryInvalidate: true,
+  })
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedCameras = selectedRows.map((row) => row.original)
@@ -44,6 +49,7 @@ export function CamerasMultiDeleteDialog({
       )
       const fulfilled = results.filter((r) => r.status === 'fulfilled').length
       if (fulfilled > 0) {
+        void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
         toast.success(t('toast.batchDeleteSuccess'))
         setValue('')
         table.resetRowSelection()

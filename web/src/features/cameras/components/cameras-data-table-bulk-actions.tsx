@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { type Table } from '@tanstack/react-table'
 import {
   Activity,
@@ -23,7 +24,11 @@ import {
 } from '@/components/ui/tooltip'
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
 import { type Camera } from '../data/schema'
-import { useDiagnoseCamera, useToggleCameraEnabled } from '../hooks/use-cameras'
+import {
+  CAMERAS_QUERY_KEY,
+  useDiagnoseCamera,
+  useToggleCameraEnabled,
+} from '../hooks/use-cameras'
 import { CamerasMultiDeleteDialog } from './cameras-multi-delete-dialog'
 
 type DataTableBulkActionsProps = {
@@ -36,8 +41,12 @@ export function CamerasDataTableBulkActions({
   const { t } = useTranslation('cameras')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
+  const queryClient = useQueryClient()
 
-  const toggleMutation = useToggleCameraEnabled({ suppressGlobalToast: true })
+  const toggleMutation = useToggleCameraEnabled({
+    suppressGlobalToast: true,
+    suppressQueryInvalidate: true,
+  })
   const diagnoseMutation = useDiagnoseCamera({ suppressGlobalToast: true })
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
@@ -59,6 +68,7 @@ export function CamerasDataTableBulkActions({
       const fulfilled = results.filter((r) => r.status === 'fulfilled').length
       if (fulfilled > 0) {
         table.resetRowSelection()
+        void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
         return t('toast.batchStatusUpdated', { count: fulfilled })
       }
       throw new Error(t('toast.batchStatusUpdateFailed'))

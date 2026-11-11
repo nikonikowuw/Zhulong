@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   type SortingState,
   type VisibilityState,
@@ -28,7 +28,7 @@ import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
 import { type Camera } from '../data/schema'
 import { camerasColumns as columns } from './cameras-columns'
 import { CamerasDataTableBulkActions } from './cameras-data-table-bulk-actions'
-import { useCamerasContext } from './cameras-provider'
+import { useCamerasActions } from './cameras-provider'
 
 interface CamerasTableProps {
   data: Camera[]
@@ -42,7 +42,7 @@ interface CamerasTableProps {
 
 export function CamerasTable({
   data,
-  total,
+  total: _total,
   isLoading,
   isError,
   onRetry,
@@ -50,7 +50,7 @@ export function CamerasTable({
   navigate,
 }: CamerasTableProps) {
   const { t } = useTranslation('cameras')
-  const { setOpen } = useCamerasContext()
+  const { setOpen } = useCamerasActions()
 
   const [rowSelection, setRowSelection] = useState({})
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
@@ -97,8 +97,6 @@ export function CamerasTable({
     getSortedRowModel: getSortedRowModel(),
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
-    pageCount: Math.ceil(total / pagination.pageSize) || 1,
-    manualPagination: true,
   })
 
   const pageCount = table.getPageCount()
@@ -106,12 +104,40 @@ export function CamerasTable({
     ensurePageInRange(pageCount)
   }, [pageCount, ensurePageInRange])
 
-  const statusOptions = [
-    { label: t('status.online'), value: 'online' },
-    { label: t('status.offline'), value: 'offline' },
-    { label: t('status.error'), value: 'error' },
-    { label: t('status.unknown'), value: 'unknown' },
-  ]
+  const statusOptions = useMemo(
+    () => [
+      { label: t('status.online'), value: 'online' },
+      { label: t('status.offline'), value: 'offline' },
+      { label: t('status.error'), value: 'error' },
+      { label: t('status.unknown'), value: 'unknown' },
+    ],
+    [t]
+  )
+
+  const filters = useMemo(
+    () => [
+      {
+        columnId: 'health',
+        title: t('table.filterStatus'),
+        options: statusOptions,
+      },
+    ],
+    [t, statusOptions]
+  )
+
+  const columnLabels = useMemo(
+    () => ({
+      id: t('table.columns.id'),
+      name: t('table.columns.name'),
+      rtspUrl: t('table.columns.rtspUrl'),
+      health: t('table.columns.health'),
+      mainStream: t('table.columns.mainStream'),
+      subStream: t('table.columns.subStream'),
+      enabled: t('table.columns.enabled'),
+      updatedAt: t('table.columns.updatedAt'),
+    }),
+    [t]
+  )
 
   const isFiltered =
     Boolean(globalFilter) || (columnFilters && columnFilters.length > 0)
@@ -121,23 +147,8 @@ export function CamerasTable({
       <DataTableToolbar
         table={table}
         searchPlaceholder={t('table.searchPlaceholder')}
-        filters={[
-          {
-            columnId: 'health',
-            title: t('table.filterStatus'),
-            options: statusOptions,
-          },
-        ]}
-        columnLabels={{
-          id: t('table.columns.id'),
-          name: t('table.columns.name'),
-          rtspUrl: t('table.columns.rtspUrl'),
-          health: t('table.columns.health'),
-          mainStream: t('table.columns.mainStream'),
-          subStream: t('table.columns.subStream'),
-          enabled: t('table.columns.enabled'),
-          updatedAt: t('table.columns.updatedAt'),
-        }}
+        filters={filters}
+        columnLabels={columnLabels}
       />
 
       <div className='rounded-md border border-border bg-card'>

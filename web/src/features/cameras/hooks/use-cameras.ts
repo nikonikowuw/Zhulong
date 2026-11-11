@@ -94,6 +94,7 @@ export function useUpdateCamera() {
  */
 export function useToggleCameraEnabled(options?: {
   suppressGlobalToast?: boolean
+  suppressQueryInvalidate?: boolean
 }) {
   const queryClient = useQueryClient()
 
@@ -104,7 +105,9 @@ export function useToggleCameraEnabled(options?: {
         enabled,
       }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
+      if (!options?.suppressQueryInvalidate) {
+        void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
+      }
     },
     meta: {
       suppressGlobalToast: options?.suppressGlobalToast,
@@ -115,13 +118,18 @@ export function useToggleCameraEnabled(options?: {
 /**
  * 删除摄像机 Mutation
  */
-export function useDeleteCamera(options?: { suppressGlobalToast?: boolean }) {
+export function useDeleteCamera(options?: {
+  suppressGlobalToast?: boolean
+  suppressQueryInvalidate?: boolean
+}) {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (id: string) => camerasApi.deleteCamera(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
+      if (!options?.suppressQueryInvalidate) {
+        void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
+      }
     },
     meta: {
       suppressGlobalToast: options?.suppressGlobalToast,

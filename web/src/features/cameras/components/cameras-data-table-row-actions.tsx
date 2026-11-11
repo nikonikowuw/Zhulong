@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { type Camera } from '../data/schema'
-import { useCamerasContext } from './cameras-provider'
+import { useCamerasActions } from './cameras-provider'
 
 interface DataTableRowActionsProps {
   row: Row<Camera>
@@ -18,7 +18,7 @@ interface DataTableRowActionsProps {
 
 export function CamerasDataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation('cameras')
-  const { setOpen, setCurrentRow } = useCamerasContext()
+  const { setOpen, setCurrentRow } = useCamerasActions()
   const camera = row.original
 
   const handleAction = (action: 'edit' | 'diagnose' | 'delete') => {

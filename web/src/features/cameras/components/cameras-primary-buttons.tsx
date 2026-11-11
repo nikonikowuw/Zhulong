@@ -3,11 +3,11 @@ import { Plus, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { CAMERAS_QUERY_KEY } from '../hooks/use-cameras'
-import { useCamerasContext } from './cameras-provider'
+import { useCamerasActions } from './cameras-provider'
 
 export function CamerasPrimaryButtons() {
   const { t } = useTranslation('cameras')
-  const { setOpen, setCurrentRow } = useCamerasContext()
+  const { setOpen, setCurrentRow } = useCamerasActions()
   const queryClient = useQueryClient()
 
   const handleRefresh = () => {
