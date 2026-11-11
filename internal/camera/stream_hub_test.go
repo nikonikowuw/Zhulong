@@ -1515,8 +1515,8 @@ func TestStreamHub_ConsumeAIResults_RegionFiltering(t *testing.T) {
 		t.Fatal("timeout waiting for AI result SSE event")
 	}
 
-	// The consumer call precedes the eventHub broadcast in consumeAIResults, but
-	// poll with a bound rather than relying on that ordering assumption.
+	// BroadcastAIResult runs before consumer.ProcessInferenceResult so persistence
+	// latency never delays live overlays; poll with a bound for consumer completion.
 	var consumerResults []aitypes.InferenceResult
 	for range 100 {
 		consumerResults = consumer.snapshot()
@@ -1536,6 +1536,95 @@ func TestStreamHub_ConsumeAIResults_RegionFiltering(t *testing.T) {
 	}
 
 	hub.ReleaseAIStreamSubscriber(camID, "test_algo")
+}
+
+type blockingAIResultConsumer struct {
+	entered chan struct{}
+	unblock chan struct{}
+}
+
+func (c *blockingAIResultConsumer) ProcessInferenceResult(ctx context.Context, _ aitypes.InferenceResult) error {
+	select {
+	case c.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-c.unblock:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+func TestStreamHub_ConsumeAIResults_BroadcastPrecedesSlowConsumer(t *testing.T) {
+	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	eventHub := NewEventHub(NewStateRegistry())
+	defer eventHub.Close()
+
+	eventSub, _, err := eventHub.Subscribe()
+	if err != nil {
+		t.Fatalf("subscribe to event hub: %v", err)
+	}
+	defer eventHub.Unsubscribe(eventSub)
+
+	hub := NewStreamHub(mockEngine, store, lazyCipher, nil, eventHub, zap.NewNop())
+	defer hub.Close()
+
+	slowConsumer := &blockingAIResultConsumer{
+		entered: make(chan struct{}, 1),
+		unblock: make(chan struct{}),
+	}
+	hub.SetAIConsumer(slowConsumer)
+
+	aiSub, feed := engine.NewAIResultSubscriptionForTest(16)
+	ctx := context.Background()
+
+	mockEngine.nextStream = &mockMediaStream{source: newMockPacketSource(16), aiSub: aiSub}
+	if _, err := hub.ResolveAIStreamBrokerPath(ctx, camID); err != nil {
+		t.Fatalf("resolve AI stream failed: %v", err)
+	}
+	hub.AttachAIStreamSubscriber(camID, "test_algo")
+	defer func() {
+		close(slowConsumer.unblock)
+		hub.ReleaseAIStreamSubscriber(camID, "test_algo")
+	}()
+
+	feed([]byte(`{
+		"stream_id":1,
+		"pts":3600,
+		"pts_us":40000,
+		"cost_ms":14,
+		"task_type":"detection",
+		"algorithm_id":"test_algo",
+		"detections":[{"box":[0.1,0.2,0.3,0.4],"label":"person","score":0.92}],
+		"classifications":[],
+		"persons":[]
+	}`))
+
+	// 即使落库 consumer 阻塞未返回，SSE 订阅者也必须立即收到带 pts_us 的结果事件。
+	select {
+	case msg := <-eventSub.Channel():
+		if msg.Event != EventTypeAIResult {
+			t.Fatalf("expected EventTypeAIResult, got %s", msg.Event)
+		}
+		res, ok := msg.Data.(aitypes.InferenceResult)
+		if !ok {
+			t.Fatalf("expected aitypes.InferenceResult, got %T", msg.Data)
+		}
+		if res.PTSUS == nil || *res.PTSUS != 40000 {
+			t.Fatalf("expected pts_us=40000, got %v", res.PTSUS)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("SSE broadcast was blocked by slow AI consumer")
+	}
+
+	select {
+	case <-slowConsumer.entered:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected slow consumer to be invoked after broadcast")
+	}
 }
 
 // 热保留必须有路数上限：看过的机位不能按浏览历史无限常驻。

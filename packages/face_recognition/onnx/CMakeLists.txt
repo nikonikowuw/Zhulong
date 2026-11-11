@@ -48,7 +48,10 @@ add_executable(face_recognition
 target_include_directories(face_recognition PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(face_recognition PRIVATE
     ZHULONG_FACE_PLUGIN_VERSION="${ZHULONG_FACE_PLUGIN_VERSION}")
-target_link_options(face_recognition PRIVATE "LINKER:--exclude-libs,ALL")
+# --exclude-libs 是 GNU ld 专属（Apple ld 报 unknown options）；macOS 开发机跳过即可。
+if(NOT APPLE)
+    target_link_options(face_recognition PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
 target_link_libraries(face_recognition PRIVATE Zhulong::AlgoSDK Zhulong::AlgoRuntime)
 
 # 开发期自测（EXCLUDE_FROM_ALL、无安装规则 → 物理上进不了归档）

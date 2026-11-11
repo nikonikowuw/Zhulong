@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { z } from 'zod'
+import { AxiosError } from 'axios'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { ImagePlus, Loader2, X } from 'lucide-react'
@@ -27,23 +27,14 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { makePersonFormSchema, type PersonFormValues } from '../data/schema'
 import {
   useAddFace,
   useCreatePerson,
   useUpdatePerson,
 } from '../hooks/use-persons'
+import { FACE_IMAGE_ACCEPT, validateFaceImageFile } from '../persons-helpers'
 import { usePersonsActions, usePersonsState } from './persons-provider'
-
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
-const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
-
-const createPersonFormSchema = (t: (key: string) => string) =>
-  z.object({
-    name: z.string().trim().min(1, t('validation.nameRequired')).max(64),
-    personId: z.string().trim().max(64).optional(),
-  })
-
-type PersonFormValues = z.infer<ReturnType<typeof createPersonFormSchema>>
 
 export function PersonsActionDialog() {
   const { t } = useTranslation('persons')
@@ -87,39 +78,30 @@ export function PersonsActionDialog() {
     }
   }, [initialFacePreview])
 
-  const formSchema = useMemo(() => createPersonFormSchema(t), [t])
+  const formSchema = useMemo(() => makePersonFormSchema(t), [t])
 
   const form = useForm<PersonFormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      name: '',
-      personId: '',
-    },
+    defaultValues: { name: '', personId: '' },
   })
 
   useEffect(() => {
-    if (isOpen) {
-      if (isEdit && currentRow) {
-        form.reset({
-          name: currentRow.name,
-          personId: currentRow.personId || '',
-        })
-      } else {
-        form.reset({
-          name: '',
-          personId: '',
-        })
-      }
-    }
+    if (!isOpen) return
+    form.reset(
+      isEdit && currentRow
+        ? { name: currentRow.name, personId: currentRow.personId || '' }
+        : { name: '', personId: '' }
+    )
   }, [isOpen, isEdit, currentRow, form])
 
   const handleFaceSelect = (file: File) => {
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      toast.error(t('validation.invalidFileType'))
-      return
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error(t('validation.fileTooLarge'))
+    const problem = validateFaceImageFile(file)
+    if (problem) {
+      toast.error(
+        problem === 'invalidType'
+          ? t('validation.invalidFileType')
+          : t('validation.fileTooLarge')
+      )
       return
     }
     setInitialFaceFile(file)
@@ -135,6 +117,8 @@ export function PersonsActionDialog() {
         const updatePayload: { name: string; personId?: string } = {
           name: values.name,
         }
+        // 工号是创建后不可变的业务主键：已经绑定的行不发送该字段，
+        // 后端对「改成不同值」会返回 409 PERSON_ID_IMMUTABLE。
         if (!isPersonIdBound && values.personId && values.personId.trim()) {
           updatePayload.personId = values.personId.trim()
         }
@@ -175,7 +159,24 @@ export function PersonsActionDialog() {
       clearFaceFile()
       form.reset()
     } catch (err: unknown) {
-      handleFormError(form, err)
+      // 后端 `PERSON_ID_ALREADY_EXISTS` 是 409 且**不带 `details`**，
+      // `handleFormError` 无法自动落到字段上，必须显式映射回 personId，
+      // 否则用户只能在一条全局 toast 里看到结论、表单上毫无指示。
+      const code =
+        err instanceof AxiosError ? err.response?.data?.code : undefined
+      if (code === 'PERSON_ID_ALREADY_EXISTS') {
+        form.setError(
+          'personId',
+          { type: 'server', message: t('validation.personIdExists') },
+          { shouldFocus: true }
+        )
+        return
+      }
+      handleFormError(form, err, {
+        onUnhandled: (message) => {
+          form.setError('root.server', { type: 'server', message })
+        },
+      })
     }
   }
 
@@ -245,6 +246,12 @@ export function PersonsActionDialog() {
               )}
             />
 
+            {form.formState.errors.root?.server ? (
+              <p role='alert' className='text-sm text-destructive'>
+                {form.formState.errors.root.server.message}
+              </p>
+            ) : null}
+
             {!isEdit && (
               <div className='space-y-1.5'>
                 <span className='text-sm leading-none font-medium text-foreground'>
@@ -253,7 +260,7 @@ export function PersonsActionDialog() {
                 <input
                   type='file'
                   ref={fileInputRef}
-                  accept='image/jpeg,image/png,image/webp'
+                  accept={FACE_IMAGE_ACCEPT}
                   onChange={(e) => {
                     const f = e.target.files?.[0]
                     if (f) handleFaceSelect(f)
@@ -294,7 +301,7 @@ export function PersonsActionDialog() {
                     {initialFacePreview && (
                       <img
                         src={initialFacePreview}
-                        alt='preview'
+                        alt=''
                         className='h-14 w-14 shrink-0 rounded-md border object-cover'
                       />
                     )}

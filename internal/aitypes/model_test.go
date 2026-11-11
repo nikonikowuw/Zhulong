@@ -245,4 +245,62 @@ func TestParseInferenceResult(t *testing.T) {
 	if _, err := aitypes.ParseInferenceResult("cam_1", "algo", []byte(`{invalid}`)); err == nil {
 		t.Errorf("expected error for invalid json")
 	}
+
+	// 6. PTSUS fidelity (pts_us = 0 preserved, positive preserved, missing omitted) & non-null nested slices
+	ptsCases := []struct {
+		name      string
+		raw       string
+		wantNil   bool
+		wantPTSUS int64
+	}{
+		{
+			name:      "first_frame_zero_pts_us",
+			raw:       `{"stream_id":1,"pts":1000,"pts_us":0,"task_type":"scene_structure","persons":[{"track_id":7,"body_box":[0.1,0.2,0.4,0.8],"body_score":0.9}],"faces":[{"box":[0.15,0.22,0.25,0.35],"quality":0.92,"person_index":0,"matched":false}]}`,
+			wantNil:   false,
+			wantPTSUS: 0,
+		},
+		{
+			name:      "positive_pts_us",
+			raw:       `{"stream_id":1,"pts":4600,"pts_us":40000,"task_type":"detection","detections":[]}`,
+			wantNil:   false,
+			wantPTSUS: 40000,
+		},
+		{
+			name:    "omitted_pts_us",
+			raw:     `{"stream_id":1,"pts":4600,"task_type":"detection","detections":[]}`,
+			wantNil: true,
+		},
+	}
+
+	for _, tc := range ptsCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := aitypes.ParseInferenceResult("cam_1", "algo_test", []byte(tc.raw))
+			if err != nil {
+				t.Fatalf("ParseInferenceResult failed: %v", err)
+			}
+			marshaled, err := json.Marshal(parsed)
+			if err != nil {
+				t.Fatalf("json.Marshal failed: %v", err)
+			}
+			js := string(marshaled)
+			if tc.wantNil {
+				if parsed.PTSUS != nil {
+					t.Fatalf("expected nil PTSUS, got %v", *parsed.PTSUS)
+				}
+				if strings.Contains(js, `"pts_us"`) {
+					t.Fatalf("expected omitted pts_us in JSON, got %s", js)
+				}
+			} else {
+				if parsed.PTSUS == nil || *parsed.PTSUS != tc.wantPTSUS {
+					t.Fatalf("expected PTSUS=%d, got %v", tc.wantPTSUS, parsed.PTSUS)
+				}
+				if !strings.Contains(js, `"pts_us":`) {
+					t.Fatalf("expected pts_us in JSON, got %s", js)
+				}
+			}
+			if strings.Contains(js, `"faces":null`) || strings.Contains(js, `"landmarks":null`) {
+				t.Fatalf("expected non-null faces/landmarks arrays in JSON, got %s", js)
+			}
+		})
+	}
 }

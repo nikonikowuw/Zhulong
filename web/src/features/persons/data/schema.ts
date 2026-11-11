@@ -1,5 +1,13 @@
 import { z } from 'zod'
 
+/**
+ * 后端分页硬上限（Go 侧 `httputil.MaxPageSize`）。
+ *
+ * 放在契约模块而不是 api 模块：调用方的分页拉全逻辑与请求构造都要用，而 api
+ * 模块在测试里会被整体 mock，常量被一并抹掉后会变成导入期语义错误。
+ */
+export const PERSONS_MAX_PAGE_SIZE = 100
+
 export const faceSchema = z.object({
   id: z.string(),
   ownerRowId: z.string(),
@@ -23,12 +31,10 @@ export const personSchema = z.object({
 
 export type Person = z.infer<typeof personSchema>
 
-export const personImportIssueSchema = z.object({
+const personImportIssueSchema = z.object({
   field: z.string().optional(),
   code: z.string(),
 })
-
-export type PersonImportIssue = z.infer<typeof personImportIssueSchema>
 
 export const personImportRowSchema = z.object({
   line: z.number(),
@@ -63,12 +69,6 @@ export type PersonImportCommitResponse = z.infer<
   typeof personImportCommitResponseSchema
 >
 
-export const setPrimaryFaceSchema = z.object({
-  faceId: z.string().min(1, 'validation.faceIdRequired'),
-})
-
-export type SetPrimaryFaceDto = z.infer<typeof setPrimaryFaceSchema>
-
 export const personListResponseSchema = z.object({
   items: z.array(personSchema),
   total: z.number(),
@@ -91,18 +91,55 @@ export const faceListResponseSchema = z.object({
 
 export type FaceListResponse = z.infer<typeof faceListResponseSchema>
 
-export const createPersonSchema = z.object({
-  name: z.string().trim().min(1, 'validation.nameRequired').max(64),
-  personId: z.string().trim().max(64).optional().or(z.literal('')),
+/**
+ * PUT /persons/{id}/primary-face 的请求体。
+ *
+ * 由 API 层在发送前 `parse` 一遍：空字符串会让后端返回 422，在客户端就拦下
+ * 能把错误落到哪个字段看得更清楚。
+ */
+export const setPrimaryFaceSchema = z.object({
+  faceId: z.string().min(1, 'validation.faceIdRequired'),
 })
+
+/** 姓名长度上限，与后端 `personNameMaxLen` 保持一致。 */
+const PERSON_NAME_MAX_LENGTH = 64
+/** 工号长度上限，与后端 `personExternalIDMaxLen` 保持一致。 */
+const PERSON_ID_MAX_LENGTH = 64
+
+/**
+ * 人员表单的唯一 schema 定义。
+ *
+ * `create` / `update` 两个请求体在字段与约束上完全相同（后端 Update 也接受
+ * `personId`，改值会被 409 PERSON_ID_IMMUTABLE 拒绝），因此不再维护两份手写的
+ * zod 对象 —— 曾经的两份副本各自持有 `max(64)`，改一处必漂。
+ *
+ * `translate` 注入错误文案：表单需要当前语言的提示，测试与非 UI 解析只需要
+ * 稳定的判定结果，直接把 i18n key 当 message 用即可。
+ */
+export function makePersonFormSchema(translate: (key: string) => string) {
+  return z.object({
+    name: z
+      .string()
+      .trim()
+      .min(1, translate('validation.nameRequired'))
+      .max(PERSON_NAME_MAX_LENGTH, translate('validation.nameTooLong')),
+    personId: z
+      .string()
+      .trim()
+      .max(PERSON_ID_MAX_LENGTH, translate('validation.personIdTooLong'))
+      .optional(),
+  })
+}
+
+export type PersonFormValues = z.infer<ReturnType<typeof makePersonFormSchema>>
+
+/** 无 i18n 上下文的解析器（测试、外部调用方）。错误信息即文案 key。 */
+export const createPersonSchema = makePersonFormSchema((key) => key)
+
+/** @see createPersonSchema —— 同一份定义，语义上代表 Update 请求体。 */
+export const updatePersonSchema = createPersonSchema
 
 export type CreatePersonDto = z.infer<typeof createPersonSchema>
-
-export const updatePersonSchema = z.object({
-  name: z.string().trim().min(1, 'validation.nameRequired').max(64),
-  personId: z.string().trim().max(64).optional().or(z.literal('')),
-})
-
 export type UpdatePersonDto = z.infer<typeof updatePersonSchema>
 
 export const faceImportJobStatusSchema = z.enum([

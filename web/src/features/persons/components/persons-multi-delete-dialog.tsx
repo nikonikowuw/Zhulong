@@ -16,7 +16,43 @@ type PersonsMultiDeleteDialogProps = {
   table: Table<Person>
 }
 
-const CONFIRM_WORD = 'DELETE'
+/** 并发上限：100 行选中一次打出 100 个 DELETE 会把 SQLite 写锁和 HTTP 池一起打满。 */
+const DELETE_CONCURRENCY = 6
+
+/**
+ * 有界并发执行。返回结果按输入顺序对齐，`Promise.allSettled` 的语义不变。
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = Array.from(
+    { length: items.length },
+    () => ({ status: 'rejected', reason: new Error('not started') })
+  )
+  let cursor = 0
+
+  const run = async () => {
+    for (;;) {
+      const index = cursor++
+      if (index >= items.length) return
+      try {
+        results[index] = {
+          status: 'fulfilled',
+          value: await worker(items[index]),
+        }
+      } catch (err) {
+        results[index] = { status: 'rejected', reason: err }
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => run())
+  )
+  return results
+}
 
 export function PersonsMultiDeleteDialog({
   open,
@@ -32,19 +68,22 @@ export function PersonsMultiDeleteDialog({
     suppressInvalidate: true,
   })
 
+  const confirmWord = t('dialogs.confirmWord')
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedPersons = selectedRows.map((row) => row.original)
 
   const handleDelete = async () => {
-    if (value.trim() !== CONFIRM_WORD) {
-      toast.error(t('validation.nameRequired'))
+    if (value.trim() !== confirmWord) {
+      toast.error(t('dialogs.confirmWordMismatch'))
       return
     }
 
     setIsDeleting(true)
     try {
-      const results = await Promise.allSettled(
-        selectedPersons.map((p) => deleteMutation.mutateAsync(p.id))
+      const results = await mapWithConcurrency(
+        selectedPersons,
+        DELETE_CONCURRENCY,
+        (p) => deleteMutation.mutateAsync(p.id)
       )
       const successCount = results.filter(
         (r) => r.status === 'fulfilled'
@@ -64,7 +103,6 @@ export function PersonsMultiDeleteDialog({
       } else if (successCount > 0) {
         toast.warning(
           t('notifications.batchDeletePartial', {
-            defaultValue: `成功删除 ${successCount} 人，失败 ${failedCount} 人`,
             success: successCount,
             failed: failedCount,
           })
@@ -91,7 +129,7 @@ export function PersonsMultiDeleteDialog({
         }
       }}
       form='persons-multi-delete-form'
-      disabled={value.trim() !== CONFIRM_WORD || isDeleting}
+      disabled={value.trim() !== confirmWord || isDeleting}
       isLoading={isDeleting}
       destructive
       title={
@@ -118,12 +156,12 @@ export function PersonsMultiDeleteDialog({
 
           <Label className='my-4 flex flex-col items-start gap-1.5'>
             <span className='text-sm font-medium'>
-              {t('dialogs.confirmDeletePrompt', { word: CONFIRM_WORD })}
+              {t('dialogs.confirmDeletePrompt', { word: confirmWord })}
             </span>
             <Input
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder={CONFIRM_WORD}
+              placeholder={confirmWord}
               disabled={isDeleting}
               autoFocus
             />
@@ -140,6 +178,7 @@ export function PersonsMultiDeleteDialog({
           t('actions.batchDelete')
         )
       }
+      cancelBtnText={t('actions.cancel')}
     />
   )
 }

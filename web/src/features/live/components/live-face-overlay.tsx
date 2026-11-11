@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useAIOverlayCanvas } from '../hooks/use-ai-overlay-canvas'
 import { drawFaceOverlay } from '../services/face-overlay-renderer'
-import { type FaceSubItem } from '../types/ai-result'
+import { extractFacesFromEvent, type FaceSubItem } from '../types/ai-result'
 
 export interface LiveFaceOverlayProps {
   cameraId?: string | null
@@ -24,8 +24,7 @@ export function LiveFaceOverlay({
   const { containerRef, canvasRef } = useAIOverlayCanvas<FaceSubItem[]>({
     cameraId,
     enabled,
-    extract: (event) =>
-      (event.persons ?? []).flatMap((person) => person.faces ?? []),
+    extract: (event) => extractFacesFromEvent(event),
     draw: (ctx, size, faces) => {
       drawFaceOverlay({
         ctx,

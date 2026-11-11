@@ -167,8 +167,26 @@ func (req *UpdateTaskRequest) apply(t *Task) error {
 	// 兼容旧的扁平单算法字段：只在任务恰好挂了一个算法子项时生效。
 	if len(t.Algorithms) == 1 {
 		req.applyLegacyFields(&t.Algorithms[0])
+		return nil
+	}
+	if req.hasLegacyAlgorithmFields() && len(t.Algorithms) > 1 {
+		return apperr.Invalid(
+			"INVALID_REQUEST",
+			"cannot apply flat algorithm fields to a multi-algorithm task; specify algorithms array instead",
+			nil,
+		)
 	}
 	return nil
+}
+
+// hasLegacyAlgorithmFields reports whether any flat single-algorithm update fields were provided.
+func (req *UpdateTaskRequest) hasLegacyAlgorithmFields() bool {
+	return req.SampleFPS != 0 ||
+		req.SampleFPSAlt != 0 ||
+		req.ConfigJSON != "" ||
+		req.ConfigJSONAlt != "" ||
+		req.RegionConfigJSON != "" ||
+		req.RegionConfigJSONAlt != ""
 }
 
 func (req *UpdateTaskRequest) resolveCrop() (string, bool, error) {

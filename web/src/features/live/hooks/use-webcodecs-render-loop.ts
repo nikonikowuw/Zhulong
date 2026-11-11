@@ -45,6 +45,10 @@ export interface UseWebCodecsRenderLoopOptions {
    * 只用于日志，变化不会重建解码器。
    */
   traceId?: string
+  /**
+   * 呈现调度目标延迟（毫秒）。支持在线动态调整，变化不会重建 VideoDecoder。
+   */
+  targetLatencyMs?: number
 }
 
 export interface UseWebCodecsRenderLoopResult {
@@ -82,8 +86,10 @@ export function useWebCodecsRenderLoop({
   onFirstFrame,
   restartKey = '',
   traceId = 'unknown',
+  targetLatencyMs,
 }: UseWebCodecsRenderLoopOptions): UseWebCodecsRenderLoopResult {
   const schedulerRef = useRef<PresentationScheduler<VideoFrame> | null>(null)
+  const targetLatencyMsRef = useRef(targetLatencyMs)
   const rafIdRef = useRef<number | null>(null)
   const lastRafRequestedAtRef = useRef<number | null>(null)
   const decoderRef = useRef<StreamDecoder | null>(null)
@@ -103,6 +109,13 @@ export function useWebCodecsRenderLoop({
     onResyncRef.current = onResync
     onFirstFrameRef.current = onFirstFrame
   }, [traceId, isPaused, onFrameDrawn, onDecodeError, onResync, onFirstFrame])
+
+  useEffect(() => {
+    targetLatencyMsRef.current = targetLatencyMs
+    if (targetLatencyMs !== undefined) {
+      schedulerRef.current?.setTargetLatencyMs(targetLatencyMs)
+    }
+  }, [targetLatencyMs])
 
   /** 释放所有待呈现帧。视频帧不关闭会持续占用解码器的 buffer group。 */
   const releaseScheduledFrames = useCallback(() => {
@@ -136,7 +149,9 @@ export function useWebCodecsRenderLoop({
     if (!enabled) return
 
     const diagnostic = createRenderDiagnosticSession(logWebCodecsDiagnostic)
-    const scheduler = new PresentationScheduler<VideoFrame>()
+    const scheduler = new PresentationScheduler<VideoFrame>({
+      targetLatencyMs: targetLatencyMsRef.current,
+    })
     schedulerRef.current = scheduler
     // 起播/稳态观测全交给遥测采集器：它与排期、显存释放无耦合，可独立单测。
     const telemetry = createPreviewTelemetry({

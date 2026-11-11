@@ -358,12 +358,15 @@ func TestStoreSaveTaskFailsOnAlgorithmLookup(t *testing.T) {
 	seeded := seedTask(t, store, "cam_algo_lookup", "algo_fault_lookup")
 
 	fault := errors.New("injected: algorithm lookup failure")
-	// 只打中"按 (task_id, algorithm_id) 定位子项"的查询，主表查询照常成功。
+	// 只打中定位子项的查询，主表查询照常成功。
 	injectFaultOnQueryDest(
 		t,
 		db,
 		func(dest any) bool {
-			_, ok := dest.(*task.TaskAlgorithm)
+			if _, ok := dest.(*task.TaskAlgorithm); ok {
+				return true
+			}
+			_, ok := dest.(*[]task.TaskAlgorithm)
 			return ok
 		},
 		fault,

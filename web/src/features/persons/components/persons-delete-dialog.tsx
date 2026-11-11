@@ -1,6 +1,8 @@
 import { AlertTriangle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { formatLocalDateTime } from '@/lib/csv'
+import { errorMessageOf } from '@/lib/handle-server-error'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useDeletePerson } from '../hooks/use-persons'
 import { usePersonsActions, usePersonsState } from './persons-provider'
@@ -9,7 +11,7 @@ export function PersonsDeleteDialog() {
   const { t } = useTranslation('persons')
   const { open, currentRow } = usePersonsState()
   const { setOpen } = usePersonsActions()
-  const deleteMutation = useDeletePerson()
+  const deleteMutation = useDeletePerson({ suppressGlobalToast: true })
 
   const isOpen = open === 'delete' && Boolean(currentRow)
 
@@ -19,8 +21,8 @@ export function PersonsDeleteDialog() {
       await deleteMutation.mutateAsync(currentRow.id)
       toast.success(t('notifications.deleteSuccess'))
       setOpen(null)
-    } catch {
-      // 全局 mutationCache 已统一弹出服务端错误提示
+    } catch (err: unknown) {
+      toast.error(errorMessageOf(err))
     }
   }
 
@@ -44,7 +46,10 @@ export function PersonsDeleteDialog() {
           </p>
           <div className='rounded-md bg-muted p-2.5 font-mono text-xs text-muted-foreground'>
             ID: {currentRow?.id} | {t('fields.personId')}:{' '}
-            {currentRow?.personId}
+            {currentRow?.personId ?? '-'} | {t('fields.createdAt')}:{' '}
+            {currentRow?.createdAt
+              ? formatLocalDateTime(currentRow.createdAt)
+              : '-'}
           </div>
         </div>
       }

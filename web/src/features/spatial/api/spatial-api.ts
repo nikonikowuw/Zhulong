@@ -1,4 +1,8 @@
-import { apiClient, type ApiResponse } from '@/lib/api-client'
+import {
+  MULTIPART_HEADERS,
+  apiClient,
+  type ApiResponse,
+} from '@/lib/api-client'
 import {
   canvasMapSchema,
   cameraPositionInfoSchema,
@@ -34,11 +38,7 @@ export const spatialApi = {
     const res = await apiClient.post<ApiResponse<unknown>>(
       '/spatial/maps',
       formData,
-      {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      }
+      { headers: MULTIPART_HEADERS }
     )
     return canvasMapSchema.parse(res.data.data)
   },

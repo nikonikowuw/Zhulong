@@ -77,3 +77,22 @@ export function triggerDownload(blob: Blob, filename: string): void {
   document.body.removeChild(a)
   setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }
+
+/**
+ * 触发浏览器下载一个**服务端 URL**（非 Blob）。
+ *
+ * 与 `triggerDownload` 共享同一套语义（追加 → 点击 → 移除）。两个函数分开
+ * 是因为 `a.href` 指向远程资源时不应该 revoke —— 那个 URL 不属于本页。
+ *
+ * `download` 属性在同源时生效；跨域时浏览器会忽略它并直接导航。本项目所有
+ * 下载端点同源（`/api/v1/...`），因此可以依赖它。
+ */
+export function triggerUrlDownload(url: string, filename: string): void {
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}

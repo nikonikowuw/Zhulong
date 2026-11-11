@@ -53,6 +53,7 @@
   "networkError": "Network connection error",
   "unrecognizedFace": "Unregistered",
   "personLabel": "Person",
+  "detectionLabel": "Object",
   "unrecognizedPlate": "Unknown Plate",
   "enableAIOverlay": "Enable AI Overlay",
   "disableAIOverlay": "Disable AI Overlay",

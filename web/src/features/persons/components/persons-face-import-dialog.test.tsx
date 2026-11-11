@@ -55,6 +55,7 @@ describe('PersonsFaceImportDialog', () => {
   })
 
   it('opens with the upload prompt and downloads manifest template', async () => {
+    vi.useFakeTimers()
     const clickSpy = vi
       .spyOn(HTMLAnchorElement.prototype, 'click')
       .mockImplementation(() => {})
@@ -87,7 +88,11 @@ describe('PersonsFaceImportDialog', () => {
     await getByRole('button', { name: /下载清单模板/i }).click()
     expect(createUrlSpy).toHaveBeenCalled()
     expect(clickSpy).toHaveBeenCalled()
+    // revoke 必须延后：立即撤销会让 Safari/Firefox 在下载启动前丢掉 Blob。
+    expect(revokeUrlSpy).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(10_000)
     expect(revokeUrlSpy).toHaveBeenCalledWith('blob:mock-url')
+    vi.useRealTimers()
   })
 
   it('rejects non-zip files with an error toast', async () => {

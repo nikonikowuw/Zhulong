@@ -55,13 +55,16 @@ if("${ZhulongAlgoSDK_BACKEND}" STREQUAL "onnx")
     endif()
     find_library(ZHULONG_ONNXRUNTIME_LIBRARY NAMES onnxruntime libonnxruntime.so.1 HINTS ${_zhulong_ort_hints})
     # 发行版的运行时包常只装 versioned 文件（libonnxruntime.so.1.21），没有 -dev 的裸 .so
-    # 软链；此时 find_library 按名字找不到，用 glob 兜一层，链接期用 soname 即可。
+    # 软链；macOS 的 Homebrew/官方包则是 .dylib。此时 find_library 按名字找不到，用 glob 兜一层。
     if(NOT ZHULONG_ONNXRUNTIME_LIBRARY)
         file(GLOB _zhulong_ort_candidates
             "${_zhulong_ort_hints}/libonnxruntime.so*"
+            "${_zhulong_ort_hints}/libonnxruntime*.dylib"
             "/usr/lib/*/libonnxruntime.so.*"
             "/usr/lib/libonnxruntime.so.*"
-            "/usr/local/lib/libonnxruntime.so*")
+            "/usr/local/lib/libonnxruntime.so*"
+            "/opt/homebrew/lib/libonnxruntime*.dylib"
+            "/usr/local/lib/libonnxruntime*.dylib")
         if(_zhulong_ort_candidates)
             list(SORT _zhulong_ort_candidates)
             list(GET _zhulong_ort_candidates 0 ZHULONG_ONNXRUNTIME_LIBRARY)
@@ -71,8 +74,8 @@ if("${ZhulongAlgoSDK_BACKEND}" STREQUAL "onnx")
         message(FATAL_ERROR
             "找不到 libonnxruntime（本 SDK 前缀是 onnx 档位）。三条路选一条：\n"
             "  1) 在 Zhulong 仓库内用 make sdk-install BUNDLE_RUNTIME=1 生成自带运行时的前缀；\n"
-            "  2) 设置 -DONNXRUNTIME_ROOT=<onnxruntime 前缀>（须含 lib/libonnxruntime.so）；\n"
-            "  3) 让系统包管理器提供 libonnxruntime（Debian/Ubuntu: libonnxruntime-dev）。")
+            "  2) 设置 -DONNXRUNTIME_ROOT=<onnxruntime 前缀>（Linux: lib/libonnxruntime.so；macOS: lib/libonnxruntime*.dylib）；\n"
+            "  3) 让系统包管理器提供 libonnxruntime（Debian/Ubuntu: libonnxruntime-dev；macOS: brew install onnxruntime）。")
     endif()
     set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
         INTERFACE_LINK_LIBRARIES "${ZHULONG_ONNXRUNTIME_LIBRARY};${_zhulong_sdk_system_libs}")
@@ -82,7 +85,9 @@ if("${ZhulongAlgoSDK_BACKEND}" STREQUAL "onnx")
     # 只给 rpath 时**链接期**仍会报 undefined reference —— 那是 ld 找不到传递依赖，
     # 不是运行期问题。
     get_filename_component(_zhulong_ort_dir "${ZHULONG_ONNXRUNTIME_LIBRARY}" DIRECTORY)
-    if(_zhulong_ort_dir MATCHES "^${ZHULONG_SDK_PREFIX}/")
+    # GNU ld 专属：DT_RPATH 沿依赖链继承，--disable-new-dtags 把 RUNPATH 降级为 RPATH。
+    # Apple ld 既不认 -rpath-link / --disable-new-dtags，也用 @rpath 机制，故只在非 APPLE 生效。
+    if(NOT APPLE AND _zhulong_ort_dir MATCHES "^${ZHULONG_SDK_PREFIX}/")
         # ⚠️ `--disable-new-dtags` 不是洁癖：ORT 的 NEEDED 是 libonnx → libprotobuf →
         #    libabsl_*（三层），而 DT_RUNPATH **不向下继承**，默认的 new-dtags 只能保证
         #    第一层被找到，跑到容器里就成了「编译通过、运行期找不到 libabsl」。
@@ -121,9 +126,11 @@ elseif("${ZhulongAlgoSDK_BACKEND}" STREQUAL "rknn")
     endif()
     set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
         INTERFACE_LINK_LIBRARIES "${ZHULONG_RKNNRT_LIBRARY};${_zhulong_sdk_system_libs}")
-    # 传递依赖符号解析（librknnrt 的 NEEDED 不在默认搜索路径时）
-    set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
-        INTERFACE_LINK_OPTIONS "-Wl,-rpath-link,${_zhulong_vendor_dir}")
+    # 传递依赖符号解析（librknnrt 的 NEEDED 不在默认搜索路径时）；-rpath-link 是 GNU ld 专属。
+    if(NOT APPLE)
+        set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
+            INTERFACE_LINK_OPTIONS "-Wl,-rpath-link,${_zhulong_vendor_dir}")
+    endif()
 else()
     message(FATAL_ERROR "未知的 SDK 后端档位: '${ZhulongAlgoSDK_BACKEND}'")
 endif()
@@ -171,8 +178,10 @@ if("${ZhulongAlgoSDK_VISION_BACKEND}" STREQUAL "rga")
     set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
         INTERFACE_LINK_LIBRARIES "${_zhulong_rga_library}")
     get_filename_component(_zhulong_rga_link_dir "${_zhulong_rga_library}" DIRECTORY)
-    set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
-        INTERFACE_LINK_OPTIONS "-Wl,-rpath-link,${_zhulong_rga_link_dir}")
+    if(NOT APPLE)
+        set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
+            INTERFACE_LINK_OPTIONS "-Wl,-rpath-link,${_zhulong_rga_link_dir}")
+    endif()
 elseif(NOT "${ZhulongAlgoSDK_VISION_BACKEND}" STREQUAL "cpu")
     message(FATAL_ERROR "未知的 SDK 视觉后端档位: '${ZhulongAlgoSDK_VISION_BACKEND}'")
 endif()

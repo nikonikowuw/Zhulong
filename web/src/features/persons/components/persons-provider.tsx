@@ -1,8 +1,16 @@
-import React, { createContext, useContext, useMemo, useState } from 'react'
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import useDialogState from '@/hooks/use-dialog-state'
 import { type Person } from '../data/schema'
+import { PERSONS_QUERY_KEY, useFaceImportJob } from '../hooks/use-persons'
 
-export type PersonsDialogType =
+type PersonsDialogType =
   | 'create'
   | 'edit'
   | 'delete'
@@ -10,24 +18,33 @@ export type PersonsDialogType =
   | 'import'
   | 'import-faces'
 
-export interface PreviewImageInfo {
+interface PreviewImageInfo {
   url: string
   title: string
 }
 
-export interface PersonsStateContextType {
+interface PersonsStateContextType {
   open: PersonsDialogType | null
   currentRow: Person | null
   previewImage: PreviewImageInfo | null
+  /**
+   * 人脸批量导入任务 id。
+   *
+   * 放在 Provider 而不是弹窗里：弹窗是 `lazy` + 条件挂载，关闭即卸载。若 id
+   * 存在弹窗内部，「后台运行」就是一句假话 —— 组件一卸载，轮询停了，任务完成
+   * 后也没人刷新列表。挂到全局后，弹窗关闭期间轮询与失效照常进行。
+   */
+  faceImportJobId: string | null
 }
 
-export interface PersonsActionsContextType {
+interface PersonsActionsContextType {
   setOpen: (str: PersonsDialogType | null) => void
   setCurrentRow: React.Dispatch<React.SetStateAction<Person | null>>
   setPreviewImage: React.Dispatch<React.SetStateAction<PreviewImageInfo | null>>
+  setFaceImportJobId: React.Dispatch<React.SetStateAction<string | null>>
 }
 
-export interface PersonsContextType
+interface PersonsContextType
   extends PersonsStateContextType, PersonsActionsContextType {}
 
 const PersonsStateContext = createContext<PersonsStateContextType | null>(null)
@@ -41,22 +58,28 @@ export function PersonsProvider({ children }: { children: React.ReactNode }) {
   const [previewImage, setPreviewImage] = useState<PreviewImageInfo | null>(
     null
   )
+  const [faceImportJobId, setFaceImportJobId] = useState<string | null>(null)
+
+  // 轮询与「任务完成后刷新列表」都在这里跑，不依赖弹窗是否挂载。
+  const queryClient = useQueryClient()
+  const jobQuery = useFaceImportJob(faceImportJobId, true)
+  const jobStatus = jobQuery.data?.status
+  useEffect(() => {
+    if (jobStatus === 'COMPLETED') {
+      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+    }
+  }, [jobStatus, queryClient])
 
   const stateValue = useMemo<PersonsStateContextType>(
-    () => ({
-      open,
-      currentRow,
-      previewImage,
-    }),
-    [open, currentRow, previewImage]
+    () => ({ open, currentRow, previewImage, faceImportJobId }),
+    [open, currentRow, previewImage, faceImportJobId]
   )
 
+  // 所有 setter 引用恒定（`useDialogState` 用 `useCallback`，`useState` 的
+  // setter 天然稳定），因此这个对象在整个 Provider 生命周期内只创建一次 ——
+  // 弹窗切换与行变化都不会让「只订阅动作」的消费者重渲染。
   const actionsValue = useMemo<PersonsActionsContextType>(
-    () => ({
-      setOpen,
-      setCurrentRow,
-      setPreviewImage,
-    }),
+    () => ({ setOpen, setCurrentRow, setPreviewImage, setFaceImportJobId }),
     [setOpen]
   )
 
@@ -95,11 +118,5 @@ export const usePersonsContext = (): PersonsContextType => {
   const state = usePersonsState()
   const actions = usePersonsActions()
 
-  return useMemo(
-    () => ({
-      ...state,
-      ...actions,
-    }),
-    [state, actions]
-  )
+  return useMemo(() => ({ ...state, ...actions }), [state, actions])
 }

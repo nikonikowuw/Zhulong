@@ -370,52 +370,43 @@ func syncTaskAlgorithms(ctx context.Context, tx *gorm.DB, task *Task, now time.T
 		return fmt.Errorf("prune removed task algorithms: %w", err)
 	}
 
+	existingList, err := gorm.G[TaskAlgorithm](tx).Where("task_id = ?", task.ID).Find(ctx)
+	if err != nil {
+		return fmt.Errorf("locate existing task algorithms: %w", err)
+	}
+	existingMap := make(map[string]TaskAlgorithm, len(existingList))
+	for _, item := range existingList {
+		existingMap[item.AlgorithmID] = item
+	}
+
 	for i := range task.Algorithms {
-		if err := upsertTaskAlgorithm(
-			ctx,
-			tx,
-			&task.Algorithms[i],
-			now,
-		); err != nil {
-			return err
+		sub := &task.Algorithms[i]
+		if existing, ok := existingMap[sub.AlgorithmID]; ok {
+			sub.ID = existing.ID
+			sub.CreatedAt = existing.CreatedAt
+			sub.UpdatedAt = now
+			columns := map[string]any{
+				"enabled":            sub.Enabled,
+				"sample_fps":         sub.SampleFPS,
+				"config_json":        sub.ConfigJSON,
+				"region_config_json": sub.RegionConfigJSON,
+				"schedule_json":      sub.ScheduleJSON,
+				"updated_at":         sub.UpdatedAt,
+			}
+			err := tx.Model(&TaskAlgorithm{}).Where("id = ?", sub.ID).Updates(columns).Error
+			if err != nil {
+				return fmt.Errorf("update task algorithm %q: %w", sub.AlgorithmID, err)
+			}
+		} else {
+			// 主键已由 assignIDs 在事务开头补全（syncTaskAlgorithms 只处理已登记的子项）。
+			sub.CreatedAt = now
+			sub.UpdatedAt = now
+			if err := gorm.G[TaskAlgorithm](tx).Create(ctx, sub); err != nil {
+				return fmt.Errorf("insert task algorithm %q: %w", sub.AlgorithmID, err)
+			}
 		}
 	}
 	return nil
-}
-
-// upsertTaskAlgorithm 按 (task_id, algorithm_id) upsert 单条子项，并保留既有业务主键与创建时间。
-func upsertTaskAlgorithm(ctx context.Context, tx *gorm.DB, sub *TaskAlgorithm, now time.Time) error {
-	existing, err := gorm.G[TaskAlgorithm](tx).
-		Where("task_id = ? AND algorithm_id = ?", sub.TaskID, sub.AlgorithmID).
-		First(ctx)
-	switch {
-	case err == nil:
-		sub.ID = existing.ID
-		sub.CreatedAt = existing.CreatedAt
-		sub.UpdatedAt = now
-		columns := map[string]any{
-			"enabled":            sub.Enabled,
-			"sample_fps":         sub.SampleFPS,
-			"config_json":        sub.ConfigJSON,
-			"region_config_json": sub.RegionConfigJSON,
-			"schedule_json":      sub.ScheduleJSON,
-			"updated_at":         sub.UpdatedAt,
-		}
-		err := tx.Model(&TaskAlgorithm{}).Where("id = ?", sub.ID).Updates(columns).Error
-		if err != nil {
-			return fmt.Errorf("update task algorithm %q: %w", sub.AlgorithmID, err)
-		}
-		return nil
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		// 主键已由 assignIDs 在事务开头补全（syncTaskAlgorithms 只处理已登记的子项）。
-		sub.CreatedAt = now
-		sub.UpdatedAt = now
-		if err := gorm.G[TaskAlgorithm](tx).Create(ctx, sub); err != nil {
-			return fmt.Errorf("insert task algorithm %q: %w", sub.AlgorithmID, err)
-		}
-		return nil
-	}
-	return fmt.Errorf("locate task algorithm %q: %w", sub.AlgorithmID, err)
 }
 
 // cameraTaskTaken 报告该摄像头是否已存在分析任务。

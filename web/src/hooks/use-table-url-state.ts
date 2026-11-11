@@ -23,6 +23,17 @@ type UseTableUrlStateParams = {
     pageSizeKey?: string
     defaultPage?: number
     defaultPageSize?: number
+    /**
+     * 允许的最大每页行数，默认 100（与后端 `httputil.MaxPageSize` 对齐）。
+     *
+     * 为什么必须夹紧：URL 是外部可写输入，`?pageSize=0` 会让 `Math.ceil(total/0)`
+     * 变成 `Infinity`，分页条会渲染出「共 Infinity 页」并把页码按钮铺满。
+     * 后端 `Normalize()` 会 clamp，但前端把非法值直接喂给算术而不是自己算出来，
+     * 属于「能被手改 URL 打崩」的输入。
+     */
+    maxPageSize?: number
+    /** 允许的最大页码，默认 100000（与后端 `httputil.MaxPage` 对齐）。 */
+    maxPage?: number
   }
   globalFilter?: {
     enabled?: boolean
@@ -80,6 +91,8 @@ export function useTableUrlState(
   const pageSizeKey = paginationCfg?.pageSizeKey ?? ('pageSize' as string)
   const defaultPage = paginationCfg?.defaultPage ?? 1
   const defaultPageSize = paginationCfg?.defaultPageSize ?? 10
+  const maxPageSize = paginationCfg?.maxPageSize ?? 100
+  const maxPage = paginationCfg?.maxPage ?? 100000
 
   const globalFilterKey = globalFilterCfg?.key ?? ('filter' as string)
   const globalFilterEnabled = globalFilterCfg?.enabled ?? true
@@ -116,8 +129,26 @@ export function useTableUrlState(
     const pageNum = typeof rawPage === 'number' ? rawPage : defaultPage
     const pageSizeNum =
       typeof rawPageSize === 'number' ? rawPageSize : defaultPageSize
-    return { pageIndex: Math.max(0, pageNum - 1), pageSize: pageSizeNum }
-  }, [search, pageKey, pageSizeKey, defaultPage, defaultPageSize])
+    // 非有限值（NaN / Infinity）与越界值一律落回合法区间，绝不把非法算术结果
+    // 传给 `Math.ceil(total / pageSize)`。
+    const safePageSize =
+      Number.isFinite(pageSizeNum) && pageSizeNum >= 1
+        ? Math.min(Math.floor(pageSizeNum), maxPageSize)
+        : defaultPageSize
+    const safePage =
+      Number.isFinite(pageNum) && pageNum >= 1
+        ? Math.min(Math.floor(pageNum), maxPage)
+        : defaultPage
+    return { pageIndex: Math.max(0, safePage - 1), pageSize: safePageSize }
+  }, [
+    search,
+    pageKey,
+    pageSizeKey,
+    defaultPage,
+    defaultPageSize,
+    maxPageSize,
+    maxPage,
+  ])
 
   const onPaginationChange: OnChangeFn<PaginationState> = (updater) => {
     const next = typeof updater === 'function' ? updater(pagination) : updater
@@ -147,7 +178,11 @@ export function useTableUrlState(
               ? updater(globalFilter ?? '')
               : updater
           const value = trimGlobal ? next.trim() : next
+          // 逐字输入的检索必须用 replace：否则打一个八字英文关键词就会往历史栈
+          // 里压八条记录，用户按一次「后退」只退掉一个字符，链接分享也会指向
+          // 某一个中间态。分页/筛选并没有这个问题。
           navigate({
+            replace: true,
             search: (prev) => ({
               ...(prev as SearchRecord),
               [pageKey]: undefined,

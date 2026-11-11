@@ -1,5 +1,4 @@
 import { memo } from 'react'
-import { type Row } from '@tanstack/react-table'
 import {
   Image as ImageIcon,
   MoreHorizontal,
@@ -18,15 +17,19 @@ import {
 import { type Person } from '../data/schema'
 import { usePersonsActions } from './persons-provider'
 
-interface DataTableRowActionsProps {
-  row: Row<Person>
+interface PersonsRowActionsProps {
+  /**
+   * 目标人员。收 `Person` 而不是 `Row<Person>`：表格列与画廊卡片都要用，
+   * 而画廊里根本没有一个完整的 row 对象 —— 曾经为了复用去伪造
+   * `{ original: person } as Row<Person>`，等于把类型系统关掉换一次调用。
+   */
+  person: Person
 }
 
 export const PersonsDataTableRowActions = memo(
-  function PersonsDataTableRowActions({ row }: DataTableRowActionsProps) {
+  function PersonsDataTableRowActions({ person }: PersonsRowActionsProps) {
     const { t } = useTranslation('persons')
     const { setOpen, setCurrentRow } = usePersonsActions()
-    const person = row.original
 
     const handleAction = (action: 'edit' | 'faces' | 'delete') => {
       setCurrentRow(person)
@@ -42,7 +45,6 @@ export const PersonsDataTableRowActions = memo(
             aria-label={t('table.columns.actions')}
           >
             <MoreHorizontal className='h-4 w-4' />
-            <span className='sr-only'>{t('table.columns.actions')}</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end' className='w-40'>

@@ -29,7 +29,12 @@
       "enrolled": "Enrolled",
       "missing": "Missing"
     },
-    "missingFaceBadge": "Pending"
+    "missingFaceBadge": "Pending",
+    "selectAll": "Select all on this page",
+    "selectRow": "Select this row",
+    "selectPerson": "Select {{name}}",
+    "previewAvatarOf": "Preview {{name}} face photo",
+    "manageFacesOf": "Manage face templates for {{name}}"
   },
   "actions": {
     "retry": "Retry",
@@ -39,7 +44,6 @@
     "edit": "Edit Person",
     "delete": "Delete Person",
     "manageFaces": "Manage Faces",
-    "addFace": "Enroll Face",
     "deleteFace": "Delete Face",
     "cancel": "Cancel",
     "confirm": "Confirm",
@@ -63,13 +67,11 @@
     "deleteDesc": "This action cannot be undone. Deleting '{{name}}' will cascade and remove all enrolled face templates!",
     "facesTitle": "Face Templates - {{name}}",
     "facesDesc": "Manage 1:N face templates for feature extraction and recognition.",
-    "addFaceTitle": "Upload Face Photo",
-    "addFaceDesc": "Choose or drag-and-drop a clear face photo. The server will store it and extract features.",
-    "deleteFaceTitle": "Delete Face Template?",
-    "deleteFaceDesc": "This template photo and its feature vector will be permanently removed.",
     "batchDeleteTitle": "Delete {{count}} Personnel?",
     "batchDeleteDesc": "This action will permanently delete {{count}} personnel records and all associated face data. This cannot be undone.",
-    "confirmDeletePrompt": "Type '{{word}}' to confirm this destructive action:"
+    "confirmDeletePrompt": "Type '{{word}}' to confirm this destructive action:",
+    "confirmWord": "DELETE",
+    "confirmWordMismatch": "Confirmation word does not match"
   },
   "fields": {
     "name": "Name",
@@ -79,9 +81,7 @@
     "personIdDisabledTip": "Personnel ID is immutable and cannot be changed",
     "dragDropTip": "Click to select or drag photo here",
     "dragDropDesc": "Supports JPG, PNG, WebP (max 10MB)",
-    "changePhoto": "Change Photo",
     "removeSelected": "Remove Selected Photo",
-    "uploadAndEnroll": "Upload and Enroll",
     "faceCountUnit": "{{count}} photo(s)",
     "initialFace": "Initial Face Template (Optional)",
     "initialFaceTip": "Drag or click to upload; automatically modeled as primary face upon creation",
@@ -94,8 +94,7 @@
   "status": {
     "emptyFaces": "No face templates enrolled",
     "emptyFacesDesc": "Select or drag photos below to enroll faces.",
-    "unregistered": "Not Enrolled",
-    "enrolledCount": "{{count}} Face(s)"
+    "unregistered": "Not Enrolled"
   },
   "notifications": {
     "createSuccess": "Person '{{name}}' created successfully",
@@ -107,22 +106,24 @@
     "batchDeleteError": "Batch delete failed",
     "addFaceSuccess": "Face template enrolled successfully",
     "deleteFaceSuccess": "Face template removed",
-    "setPrimarySuccess": "Primary face updated successfully"
+    "setPrimarySuccess": "Primary face updated successfully",
+    "addFacePartial": "{{success}} enrolled, {{failed}} failed",
+    "batchDeletePartial": "Deleted {{success}}, failed {{failed}}"
   },
   "validation": {
     "nameRequired": "Name is required",
-    "fileRequired": "Please select a photo to upload",
     "fileTooLarge": "File exceeds the 10MB limit",
     "invalidFileType": "Only JPG, PNG or WebP images are allowed",
-    "faceIdRequired": "Please specify a face ID"
+    "faceIdRequired": "Please specify a face ID",
+    "nameTooLong": "Name must be at most 64 characters",
+    "personIdTooLong": "Personnel ID must be at most 64 characters",
+    "personIdExists": "This personnel ID is already taken"
   },
   "sheet": {
-    "detailTitle": "Personnel Profile & Face Gallery",
-    "detailDesc": "View personnel details and manage multi-angle face templates.",
-    "personInfo": "Basic Info",
     "faceGallery": "Face Gallery",
     "copyId": "Copy ID",
-    "idCopied": "Personnel ID copied to clipboard"
+    "idCopied": "Personnel ID copied to clipboard",
+    "idCopyFailed": "Copy failed. Select the ID and copy manually."
   },
   "imagePreview": {
     "zoomOut": "Zoom out (-)",
@@ -132,7 +133,8 @@
     "exitFullscreen": "Exit fullscreen",
     "openOriginal": "View original in a new tab",
     "close": "Close (Esc)",
-    "shortcutHint": "{{cancel}} (ESC) · Scroll to zoom · Double-click to toggle"
+    "shortcutHint": "{{cancel}} (ESC) · Scroll to zoom · Double-click to toggle",
+    "title": "Face photo preview"
   },
   "import": {
     "title": "Bulk Import Personnel",

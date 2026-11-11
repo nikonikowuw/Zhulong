@@ -61,6 +61,8 @@ struct HardwareFrame {
     // =========================================================================
     int64_t  pts{0};                       /**< 原生时间戳 (源流时间基下的滴答数，回传推理结果事件时保持对齐) */
     bool     has_pts{false};               /**< 是否存在有效 PTS (⚠️ 缺失 PTS 不得被当作有效时间戳 0) */
+    int64_t  pts_us{0};                    /**< 预览归一化微秒显示时间戳 (与 PreviewNormalizer::pts_us 同源，仅 has_pts_us=true 时有效) */
+    bool     has_pts_us{false};            /**< 是否携带有效的预览归一化微秒时间戳 */
     int32_t  time_base_num{1};             /**< 来源流时间基分子 (Timebase Numerator) */
     int32_t  time_base_den{90000};         /**< 来源流时间基分母 (Timebase Denominator) */
     uint64_t stream_id{0};                 /**< 所属物理流 ID */
@@ -128,6 +130,8 @@ struct HardwareFrame {
                         other.plane_strides[3]},
           pts(other.pts),
           has_pts(other.has_pts),
+          pts_us(other.pts_us),
+          has_pts_us(other.has_pts_us),
           time_base_num(other.time_base_num),
           time_base_den(other.time_base_den),
           stream_id(other.stream_id),
@@ -175,6 +179,8 @@ struct HardwareFrame {
             }
             pts = other.pts;
             has_pts = other.has_pts;
+            pts_us = other.pts_us;
+            has_pts_us = other.has_pts_us;
             time_base_num = other.time_base_num;
             time_base_den = other.time_base_den;
             stream_id = other.stream_id;

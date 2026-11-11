@@ -29,7 +29,12 @@
       "enrolled": "已建模",
       "missing": "未录入"
     },
-    "missingFaceBadge": "待采像"
+    "missingFaceBadge": "待采像",
+    "selectAll": "全选本页",
+    "selectRow": "选择该行",
+    "selectPerson": "选择 {{name}}",
+    "previewAvatarOf": "查看 {{name}} 的人脸大图",
+    "manageFacesOf": "管理 {{name}} 的人脸底库"
   },
   "actions": {
     "retry": "重试",
@@ -39,7 +44,6 @@
     "edit": "编辑人员",
     "delete": "删除人员",
     "manageFaces": "人脸管理",
-    "addFace": "录入人脸",
     "deleteFace": "删除人脸",
     "cancel": "取消",
     "confirm": "确定",
@@ -47,7 +51,6 @@
     "saving": "保存中...",
     "deleting": "删除中...",
     "setPrimary": "设为主人脸",
-    "import": "批量导入",
     "importFaces": "人脸批量导入",
     "exportManifest": "导出采像清单"
   },
@@ -64,13 +67,11 @@
     "deleteDesc": "此操作无法撤销。删除人员「{{name}}」将同时级联清空其所有已录入的人脸底库和特征数据！",
     "facesTitle": "人脸底库管理 - {{name}}",
     "facesDesc": "一人多照底库维护。系统比对时将基于所有已录入的人脸特征进行综合识别。",
-    "addFaceTitle": "上传新人脸照片",
-    "addFaceDesc": "选择或拖拽本地人脸清晰照片直接上传，系统将自动落盘并提取特征向量。",
-    "deleteFaceTitle": "确认删除此人脸底库？",
-    "deleteFaceDesc": "此操作将从特征库中移除该张底库图片，不可恢复。",
     "batchDeleteTitle": "确认批量删除 {{count}} 位人员？",
     "batchDeleteDesc": "此操作将永久删除选中的 {{count}} 位人员档案，并级联清除其全部人脸底库与特征数据，不可恢复！",
-    "confirmDeletePrompt": "请输入「{{word}}」以确认高危操作："
+    "confirmDeletePrompt": "请输入「{{word}}」以确认高危操作：",
+    "confirmWord": "删除",
+    "confirmWordMismatch": "确认词不匹配，请重新输入"
   },
   "fields": {
     "name": "姓名",
@@ -80,9 +81,7 @@
     "personIdDisabledTip": "工号为不可变业务主键，不可修改",
     "dragDropTip": "点击选择或将人脸照片拖拽至此处",
     "dragDropDesc": "支持 JPG、PNG、WebP 格式（最大 10MB）",
-    "changePhoto": "更换照片",
     "removeSelected": "移除选中的照片",
-    "uploadAndEnroll": "上传并录入人脸",
     "faceCountUnit": "{{count}} 张",
     "initialFace": "首张人脸底库（可选）",
     "initialFaceTip": "拖拽或点击上传，建档后将自动提取特征并设为主图",
@@ -95,8 +94,7 @@
   "status": {
     "emptyFaces": "暂无人脸底库照片",
     "emptyFacesDesc": "请在下方区域选择或拖拽图片进行录入。",
-    "unregistered": "未录入底库",
-    "enrolledCount": "{{count}} 张底库"
+    "unregistered": "未录入底库"
   },
   "notifications": {
     "createSuccess": "人员「{{name}}」创建成功",
@@ -108,22 +106,24 @@
     "batchDeleteError": "批量删除失败",
     "addFaceSuccess": "人脸底库录入成功",
     "deleteFaceSuccess": "人脸底库已移除",
-    "setPrimarySuccess": "主人脸设置成功"
+    "setPrimarySuccess": "主人脸设置成功",
+    "addFacePartial": "成功录入 {{success}} 张，{{failed}} 张失败",
+    "batchDeletePartial": "成功删除 {{success}} 人，{{failed}} 人失败"
   },
   "validation": {
     "nameRequired": "请输入人员姓名",
-    "fileRequired": "请选择要上传的人脸照片",
     "fileTooLarge": "图片大小超过 10MB 限制",
     "invalidFileType": "只允许上传 JPG、PNG 或 WebP 格式图片",
-    "faceIdRequired": "请指定人脸 ID"
+    "faceIdRequired": "请指定人脸 ID",
+    "nameTooLong": "姓名不能超过 64 个字符",
+    "personIdTooLong": "工号不能超过 64 个字符",
+    "personIdExists": "该工号已被占用，请更换"
   },
   "sheet": {
-    "detailTitle": "人员档案与人脸底库",
-    "detailDesc": "查看人员详细信息，管理一人多照人脸底库及特征建模状态。",
-    "personInfo": "基本信息",
     "faceGallery": "底库画廊",
     "copyId": "复制工号",
-    "idCopied": "工号已复制到剪贴板"
+    "idCopied": "工号已复制到剪贴板",
+    "idCopyFailed": "复制失败，请手动选择工号复制"
   },
   "imagePreview": {
     "zoomOut": "缩小 (-)",
@@ -133,7 +133,8 @@
     "exitFullscreen": "退出全屏",
     "openOriginal": "在新标签页中查看原图",
     "close": "关闭 (Esc)",
-    "shortcutHint": "{{cancel}} (ESC) · 滚轮缩放 · 双击快速放大/还原"
+    "shortcutHint": "{{cancel}} (ESC) · 滚轮缩放 · 双击快速放大/还原",
+    "title": "人脸大图预览"
   },
   "import": {
     "title": "批量导入人员",

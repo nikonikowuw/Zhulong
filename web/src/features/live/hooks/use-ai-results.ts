@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { AIResultService } from '../services/ai-result-service'
-import { type AIResultEvent, type FaceSubItem } from '../types/ai-result'
+import {
+  extractFacesFromEvent,
+  type AIResultEvent,
+  type FaceSubItem,
+} from '../types/ai-result'
 
 interface UseAIResultsOptions {
   cameraId?: string | null
@@ -38,15 +42,8 @@ export function useAIResults({
 
     const service = AIResultService.getInstance()
     const unsubscribe = service.subscribeCamera(cameraId, (event) => {
-      // 提取结构化人脸项
-      const extractedFaces: FaceSubItem[] = []
-      if (event.persons) {
-        for (const p of event.persons) {
-          if (p.faces && p.faces.length > 0) {
-            extractedFaces.push(...p.faces)
-          }
-        }
-      }
+      // 提取结构化人脸项（兼容 SCENE_STRUCTURE v2 顶层 faces 与旧版嵌套结构）
+      const extractedFaces = extractFacesFromEvent(event)
 
       setLatestResult(event)
       setFaces(extractedFaces)

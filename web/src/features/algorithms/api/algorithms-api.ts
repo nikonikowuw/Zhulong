@@ -1,4 +1,8 @@
-import { apiClient, type ApiResponse } from '@/lib/api-client'
+import {
+  MULTIPART_HEADERS,
+  apiClient,
+  type ApiResponse,
+} from '@/lib/api-client'
 import {
   algorithmActionResponseSchema,
   algorithmListResponseSchema,
@@ -46,9 +50,7 @@ export const algorithmsApi = {
       '/algorithms/install',
       formData,
       {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+        headers: MULTIPART_HEADERS,
         onUploadProgress: (progressEvent) => {
           if (progressEvent.total && progressEvent.total > 0 && onProgress) {
             const percent = Math.round(
@@ -129,11 +131,7 @@ export const algorithmsApi = {
     const resp = await apiClient.post<ApiResponse<unknown>>(
       `/algorithms/${id}/trial`,
       formData,
-      {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      }
+      { headers: MULTIPART_HEADERS }
     )
     return algorithmTrialResultSchema.parse(resp.data.data)
   },

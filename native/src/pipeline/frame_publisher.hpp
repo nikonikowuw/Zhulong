@@ -87,6 +87,29 @@ public:
      */
     void push_frame(HardwareFrame::ConstPtr frame);
 
+    /**
+     * @brief 记录已发布帧的采集时钟 / 原始 PTS 与预览归一化时间戳映射
+     *
+     * 仅保存轻量标量（零 HardwareFrame 引用），用于在宿主侧将算法回传的
+     * MSG_RESULT 精确对齐回同源物理流的 WebCodecs 预览时间戳（pts_us）。
+     */
+    void record_published_pts(int64_t capture_time_ms, int64_t raw_pts,
+                              bool has_pts, int64_t pts_us);
+
+    /**
+     * @brief 根据回传的 capture_time_ms（优先）或原始 PTS 反查对应的归一化 pts_us
+     *
+     * @param has_capture_time_ms 回传 JSON 是否携带 capture_time_ms
+     * @param capture_time_ms     帧发布时打下的单调采集毫秒时间戳（> 0 时作为唯一帧标识匹配）
+     * @param has_raw_pts         回传 JSON 是否携带原始 pts
+     * @param raw_pts             解码帧原始 PTS（仅在 capture_time_ms <= 0 时作为回退匹配键）
+     * @param[out] out_pts_us     命中时写入对应的微秒级归一化时间戳（首帧合法值为 0）
+     * @return 命中返回 true，未命中返回 false
+     */
+    bool resolve_pts_us(bool has_capture_time_ms, int64_t capture_time_ms,
+                        bool has_raw_pts, int64_t raw_pts,
+                        int64_t &out_pts_us) const noexcept;
+
 private:
     /** @brief 线程入口：逐帧收口异常，绝不让其穿出 noexcept 线程入口 */
     void publish_loop() noexcept;
@@ -115,8 +138,18 @@ private:
     // 兼顾实测 1~4 帧回传延迟与解码器缓冲安全冗余）。
     // ⚠️ mutable + mutex：查询接口是 const，但需要加锁读取。
     static constexpr size_t history_capacity = 4;
+    static constexpr size_t published_pts_capacity = 64;
+
+    struct PublishedPtsRecord {
+        int64_t capture_time_ms{0};
+        int64_t raw_pts{0};
+        bool has_pts{false};
+        int64_t pts_us{0};
+    };
+
     mutable std::mutex latest_mutex_;
     std::deque<HardwareFrame::ConstPtr> history_frames_;
+    std::deque<PublishedPtsRecord> published_pts_records_;
 
     MotionDetector motion_detector_;
 };

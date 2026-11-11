@@ -303,17 +303,16 @@ func TestUpdateTaskRequestApply(t *testing.T) {
 		}
 	})
 
-	t.Run("legacy flat fields skip multi algorithm tasks", func(t *testing.T) {
+	t.Run("legacy flat fields reject multi algorithm tasks", func(t *testing.T) {
 		tsk := baseTask()
 		tsk.Algorithms = append(tsk.Algorithms, TaskAlgorithm{AlgorithmID: "algo_b", SampleFPS: 5})
-		if err := (&UpdateTaskRequest{SampleFPS: 30}).apply(tsk); err != nil {
-			t.Fatalf("apply failed: %v", err)
+		err := (&UpdateTaskRequest{SampleFPS: 30}).apply(tsk)
+		if err == nil {
+			t.Fatal("expected error when applying legacy flat fields to multi-algorithm task")
 		}
-
-		for _, sub := range tsk.Algorithms {
-			if sub.SampleFPS != 5 {
-				t.Errorf("flat fps must not leak into multi-algorithm task, got %+v", sub)
-			}
+		var appErr *apperr.Error
+		if !errors.As(err, &appErr) || appErr.Code != "INVALID_REQUEST" {
+			t.Fatalf("expected INVALID_REQUEST, got %v", err)
 		}
 	})
 

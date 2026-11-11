@@ -23,6 +23,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -734,8 +737,237 @@ void Engine::unsubscribe_ai_results(Zhulong_stream_id id, Zhulong_subscription_i
     }
 }
 
+namespace {
+
+constexpr bool is_json_ws(char ch) noexcept {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+bool parse_json_int64(const char *data, size_t size, size_t &pos, int64_t &out_val) noexcept {
+    if (pos >= size) return false;
+    bool negative = false;
+    size_t cur = pos;
+    if (data[cur] == '-') {
+        negative = true;
+        ++cur;
+    }
+    if (cur >= size || data[cur] < '0' || data[cur] > '9') {
+        return false;
+    }
+    const uint64_t limit = negative
+        ? (static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) + 1ULL)
+        : static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+    uint64_t acc = 0;
+    while (cur < size && data[cur] >= '0' && data[cur] <= '9') {
+        const uint64_t digit = static_cast<uint64_t>(data[cur] - '0');
+        if (acc > (limit - digit) / 10ULL) {
+            return false;
+        }
+        acc = acc * 10ULL + digit;
+        ++cur;
+    }
+    if (cur < size) {
+        const char next = data[cur];
+        if (!is_json_ws(next) && next != ',' && next != '}') {
+            return false;
+        }
+    }
+    if (negative) {
+        if (acc == static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) + 1ULL) {
+            out_val = std::numeric_limits<int64_t>::min();
+        } else {
+            out_val = -static_cast<int64_t>(acc);
+        }
+    } else {
+        out_val = static_cast<int64_t>(acc);
+    }
+    pos = cur;
+    return true;
+}
+
+/**
+ * @brief 在宿主侧为算法回传的顶层 JSON 补齐归一化预览时间戳 `pts_us`
+ *
+ * 算法包（`.zpk`）独立编译分发，IPC `FrameDispatchMsg` 固定 184 字节；
+ * Runner 在 `MSG_RESULT` 中原样回传 `capture_time_ms` 与 `pts`，宿主据此从
+ * `FramePublisher` 的轻量标量环反查 `PreviewNormalizer` 产出的 `pts_us` 并注入顶层 JSON，
+ * 零改动兼容新旧算法包。
+ */
+bool enrich_ai_result_pts_us(const FramePublisher &publisher,
+                             const char *payload, size_t size,
+                             std::string &out) {
+    size_t start = 0;
+    while (start < size && is_json_ws(payload[start])) {
+        ++start;
+    }
+    if (start >= size || payload[start] != '{') {
+        return false;
+    }
+    size_t end = size;
+    while (end > start && is_json_ws(payload[end - 1])) {
+        --end;
+    }
+    if (end <= start + 1 || payload[end - 1] != '}') {
+        return false;
+    }
+
+    int depth = 0;
+    bool expecting_key = false;
+    bool has_capture_time_ms = false;
+    int64_t capture_time_ms = 0;
+    bool has_raw_pts = false;
+    int64_t raw_pts = 0;
+
+    size_t pos = start;
+    while (pos < end) {
+        while (pos < end && is_json_ws(payload[pos])) {
+            ++pos;
+        }
+        if (pos >= end) break;
+
+        const char ch = payload[pos];
+        if (ch == '"') {
+            const size_t key_start = pos + 1;
+            ++pos;
+            bool has_escape = false;
+            while (pos < end) {
+                if (payload[pos] == '\\') {
+                    has_escape = true;
+                    pos += 2;
+                    if (pos > end) return false;
+                    continue;
+                }
+                if (payload[pos] == '"') {
+                    break;
+                }
+                ++pos;
+            }
+            if (pos >= end || payload[pos] != '"') {
+                return false;
+            }
+            const size_t key_end = pos;
+            ++pos; // 跳过右引号
+
+            if (depth == 1 && expecting_key) {
+                while (pos < end && is_json_ws(payload[pos])) {
+                    ++pos;
+                }
+                if (pos >= end || payload[pos] != ':') {
+                    return false;
+                }
+                ++pos; // 跳过 ':'
+                expecting_key = false;
+
+                if (!has_escape) {
+                    const std::string_view key(payload + key_start, key_end - key_start);
+                    if (key == "pts_us") {
+                        return false;
+                    }
+                    if (key == "capture_time_ms" || key == "pts") {
+                        while (pos < end && is_json_ws(payload[pos])) {
+                            ++pos;
+                        }
+                        int64_t parsed = 0;
+                        if (parse_json_int64(payload, end, pos, parsed)) {
+                            if (key == "capture_time_ms") {
+                                has_capture_time_ms = true;
+                                capture_time_ms = parsed;
+                            } else {
+                                has_raw_pts = true;
+                                raw_pts = parsed;
+                            }
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        if (ch == '{') {
+            ++depth;
+            if (depth == 1) {
+                expecting_key = true;
+            }
+            ++pos;
+            continue;
+        }
+        if (ch == '[') {
+            ++depth;
+            ++pos;
+            continue;
+        }
+        if (ch == '}' || ch == ']') {
+            --depth;
+            if (depth < 0) {
+                return false;
+            }
+            if (depth == 0) {
+                if (ch != '}' || pos != end - 1) {
+                    return false;
+                }
+                ++pos;
+                break;
+            }
+            ++pos;
+            continue;
+        }
+        if (ch == ',') {
+            if (depth == 1) {
+                expecting_key = true;
+            }
+            ++pos;
+            continue;
+        }
+        ++pos;
+    }
+
+    if (depth != 0 || (!has_capture_time_ms && !has_raw_pts)) {
+        return false;
+    }
+
+    int64_t pts_us = 0;
+    if (!publisher.resolve_pts_us(has_capture_time_ms, capture_time_ms,
+                                  has_raw_pts, raw_pts, pts_us)) {
+        return false;
+    }
+
+    const std::string suffix = ",\"pts_us\":" + std::to_string(pts_us);
+    out.clear();
+    out.reserve(size + suffix.size());
+    out.append(payload, end - 1);
+    out.append(suffix);
+    out.append(payload + (end - 1), size - (end - 1));
+    return true;
+}
+
+} // namespace
+
 void Engine::dispatch_ai_result(Zhulong_stream_id stream_id, const char* payload, size_t size) {
     if (!payload || size == 0) return;
+
+    std::shared_ptr<FramePublisher> publisher;
+    {
+        std::lock_guard<std::mutex> lock(control);
+        const auto pub_it = publishers.find(stream_id);
+        if (pub_it != publishers.end()) {
+            publisher = pub_it->second;
+        }
+    }
+
+    std::string enriched;
+    const char *dispatch_data = payload;
+    size_t dispatch_size = size;
+    if (publisher) {
+        try {
+            if (enrich_ai_result_pts_us(*publisher, payload, size, enriched)) {
+                dispatch_data = enriched.data();
+                dispatch_size = enriched.size();
+            }
+        } catch (...) {
+            // OOM 等异常降级保留原始 JSON，绝不中断 AI 结果派发
+        }
+    }
+
     std::vector<std::shared_ptr<AISubscription>> targets;
     {
         std::lock_guard<std::mutex> lock(ai_sub_mutex);
@@ -747,7 +979,7 @@ void Engine::dispatch_ai_result(Zhulong_stream_id stream_id, const char* payload
     }
     for (const auto& sub : targets) {
         try {
-            sub->invoke(stream_id, payload, size);
+            sub->invoke(stream_id, dispatch_data, dispatch_size);
         } catch (...) {
             ai_callback_exceptions_.fetch_add(1, std::memory_order_relaxed);
             ZL_LOGW(stream_id, "pipeline.engine", "ai_callback_exception");

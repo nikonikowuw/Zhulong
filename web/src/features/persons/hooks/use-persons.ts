@@ -6,7 +6,9 @@ import {
 } from '@tanstack/react-query'
 import { personsApi, type GetPersonsParams } from '../api/persons-api'
 import {
+  PERSONS_MAX_PAGE_SIZE,
   type CreatePersonDto,
+  type FaceImportJobStatus,
   type FaceListResponse,
   type Person,
   type PersonImportCommitResponse,
@@ -17,14 +19,39 @@ import {
 
 export const PERSONS_QUERY_KEY = ['persons'] as const
 
+/** 单个人脸底库的 query key。失效时按 personId 精确命中。 */
+export function personFacesQueryKey(personId: string) {
+  return [...PERSONS_QUERY_KEY, personId, 'faces'] as const
+}
+
+/**
+ * 把可选参数归一化成**固定字段**的查询键。
+ *
+ * 调用方每次渲染都会新建一个对象字面量，`{a:1}` 与 `{a:1,b:undefined}` 在
+ * TanStack Query 的结构哈希里是两个不同的 key。值一样就不应该重新请求，
+ * 因此这里只给有值的字段留位。
+ */
+function personsQueryKey(params?: GetPersonsParams) {
+  return [
+    ...PERSONS_QUERY_KEY,
+    params?.page ?? 1,
+    params?.pageSize ?? 10,
+    params?.search ?? '',
+    params?.faceStatus ?? '',
+  ] as const
+}
+
 /**
  * 获取人员分页列表
+ *
+ * `placeholderData` 让翻页时保留上一页内容，避免整表闪成骨架屏；同时把
+ * `isPlaceholderData` 透出去，调用方可以据此做「正在载入下一页」的弱提示。
  */
 export function usePersons(
   params?: GetPersonsParams
 ): UseQueryResult<PersonListResponse, Error> {
   return useQuery({
-    queryKey: [...PERSONS_QUERY_KEY, params],
+    queryKey: personsQueryKey(params),
     queryFn: () => personsApi.getPersons(params),
     placeholderData: (previousData) => previousData,
   })
@@ -57,28 +84,33 @@ export function useCommitPersonImport() {
 
 /**
  * 获取单个人员详情
+ *
+ * `id` 为空时返回 `null` 而不是 `Promise.reject`：拒绝态会污染全局 QueryCache
+ * 的 401/500 分支，也会让调用方拿到一个假的 Error。
  */
-export function usePerson(id?: string): UseQueryResult<Person, Error> {
+export function usePerson(id?: string): UseQueryResult<Person | null, Error> {
   return useQuery({
     queryKey: [...PERSONS_QUERY_KEY, 'detail', id],
-    queryFn: () =>
-      id ? personsApi.getPerson(id) : Promise.reject(new Error('No id')),
+    queryFn: () => (id ? personsApi.getPerson(id) : null),
     enabled: Boolean(id),
   })
 }
 
 /**
  * 获取指定人员关联的人脸底库列表（分页信封，total 为后端真实总数）
+ *
+ * `pageSize` 取后端硬上限：一个人最多 `MaxFacesPerPerson`（10）张底库，
+ * 上限 100 足够覆盖，也不会有翻页语义。
  */
 export function usePersonFaces(
   personId?: string
-): UseQueryResult<FaceListResponse, Error> {
+): UseQueryResult<FaceListResponse | null, Error> {
   return useQuery({
-    queryKey: [...PERSONS_QUERY_KEY, personId, 'faces'],
+    queryKey: personFacesQueryKey(personId ?? ''),
     queryFn: () =>
       personId
-        ? personsApi.listFaces(personId, { pageSize: 100 })
-        : Promise.reject(new Error('No personId')),
+        ? personsApi.listFaces(personId, { pageSize: PERSONS_MAX_PAGE_SIZE })
+        : null,
     enabled: Boolean(personId),
   })
 }
@@ -94,6 +126,7 @@ export function useCreatePerson() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
     },
+    meta: { suppressGlobalToast: true },
   })
 }
 
@@ -112,6 +145,7 @@ export function useUpdatePerson() {
         queryKey: [...PERSONS_QUERY_KEY, 'detail', variables.id],
       })
     },
+    meta: { suppressGlobalToast: true },
   })
 }
 
@@ -157,7 +191,7 @@ export function useAddFace(options?: {
     onSuccess: (_data, variables) => {
       if (!options?.suppressInvalidate) {
         void queryClient.invalidateQueries({
-          queryKey: [...PERSONS_QUERY_KEY, variables.personId, 'faces'],
+          queryKey: personFacesQueryKey(variables.personId),
         })
         void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
       }
@@ -171,7 +205,7 @@ export function useAddFace(options?: {
 /**
  * 删除单张人脸 Mutation
  */
-export function useDeleteFace() {
+export function useDeleteFace(options?: { suppressGlobalToast?: boolean }) {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -179,17 +213,18 @@ export function useDeleteFace() {
       personsApi.deleteFace(personId, faceId),
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({
-        queryKey: [...PERSONS_QUERY_KEY, variables.personId, 'faces'],
+        queryKey: personFacesQueryKey(variables.personId),
       })
       void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
     },
+    meta: { suppressGlobalToast: options?.suppressGlobalToast },
   })
 }
 
 /**
  * 设置主人脸 Mutation
  */
-export function useSetPrimaryFace() {
+export function useSetPrimaryFace(options?: { suppressGlobalToast?: boolean }) {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -198,17 +233,15 @@ export function useSetPrimaryFace() {
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
       void queryClient.invalidateQueries({
-        queryKey: [...PERSONS_QUERY_KEY, variables.personId, 'faces'],
+        queryKey: personFacesQueryKey(variables.personId),
       })
       void queryClient.invalidateQueries({
         queryKey: [...PERSONS_QUERY_KEY, 'detail', variables.personId],
       })
     },
+    meta: { suppressGlobalToast: options?.suppressGlobalToast },
   })
 }
-
-/** 后端分页硬上限（`httputil.MaxPageSize`）。 */
-const PERSONS_FETCH_PAGE_SIZE = 100
 
 /**
  * 获取全量人员列表（内部按分页上限逐页拉全）。
@@ -222,13 +255,13 @@ export function useAllPersons(): UseQueryResult<PersonListResponse, Error> {
     queryFn: async () => {
       const first = await personsApi.getPersons({
         page: 1,
-        pageSize: PERSONS_FETCH_PAGE_SIZE,
+        pageSize: PERSONS_MAX_PAGE_SIZE,
       })
       if (first.items.length >= first.total) {
         return first
       }
 
-      const pageCount = Math.ceil(first.total / PERSONS_FETCH_PAGE_SIZE)
+      const pageCount = Math.ceil(first.total / PERSONS_MAX_PAGE_SIZE)
       const remainingPages = Array.from(
         { length: pageCount - 1 },
         (_, i) => i + 2
@@ -237,7 +270,7 @@ export function useAllPersons(): UseQueryResult<PersonListResponse, Error> {
         remainingPages.map((page) =>
           personsApi.getPersons({
             page,
-            pageSize: PERSONS_FETCH_PAGE_SIZE,
+            pageSize: PERSONS_MAX_PAGE_SIZE,
           })
         )
       )
@@ -278,8 +311,18 @@ export function useExportPersonsManifest() {
   })
 }
 
+/** 人脸批量导入任务的终态集合。用 `Set` 而非数组：不需要逐个 `as` 断言。 */
+const FACE_IMPORT_TERMINAL_STATUSES = new Set<FaceImportJobStatus>([
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+])
+
 /**
  * 轮询/查询人脸批量导入任务状态
+ *
+ * 轮询间隔随进度收敛：刚开始 1s 一次，任务进入中后段后 2s 一次即可，
+ * 完成后立刻停表。
  */
 export function useFaceImportJob(jobId: string | null, enabled: boolean) {
   return useQuery({
@@ -289,14 +332,8 @@ export function useFaceImportJob(jobId: string | null, enabled: boolean) {
     refetchInterval: (query) => {
       const data = query.state.data
       if (!data) return 1000
-      if (
-        data.status === 'COMPLETED' ||
-        data.status === 'FAILED' ||
-        data.status === 'CANCELLED'
-      ) {
-        return false
-      }
-      return 1000
+      if (FACE_IMPORT_TERMINAL_STATUSES.has(data.status)) return false
+      return data.processed >= data.total / 2 ? 2000 : 1000
     },
   })
 }

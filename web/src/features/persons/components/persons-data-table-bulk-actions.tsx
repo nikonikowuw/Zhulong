@@ -22,8 +22,8 @@ export function PersonsDataTableBulkActions({
   const { t } = useTranslation('persons')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
-  const selectedRows = table.getFilteredSelectedRowModel().rows
-  if (selectedRows.length === 0) return null
+  const selectedCount = table.getFilteredSelectedRowModel().rows.length
+  if (selectedCount === 0) return null
 
   return (
     <>
@@ -39,7 +39,6 @@ export function PersonsDataTableBulkActions({
               title={t('actions.batchDelete')}
             >
               <Trash2 className='size-4' />
-              <span className='sr-only'>{t('actions.batchDelete')}</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>

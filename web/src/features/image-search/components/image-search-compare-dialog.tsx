@@ -211,7 +211,7 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
               {/* 相似度评分胶囊 */}
               <div className='flex items-center gap-3'>
                 <div className='text-right'>
-                  <div className='text-[10px] uppercase text-muted-foreground'>
+                  <div className='text-[10px] text-muted-foreground uppercase'>
                     {t('compareDialog.similarityScore')}
                   </div>
                   <div
@@ -226,7 +226,7 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
                     {similarityPercent}%
                   </div>
                 </div>
-                <div className='flex h-10 w-10 items-center justify-center rounded-xl bg-background border border-border/80 shadow-xs'>
+                <div className='flex h-10 w-10 items-center justify-center rounded-xl border border-border/80 bg-background shadow-xs'>
                   {isHighMatch ? (
                     <CheckCircle2 className='h-5 w-5 text-emerald-500' />
                   ) : (

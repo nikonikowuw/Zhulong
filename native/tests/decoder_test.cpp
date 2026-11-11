@@ -7,6 +7,8 @@
 #include "nodes/decode/mpp_decoder.hpp"
 #include "nodes/capture/rtsp_input.hpp"
 #include "pipeline/bounded_queue.hpp"
+#include "pipeline/engine.hpp"
+#include "pipeline/frame_publisher.hpp"
 #include "pipeline/stream.hpp"
 #include "Zhulong/frame.hpp"
 #include "common/log.hpp"
@@ -424,8 +426,11 @@ int main() {
             packet.time_base_den = 90000;
 
             // 喂包 (在流式硬件解码器中，首帧在后续包到达或流推进时输出)
+            // 1/90000 时基下：首帧 pts=1000 -> pts_us=0；第二帧 pts=4600 (+3600 ticks) -> pts_us=40000
             stream.dispatch(packet);
-            packet.pts = 1040;
+            packet.pts = 4600;
+            stream.dispatch(packet);
+            packet.pts = 8200;
             stream.dispatch(packet);
 
             // 等待产帧
@@ -439,7 +444,22 @@ int main() {
             }
             CHECK(got_frame && frame1 != nullptr);
             CHECK(frame1->pts == 1000);
+            CHECK(frame1->has_pts_us);
+            CHECK(frame1->pts_us == 0);
             CHECK(frame1->stream_id == 1001);
+
+            HardwareFrame::ConstPtr frame1b;
+            got_frame = false;
+            for (int i = 0; i < 40; ++i) {
+                if (stream.acquire_frame(frame1b, 50ms)) {
+                    got_frame = true;
+                    break;
+                }
+            }
+            CHECK(got_frame && frame1b != nullptr);
+            CHECK(frame1b->pts == 4600);
+            CHECK(frame1b->has_pts_us);
+            CHECK(frame1b->pts_us == 40000);
 
             // 释放首个 AI 消费者 -> 休眠解码会话
             stream.consumers.erase(1);
@@ -1005,6 +1025,68 @@ int main() {
             CHECK(survivor->release_fn != nullptr);
             survivor.reset();
             CHECK(survivor == nullptr);
+        }
+
+        // ====================================================================
+        // 14. FramePublisher 归一化 pts_us 反查与 Engine::dispatch_ai_result 富化测试
+        // ====================================================================
+        {
+            auto mock_stream = std::make_shared<zhulong::Stream>(1088, "rtsp://127.0.0.1/pts-us", zhulong::Options{});
+            auto publisher = std::make_shared<zhulong::FramePublisher>(mock_stream, nullptr);
+
+            // 首帧合法 pts_us = 0 与后续帧 pts_us = 40000
+            publisher->record_published_pts(1700000000100LL, 1000, true, 0);
+            publisher->record_published_pts(1700000000140LL, 4600, true, 40000);
+
+            int64_t resolved = -1;
+            CHECK(publisher->resolve_pts_us(true, 1700000000100LL, true, 1000, resolved));
+            CHECK(resolved == 0);
+            CHECK(publisher->resolve_pts_us(true, 1700000000140LL, true, 4600, resolved));
+            CHECK(resolved == 40000);
+            // capture_time_ms <= 0 时回退按 raw_pts 匹配
+            CHECK(publisher->resolve_pts_us(true, 0, true, 4600, resolved));
+            CHECK(resolved == 40000);
+            // 指定不存在的 capture_time_ms (> 0) 时不得误命中旧帧 raw_pts
+            CHECK(!publisher->resolve_pts_us(true, 1700000099999LL, true, 1000, resolved));
+
+            zhulong::Engine engine;
+            engine.running = true;
+            engine.streams.emplace(1088, mock_stream);
+            engine.publishers.emplace(1088, publisher);
+
+            std::string captured_json;
+            auto on_ai = [](uintptr_t token, Zhulong_stream_id /*stream_id*/,
+                            const char *payload, size_t size) {
+                auto *out = reinterpret_cast<std::string *>(token);
+                out->assign(payload, size);
+            };
+            const auto sub_id = engine.subscribe_ai_results(
+                1088, on_ai, reinterpret_cast<uintptr_t>(&captured_json));
+
+            // 1) 首帧 pts_us = 0 富化（嵌套对象含干扰同名键与转义引号）
+            const std::string raw_first =
+                R"({"stream_id":1088,"pts":1000,"capture_time_ms":1700000000100,"note":"\"pts\":999","meta":{"pts":4600},"persons":[]})";
+            engine.dispatch_ai_result(1088, raw_first.data(), raw_first.size());
+            CHECK(captured_json ==
+                  R"({"stream_id":1088,"pts":1000,"capture_time_ms":1700000000100,"note":"\"pts\":999","meta":{"pts":4600},"persons":[],"pts_us":0})");
+
+            // 2) 后续帧 pts_us = 40000 富化
+            const std::string raw_second =
+                R"({"stream_id":1088,"pts":4600,"capture_time_ms":1700000000140,"detections":[]})";
+            engine.dispatch_ai_result(1088, raw_second.data(), raw_second.size());
+            CHECK(captured_json ==
+                  R"({"stream_id":1088,"pts":4600,"capture_time_ms":1700000000140,"detections":[],"pts_us":40000})");
+
+            // 3) 顶层已带 pts_us 时原样透传不覆写
+            const std::string already_enriched =
+                R"({"stream_id":1088,"pts":4600,"capture_time_ms":1700000000140,"pts_us":123456})";
+            engine.dispatch_ai_result(1088, already_enriched.data(), already_enriched.size());
+            CHECK(captured_json == already_enriched);
+
+            engine.unsubscribe_ai_results(1088, sub_id);
+            engine.publishers.clear();
+            engine.streams.clear();
+            engine.running = false;
         }
 
         std::cout << "All Decoder & BoundedQueue tests passed successfully!" << std::endl;

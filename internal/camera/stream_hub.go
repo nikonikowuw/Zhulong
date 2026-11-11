@@ -1180,16 +1180,18 @@ func (h *StreamHub) consumeAIResults(
 			}
 		}
 
+		// 先向前端 SSE 低延迟广播（非阻塞写内存 channel），再执行落库/抓拍 consumer，
+		// 避免 SQLite 事务或 JPEG 抓拍编码把实时预览画框拖慢数十毫秒。
+		if h.eventHub != nil {
+			h.eventHub.BroadcastAIResult(res)
+		}
+
 		if consumer != nil {
 			if err := consumer.ProcessInferenceResult(ctx, res); err != nil {
 				h.logger.Warn("process ai result by consumer failed",
 					zap.String("camera_id", cameraID),
 					zap.Error(err))
 			}
-		}
-
-		if h.eventHub != nil {
-			h.eventHub.BroadcastAIResult(res)
 		}
 	}
 }

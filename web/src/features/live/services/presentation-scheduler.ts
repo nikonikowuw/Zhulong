@@ -114,7 +114,7 @@ interface PresentationClock {
 }
 
 export class PresentationScheduler<T> {
-  private readonly targetLatencyMs: number
+  private targetLatencyMs: number
   private readonly maxLeadMs: number
   private readonly maxQueueFrames: number
   private readonly maxDepthMs: number
@@ -238,6 +238,17 @@ export class PresentationScheduler<T> {
   /** 当前等待呈现的帧数。 */
   get pending(): number {
     return this.queue.length
+  }
+
+  /**
+   * 动态调整目标延迟（毫秒），无需清空待呈现队列或重建底层解码器。
+   *
+   * 典型场景：开启主流 AI 叠加层时适度抬高呈现缓冲（如 160ms）以掩盖推理回传延迟，
+   * 关闭时平顺回落至默认低延迟（100ms）；音频侧经 `clockSnapshot()` 自动同步同一偏移。
+   */
+  setTargetLatencyMs(targetLatencyMs: number): void {
+    if (!Number.isFinite(targetLatencyMs) || targetLatencyMs < 0) return
+    this.targetLatencyMs = targetLatencyMs
   }
 
   /**
