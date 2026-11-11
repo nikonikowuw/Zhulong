@@ -4,9 +4,6 @@ import {
   type VisibilityState,
   flexRender,
   getCoreRowModel,
-  getFacetedRowModel,
-  getFacetedUniqueValues,
-  getFilteredRowModel,
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
@@ -47,6 +44,32 @@ const viewModeOptions = [
 
 /** 骨架屏行数。列数不再写死：列定义增长时硬编码的 5 个单元格会横向错位。 */
 const SKELETON_ROWS = 5
+
+/**
+ * 按列 id 匹配真实单元格形状的骨架。
+ *
+ * 统一一根 `h-4` 横条在加载完成时会造成可见的布局跳变：勾选框只有 16px、
+ * 头像是 36px 圆、操作列是 32px 方形按钮。形状对不上的骨架屏不只是难看，
+ * 它把「正在加载」和「数据到了」两帧的列宽也拉得不一致。
+ */
+function CellSkeleton({ columnId }: { columnId: string }) {
+  switch (columnId) {
+    case 'select':
+      return <Skeleton className='mx-auto h-4 w-4 rounded-sm' />
+    case 'avatar':
+      return <Skeleton className='mx-auto h-9 w-9 rounded-full' />
+    case 'faces':
+      return <Skeleton className='h-7 w-20 rounded-md' />
+    case 'actions':
+      return <Skeleton className='ms-auto h-8 w-8 rounded-md' />
+    case 'source':
+      return <Skeleton className='h-5 w-16 rounded-full' />
+    case 'createdAt':
+      return <Skeleton className='h-4 w-30' />
+    default:
+      return <Skeleton className='h-4 w-28' />
+  }
+}
 
 interface PersonsTableProps {
   data: Person[]
@@ -130,19 +153,28 @@ export function PersonsTable({
     onGlobalFilterChange,
     getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    getFacetedRowModel: getFacetedRowModel(),
-    getFacetedUniqueValues: getFacetedUniqueValues(),
-    pageCount: Math.ceil(total / pagination.pageSize) || 1,
+    // `manualFiltering: true` 时不要挂 `getFilteredRowModel` /
+    // `getFacetedRowModel` / `getFacetedUniqueValues`：它们只会拿当前页数据在
+    // 本地再跑一遍过滤 —— 既不参与渲染（`showFacets: false`），又白白浪费
+    // 一次全表扫描，还会让人误以为那个计数是全库统计。
+    // 分页/排序同理都由 URL + 后端承担，因此也删掉 `getSortedRowModel`。
+    pageCount: Math.max(1, Math.ceil(total / pagination.pageSize)),
     manualPagination: true,
     manualFiltering: true,
+    manualSorting: true,
   })
 
+  // 首屏 `total` 还是 0 时 `pageCount === 1`，此时下降回第 1 页会把深链接
+  // （分享的 `?page=3`、刷新页面）抹掉，而且数据到货后也回不去 —— 必须等真实
+  // 总数到货后才执行夹紧。
   const pageCount = table.getPageCount()
+  const canCheckPageRange = !isLoading && total > 0
   useEffect(() => {
-    ensurePageInRange(pageCount)
-  }, [pageCount, ensurePageInRange])
+    if (canCheckPageRange) {
+      ensurePageInRange(pageCount)
+    }
+  }, [canCheckPageRange, pageCount, ensurePageInRange])
 
   const isFiltered =
     Boolean(globalFilter) || (columnFilters && columnFilters.length > 0)
@@ -248,7 +280,10 @@ export function PersonsTable({
                         key={`skeleton-${index}-${column.id}`}
                         className={column.columnDef.meta?.className}
                       >
-                        <Skeleton className='h-4 w-full max-w-28' />
+                        {/* 按列渲染对应形状的骨架构件：全渲染成同一根横条会在
+                            数据到货时整表跳变（checkbox / 头像 / 操作按钮
+                            的形状与尺寸都不一样）。 */}
+                        <CellSkeleton columnId={column.id} />
                       </TableCell>
                     ))}
                   </TableRow>
