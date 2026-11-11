@@ -312,6 +312,15 @@ int main() {
         assert(f.box[0] >= 0.0f && f.box[2] <= 1.0f);
         assert(f.box[1] >= 0.0f && f.box[3] <= 1.0f);
         assert(f.quality >= 0.50f);
+        assert(f.feature_dim == 512);
+        assert(scene->face_features != nullptr);
+        float norm_sq = 0.0f;
+        for (uint32_t d = 0; d < 512; ++d) {
+            float val = scene->face_features[f.feature_offset + d];
+            assert(std::isfinite(val));
+            norm_sq += val * val;
+        }
+        assert(std::fabs(norm_sq - 1.0f) < 0.01f);
         if (f.person_index == -1) {
             ++isolated_faces;
         } else {
@@ -353,6 +362,15 @@ int main() {
             const auto& f = face_scene->faces[i];
             assert(f.person_index == -1 && "无身体检出时 person_index 恒为 -1");
             assert(f.quality >= 0.50f);
+            assert(f.feature_dim == 512);
+            assert(face_scene->face_features != nullptr);
+            float norm_sq = 0.0f;
+            for (uint32_t d = 0; d < 512; ++d) {
+                float val = face_scene->face_features[f.feature_offset + d];
+                assert(std::isfinite(val));
+                norm_sq += val * val;
+            }
+            assert(std::fabs(norm_sq - 1.0f) < 0.01f);
         }
         std::cout << "  pure-face frame -> " << face_scene->face_count
                   << " face(s) with 0 person; SCENE_STRUCTURE v2 独立对象契约全部满足" << std::endl;

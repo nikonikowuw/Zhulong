@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/architecture.md", "reason": "跨层边界契约与流式感知数据链路总览"}
+{"file": ".trellis/spec/native/index.md", "reason": "原生层开发前检查清单、异常防爆门与 CTest 验证规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "纯 C ABI 结构化 Arena 打包、SDK 门面、IPC 协议上限与多档位零漂移规范"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Go 后端开发前检查清单、模块职责与 native wrapper 测试规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 版本化迁移、分页读快照与索引无 TEMP B-TREE 铁律"}
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "感知记录持久化、StreamHub 消费链与冷却去重契约"}

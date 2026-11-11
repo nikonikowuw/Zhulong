@@ -306,6 +306,7 @@ bool FaceRecognitionPlugin::populate_matched_face_item(
     out_face.matched_face_id = std::move(match_result.matched_face_id);
     out_face.candidates = std::move(match_result.candidates);
     out_face.is_fused = is_fused;
+    out_face.features.assign(match_features.begin(), match_features.end());
     return true;
 }
 
@@ -433,6 +434,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
         face.person_name = std::move(processed.item.person_name);
         face.matched_face_id = std::move(processed.item.matched_face_id);
         face.candidates = std::move(processed.item.candidates);
+        face.features = std::move(processed.item.features);
         face.person_index = -1;
 
         for (size_t p_idx = 0; p_idx < person_detections.size(); ++p_idx) {
@@ -477,6 +479,7 @@ std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::
         fi.person_name = std::move(f.person_name);
         fi.matched_face_id = std::move(f.matched_face_id);
         fi.candidates = std::move(f.candidates);
+        fi.features = std::move(f.features);
 
         if (f.person_index >= 0 && static_cast<size_t>(f.person_index) < results.size()) {
             results[static_cast<size_t>(f.person_index)].faces.push_back(std::move(fi));

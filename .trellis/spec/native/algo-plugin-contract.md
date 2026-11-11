@@ -27,6 +27,10 @@
 3. **结构化人体/人脸**：`ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` (3) + `zhulong_person_item[]`（支持 1:N 嵌套人脸 `zhulong_face_item` 与 Top-K 候选人 `zhulong_face_candidate`）。
    - **方案 B 底库对账契约**：`zhulong_face_candidate` 包含 `char face_id[ZHULONG_FACE_ID_MAX_LEN]`（200 字节，8 字节整除自然对齐），精确记录候选人对应的单张登记照唯一标识；`zhulong_face_item` 包含 `char matched_face_id[ZHULONG_FACE_ID_MAX_LEN]`（280 字节，8 字节整除自然对齐），记录 Top-1 胜出底照 ID，支持宿主直接进行 1:1 双图（抓拍人脸 vs 底库登记照）核验。
 4. **结构化机动车/车牌**：`ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE` (4) + `zhulong_vehicle_item[]`（支持 1:N 嵌套车牌 `zhulong_plate_item`，车辆结构体 88 字节，车牌结构体 72 字节，均满足 8 字节整除自然对齐；支持纯车牌退化语义：仅检测车牌时 `track_id=0`，`vehicle_box=plate_box`，`vehicle_score` 填**车牌检测**置信度（与 `plate.score` 的字符识别置信度语义不同，严禁互换），`plate_count=1`）。
+5. **场景结构化 (SCENE_STRUCTURE)**：`ZHULONG_RESULT_TYPE_SCENE_STRUCTURE` (5) + `zhulong_scene_structure`（32 字节，8 字节对齐，含 `persons[]`、`faces[]` 扁平双数组与 `const float* face_features` 特征池指针）。
+   - **流式人脸特征回传 (SDK 1.3.0)**：`zhulong_face_structure_item`（288 字节，8 字节自然对齐）包含 `feature_offset`（特征在浮点池中的首浮点索引）与 `feature_dim`（特征维度，最大 512）。所有特征浮点数据连续打包在单块 Arena 尾部，由 `face_features` 索引。
+   - **IPC 64KB 预算保护**：Runner 序列化输出 Base64 编码的小端 IEEE-754 `float32`（`"feature_b64"`，512 维为 2732 字符）。当单帧多人脸导致 JSON 载荷可能突破 IPC 64 KB（`65536` 字节）上限时，按 `quality` 降序优先保留高质人脸特征，超额人脸安全省略 `"feature_b64"`，元数据与检测框永不丢弃。
+   - **特征只随 v2 场景结构回传**：`zhulong_face_item`（type 3 的 280 字节紧凑结构）没有特征槽位，因此 `ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` 载荷**不带** `feature_b64`。包需要回传特征时必须走 SCENE_STRUCTURE v2；宿主侧对此无感（缺失即 `FeatureVector = nil`）。
 
 全系统（通用目标检测、人体/人脸结构化、IPC 消息、Go 宿主领域模型与前端渲染）统一采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 严格归一化两点坐标，全面废弃 `(x, y, w, h)` 语义。
 结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类与结构化能力保持 v1 函数表布局稳定（数据层多态）。

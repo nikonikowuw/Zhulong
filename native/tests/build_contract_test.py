@@ -93,6 +93,8 @@ class BuildContractTests(unittest.TestCase):
             (brew / "lib/libonnxruntime.dylib").write_text("")
             with patch("platform.system", return_value="Darwin"), \
                  patch.dict(os.environ, {}, clear=False), \
+                 patch.object(build, "ONNX_VENDOR", Path("/nonexistent/vendor")), \
+                 patch.object(build, "ONNX_DEPS", Path("/nonexistent/deps")), \
                  patch.object(build, "ONNX_MAC_PREFIXES", (brew,)):
                 os.environ.pop("ZHULONG_ONNX_ROOT", None)
                 include, library = build.onnx_layout()

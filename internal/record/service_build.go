@@ -79,6 +79,7 @@ func buildRecognitionRecordAndJob(
 		BoxJSON:          marshalBox(face.Box),
 		BodyBoxJSON:      marshalBox(bodyBox),
 		AttributesJSON:   marshalMapOrDefault(personAttrs),
+		FeatureVector:    face.FeatureVector,
 		CapturedAt:       f.capturedAt,
 		CreatedAt:        time.Now().UTC(),
 	}

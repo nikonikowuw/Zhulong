@@ -1,7 +1,12 @@
 package aitypes_test
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -303,4 +308,96 @@ func TestParseInferenceResult(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFaceFeatureVectorDecodeAndBroadcastIsolation(t *testing.T) {
+	// Construct 512 float32 bytes little-endian
+	feats := make([]float32, aitypes.FaceFeatureDimension)
+	feats[0] = 1.0
+	feats[1] = -0.5
+	featBytes := make([]byte, aitypes.FaceFeatureByteLen)
+	for i, f := range feats {
+		binary.LittleEndian.PutUint32(featBytes[i*4:(i+1)*4], math.Float32bits(f))
+	}
+	validB64 := base64.StdEncoding.EncodeToString(featBytes)
+
+	// Construct NaN float32 bytes
+	nanBytes := make([]byte, aitypes.FaceFeatureByteLen)
+	copy(nanBytes, featBytes)
+	binary.LittleEndian.PutUint32(nanBytes[0:4], math.Float32bits(float32(math.NaN())))
+	nanB64 := base64.StdEncoding.EncodeToString(nanBytes)
+
+	// Construct zero float32 bytes
+	zeroBytes := make([]byte, aitypes.FaceFeatureByteLen)
+	zeroB64 := base64.StdEncoding.EncodeToString(zeroBytes)
+
+	t.Run("scene_structure_valid_feature", func(t *testing.T) {
+		raw := fmt.Sprintf(`{"stream_id":1,"pts":100,"task_type":"scene_structure","faces":[{"box":[0.1,0.2,0.3,0.4],"quality":0.95,"matched":false,"feature_b64":%q}]}`, validB64)
+		res, err := aitypes.ParseInferenceResult("cam_1", "face_algo", []byte(raw))
+		if err != nil {
+			t.Fatalf("ParseInferenceResult failed: %v", err)
+		}
+		if len(res.Faces) != 1 {
+			t.Fatalf("expected 1 face, got %d", len(res.Faces))
+		}
+		face := res.Faces[0]
+		if len(face.FeatureVector) != aitypes.FaceFeatureByteLen {
+			t.Fatalf("expected FeatureVector len %d, got %d", aitypes.FaceFeatureByteLen, len(face.FeatureVector))
+		}
+		if !bytes.Equal(face.FeatureVector, featBytes) {
+			t.Fatalf("FeatureVector bytes mismatch")
+		}
+
+		// Verify broadcast isolation: json.Marshal MUST NOT contain feature_vector or feature_b64
+		marshaled, err := json.Marshal(res)
+		if err != nil {
+			t.Fatalf("json.Marshal failed: %v", err)
+		}
+		js := string(marshaled)
+		if strings.Contains(js, "feature_vector") || strings.Contains(js, "feature_b64") {
+			t.Fatalf("broadcast leakage detected in marshaled json: %s", js)
+		}
+	})
+
+	t.Run("scene_structure_invalid_features_fallback_to_nil", func(t *testing.T) {
+		invalidCases := []struct {
+			name string
+			b64  string
+		}{
+			{"nan", nanB64},
+			{"zero_norm", zeroB64},
+			{"corrupted_base64", "not-a-valid-base64!!!"},
+			{"too_short", base64.StdEncoding.EncodeToString([]byte{1, 2, 3})},
+		}
+
+		for _, tc := range invalidCases {
+			t.Run(tc.name, func(t *testing.T) {
+				raw := fmt.Sprintf(`{"stream_id":1,"pts":100,"task_type":"scene_structure","faces":[{"box":[0.1,0.2,0.3,0.4],"quality":0.95,"matched":false,"feature_b64":%q}]}`, tc.b64)
+				res, err := aitypes.ParseInferenceResult("cam_1", "face_algo", []byte(raw))
+				if err != nil {
+					t.Fatalf("ParseInferenceResult should succeed even with invalid feature, got: %v", err)
+				}
+				if len(res.Faces) != 1 {
+					t.Fatalf("expected 1 face, got %d", len(res.Faces))
+				}
+				if res.Faces[0].FeatureVector != nil {
+					t.Fatalf("expected nil FeatureVector for %s, got len %d", tc.name, len(res.Faces[0].FeatureVector))
+				}
+			})
+		}
+	})
+
+	t.Run("person_structure_fallback_copies_feature_vector", func(t *testing.T) {
+		raw := fmt.Sprintf(`{"stream_id":1,"pts":100,"task_type":"person_structure","persons":[{"track_id":10,"body_box":[0.1,0.1,0.8,0.8],"body_score":0.9,"faces":[{"box":[0.2,0.2,0.4,0.4],"quality":0.88,"matched":true,"person_id":"p1","feature_b64":%q}]}]}`, validB64)
+		res, err := aitypes.ParseInferenceResult("cam_1", "face_algo", []byte(raw))
+		if err != nil {
+			t.Fatalf("ParseInferenceResult failed: %v", err)
+		}
+		if len(res.Faces) != 1 {
+			t.Fatalf("expected 1 face, got %d", len(res.Faces))
+		}
+		if !bytes.Equal(res.Faces[0].FeatureVector, featBytes) {
+			t.Fatalf("FeatureVector was not copied in person_structure fallback")
+		}
+	})
 }

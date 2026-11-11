@@ -1,11 +1,46 @@
 package aitypes
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
+
+// Face feature vector dimensions and byte lengths.
+const (
+	FaceFeatureDimension = 512
+	FaceFeatureByteLen   = FaceFeatureDimension * 4 // 2048 bytes (float32 little-endian)
+)
+
+// decodeFeatureVector decodes and validates a Base64-encoded little-endian IEEE-754 float32[512] vector.
+// Returns nil if b64 is empty, malformed, not exactly 2048 bytes, contains non-finite numbers (NaN/Inf),
+// or has zero/sub-epsilon norm.
+func decodeFeatureVector(b64 string) []byte {
+	if b64 == "" {
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil || len(raw) != FaceFeatureByteLen {
+		return nil
+	}
+	var normSq float32
+	for i := 0; i < FaceFeatureByteLen; i += 4 {
+		bits := binary.LittleEndian.Uint32(raw[i : i+4])
+		val := math.Float32frombits(bits)
+		if math.IsNaN(float64(val)) || math.IsInf(float64(val), 0) {
+			return nil
+		}
+		normSq += val * val
+	}
+	if normSq <= 1e-6 {
+		return nil
+	}
+	return raw
+}
 
 // Common Task Types
 const (
@@ -64,6 +99,24 @@ type FaceSubItem struct {
 	Similarity    float64         `json:"similarity"`
 	IsFused       bool            `json:"is_fused"`
 	Candidates    []FaceCandidate `json:"candidates"`
+	FeatureVector []byte          `json:"-"`
+}
+
+func (f *FaceSubItem) UnmarshalJSON(data []byte) error {
+	type Alias FaceSubItem
+	aux := struct {
+		*Alias
+		FeatureB64 string `json:"feature_b64,omitempty"`
+	}{
+		Alias: (*Alias)(f),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.FeatureB64 != "" {
+		f.FeatureVector = decodeFeatureVector(aux.FeatureB64)
+	}
+	return nil
 }
 
 // FaceStructureItem represents an independent face object in SCENE_STRUCTURE v2.
@@ -79,6 +132,24 @@ type FaceStructureItem struct {
 	MatchedFaceID string          `json:"matched_face_id"`
 	IsFused       bool            `json:"is_fused,omitempty"`
 	Candidates    []FaceCandidate `json:"candidates,omitempty"`
+	FeatureVector []byte          `json:"-"`
+}
+
+func (f *FaceStructureItem) UnmarshalJSON(data []byte) error {
+	type Alias FaceStructureItem
+	aux := struct {
+		*Alias
+		FeatureB64 string `json:"feature_b64,omitempty"`
+	}{
+		Alias: (*Alias)(f),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.FeatureB64 != "" {
+		f.FeatureVector = decodeFeatureVector(aux.FeatureB64)
+	}
+	return nil
 }
 
 // PersonItem represents a detected person with body box and mounted face items (1:N).
@@ -283,6 +354,7 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 						MatchedFaceID: f.MatchedFaceID,
 						IsFused:       f.IsFused,
 						Candidates:    f.Candidates,
+						FeatureVector: f.FeatureVector,
 					})
 				}
 			} else {
@@ -304,6 +376,7 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 						MatchedFaceID: f.MatchedFaceID,
 						IsFused:       f.IsFused,
 						Candidates:    f.Candidates,
+						FeatureVector: f.FeatureVector,
 					})
 				}
 				p.Faces = make([]FaceSubItem, 0)

@@ -1,10 +1,12 @@
 package record_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 )
@@ -392,5 +394,81 @@ func TestClearRecordSnapshotPathsRejectsUnknownTable(t *testing.T) {
 
 	if err := store.ClearRecordSnapshotPaths(context.Background(), "not_a_records_table", "row_1"); err == nil {
 		t.Fatal("expected an error for an unsupported table, got nil")
+	}
+}
+
+func TestStoreRecognitionFeatureVectorPersistenceAndOmit(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	vec1 := make([]byte, 2048)
+	vec1[0] = 0xAA
+	vec1[2047] = 0xBB
+
+	vec2 := make([]byte, 2048)
+	vec2[0] = 0x11
+	vec2[2047] = 0x22
+
+	capturedAt := time.Date(2026, 10, 16, 20, 0, 0, 0, time.UTC)
+	alice := "person_alice"
+	recKnown := &record.Recognition{
+		ID:            idutil.New(),
+		CameraID:      "cam_01",
+		AlgorithmID:   strPtr("algo_01"),
+		PTS:           1000,
+		PersonID:      &alice,
+		PersonName:    "Alice",
+		Matched:       true,
+		FeatureVector: vec1,
+		CapturedAt:    capturedAt,
+	}
+
+	recStranger := &record.Recognition{
+		ID:            idutil.New(),
+		CameraID:      "cam_01",
+		AlgorithmID:   strPtr("algo_01"),
+		PTS:           2000,
+		Matched:       false,
+		FeatureVector: vec2,
+		CapturedAt:    capturedAt.Add(time.Second),
+	}
+
+	if err := store.CreateRecognitionBatch(ctx, []*record.Recognition{recKnown, recStranger}); err != nil {
+		t.Fatalf("CreateRecognitionBatch failed: %v", err)
+	}
+
+	// 1. ListRecognitions should omit feature_vector
+	items, total, err := store.ListRecognitions(ctx, record.RecognitionFilter{
+		CameraID: "cam_01",
+		Window:   httputil.PageWindow{PageSize: 10},
+	})
+	if err != nil {
+		t.Fatalf("ListRecognitions failed: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("expected 2 items, got total=%d len=%d", total, len(items))
+	}
+	for _, item := range items {
+		if item.FeatureVector != nil {
+			t.Fatalf("ListRecognitions leaked feature_vector for row %s (len=%d)", item.ID, len(item.FeatureVector))
+		}
+	}
+
+	// 2. GetRecognitionByID should load the full feature_vector
+	gotKnown, err := store.GetRecognitionByID(ctx, recKnown.ID)
+	if err != nil {
+		t.Fatalf("GetRecognitionByID(%s) failed: %v", recKnown.ID, err)
+	}
+	if gotKnown == nil || !bytes.Equal(gotKnown.FeatureVector, vec1) {
+		t.Fatalf("GetRecognitionByID(%s) feature_vector mismatch", recKnown.ID)
+	}
+
+	gotStranger, err := store.GetRecognitionByID(ctx, recStranger.ID)
+	if err != nil {
+		t.Fatalf("GetRecognitionByID(%s) failed: %v", recStranger.ID, err)
+	}
+	if gotStranger == nil || !bytes.Equal(gotStranger.FeatureVector, vec2) {
+		t.Fatalf("GetRecognitionByID(%s) feature_vector mismatch", recStranger.ID)
 	}
 }

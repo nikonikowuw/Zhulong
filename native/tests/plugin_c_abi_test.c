@@ -111,13 +111,15 @@ int main(void) {
     _Static_assert(sizeof(zhulong_face_structure_item) == 288, "zhulong_face_structure_item must be 288 bytes");
     _Static_assert(sizeof(zhulong_face_structure_item) % 8 == 0, "zhulong_face_structure_item must be 8-byte aligned");
     _Static_assert(offsetof(zhulong_face_structure_item, person_index) == 72, "person_index offset mismatch");
-    _Static_assert(offsetof(zhulong_face_structure_item, reserved_) == 272, "reserved_ offset mismatch");
+    _Static_assert(offsetof(zhulong_face_structure_item, feature_offset) == 272, "feature_offset offset mismatch");
+    _Static_assert(offsetof(zhulong_face_structure_item, feature_dim) == 276, "feature_dim offset mismatch");
     _Static_assert(offsetof(zhulong_face_structure_item, candidates) == 280, "candidates offset mismatch");
 
     _Static_assert(sizeof(zhulong_scene_structure) == 32, "zhulong_scene_structure must be 32 bytes");
     _Static_assert(sizeof(zhulong_scene_structure) % 8 == 0, "zhulong_scene_structure must be 8-byte aligned");
     _Static_assert(offsetof(zhulong_scene_structure, persons) == 8, "persons offset mismatch");
     _Static_assert(offsetof(zhulong_scene_structure, faces) == 16, "faces offset mismatch");
+    _Static_assert(offsetof(zhulong_scene_structure, face_features) == 24, "face_features offset mismatch");
 
     _Static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
     _Static_assert(sizeof(zhulong_person_item) % 8 == 0, "zhulong_person_item must be 8-byte aligned");
@@ -298,6 +300,74 @@ int main(void) {
         assert(strcmp(v->vehicle_color, "white") == 0);
 
         /* 单次 free 释放整个 Arena 树 */
+        free(res.internal_token);
+    }
+
+    /* 6. 验证 SCENE_STRUCTURE v2 独立人脸与特征池在纯 C 边界下的单块 Arena 解构 */
+    {
+        /* 模拟分配 1 个人体 + 1 张人脸 (携带 512 维特征) 的 Arena 连续内存块 */
+        size_t arena_size = sizeof(zhulong_scene_structure) +
+                            sizeof(zhulong_person_item) +
+                            sizeof(zhulong_face_structure_item) +
+                            ZHULONG_FACE_FEATURE_MAX_DIM * sizeof(float);
+        uint8_t* arena = (uint8_t*)malloc(arena_size);
+        assert(arena != NULL);
+        memset(arena, 0, arena_size);
+
+        zhulong_scene_structure* scene = (zhulong_scene_structure*)arena;
+        zhulong_person_item* person = (zhulong_person_item*)(arena + sizeof(zhulong_scene_structure));
+        zhulong_face_structure_item* face = (zhulong_face_structure_item*)(arena + sizeof(zhulong_scene_structure) + sizeof(zhulong_person_item));
+        float* features = (float*)(arena + sizeof(zhulong_scene_structure) + sizeof(zhulong_person_item) + sizeof(zhulong_face_structure_item));
+
+        scene->person_count = 1;
+        scene->face_count = 1;
+        scene->persons = person;
+        scene->faces = face;
+        scene->face_features = features;
+
+        person->track_id = 42;
+        person->body_box[0] = 0.1f; person->body_box[1] = 0.1f;
+        person->body_box[2] = 0.6f; person->body_box[3] = 0.9f;
+        person->body_score = 0.95f;
+        person->face_count = 0;
+        person->faces = NULL;
+
+        face->box[0] = 0.2f; face->box[1] = 0.15f;
+        face->box[2] = 0.35f; face->box[3] = 0.35f;
+        face->quality = 0.91f;
+        face->matched = 0;
+        face->similarity = 0.32f;
+        face->is_fused = 1;
+        face->person_index = 0;
+        face->feature_offset = 0;
+        face->feature_dim = ZHULONG_FACE_FEATURE_MAX_DIM;
+        face->candidate_count = 0;
+        face->candidates = NULL;
+
+        for (uint32_t k = 0; k < ZHULONG_FACE_FEATURE_MAX_DIM; ++k) {
+            features[k] = (float)k * 0.001f;
+        }
+
+        zhulong_inference_result res;
+        res.frame_id = 102;
+        res.task_id = 202;
+        res.result_type = ZHULONG_RESULT_TYPE_SCENE_STRUCTURE;
+        res.count = 2;
+        res.data = arena;
+        res.internal_token = arena;
+
+        assert(res.result_type == ZHULONG_RESULT_TYPE_SCENE_STRUCTURE);
+        assert(res.count == 2);
+        const zhulong_scene_structure* s = (const zhulong_scene_structure*)res.data;
+        assert(s->person_count == 1);
+        assert(s->face_count == 1);
+        assert(s->face_features != NULL);
+        assert(s->persons[0].track_id == 42);
+        assert(s->faces[0].person_index == 0);
+        assert(s->faces[0].feature_dim == 512);
+        assert(s->faces[0].feature_offset == 0);
+        assert(s->face_features[s->faces[0].feature_offset + 10] == 0.010f);
+
         free(res.internal_token);
     }
 

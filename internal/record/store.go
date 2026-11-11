@@ -57,6 +57,7 @@ func listInReadSnapshot[T any](
 	db *gorm.DB,
 	build func(g gorm.ChainInterface[T]) gorm.ChainInterface[T],
 	window httputil.PageWindow,
+	findModifiers ...func(g gorm.ChainInterface[T]) gorm.ChainInterface[T],
 ) ([]T, int64, error) {
 	if window.PageSize <= 0 || window.PageSize > httputil.MaxPageSize {
 		window.PageSize = httputil.DefaultPageSize
@@ -74,11 +75,14 @@ func listInReadSnapshot[T any](
 		if err != nil {
 			return err
 		}
-		items, err = g.
+		findChain := g.
 			Order("captured_at DESC, id DESC").
 			Offset(window.Offset).
-			Limit(window.PageSize).
-			Find(ctx)
+			Limit(window.PageSize)
+		for _, mod := range findModifiers {
+			findChain = mod(findChain)
+		}
+		items, err = findChain.Find(ctx)
 		return err
 	})
 	if err != nil {
@@ -160,7 +164,9 @@ func (s *Store) ListRecognitions(ctx context.Context, filter RecognitionFilter) 
 			g = g.Where("captured_at <= ?", filter.EndTime.UTC())
 		}
 		return g
-	}, filter.Window)
+	}, filter.Window, func(g gorm.ChainInterface[Recognition]) gorm.ChainInterface[Recognition] {
+		return g.Omit("feature_vector")
+	})
 }
 
 // GetRecognitionByID retrieves a recognition by its primary key.

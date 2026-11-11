@@ -1,6 +1,7 @@
 package region
 
 import (
+	"bytes"
 	"math"
 	"reflect"
 	"testing"
@@ -169,5 +170,41 @@ func TestReprojectFacePersonIndexMatchesFilter(t *testing.T) {
 	filtered := cfg.Filter(res)
 	if len(filtered.Faces) != 1 || filtered.Faces[0].PersonIndex != -1 {
 		t.Fatalf("filter and reproject disagree on face retention: %+v", filtered.Faces)
+	}
+}
+
+func TestReprojectAndFilterPreserveFaceFeatureVector(t *testing.T) {
+	fakeFeat := make([]byte, 2048)
+	fakeFeat[0] = 0xAB
+	fakeFeat[2047] = 0xCD
+
+	res := aitypes.InferenceResult{
+		TaskType: aitypes.TaskTypeSceneStructure,
+		Faces: []aitypes.FaceStructureItem{
+			{
+				Box:           [4]float64{0.1, 0.1, 0.3, 0.3},
+				PersonIndex:   -1,
+				FeatureVector: fakeFeat,
+			},
+		},
+	}
+
+	// 1. Reproject test
+	reprojected := Reproject(res, reprojectTestView())
+	if len(reprojected.Faces) != 1 {
+		t.Fatalf("expected 1 face after reproject, got %d", len(reprojected.Faces))
+	}
+	if !bytes.Equal(reprojected.Faces[0].FeatureVector, fakeFeat) {
+		t.Fatalf("reproject failed to preserve FeatureVector")
+	}
+
+	// 2. Filter test
+	cfg := Config{ROI: []Rect{Identity()}}
+	filtered := cfg.Filter(res)
+	if len(filtered.Faces) != 1 {
+		t.Fatalf("expected 1 face after filter, got %d", len(filtered.Faces))
+	}
+	if !bytes.Equal(filtered.Faces[0].FeatureVector, fakeFeat) {
+		t.Fatalf("filter failed to preserve FeatureVector")
 	}
 }

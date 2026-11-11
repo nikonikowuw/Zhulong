@@ -1,6 +1,7 @@
 package record_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -392,5 +393,97 @@ func TestProcessPersonStructureResolvesIdentityThroughMatchedFace(t *testing.T) 
 	}
 	if after.PersonExternalID != businessKey {
 		t.Errorf("expected personExternalId to survive the person deletion, got %q", after.PersonExternalID)
+	}
+}
+
+func TestServiceProcessSceneStructureFeatureVectorPersistence(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	svc := record.NewService(store, zap.NewNop())
+
+	vecKnown := make([]byte, 2048)
+	vecKnown[0] = 0xDE
+	vecKnown[2047] = 0xAD
+
+	vecStranger := make([]byte, 2048)
+	vecStranger[0] = 0xBE
+	vecStranger[2047] = 0xEF
+
+	captureTime := time.Date(2026, 11, 11, 14, 0, 0, 0, time.UTC)
+	res := aitypes.InferenceResult{
+		CameraID:    "cam_01",
+		AlgorithmID: "algo_01",
+		PTS:         10001,
+		Timestamp:   captureTime,
+		TaskType:    aitypes.TaskTypeSceneStructure,
+		Persons: []aitypes.PersonItem{
+			{
+				TrackID:   1,
+				BodyBox:   [4]float64{0.1, 0.1, 0.4, 0.8},
+				BodyScore: 0.9,
+			},
+		},
+		Faces: []aitypes.FaceStructureItem{
+			{
+				Box:           [4]float64{0.15, 0.12, 0.35, 0.35},
+				Quality:       0.92,
+				PersonIndex:   0,
+				Matched:       true,
+				PersonID:      "person_alice",
+				PersonName:    "Alice",
+				MatchedFaceID: "face_alice_01",
+				Similarity:    0.95,
+				FeatureVector: vecKnown,
+			},
+			{
+				Box:           [4]float64{0.55, 0.52, 0.75, 0.75},
+				Quality:       0.85,
+				PersonIndex:   -1,
+				Matched:       false,
+				FeatureVector: vecStranger,
+			},
+		},
+	}
+
+	if err := svc.ProcessInferenceResult(ctx, res); err != nil {
+		t.Fatalf("ProcessInferenceResult failed: %v", err)
+	}
+
+	// 1. ListRecognitions should find both records, with feature_vector omitted
+	recs, total, err := svc.ListRecognitions(ctx, record.RecognitionFilter{CameraID: "cam_01"})
+	if err != nil {
+		t.Fatalf("ListRecognitions failed: %v", err)
+	}
+	if total != 2 || len(recs) != 2 {
+		t.Fatalf("expected 2 recognitions, got total=%d len=%d", total, len(recs))
+	}
+
+	// 2. Fetch directly from store.GetRecognitionByID to verify BLOB persistence in SQLite
+	var knownFound, strangerFound bool
+	for _, r := range recs {
+		full, err := store.GetRecognitionByID(ctx, r.ID)
+		if err != nil {
+			t.Fatalf("GetRecognitionByID(%s) failed: %v", r.ID, err)
+		}
+		if full == nil {
+			t.Fatalf("record %s not found in store", r.ID)
+		}
+		if full.Matched {
+			knownFound = true
+			if !bytes.Equal(full.FeatureVector, vecKnown) {
+				t.Fatalf("known person feature_vector mismatch: got %v", full.FeatureVector[:10])
+			}
+		} else {
+			strangerFound = true
+			if !bytes.Equal(full.FeatureVector, vecStranger) {
+				t.Fatalf("stranger feature_vector mismatch: got %v", full.FeatureVector[:10])
+			}
+		}
+	}
+
+	if !knownFound || !strangerFound {
+		t.Fatalf("expected both known and stranger records, got known=%v stranger=%v", knownFound, strangerFound)
 	}
 }

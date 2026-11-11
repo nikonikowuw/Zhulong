@@ -41,6 +41,7 @@ type Recognition struct {
 	BoxJSON          string    `gorm:"column:box_json;not null;default:'[]'"`
 	BodyBoxJSON      string    `gorm:"column:body_box_json;not null;default:'[]'"`
 	AttributesJSON   string    `gorm:"column:attributes_json;not null;default:'{}'"`
+	FeatureVector    []byte    `gorm:"column:feature_vector"`
 	CapturedAt       time.Time `gorm:"column:captured_at;not null"`
 	CreatedAt        time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
 }

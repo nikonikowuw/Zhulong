@@ -29,6 +29,7 @@
 #include <vector>
 #include <memory>
 #include <cstring>
+#include <cmath>
 #include <iostream>
 
 namespace zhulong {
@@ -192,6 +193,7 @@ struct FaceItem {
     std::string person_name;               /**< Top-1 人员姓名 (未命中时为空字符串) */
     std::string matched_face_id;           /**< Top-1 命中的底照 ID (未命中时为空字符串) */
     std::vector<FaceCandidate> candidates; /**< Top-K 候选人列表，按相似度降序排列 */
+    std::vector<float> features;           /**< 512 维 L2 归一化特征向量 (可选) */
 };
 
 /**
@@ -261,6 +263,7 @@ struct FaceStructureItem {
     std::string person_name;               /**< Top-1 人员姓名 (未命中为空字符串) */
     std::string matched_face_id;           /**< Top-1 命中的底照 ID (未命中为空字符串) */
     std::vector<FaceCandidate> candidates; /**< Top-K 候选人列表 */
+    std::vector<float> features;           /**< 512 维 L2 归一化特征向量 (可选) */
 };
 
 /**
@@ -843,9 +846,22 @@ struct SceneStructureResultAdapter {
         size_t n_persons = scene.persons.size();
         size_t n_faces = scene.faces.size();
         size_t n_candidates = 0;
+        size_t n_feature_floats = 0;
 
         for (const auto& f : scene.faces) {
             n_candidates += f.candidates.size();
+            if (!f.features.empty() && f.features.size() <= ZHULONG_FACE_FEATURE_MAX_DIM) {
+                bool finite = true;
+                for (float v : f.features) {
+                    if (!std::isfinite(v)) {
+                        finite = false;
+                        break;
+                    }
+                }
+                if (finite) {
+                    n_feature_floats += f.features.size();
+                }
+            }
         }
 
         if (n_persons == 0 && n_faces == 0) {
@@ -859,7 +875,8 @@ struct SceneStructureResultAdapter {
         size_t persons_bytes = n_persons * sizeof(zhulong_person_item);
         size_t faces_bytes = n_faces * sizeof(zhulong_face_structure_item);
         size_t candidates_bytes = n_candidates * sizeof(zhulong_face_candidate);
-        size_t total_bytes = scene_bytes + persons_bytes + faces_bytes + candidates_bytes;
+        size_t features_bytes = n_feature_floats * sizeof(float);
+        size_t total_bytes = scene_bytes + persons_bytes + faces_bytes + candidates_bytes + features_bytes;
 
         uint8_t* arena = static_cast<uint8_t*>(std::malloc(total_bytes));
         if (!arena) {
@@ -870,7 +887,6 @@ struct SceneStructureResultAdapter {
         auto* out_scene = reinterpret_cast<zhulong_scene_structure*>(arena);
         out_scene->person_count = static_cast<uint32_t>(n_persons);
         out_scene->face_count = static_cast<uint32_t>(n_faces);
-        out_scene->reserved_ = 0;
 
         auto* out_persons = n_persons > 0
             ? reinterpret_cast<zhulong_person_item*>(arena + scene_bytes)
@@ -881,9 +897,13 @@ struct SceneStructureResultAdapter {
         auto* out_candidates = n_candidates > 0
             ? reinterpret_cast<zhulong_face_candidate*>(arena + scene_bytes + persons_bytes + faces_bytes)
             : nullptr;
+        auto* out_features = n_feature_floats > 0
+            ? reinterpret_cast<float*>(arena + scene_bytes + persons_bytes + faces_bytes + candidates_bytes)
+            : nullptr;
 
         out_scene->persons = out_persons;
         out_scene->faces = out_faces;
+        out_scene->face_features = out_features;
 
         // 填充真人体 (真人体项内 faces 恒为空)
         for (size_t i = 0; i < n_persons; ++i) {
@@ -902,6 +922,7 @@ struct SceneStructureResultAdapter {
 
         // 填充独立人脸
         size_t cand_idx = 0;
+        size_t feat_idx = 0;
         for (size_t i = 0; i < n_faces; ++i) {
             const auto& src_f = scene.faces[i];
             auto& dst_f = out_faces[i];
@@ -922,6 +943,28 @@ struct SceneStructureResultAdapter {
             dst_f.similarity = src_f.similarity;
             dst_f.is_fused = src_f.is_fused ? 1 : 0;
             dst_f.person_index = src_f.person_index;
+
+            bool has_valid_feat = false;
+            if (!src_f.features.empty() && src_f.features.size() <= ZHULONG_FACE_FEATURE_MAX_DIM && out_features) {
+                bool finite = true;
+                for (float v : src_f.features) {
+                    if (!std::isfinite(v)) {
+                        finite = false;
+                        break;
+                    }
+                }
+                if (finite) {
+                    dst_f.feature_offset = static_cast<uint32_t>(feat_idx);
+                    dst_f.feature_dim = static_cast<uint32_t>(src_f.features.size());
+                    std::memcpy(&out_features[feat_idx], src_f.features.data(), src_f.features.size() * sizeof(float));
+                    feat_idx += src_f.features.size();
+                    has_valid_feat = true;
+                }
+            }
+            if (!has_valid_feat) {
+                dst_f.feature_offset = 0;
+                dst_f.feature_dim = 0;
+            }
 
             std::strncpy(dst_f.person_id, src_f.person_id.c_str(), sizeof(dst_f.person_id) - 1);
             dst_f.person_id[sizeof(dst_f.person_id) - 1] = '\0';

@@ -74,6 +74,7 @@ enum {
 #define ZHULONG_PERSON_NAME_MAX_LEN  64 /**< 底库人员显示姓名最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_FACE_ID_MAX_LEN      64 /**< 底库单张人脸照片唯一标识符最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_FACE_LANDMARK_COUNT  5  /**< 人脸关键点标准数量（5 点：左眼、右眼、鼻尖、左嘴角、右嘴角） */
+#define ZHULONG_FACE_FEATURE_MAX_DIM 512 /**< 单张人脸特征向量最大维度（FaceLiVTv2-L / ArcFace 均为 512） */
 #define ZHULONG_PLATE_NUMBER_MAX_LEN 32 /**< 车牌号码最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_PLATE_COLOR_MAX_LEN  16 /**< 车牌颜色最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_VEHICLE_TYPE_MAX_LEN 32 /**< 车型描述最大字节长度（含末尾 '\\0'） */
@@ -239,7 +240,8 @@ typedef struct zhulong_face_structure_item {
     char     person_name[ZHULONG_PERSON_NAME_MAX_LEN];  /* Top-1 底库人员姓名 (140..204) */
     char     matched_face_id[ZHULONG_FACE_ID_MAX_LEN];  /* Top-1 底库人脸照片 ID (204..268) */
     uint32_t candidate_count;                          /* candidates 数组元素数 (268..272) */
-    uint32_t reserved_[2];                             /* 显式填充对齐位，确保随后的 64 位指针自然 8 字节对齐 (272..280) */
+    uint32_t feature_offset;                           /* scene->face_features 浮点特征池中的起始偏移 (272..276) */
+    uint32_t feature_dim;                              /* 浮点特征维度 (0 表示无特征，最大 ZHULONG_FACE_FEATURE_MAX_DIM) (276..280) */
     const zhulong_face_candidate* candidates;          /* 指向候选人数组借用指针 (只读，指向同一 Arena) (280..288) */
 } zhulong_face_structure_item;
 
@@ -260,7 +262,7 @@ typedef struct zhulong_scene_structure {
     uint32_t face_count;                               /* 独立人脸数量 (含关联与孤立人脸) */
     const zhulong_person_item* persons;                /* 真人体数组指针 (person_count == 0 时为 NULL) */
     const zhulong_face_structure_item* faces;          /* 独立人脸数组指针 (face_count == 0 时为 NULL) */
-    uint64_t reserved_;                                /* 尾部对齐预留位 (8 字节对齐保底) */
+    const float* face_features;                        /* 连续特征池首地址 (全帧无特征时为 NULL) */
 } zhulong_scene_structure;
 
 /**

@@ -407,6 +407,7 @@ func planPersonStructure(res aitypes.InferenceResult) personStructurePlan {
 				MatchedFaceID: f.MatchedFaceID,
 				IsFused:       f.IsFused,
 				Candidates:    f.Candidates,
+				FeatureVector: f.FeatureVector,
 			})
 			continue
 		}
@@ -425,6 +426,7 @@ func planPersonStructure(res aitypes.InferenceResult) personStructurePlan {
 				MatchedFaceID: f.MatchedFaceID,
 				IsFused:       f.IsFused,
 				Candidates:    f.Candidates,
+				FeatureVector: f.FeatureVector,
 			})
 		}
 		p.Faces = nil

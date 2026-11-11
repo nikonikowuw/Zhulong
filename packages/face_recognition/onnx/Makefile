@@ -25,9 +25,18 @@ VERIFY_SAMPLE ?= $(CURDIR)/sample.jpg
 
 SRC_FILES := $(wildcard src/*.cpp src/*.hpp src/*/*.cpp src/*/*.hpp)
 
-.PHONY: all test unit-test verify clean
+.PHONY: all test unit-test verify clean FORCE
 
 all: $(EXE) $(DEVTEST) $(UNITTEST)
+
+# 规则必须放在 `all:` 之后（Make 的默认目标是文件里第一个普通目标）。
+#
+# ⚠️ 三个构建目标都挂 FORCE：`$(SRC_FILES)` 只覆盖包自己，**看不到 SDK 前缀里的头文件**。
+#    `algo.hpp` / `plugin.h` 升级后 make 会认为二进制是最新的而静默跳过重建，
+#    于是 `make verify` 验的是上一个 ABI 的老二进制（曾经表现为新字段全空、
+#    却报告 status=passed）。头文件依赖交给 CMake 自己的 depfile 判定，
+#    这里只保证每次都真的问一次 CMake（增量空跑 ~50ms）。
+FORCE:
 
 $(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 	cmake -S $(CURDIR) -B $(BUILD_DIR) \
@@ -39,13 +48,13 @@ $(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 		$(if $(ONNXRUNTIME_ROOT),-DONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT),) \
 		$(EXTRA_CMAKE_ARGS)
 
-$(EXE): $(BUILD_DIR)/CMakeCache.txt $(SRC_FILES)
+$(EXE): $(BUILD_DIR)/CMakeCache.txt $(SRC_FILES) FORCE
 	cmake --build $(BUILD_DIR) --target face_recognition
 
-$(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(SRC_FILES)
+$(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(SRC_FILES) FORCE
 	cmake --build $(BUILD_DIR) --target face_recognition_devtest
 
-$(UNITTEST): $(BUILD_DIR)/CMakeCache.txt tests/aligner_matcher_test.cpp $(SRC_FILES)
+$(UNITTEST): $(BUILD_DIR)/CMakeCache.txt tests/aligner_matcher_test.cpp $(SRC_FILES) FORCE
 	cmake --build $(BUILD_DIR) --target face_recognition_unittest
 
 verify: $(EXE)

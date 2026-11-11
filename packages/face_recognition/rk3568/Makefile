@@ -58,13 +58,17 @@ $(BUILD_DIR)/CMakeCache.txt: $(CONFIGURE_STAMP) CMakeLists.txt
 		$(if $(ONNXRUNTIME_ROOT),-DONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT),) \
 		$(EXTRA_CMAKE_ARGS)
 
-$(EXE): $(BUILD_DIR)/CMakeCache.txt $(SRC_FILES)
+# ⚠️ 三个构建目标都挂 FORCE：`$(SRC_FILES)` 只覆盖包自己，**看不到 SDK 前缀里的头文件**。
+#    `algo.hpp` / `plugin.h` 升级后 make 会认为二进制是最新的而静默跳过重建，
+#    `make verify` 于是验的是上一个 ABI 的老二进制（表现为新字段全空却 status=passed）。
+#    头文件依赖交给 CMake 自己的 depfile 判定，这里只保证每次都真的问一次 CMake。
+$(EXE): $(BUILD_DIR)/CMakeCache.txt $(SRC_FILES) FORCE
 	cmake --build $(BUILD_DIR) --target face_recognition
 
-$(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(SRC_FILES)
+$(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(SRC_FILES) FORCE
 	cmake --build $(BUILD_DIR) --target face_recognition_devtest
 
-$(UNITTEST): $(BUILD_DIR)/CMakeCache.txt tests/aligner_matcher_test.cpp $(SRC_FILES)
+$(UNITTEST): $(BUILD_DIR)/CMakeCache.txt tests/aligner_matcher_test.cpp $(SRC_FILES) FORCE
 	cmake --build $(BUILD_DIR) --target face_recognition_unittest
 
 verify: $(EXE)

@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(ZhulongAlgoSDK 1.0 REQUIRED)
+find_package(ZhulongAlgoSDK 1.3 REQUIRED)
 find_package(Threads REQUIRED)
 
 # 包版本只认 manifest.json —— 唯一事实源。

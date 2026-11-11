@@ -836,6 +836,12 @@ if(BUILD_TESTING)
     target_include_directories(ZhulongStallWatchTests PRIVATE sdk/include sdk/src src)
     add_test(NAME ZhulongStallWatch COMMAND ZhulongStallWatchTests)
 
+    # Runner 骨架结果序列化与 64KB IPC 预算保护测试
+    add_executable(ZhulongResultSerializerTests tests/result_serializer_test.cpp)
+    target_compile_features(ZhulongResultSerializerTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongResultSerializerTests PRIVATE sdk/include sdk/src src)
+    add_test(NAME ZhulongResultSerializer COMMAND ZhulongResultSerializerTests)
+
     # ⚠️ 这些测试完全依赖 assert()，必须显式 -UNDEBUG：否则 RelWithDebInfo 构建下
     #    NDEBUG 会把全部断言编译掉，测试会「假绿」——曾经 ZhulongIpcSocketFdTests
     #    就不在本列表中，其断言从未真正执行过。
@@ -852,6 +858,7 @@ if(BUILD_TESTING)
         ZhulongMotionGateTests
         ZhulongWorkerGuardTests
         ZhulongStallWatchTests
+        ZhulongResultSerializerTests
     )
     if(TARGET ZhulongFaceRecognitionPluginTests)
         list(APPEND ASSERT_TEST_TARGETS ZhulongFaceRecognitionPluginTests)

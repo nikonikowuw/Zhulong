@@ -32,6 +32,10 @@ Runner MSG_RESULT
 - `algorithm_id` 缺失时写 SQL `NULL`，不要写空字符串。SQLite 外键对空字符串仍要求存在父行，空字符串会导致记录插入失败。
 - `algorithm_name` 与 `algorithm_version` 是写入时快照。算法卸载后，外键按 `ON DELETE SET NULL` 保留记录；读取时不得 join 已卸载的算法表来“补回”快照。
 - 新增记录使用推理时间戳转 UTC；时间戳缺失时才使用宿主当前 UTC 时间。
+- **人脸识别特征向量持久化与查询隔离**：
+  - `recognitions.feature_vector BLOB` 持久化流式人脸 512 维 L2 归一化 IEEE-754 小端 `float32` 向量（2048 字节），用于下游陌生人聚类与追溯。无论陌生人（`matched = false`）还是已知人员（`matched = true`）均写入特征向量。
+  - **列表查询隔离**：`ListRecognitions` 分页列表查询必须通过 GORM `.Omit("feature_vector")` 显式剔除大 BLOB 字段，避免加载 SQLite overflow page 拖慢分页索引扫描与引发内存抖动；单条详情或精确查询（`GetRecognitionByID`）完整读取 BLOB。
+  - **实时广播与 API 隔离**：Go 领域模型 `aitypes.FaceStructureItem.FeatureVector` 必须显式标记 `json:"-"`，严禁通过 WebSocket/SSE 实时预览向前端广播 2 KB 二进制特征，公网 API 响应模型（`RecognitionResponse`）保持无该字段。
 - 记录批量写入失败时不得继续排入对应证据图任务，避免创建无数据库引用的孤儿图片。
   `ProcessInferenceResult` 会把首个持久化错误连同层信息返回给调用方（StreamHub 按 camera_id 记一条 Warn），
   抓拍落盘失败不上抛 —— 那是后台 worker 的事，与「这条结果是否被消费」无关。
