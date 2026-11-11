@@ -3,6 +3,7 @@ import { type Table } from '@tanstack/react-table'
 import { Eye, Image as ImageIcon, Plus, Users as UsersIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getGalleryImageUrl } from '@/lib/media-url'
+import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -204,7 +205,10 @@ const PersonCard = memo(function PersonCard({
           ) : (
             <Badge
               variant='outline'
-              className='border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-400'
+              className={cn(
+                'text-[10px] font-normal',
+                statusLevelClass('warning')
+              )}
             >
               {t('status.unregistered')}
             </Badge>

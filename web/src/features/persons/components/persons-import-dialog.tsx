@@ -11,6 +11,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { toCsv, triggerDownload } from '@/lib/csv'
+import { errorMessageOf } from '@/lib/handle-server-error'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -103,7 +104,9 @@ export function PersonsImportDialog() {
     try {
       await previewMutation.mutateAsync(selected)
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : String(err))
+      // 服务端消息已经过本地化（拦截器读回了 blob 错误信封），
+      // 直接展示比 `String(err)` 的英文兜底可用得多。
+      toast.error(errorMessageOf(err))
     }
   }
 
@@ -113,7 +116,9 @@ export function PersonsImportDialog() {
       await commitMutation.mutateAsync(file)
       toast.success(t('import.completed'))
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : String(err))
+      // 服务端消息已经过本地化（拦截器读回了 blob 错误信封），
+      // 直接展示比 `String(err)` 的英文兜底可用得多。
+      toast.error(errorMessageOf(err))
     }
   }
 
@@ -328,7 +333,14 @@ function ImportRowsTable({
                 <TableCell>{statusText}</TableCell>
                 <TableCell className='whitespace-normal text-destructive'>
                   {row.issues
-                    .map((issue) => t(`import.errors.${issue.code}`))
+                    // 后端新增错误码时 `import.errors.*` 可能还没跟上：
+                    // 必须回落到稳定机器码，而不是把这串原始 i18n key
+                    // 直接扇给用户。
+                    .map((issue) =>
+                      t(`import.errors.${issue.code}`, {
+                        defaultValue: issue.code,
+                      })
+                    )
                     .join('、') || '-'}
                 </TableCell>
               </TableRow>

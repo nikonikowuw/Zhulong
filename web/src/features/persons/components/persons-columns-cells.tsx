@@ -4,6 +4,7 @@ import { Eye, Image as ImageIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { CATEGORY_BADGE_CLASS } from '@/lib/category-palette'
 import { getGalleryImageUrl } from '@/lib/media-url'
+import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -196,8 +197,10 @@ export const PersonsFacesCell = memo(function PersonsFacesCell({
       aria-label={t('table.manageFacesOf', { name: person.name })}
       className={cn(
         'h-7 gap-1.5 px-2 text-xs font-normal hover:bg-muted',
-        faceCount === 0 &&
-          'border-amber-500/30 bg-amber-500/5 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400'
+        // 「待采像」是 §1.3.3 的 warning 级别，色串必须走 palette：
+        // 就地手写 `border-amber-500/30 … dark:text-amber-400` 缺 `dark:border`
+        // /`dark:bg` 是规范点名的漂移形态。
+        faceCount === 0 && statusLevelClass('warning')
       )}
     >
       <ImageIcon className='h-3.5 w-3.5 text-muted-foreground' />

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { errorMessageOf } from '@/lib/handle-server-error'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
@@ -64,7 +65,8 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
     } catch (err: unknown) {
       // exportManifest 会把 blob 形态的 JSON 错误体还原成 Error；
       // 这里只补一次提示，避免用户在按钮无反应时反复点。
-      toast.error(err instanceof Error ? err.message : String(err))
+      // 拦截器已把 blob 错误体里的服务端消息抬到 error.message。
+      toast.error(errorMessageOf(err))
     }
   }
 

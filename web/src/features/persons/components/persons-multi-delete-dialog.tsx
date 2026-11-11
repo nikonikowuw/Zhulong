@@ -178,6 +178,7 @@ export function PersonsMultiDeleteDialog({
           t('actions.batchDelete')
         )
       }
+      cancelBtnText={t('actions.cancel')}
     />
   )
 }

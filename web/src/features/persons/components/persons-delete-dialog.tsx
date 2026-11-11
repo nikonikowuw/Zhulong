@@ -2,6 +2,7 @@ import { AlertTriangle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatLocalDateTime } from '@/lib/csv'
+import { errorMessageOf } from '@/lib/handle-server-error'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useDeletePerson } from '../hooks/use-persons'
 import { usePersonsActions, usePersonsState } from './persons-provider'
@@ -21,7 +22,7 @@ export function PersonsDeleteDialog() {
       toast.success(t('notifications.deleteSuccess'))
       setOpen(null)
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : String(err))
+      toast.error(errorMessageOf(err))
     }
   }
 
