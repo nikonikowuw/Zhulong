@@ -147,12 +147,18 @@ int main() {
             } // 离开作用域，~HardwareFrame() 必须安全捕获异常，不得引发 std::terminate 崩溃
         }
 
-        // 6. 新增字段（格式、时基与有效性）与移动保持测试
+        // 6. 新增字段（格式、时基、归一化 pts_us 与有效性）与移动保持测试
         {
+            HardwareFrame f_default;
+            CHECK(!f_default.has_pts_us);
+            CHECK(f_default.pts_us == 0);
+
             HardwareFrame f1;
             f1.format = zhulong::FRAME_FORMAT_YUV420P;
             f1.has_pts = true;
             f1.pts = 88888;
+            f1.has_pts_us = true;
+            f1.pts_us = 40000;
             f1.time_base_num = 1;
             f1.time_base_den = 90000;
 
@@ -160,6 +166,8 @@ int main() {
             CHECK(f2.format == zhulong::FRAME_FORMAT_YUV420P);
             CHECK(f2.has_pts);
             CHECK(f2.pts == 88888);
+            CHECK(f2.has_pts_us);
+            CHECK(f2.pts_us == 40000);
             CHECK(f2.time_base_num == 1);
             CHECK(f2.time_base_den == 90000);
 
@@ -168,6 +176,8 @@ int main() {
             CHECK(f3.format == zhulong::FRAME_FORMAT_YUV420P);
             CHECK(f3.has_pts);
             CHECK(f3.pts == 88888);
+            CHECK(f3.has_pts_us);
+            CHECK(f3.pts_us == 40000);
             CHECK(f3.time_base_num == 1);
             CHECK(f3.time_base_den == 90000);
         }

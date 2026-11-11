@@ -55,8 +55,10 @@ struct QueuedPacket {
     std::vector<uint8_t> data;             /**< 压缩数据载荷（预留尾部填充空间） */
     int64_t pts{0};                        /**< 显示时间戳 (仅当 has_pts 为 true 时有效) */
     int64_t dts{0};                        /**< 解码时间戳 (仅当 has_dts 为 true 时有效) */
+    int64_t pts_us{0};                     /**< 预览归一化微秒显示时间戳 (仅当 has_pts_us 为 true 时有效) */
     bool has_pts{false};                   /**< 是否包含有效的显示时间戳 */
     bool has_dts{false};                   /**< 是否包含有效的解码时间戳 */
+    bool has_pts_us{false};                /**< 是否包含有效的预览归一化微秒时间戳 */
     int32_t time_base_num{1};              /**< 时间基分子 */
     int32_t time_base_den{90000};          /**< 时间基分母 */
     int32_t codec{0};                      /**< 视频编码格式 */
@@ -107,9 +109,10 @@ public:
      *   - 若 packet_queue_ 满载导致 push 失败，置位 waiting_keyframe_ 并清空积压队列。
      *
      * @param packet 数据包视图借用指针
+     * @param has_normalized_pts_us packet.pts_us 是否已经过 PreviewNormalizer 归一化（允许有效 0 值）
      * @return true 成功送入队列；false 被拒绝、丢弃或队列已取消
      */
-    bool push_packet(const Zhulong_packet_view &packet);
+    bool push_packet(const Zhulong_packet_view &packet, bool has_normalized_pts_us = false);
 
     /**
      * @brief 从输出队列拉取已解码的硬件帧 (供 AI 消费者只读借用)

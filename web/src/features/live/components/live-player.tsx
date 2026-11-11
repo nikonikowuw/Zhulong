@@ -12,7 +12,9 @@ import {
   type LivePlayerAudioStatus,
 } from '../hooks/use-live-audio'
 import { useWebCodecsRenderLoop } from '../hooks/use-webcodecs-render-loop'
+import { AIOverlaySynchronizer } from '../services/ai-overlay-synchronizer'
 import { AIResultService } from '../services/ai-result-service'
+import { drawDetectionOverlay } from '../services/detection-overlay-renderer'
 import { drawFaceOverlay } from '../services/face-overlay-renderer'
 import { drawPersonOverlay } from '../services/person-overlay-renderer'
 import { drawVehicleOverlay } from '../services/vehicle-overlay-renderer'
@@ -20,14 +22,7 @@ import {
   isWebCodecsSupported,
   getWebCodecsSupportIssue,
 } from '../services/webcodecs-decoder'
-import {
-  type FaceSubItem,
-  type PersonItem,
-  type StreamType,
-  type VehicleItem,
-  type ParsedPacket,
-  type StreamStats,
-} from '../types'
+import { type StreamType, type ParsedPacket, type StreamStats } from '../types'
 
 /** 音频状态类型转发（实现在 `use-live-audio`，组件只做展示）。 */
 export type { LivePlayerAudioStatus }
@@ -90,10 +85,11 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
     const lastResolutionRef = useRef<string | null>(null)
     const [isSupported] = useState(() => isWebCodecsSupported())
 
-    const facesRef = useRef<FaceSubItem[]>([])
-    const personsRef = useRef<PersonItem[]>([])
-    const vehiclesRef = useRef<VehicleItem[]>([])
-    const lastEventTimeRef = useRef<number>(0)
+    const synchronizerRef = useRef<AIOverlaySynchronizer | null>(null)
+    if (synchronizerRef.current === null) {
+      synchronizerRef.current = new AIOverlaySynchronizer(streamType)
+    }
+    const hasActiveTargetsRef = useRef<boolean>(false)
     const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
     // 维持最新的回调引用，避免 effect 闭包过期
@@ -123,48 +119,84 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
     /** `useLiveAudio` 的 `flush` 经 ref 暴露，避免进渲染循环的依赖数组。 */
     const flushAudioRef = useRef<() => void>(() => {})
 
-    const redrawOverlay = useCallback(() => {
-      if (!showAIOverlay) return
-      const overlay = overlayCanvasRef.current
-      if (!overlay || overlay.width === 0 || overlay.height === 0) return
-      const ctx = overlay.getContext('2d')
-      if (!ctx) return
+    const clearFadeTimer = useCallback(() => {
+      if (fadeTimerRef.current !== null) {
+        clearTimeout(fadeTimerRef.current)
+        fadeTimerRef.current = null
+      }
+    }, [])
 
-      const isExpired = Date.now() - lastEventTimeRef.current > 350
-      const currentPersons = isExpired ? [] : personsRef.current
-      const currentFaces = isExpired ? [] : facesRef.current
-      const currentVehicles = isExpired ? [] : vehiclesRef.current
+    const redrawOverlay = useCallback(
+      (videoPtsUs?: number | null) => {
+        if (!showAIOverlay) return
+        const synchronizer = synchronizerRef.current
+        if (!synchronizer) return
 
-      // 绘制顺序即层级：人体框在底层，人脸/车牌框压在它上面。
-      // 只有第一个调用负责清屏，否则后画的会抹掉前一个。
-      drawPersonOverlay({
-        ctx,
-        width: overlay.width,
-        height: overlay.height,
-        persons: currentPersons,
-        personLabel: t('personLabel', '人体'),
-        clear: true,
-      })
-      drawFaceOverlay({
-        ctx,
-        width: overlay.width,
-        height: overlay.height,
-        faces: currentFaces,
-        unrecognizedLabel: t('unrecognizedFace', '未登记'),
-        clear: false,
-      })
-      drawVehicleOverlay({
-        ctx,
-        width: overlay.width,
-        height: overlay.height,
-        vehicles: currentVehicles,
-        unrecognizedLabel: t('unrecognizedPlate', '未识别车牌'),
-        clear: false,
-      })
-    }, [showAIOverlay, t])
+        const nowMs = performance.now()
+        const sampled = synchronizer.sample(nowMs, videoPtsUs)
+        hasActiveTargetsRef.current = sampled.hasActiveTargets
+
+        clearFadeTimer()
+        if (sampled.nextExpiryMs !== null) {
+          const delayMs = Math.max(
+            16,
+            Math.ceil(sampled.nextExpiryMs - nowMs) + 4
+          )
+          fadeTimerRef.current = setTimeout(() => {
+            fadeTimerRef.current = null
+            redrawOverlay()
+          }, delayMs)
+        }
+
+        const overlay = overlayCanvasRef.current
+        if (!overlay || overlay.width === 0 || overlay.height === 0) return
+        const ctx = overlay.getContext('2d')
+        if (!ctx) return
+
+        // 绘制顺序即层级：通用检测框与人体框在底层，人脸/车牌框压在它们上面。
+        // 只有第一个调用负责清屏，否则后画的会抹掉前一个。
+        drawDetectionOverlay({
+          ctx,
+          width: overlay.width,
+          height: overlay.height,
+          detections: sampled.detections,
+          fallbackLabel: t('detectionLabel', '目标'),
+          clear: true,
+        })
+        drawPersonOverlay({
+          ctx,
+          width: overlay.width,
+          height: overlay.height,
+          persons: sampled.persons,
+          personLabel: t('personLabel', '人体'),
+          clear: false,
+        })
+        drawFaceOverlay({
+          ctx,
+          width: overlay.width,
+          height: overlay.height,
+          faces: sampled.faces,
+          unrecognizedLabel: t('unrecognizedFace', '未登记'),
+          clear: false,
+        })
+        drawVehicleOverlay({
+          ctx,
+          width: overlay.width,
+          height: overlay.height,
+          vehicles: sampled.vehicles,
+          unrecognizedLabel: t('unrecognizedPlate', '未识别车牌'),
+          clear: false,
+        })
+      },
+      [clearFadeTimer, showAIOverlay, t]
+    )
+
+    useEffect(() => {
+      synchronizerRef.current?.setStreamType(streamType)
+    }, [streamType])
 
     /**
-     * 每帧后处理：上报分辨率变化、同步叠加层画布尺寸并重绘目标框。
+     * 每帧后处理：上报分辨率变化、同步叠加层画布尺寸并按当前 VideoFrame.timestamp 重绘目标框。
      * 叠加层画布尺寸跟随主画布，赋值会清空内容，因此随后必须重绘。
      */
     const handleFrameDrawn = useCallback(
@@ -185,10 +217,12 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           onStatsChangeRef.current?.({ resolution: resStr })
         }
 
-        redrawOverlay()
+        redrawOverlay(frame.timestamp)
       },
       [redrawOverlay]
     )
+
+    const targetLatencyMs = showAIOverlay && streamType === 'main' ? 160 : 100
 
     const {
       decoderRef,
@@ -198,6 +232,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       enabled: isSupported,
       canvasRef,
       traceId: cameraId ?? 'live-player',
+      targetLatencyMs,
       onFrameDrawn: handleFrameDrawn,
       onDecodeError: (error: unknown) => {
         onErrorRef.current?.(
@@ -240,10 +275,11 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
     // 订阅 AI 推理结果事件流（零 React 重渲染，直接驱动 Canvas 2D）
     useEffect(() => {
       const overlayCanvas = overlayCanvasRef.current
-      if (!showAIOverlay || !cameraId) {
-        facesRef.current = []
-        personsRef.current = []
-        vehiclesRef.current = []
+      const synchronizer = synchronizerRef.current
+      if (!showAIOverlay || !cameraId || !synchronizer) {
+        clearFadeTimer()
+        synchronizer?.reset()
+        hasActiveTargetsRef.current = false
         if (overlayCanvas) {
           const ctx = overlayCanvas.getContext('2d')
           ctx?.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
@@ -253,53 +289,23 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
 
       const service = AIResultService.getInstance()
       const unsubscribe = service.subscribeCamera(cameraId, (event) => {
-        const extractedFaces: FaceSubItem[] = []
-        if (event.persons) {
-          for (const p of event.persons) {
-            if (p.faces && p.faces.length > 0) {
-              extractedFaces.push(...p.faces)
-            }
-          }
-        }
-
-        const extractedVehicles: VehicleItem[] = []
-        if (event.vehicles && event.vehicles.length > 0) {
-          extractedVehicles.push(...event.vehicles)
-        }
-
-        personsRef.current = event.persons ?? []
-        facesRef.current = extractedFaces
-        vehiclesRef.current = extractedVehicles
-        lastEventTimeRef.current = Date.now()
-        redrawOverlay()
-
-        if (fadeTimerRef.current) {
-          clearTimeout(fadeTimerRef.current)
-        }
-        fadeTimerRef.current = setTimeout(() => {
-          facesRef.current = []
-          personsRef.current = []
-          vehiclesRef.current = []
+        const activated = synchronizer.ingest(event, performance.now())
+        if (activated) {
           redrawOverlay()
-          fadeTimerRef.current = null
-        }, 350)
+        }
       })
 
       return () => {
-        if (fadeTimerRef.current) {
-          clearTimeout(fadeTimerRef.current)
-          fadeTimerRef.current = null
-        }
+        clearFadeTimer()
         unsubscribe()
-        facesRef.current = []
-        personsRef.current = []
-        vehiclesRef.current = []
+        synchronizer.reset()
+        hasActiveTargetsRef.current = false
         if (overlayCanvas) {
           const ctx = overlayCanvas.getContext('2d')
           ctx?.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
         }
       }
-    }, [cameraId, showAIOverlay, redrawOverlay])
+    }, [cameraId, clearFadeTimer, showAIOverlay, redrawOverlay])
 
     useImperativeHandle(
       ref,
@@ -314,10 +320,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           if (!canvas || canvas.width === 0 || canvas.height === 0) return
           try {
             let dataUrl: string
-            const hasPerception =
-              facesRef.current.length > 0 ||
-              vehiclesRef.current.length > 0 ||
-              personsRef.current.length > 0
+            const hasPerception = hasActiveTargetsRef.current
             if (
               showAIOverlay &&
               overlayCanvas &&
@@ -358,11 +361,21 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
         },
         reset: () => {
           resetRenderLoop()
+          clearFadeTimer()
+          synchronizerRef.current?.reset()
+          hasActiveTargetsRef.current = false
           lastResolutionRef.current = null
           setOverrideMute(null)
         },
       }),
-      [showAIOverlay, resetRenderLoop, decoderRef, hasAudio, isMuted]
+      [
+        clearFadeTimer,
+        showAIOverlay,
+        resetRenderLoop,
+        decoderRef,
+        hasAudio,
+        isMuted,
+      ]
     )
 
     if (!isSupported) {

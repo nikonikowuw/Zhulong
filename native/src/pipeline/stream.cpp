@@ -118,7 +118,7 @@ void DecodeSession::join() {
     }
 }
 
-bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
+bool DecodeSession::push_packet(const Zhulong_packet_view &packet, bool has_normalized_pts_us) {
     if (!active_.load(std::memory_order_relaxed) || !packet.data || packet.size == 0) {
         return false;
     }
@@ -146,8 +146,10 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
     // ⚠️ 时间戳保真透传：严格根据 has_pts / has_dts 记录有效性，禁止把缺失时间戳当作有效 0
     qp.pts = packet.has_pts ? packet.pts : 0;
     qp.dts = packet.has_dts ? packet.dts : 0;
+    qp.pts_us = has_normalized_pts_us ? packet.pts_us : 0;
     qp.has_pts = (packet.has_pts != 0);
     qp.has_dts = (packet.has_dts != 0);
+    qp.has_pts_us = has_normalized_pts_us;
 
     qp.time_base_num = packet.time_base_num > 0 ? packet.time_base_num : time_base_num_.load(std::memory_order_relaxed);
     qp.time_base_den = packet.time_base_den > 0 ? packet.time_base_den : time_base_den_.load(std::memory_order_relaxed);
@@ -327,6 +329,20 @@ void DecodeSession::decode_loop_body() {
         return decoder.get();
     };
 
+    struct PtsUsEntry {
+        int64_t raw_pts{0};
+        int64_t pts_us{0};
+    };
+    constexpr size_t max_pts_us_history = 96;
+    std::deque<PtsUsEntry> pts_us_history;
+    bool has_fallback_pts_us = false;
+    int64_t fallback_pts_us = 0;
+    auto reset_pts_us_history = [&]() noexcept {
+        pts_us_history.clear();
+        has_fallback_pts_us = false;
+        fallback_pts_us = 0;
+    };
+
     // ⚠️ 本 lambda 自己吞掉异常：decode_loop_body() 允许抛出（由 decode_loop 收口），
     //    但排空帧失败只该丢帧并按解码错误重同步关键帧，不值得终止整个解码会话。
     auto drain_frames = [&](IDecodeNode *dec) {
@@ -335,11 +351,25 @@ void DecodeSession::decode_loop_body() {
             HardwareFrame::Ptr frame;
             while (dec->receive_frame(frame) == decode_ok && frame != nullptr) {
                 frame->stream_id = stream_id_;
+                if (frame->has_pts) {
+                    for (auto it = pts_us_history.begin(); it != pts_us_history.end(); ++it) {
+                        if (it->raw_pts == frame->pts) {
+                            frame->pts_us = it->pts_us;
+                            frame->has_pts_us = true;
+                            pts_us_history.erase(it);
+                            break;
+                        }
+                    }
+                } else if (has_fallback_pts_us) {
+                    frame->pts_us = fallback_pts_us;
+                    frame->has_pts_us = true;
+                }
                 frame_queue_.push(std::move(frame));
             }
         } catch (...) {
             // 排空中断：丢弃已解出的帧比崩掉整个宿主便宜，随后按解码错误重同步关键帧
             need_keyframe = true;
+            reset_pts_us_history();
             ZL_LOGW(stream_id_, "pipeline.stream", "decode_drain_exception");
         }
     };
@@ -364,6 +394,7 @@ void DecodeSession::decode_loop_body() {
         if (decoder && decoder_generation != meta_generation_.load(std::memory_order_acquire)) {
             decoder.reset();
             need_keyframe = true;
+            reset_pts_us_history();
         }
 
         if (need_keyframe && !pkt.key_frame) {
@@ -389,17 +420,45 @@ void DecodeSession::decode_loop_body() {
                 const int64_t pts = pkt.has_pts ? pkt.pts : AV_NOPTS_VALUE;
                 const int64_t dts = pkt.has_dts ? pkt.dts : AV_NOPTS_VALUE;
 
+                bool pushed_pts_us_entry = false;
+                if (pkt.has_pts_us) {
+                    if (pkt.has_pts) {
+                        if (pts_us_history.size() >= max_pts_us_history) {
+                            pts_us_history.pop_front();
+                        }
+                        pts_us_history.push_back({pkt.pts, pkt.pts_us});
+                        pushed_pts_us_entry = true;
+                    } else {
+                        has_fallback_pts_us = true;
+                        fallback_pts_us = pkt.pts_us;
+                    }
+                }
+
                 int ret = dec->send_packet(pkt.data.data(), actual_size, pts, dts);
 
                 // ⚠️ 若底层缓冲已满导致背压，先排空已解码帧，再重新发送当前包，严防静默吞包
                 if (ret == decode_again) {
+                    if (pushed_pts_us_entry && !pts_us_history.empty()) {
+                        pts_us_history.pop_back();
+                        pushed_pts_us_entry = false;
+                    }
                     drain_frames(dec);
+                    if (pkt.has_pts_us && pkt.has_pts) {
+                        if (pts_us_history.size() >= max_pts_us_history) {
+                            pts_us_history.pop_front();
+                        }
+                        pts_us_history.push_back({pkt.pts, pkt.pts_us});
+                        pushed_pts_us_entry = true;
+                    }
                     ret = dec->send_packet(pkt.data.data(), actual_size, pts, dts);
                 }
 
                 if (ret == decode_ok) {
                     drain_frames(dec);
                 } else if (ret == decode_again) {
+                    if (pushed_pts_us_entry && !pts_us_history.empty()) {
+                        pts_us_history.pop_back();
+                    }
                     // 排空后仍背压：本包被丢弃。持续性背压说明解码器已停止消费，必须可观测
                     ZL_LOGW(stream_id_, "pipeline.stream", "decode_backpressure_drop size=%zu", actual_size);
                 } else if (ret != AVERROR_EOF) {
@@ -407,7 +466,10 @@ void DecodeSession::decode_loop_body() {
                     // 并等待下一个关键帧，避免参考错误持续污染后续画面
                     dec->flush();
                     need_keyframe = true;
+                    reset_pts_us_history();
                     ZL_LOGW(stream_id_, "pipeline.stream", "decode_packet_failed rc=%d", ret);
+                } else if (pushed_pts_us_entry && !pts_us_history.empty()) {
+                    pts_us_history.pop_back();
                 }
             } else {
                 // 解码器不可用 (codec 无效 / 创建退避窗口内 / 创建失败)：本包被丢弃
@@ -423,6 +485,7 @@ void DecodeSession::decode_loop_body() {
                 } catch (...) {}
             }
             need_keyframe = true;
+            reset_pts_us_history();
         }
         recycle_buffer(std::move(pkt.data));
     }
@@ -668,7 +731,7 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
 
     // 1. 优先推送至 AI 解码队列 (先于 Preview 回调，避免慢回调延迟 AI 处理)
     if (session && !cancel.stopped.load()) {
-        session->push_packet(shaped);
+        session->push_packet(shaped, true);
     }
 
     // 2. 在锁外逐个调用订阅回调（按轨过滤仅接收视频轨的订阅者）

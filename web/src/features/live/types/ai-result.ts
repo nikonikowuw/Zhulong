@@ -1,11 +1,21 @@
 import { z } from 'zod'
 
 /**
+ * 兼容后端 Go JSON 对 nil 切片可能序列化出的 null 与缺省字段，统一归一化为非空数组。
+ */
+const nullableArray = <S extends z.ZodType>(item: S) =>
+  z
+    .array(item)
+    .nullish()
+    .transform((v) => v ?? [])
+
+/**
  * 人脸候选匹配项契约
  */
 export const faceCandidateSchema = z.object({
   person_id: z.string().default(''),
   person_name: z.string().default(''),
+  face_id: z.string().optional().default(''),
   similarity: z.number().default(0),
 })
 
@@ -18,29 +28,36 @@ export type FaceCandidate = z.infer<typeof faceCandidateSchema>
 export const faceSubItemSchema = z.object({
   box: z.tuple([z.number(), z.number(), z.number(), z.number()]),
   quality: z.number().default(0),
-  landmarks: z
-    .array(z.tuple([z.number(), z.number()]))
-    .optional()
-    .default([]),
+  landmarks: nullableArray(z.tuple([z.number(), z.number()])),
   matched: z.boolean().default(false),
   person_id: z.string().default(''),
   person_name: z.string().default(''),
+  matched_face_id: z.string().optional().default(''),
   similarity: z.number().default(0),
   is_fused: z.boolean().optional().default(false),
-  candidates: z.array(faceCandidateSchema).optional().default([]),
+  candidates: nullableArray(faceCandidateSchema),
 })
 
 export type FaceSubItem = z.infer<typeof faceSubItemSchema>
 export type FaceSubItemInput = z.input<typeof faceSubItemSchema>
 
 /**
- * 结构化人体项契约（1:N 挂载人脸）
+ * SCENE_STRUCTURE v2 顶层独立人脸项契约（person_index >= 0 关联人体，-1 为孤立人脸）
+ */
+export const faceStructureItemSchema = faceSubItemSchema.extend({
+  person_index: z.number().int().default(-1),
+})
+
+export type FaceStructureItem = z.infer<typeof faceStructureItemSchema>
+
+/**
+ * 结构化人体项契约（兼容旧版嵌套 faces 与 v2 空切片）
  */
 export const personItemSchema = z.object({
   track_id: z.number().default(0),
   body_box: z.tuple([z.number(), z.number(), z.number(), z.number()]),
   body_score: z.number().default(0),
-  faces: z.array(faceSubItemSchema).default([]),
+  faces: nullableArray(faceSubItemSchema),
 })
 
 export type PersonItem = z.infer<typeof personItemSchema>
@@ -70,7 +87,7 @@ export const vehicleItemSchema = z.object({
   vehicle_score: z.number().default(0),
   vehicle_type: z.string().optional().default(''),
   vehicle_color: z.string().optional().default(''),
-  plates: z.array(plateSubItemSchema).default([]),
+  plates: nullableArray(plateSubItemSchema),
 })
 
 export type VehicleItem = z.infer<typeof vehicleItemSchema>
@@ -94,17 +111,42 @@ export const aiResultEventSchema = z.object({
   camera_id: z.string(),
   algorithm_id: z.string().optional().default(''),
   pts: z.number().default(0),
+  /** 与同源主流 WebCodecs VideoFrame.timestamp 对齐的归一化微秒时间戳（首帧合法值为 0） */
+  pts_us: z.number().optional(),
   timestamp: z.string().optional(),
   task_type: z.string().default('person_structure'),
   cost_ms: z.number().default(0),
-  detections: z.array(detectionItemSchema).optional().default([]),
-  classifications: z.array(z.unknown()).optional().default([]),
-  persons: z.array(personItemSchema).optional().default([]),
-  vehicles: z.array(vehicleItemSchema).optional().default([]),
+  detections: nullableArray(detectionItemSchema),
+  classifications: nullableArray(z.unknown()),
+  persons: nullableArray(personItemSchema),
+  faces: nullableArray(faceStructureItemSchema),
+  vehicles: nullableArray(vehicleItemSchema),
 })
 
 export type AIResultEvent = z.infer<typeof aiResultEventSchema>
 export type AIResultEventInput = z.input<typeof aiResultEventSchema>
+
+/**
+ * 统一提取事件中的人脸列表（优先读取 SCENE_STRUCTURE v2 顶层 faces，回退兼容旧版嵌套 persons[].faces）
+ */
+export function extractFacesFromEvent(
+  event: AIResultEvent
+): FaceStructureItem[] {
+  if (event.faces.length > 0) {
+    return event.faces
+  }
+  const flattened: FaceStructureItem[] = []
+  for (let i = 0; i < event.persons.length; i++) {
+    const person = event.persons[i]
+    for (const face of person.faces) {
+      flattened.push({
+        ...face,
+        person_index: i,
+      })
+    }
+  }
+  return flattened
+}
 
 /**
  * 创建人脸项 Mock 辅助函数
@@ -119,6 +161,7 @@ export function createMockFace(
     matched: false,
     person_id: '',
     person_name: '',
+    matched_face_id: '',
     similarity: 0,
     is_fused: false,
     candidates: [],

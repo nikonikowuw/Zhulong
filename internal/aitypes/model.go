@@ -133,6 +133,7 @@ type InferenceResult struct {
 	CameraID        string               `json:"camera_id"`
 	AlgorithmID     string               `json:"algorithm_id"`
 	PTS             int64                `json:"pts"`
+	PTSUS           *int64               `json:"pts_us,omitempty"`
 	Timestamp       time.Time            `json:"timestamp"`
 	TaskType        string               `json:"task_type"`
 	CostMs          int64                `json:"cost_ms"`
@@ -188,6 +189,7 @@ func newInferenceResult(cameraID, algorithmID string, pts, costMs int64, taskTyp
 type RawInferencePayload struct {
 	StreamID        uint64               `json:"stream_id"`
 	PTS             int64                `json:"pts"`
+	PTSUS           *int64               `json:"pts_us,omitempty"`
 	CaptureTimeMs   int64                `json:"capture_time_ms"`
 	CostMs          int64                `json:"cost_ms"`
 	TaskType        string               `json:"task_type"`
@@ -240,13 +242,20 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		if len(payload.Persons) > 0 {
 			cleanPersons := make([]PersonItem, len(payload.Persons))
 			for i, p := range payload.Persons {
-				p.Faces = nil
+				p.Faces = make([]FaceSubItem, 0)
 				cleanPersons[i] = p
 			}
 			res.Persons = cleanPersons
 		}
 		if len(payload.Faces) > 0 {
-			res.Faces = payload.Faces
+			cleanFaces := make([]FaceStructureItem, len(payload.Faces))
+			for i, f := range payload.Faces {
+				if f.Landmarks == nil {
+					f.Landmarks = make([][2]float64, 0)
+				}
+				cleanFaces[i] = f
+			}
+			res.Faces = cleanFaces
 		}
 	case TaskTypePersonStructure:
 		// 宿主反序列化入口单向归一化 (兼容期旧包 type 3)：
@@ -258,10 +267,14 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 			if p.IsFaceCloseup() {
 				if len(p.Faces) > 0 {
 					f := p.Faces[0]
+					landmarks := f.Landmarks
+					if landmarks == nil {
+						landmarks = make([][2]float64, 0)
+					}
 					res.Faces = append(res.Faces, FaceStructureItem{
 						Box:           f.Box,
 						Quality:       f.Quality,
-						Landmarks:     f.Landmarks,
+						Landmarks:     landmarks,
 						Matched:       f.Matched,
 						Similarity:    f.Similarity,
 						PersonIndex:   -1,
@@ -275,10 +288,14 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 			} else {
 				personIdx := int32(len(res.Persons))
 				for _, f := range p.Faces {
+					landmarks := f.Landmarks
+					if landmarks == nil {
+						landmarks = make([][2]float64, 0)
+					}
 					res.Faces = append(res.Faces, FaceStructureItem{
 						Box:           f.Box,
 						Quality:       f.Quality,
-						Landmarks:     f.Landmarks,
+						Landmarks:     landmarks,
 						Matched:       f.Matched,
 						Similarity:    f.Similarity,
 						PersonIndex:   personIdx,
@@ -289,7 +306,7 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 						Candidates:    f.Candidates,
 					})
 				}
-				p.Faces = nil
+				p.Faces = make([]FaceSubItem, 0)
 				res.Persons = append(res.Persons, p)
 			}
 		}
@@ -297,7 +314,14 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		res = NewVehicleStructureResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
 		res.Timestamp = captureTime
 		if len(payload.Vehicles) > 0 {
-			res.Vehicles = payload.Vehicles
+			cleanVehicles := make([]VehicleItem, len(payload.Vehicles))
+			for i, v := range payload.Vehicles {
+				if v.Plates == nil {
+					v.Plates = make([]PlateSubItem, 0)
+				}
+				cleanVehicles[i] = v
+			}
+			res.Vehicles = cleanVehicles
 		}
 	default:
 		res = InferenceResult{
@@ -328,6 +352,10 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		if res.Vehicles == nil {
 			res.Vehicles = make([]VehicleItem, 0)
 		}
+	}
+	if payload.PTSUS != nil {
+		ptsUS := *payload.PTSUS
+		res.PTSUS = &ptsUS
 	}
 	return res, nil
 }

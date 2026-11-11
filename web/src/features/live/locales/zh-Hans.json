@@ -53,6 +53,7 @@
   "networkError": "网络连接异常",
   "unrecognizedFace": "未登记",
   "personLabel": "人体",
+  "detectionLabel": "目标",
   "unrecognizedPlate": "未识别车牌",
   "enableAIOverlay": "开启目标框叠加",
   "disableAIOverlay": "关闭目标框叠加",

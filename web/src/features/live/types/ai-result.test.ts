@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { parseAIResultEvent, faceSubItemSchema } from './ai-result'
+import {
+  extractFacesFromEvent,
+  faceSubItemSchema,
+  parseAIResultEvent,
+} from './ai-result'
 
 describe('ai-result schema and parser', () => {
   it('parses valid person_structure event with matched face', () => {
@@ -133,5 +137,58 @@ describe('ai-result schema and parser', () => {
     expect(veh.plates).toHaveLength(1)
     expect(veh.plates[0].plate_number).toBe('粤B88888')
     expect(veh.plates[0].plate_color).toBe('蓝色')
+  })
+
+  it('parses scene_structure v2 with top-level faces, null slices, and pts_us = 0', () => {
+    const raw = {
+      camera_id: 'cam_scene_01',
+      algorithm_id: 'face_recognition',
+      pts: 1000,
+      pts_us: 0,
+      task_type: 'scene_structure',
+      cost_ms: 21,
+      detections: null,
+      classifications: null,
+      persons: [
+        {
+          track_id: 7,
+          body_box: [0.1, 0.15, 0.45, 0.85],
+          body_score: 0.94,
+          faces: null,
+        },
+      ],
+      faces: [
+        {
+          box: [0.18, 0.17, 0.29, 0.31],
+          quality: 0.93,
+          landmarks: null,
+          matched: true,
+          person_index: 0,
+          person_id: 'emp_01',
+          person_name: 'Alice',
+          similarity: 0.91,
+          candidates: null,
+        },
+        {
+          box: [0.6, 0.2, 0.72, 0.38],
+          quality: 0.88,
+          landmarks: [],
+          matched: false,
+          person_index: -1,
+          similarity: 0.4,
+        },
+      ],
+      vehicles: null,
+    }
+
+    const parsed = parseAIResultEvent(raw)
+    expect(parsed).not.toBeNull()
+    expect(parsed?.pts_us).toBe(0)
+    expect(parsed?.persons[0].faces).toEqual([])
+    const faces = extractFacesFromEvent(parsed!)
+    expect(faces).toHaveLength(2)
+    expect(faces[0].person_index).toBe(0)
+    expect(faces[0].person_name).toBe('Alice')
+    expect(faces[1].person_index).toBe(-1)
   })
 })

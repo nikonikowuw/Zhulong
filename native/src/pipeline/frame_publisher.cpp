@@ -50,6 +50,7 @@ void FramePublisher::stop() {
         std::lock_guard<std::mutex> lock(latest_mutex_);
         frames_to_drop = std::move(history_frames_);
         history_frames_.clear();
+        published_pts_records_.clear();
     }
     frames_to_drop.clear();
     motion_detector_.reset();
@@ -90,6 +91,49 @@ void FramePublisher::push_frame(HardwareFrame::ConstPtr frame) {
         history_frames_.push_back(std::move(frame));
     }
     evicted_frame.reset(); // 锁外析构底层 HardwareFrame
+}
+
+void FramePublisher::record_published_pts(int64_t capture_time_ms, int64_t raw_pts,
+                                          bool has_pts, int64_t pts_us) {
+    std::lock_guard<std::mutex> lock(latest_mutex_);
+    if (published_pts_records_.size() >= published_pts_capacity) {
+        published_pts_records_.pop_front();
+    }
+    published_pts_records_.push_back(PublishedPtsRecord{
+        capture_time_ms,
+        raw_pts,
+        has_pts,
+        pts_us,
+    });
+}
+
+bool FramePublisher::resolve_pts_us(bool has_capture_time_ms, int64_t capture_time_ms,
+                                    bool has_raw_pts, int64_t raw_pts,
+                                    int64_t &out_pts_us) const noexcept {
+    std::lock_guard<std::mutex> lock(latest_mutex_);
+    if (published_pts_records_.empty()) {
+        return false;
+    }
+
+    if (has_capture_time_ms && capture_time_ms > 0) {
+        for (auto it = published_pts_records_.rbegin(); it != published_pts_records_.rend(); ++it) {
+            if (it->capture_time_ms == capture_time_ms) {
+                out_pts_us = it->pts_us;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if (has_raw_pts) {
+        for (auto it = published_pts_records_.rbegin(); it != published_pts_records_.rend(); ++it) {
+            if (it->has_pts && it->raw_pts == raw_pts) {
+                out_pts_us = it->pts_us;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void FramePublisher::set_max_sample_fps(uint32_t fps) noexcept {
@@ -161,6 +205,7 @@ void FramePublisher::publish_once(std::chrono::steady_clock::time_point &next_du
     }
 
     bool dispatched = false;
+    int64_t dispatched_capture_time_ms = 0;
     if (broker_ && broker_->is_running()) {
         // 视图快照必须是本帧的第一件事：窗口几何、capture_time 与后续像素/结果
         // 由同一次加锁串起来（边界时钟的不变量）。
@@ -192,6 +237,7 @@ void FramePublisher::publish_once(std::chrono::steady_clock::time_point &next_du
             }
         } else {
             dispatched = true;
+            dispatched_capture_time_ms = snapshot.capture_time_ms;
         }
     }
 
@@ -199,6 +245,10 @@ void FramePublisher::publish_once(std::chrono::steady_clock::time_point &next_du
     // 「最近一次发布过的帧」契约一致：未下发的帧留在旧记录上，不会被误当成在途结果。
     // ⚠️ 必须在 frame.reset() 之前压入；淘汰帧析构在互斥锁外执行。
     if (dispatched) {
+        if (frame->has_pts_us) {
+            record_published_pts(dispatched_capture_time_ms, frame->pts,
+                                 frame->has_pts, frame->pts_us);
+        }
         push_frame(frame);
     }
 

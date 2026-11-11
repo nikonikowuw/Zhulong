@@ -443,6 +443,7 @@ export function createLiveAudioPlayer(
       if (ready) return ready
 
       ready = (async () => {
+        let localContext: AudioContext | null = null
         try {
           const Ctor = globalThis.AudioContext
           if (typeof Ctor !== 'function') {
@@ -450,11 +451,8 @@ export function createLiveAudioPlayer(
             return
           }
 
-          // ⚠️ 触发 resume() 尝试唤醒渲染线程，但绝不 await 它（无用户手势时该 Promise 永不落地，await 会挂死，见 research §2.1）。
           const context = new Ctor()
-          if (context.state === 'suspended') {
-            void context.resume().catch(() => {})
-          }
+          localContext = context
           if (
             !context.audioWorklet ||
             typeof globalThis.AudioWorkletNode !== 'function'
@@ -463,6 +461,14 @@ export function createLiveAudioPlayer(
             // 上下文已建但无法装配：立刻释放，避免留下一个永远 suspended 的空上下文。
             void context.close().catch(() => {})
             return
+          }
+
+          // ⚠️ 触发 resume() 尝试唤醒渲染线程，但绝不 await 它（无用户手势时该 Promise 永不落地，await 会挂死，见 research §2.1）。
+          if (
+            context.state === 'suspended' &&
+            typeof context.resume === 'function'
+          ) {
+            void context.resume().catch(() => {})
           }
 
           const url = URL.createObjectURL(
@@ -510,6 +516,9 @@ export function createLiveAudioPlayer(
         } catch {
           // 任何装配失败都降级为「无声」：上层只看到 stats.degraded，
           // 不黑屏、不弹错、不进报错循环 —— 视频必须继续。
+          if (localContext && typeof localContext.close === 'function') {
+            void localContext.close().catch(() => {})
+          }
           stats.degraded = true
           attached = false
           node = null

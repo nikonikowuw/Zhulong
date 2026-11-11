@@ -270,6 +270,11 @@ CREATE TABLE camera_streams (
 4. **1 / 4 / 9 宫格监控看板 (`LiveDashboard.tsx`)**：
    - 支持 1、4、9 宫格响应式排布；支持视口分配摄像机、主/子流切换、单视口独立全屏；
    - 视口绑定与布局模式持久化存储在 `localStorage`。
+5. **实时 AI 视觉叠加层与同源 `pts_us` 对齐 (`ai-overlay-synchronizer.ts` + `stream_hub.go`)**：
+   - Native `Stream::dispatch` 将 `PreviewNormalizer` 归一化出的微秒级 `pts_us` 同步传给 `DecodeSession` 并在 `FramePublisher` 维护轻量标量映射环；`Engine::dispatch_ai_result` 按 Runner 回传的 `capture_time_ms`（及 `pts` 回退）在宿主侧将 `"pts_us"` 注入顶层 JSON（零改动兼容独立编译的 `.zpk` 算法包，首帧 `0` 以 `*int64` 显式保留，缺失省略）；
+   - `StreamHub.consumeAIResults` 必须先非阻塞调用 `eventHub.BroadcastAIResult(res)`，再执行同步落库/抓拍 `consumer.ProcessInferenceResult`，严禁让 SQLite 事务或 JPEG 抓拍阻塞实时画框；
+   - 前端 `AIOverlaySynchronizer` 按 `algorithm_id` 分槽隔离多算法状态：主流（`main`）在开启叠加层时经 `PresentationScheduler.setTargetLatencyMs(160)` 在线抬高呈现缓冲（严禁触发 `VideoDecoder` 重建）并按 `VideoFrame.timestamp` 对齐释放 AI 框，结合 `track_id` 受限速度外推平滑与显式空目标信标即时清槽；子码流（`sub`）因独立 `PreviewNormalizer` 时钟起点自动回退墙钟驱动。
+
 
 
 

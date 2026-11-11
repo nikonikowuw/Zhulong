@@ -161,6 +161,23 @@ describe('PresentationScheduler', () => {
     expect(scheduler.takeDue(599).present).toBeNull()
     expect(scheduler.takeDue(600).present).toBe('c')
   })
+
+  it('setTargetLatencyMs 在线调整目标延迟且不丢弃队列，并同步更新 clockSnapshot', () => {
+    const scheduler = createScheduler({ targetLatencyMs: 100 })
+    scheduler.push(0, 'a', 0)
+    scheduler.push(40_000, 'b', 40)
+
+    // 动态上调至 160ms：原定 100ms 到期的首帧平滑延后至 160ms 呈现
+    scheduler.setTargetLatencyMs(160)
+    expect(scheduler.clockSnapshot()?.targetLatencyMs).toBe(160)
+    expect(scheduler.takeDue(120).present).toBeNull()
+    expect(scheduler.takeDue(160).present).toBe('a')
+
+    // 动态回落至 100ms：第二帧在 140ms 已经到期，下一拍立即呈现
+    scheduler.setTargetLatencyMs(100)
+    expect(scheduler.clockSnapshot()?.targetLatencyMs).toBe(100)
+    expect(scheduler.takeDue(165).present).toBe('b')
+  })
 })
 
 /**
