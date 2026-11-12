@@ -103,3 +103,44 @@ Implemented the storage emergency self-heal fix: used/(used+free) usage accounti
 ### Status
 
 [OK] **Completed**
+
+
+## Session 99: Archive face-recognition CCTV optimization and 4 completed tasks
+<!-- trellis-session: v=2 fp=96ebc8b48fbd4114 -->
+
+**Date**: 2026-11-12
+**Task**: Archive face-recognition CCTV optimization and 4 completed tasks
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+归档 11-06-face-recognition-cctv-optimize，并一并清理归档已完成合入 dev 的 4 个任务（11-06-tripwire-config、11-08-face-recognition-feature-fusion、11-11-streaming-face-feature-persistence、11-11-outbound-heartbeat-report）；保留进行中的 11-03-task-crop-region 与规划中的 11-12-stranger-cluster-trajectory。
+
+### Main Changes
+
+- 归档 11-06-face-recognition-cctv-optimize：像素空间眼线几何质检、对齐脸块清晰度/曝光可选门禁、按 person_id 身份聚合与分差、SCRFD pre/post-NMS 分离预算及 .env 配置收敛
+- 归档 11-06-tripwire-config：任务级带方向绊线编辑器、校验契约与算法隔离 IPC/SDK 只读下发
+- 归档 11-08-face-recognition-feature-fusion：按流有界双重余弦门禁跨帧特征融合与宿主同轨迹 unmatched→matched 冷却升级落库
+- 归档 11-11-streaming-face-feature-persistence：流式 512 维人脸特征 SDK Arena/IPC Base64 回传与 recognitions.feature_vector 持久化
+- 归档 11-11-outbound-heartbeat-report：推送目标事件/存活正交双能力、MQTT LWT 遗嘱与 GET /api/v1/openapi/status 状态拉取端点
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d4e7d32` | feat(task): add tripwire configuration and SDK region delivery |
+| `7c66dcc` | feat(algo/face): fuse features across frames and gate faces on image quality |
+| `8c57267` | feat(record): let a tracked face upgrade from stranger to matched within one cooldown window |
+| `5c114de` | refactor(algo/face): streamline config schema to core params and support .env overrides |
+| `3d069f0` | feat(face): 回传 512 维人脸特征并持久化到识别记录 |
+| `77bf723` | feat(alertpush,openapi): 新增外部平台心跳上报与设备状态端点 |
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 11-03-task-crop-region 待完成板端 spike 与 RGA 第二刀验证
+- 11-12-stranger-cluster-trajectory 在另一窗口继续规划推进

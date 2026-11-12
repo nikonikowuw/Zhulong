@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 98
-- **Last Active**: 2026-11-06
+- **Total Sessions**: 99
+- **Last Active**: 2026-11-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~105 | Active |
+| `journal-3.md` | ~146 | Active |
 | `journal-2.md` | ~1954 | Archived |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 99 | 2026-11-12 | Archive face-recognition CCTV optimization and 4 completed tasks | `d4e7d32`, `7c66dcc`, `8c57267`, `5c114de`, `3d069f0`, `77bf723` | `dev` |
 | 98 | 2026-11-06 | Finish alert-push task | `36a936a`, `1501b46`, `e1968bc`, `464baa0`, `c474103` | `dev` |
 | 97 | 2026-11-04 | Storage emergency self-heal and RK3568 verification | `0ab2ad7` | `dev` |
 | 96 | 2026-11-04 | 人员与人脸 OpenAPI 下发接收（M2M Bearer Token） | `20d299e`, `6d79060`, `30b22a8` | `dev` |
