@@ -5,6 +5,7 @@ import { userEvent } from 'vitest/browser'
 import { alertPushApi } from '../api/alert-push-api'
 import type { AlertDestination } from '../types'
 import { AlertDestinationDialog } from './alert-destination-dialog'
+import { AlertDestinationsTable } from './alert-destinations-table'
 
 vi.mock('../api/alert-push-api', () => ({
   alertPushApi: {
@@ -40,11 +41,15 @@ const mockDestination: AlertDestination = {
   name: 'Existing Webhook',
   channelType: 'webhook',
   enabled: true,
+  eventsEnabled: true,
+  heartbeatEnabled: true,
   imageMode: 'multipart',
   config: {
     url: 'https://api.example.com/alerts/webhook',
+    heartbeatUrl: 'https://api.example.com/devices/heartbeat',
     authType: 'none',
     timeoutSeconds: 5,
+    heartbeatIntervalSeconds: 45,
   },
   filter: {
     eventTypes: ['alarm'],
@@ -56,18 +61,18 @@ const mockDestination: AlertDestination = {
   status: {
     consecutiveFailures: 0,
     totalDispatched: 10,
-    queueLength: 0,
-    queueCapacity: 32,
+    queueLength: 2,
+    queueCapacity: 16,
     state: 'idle',
   },
 }
 
-describe('AlertDestinationDialog', () => {
+describe('AlertDestinationDialog & Table Capabilities', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('renders create dialog in a coherent single-flow layout without tab switching', async () => {
+  it('renders create dialog with connection, event push, and device liveness sections', async () => {
     const queryClient = new QueryClient()
     const { getByRole, getByPlaceholder, getByText } = await render(
       <QueryClientProvider client={queryClient}>
@@ -79,12 +84,10 @@ describe('AlertDestinationDialog', () => {
       </QueryClientProvider>
     )
 
-    // Heading
     await expect
       .element(getByRole('heading', { name: /新建推送目标/i }))
       .toBeInTheDocument()
 
-    // Protocol card titles (exact match)
     await expect
       .element(getByText('HTTP Webhook', { exact: true }))
       .toBeInTheDocument()
@@ -92,20 +95,25 @@ describe('AlertDestinationDialog', () => {
       .element(getByText('MQTT 消息总线', { exact: true }))
       .toBeInTheDocument()
 
-    // Name input
     await expect
       .element(getByPlaceholder(/例如：SOC Webhook 回调/i))
       .toBeInTheDocument()
-
-    // Webhook URL is directly visible in the main flow (zero tab switching!)
     await expect
       .element(getByPlaceholder(/https:\/\/api.example.com\/alerts\/webhook/i))
       .toBeInTheDocument()
+
+    // Both capability section headers are rendered
+    await expect
+      .element(getByText('感知事件推送', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(getByText('设备存活上报', { exact: true }))
+      .toBeInTheDocument()
   })
 
-  it('seamlessly switches protocol fields when MQTT card is selected', async () => {
+  it('toggles event push and device liveness sections and blocks submit when both are disabled', async () => {
     const queryClient = new QueryClient()
-    const { getByText, getByPlaceholder } = await render(
+    const { getByRole, getByText, getByPlaceholder } = await render(
       <QueryClientProvider client={queryClient}>
         <AlertDestinationDialog
           open={true}
@@ -115,17 +123,65 @@ describe('AlertDestinationDialog', () => {
       </QueryClientProvider>
     )
 
-    // Select MQTT protocol card
-    const mqttCard = getByText('MQTT 消息总线', { exact: true })
-    await userEvent.click(mqttCard)
+    const nameInput = getByRole('textbox', { name: /通道名称/i })
+    await userEvent.type(nameInput, 'Park Platform')
+    const urlInput = getByPlaceholder(
+      /https:\/\/api.example.com\/alerts\/webhook/i
+    )
+    await userEvent.type(urlInput, 'https://api.example.com/events')
 
-    // MQTT Broker & Topic fields are now in place directly
+    // Disable Perception Event Push -> both capabilities are now off
+    const eventsSwitch = getByRole('switch', { name: '感知事件推送' })
+    await userEvent.click(eventsSwitch)
+
+    // Image mode field is hidden when eventsEnabled is false
+    await expect.element(getByText('图片附带模式')).not.toBeInTheDocument()
+
+    // Submitting with both capabilities off shows validation error and does not call API
+    const saveBtn = getByRole('button', { name: /保存目标/i })
+    await userEvent.click(saveBtn)
+
+    await expect
+      .element(
+        getByText(/请至少开启“感知事件推送”或“设备存活上报”中的一项能力/)
+      )
+      .toBeInTheDocument()
+    expect(alertPushApi.create).not.toHaveBeenCalled()
+
+    // Enable Device Liveness Reporting -> reveals reporting interval & optional heartbeat URL
+    const heartbeatSwitch = getByRole('switch', { name: '设备存活上报' })
+    await userEvent.click(heartbeatSwitch)
+
+    await expect.element(getByText(/上报间隔/)).toBeInTheDocument()
+    await expect.element(getByText(/独立存活接收 URL/)).toBeInTheDocument()
+  })
+
+  it('seamlessly switches protocol fields and MQTT LWT options when MQTT card is selected', async () => {
+    const queryClient = new QueryClient()
+    const { getByRole, getByText, getByPlaceholder } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await userEvent.click(getByText('MQTT 消息总线', { exact: true }))
+
     await expect
       .element(getByPlaceholder(/tcp:\/\/192.168.1.100:1883/i))
       .toBeInTheDocument()
     await expect
       .element(getByPlaceholder(/zhulong\/alarms/i))
       .toBeInTheDocument()
+
+    await userEvent.click(getByRole('switch', { name: '设备存活上报' }))
+    await expect.element(getByText(/独立状态 Topic/)).toBeInTheDocument()
+    await expect
+      .element(getByRole('switch', { name: /断线遗嘱通知/ }))
+      .toBeChecked()
   })
 
   it('executes connection probe test directly in the footer without context switching', async () => {
@@ -147,7 +203,6 @@ describe('AlertDestinationDialog', () => {
       expect(alertPushApi.test).toHaveBeenCalledTimes(1)
     })
 
-    // Probe success badge is displayed
     await expect.element(getByText(/探测成功 \(24ms\)/i)).toBeInTheDocument()
   })
 
@@ -168,13 +223,41 @@ describe('AlertDestinationDialog', () => {
       .element(getByRole('heading', { name: /编辑推送目标/i }))
       .toBeInTheDocument()
 
-    // Filled name via role textbox
     const nameInput = getByRole('textbox', { name: /通道名称/i })
     await expect.element(nameInput).toHaveValue('Existing Webhook')
 
-    // Protocol locked notice
     await expect
       .element(getByText(/传输协议类型创建后固定/i))
       .toBeInTheDocument()
+  })
+
+  it('renders capability badges and em-dash queue cell for heartbeat-only rows in table', async () => {
+    const heartbeatOnlyDest: AlertDestination = {
+      ...mockDestination,
+      id: 'dest-hb-only',
+      name: 'Cloud Ops Monitor',
+      eventsEnabled: false,
+      heartbeatEnabled: true,
+      config: {
+        url: 'https://ops.example.com/heartbeat',
+        authType: 'none',
+        heartbeatIntervalSeconds: 30,
+      },
+    }
+
+    const { getByText } = await render(
+      <AlertDestinationsTable
+        destinations={[mockDestination, heartbeatOnlyDest]}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onToggle={vi.fn()}
+        onTest={vi.fn()}
+      />
+    )
+
+    await expect.element(getByText('事件推送')).toBeInTheDocument()
+    await expect.element(getByText('存活上报 · 45s')).toBeInTheDocument()
+    await expect.element(getByText('存活上报 · 30s')).toBeInTheDocument()
+    await expect.element(getByText('2 / 16')).toBeInTheDocument()
   })
 })

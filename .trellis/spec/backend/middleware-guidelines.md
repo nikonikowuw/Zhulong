@@ -20,7 +20,7 @@
 >
 > 回归护栏：`internal/app/upload_router_test.go` 会走**真实 router** 上传一份 > 1 MiB 的归档并断言 `201 Created` 而非 413；只测 handler 的单元测试永远发现不了这个坑。
 >
-> 当前挂载在 `upload_routes` 组的端点：`POST /api/v1/persons/{id}/faces`（10 MiB 登记照）、算法包安装归档。挂载在 `openapi_routes` 组的端点：`/api/v1/openapi/persons/...`。
+> 当前挂载在 `upload_routes` 组的端点：`POST /api/v1/persons/{id}/faces`（10 MiB 登记照）、算法包安装归档。挂载在 `openapi_routes` 组的端点：`/api/v1/openapi/persons/...`、`GET /api/v1/openapi/status`。
 
 ---
 

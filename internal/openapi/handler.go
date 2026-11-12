@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -18,21 +19,47 @@ import (
 // stable, recognizable value rather than an empty source.
 const defaultCallerName = "API"
 
-// Handler handles third-party OpenAPI provisioning requests.
+// StatusProvider supplies a sanitized point-in-time host health and workload snapshot.
+type StatusProvider interface {
+	DeviceStatus(ctx context.Context) (DeviceStatusResponse, error)
+}
+
+// HandlerOption configures optional dependencies on Handler.
+type HandlerOption func(*Handler)
+
+// WithStatusProvider wires the read-only device status provider into Handler.
+func WithStatusProvider(provider StatusProvider) HandlerOption {
+	return func(h *Handler) {
+		h.statusProvider = provider
+	}
+}
+
+// Handler handles third-party OpenAPI provisioning and liveness requests.
 type Handler struct {
-	personService *person.Service
-	limiter       *UploadLimiter
+	personService  *person.Service
+	limiter        *UploadLimiter
+	statusProvider StatusProvider
 }
 
 // NewHandler constructs a new OpenAPI handler.
-func NewHandler(personService *person.Service, limiter *UploadLimiter) *Handler {
+func NewHandler(
+	personService *person.Service,
+	limiter *UploadLimiter,
+	opts ...HandlerOption,
+) *Handler {
 	if limiter == nil {
 		limiter = NewUploadLimiter()
 	}
-	return &Handler{
+	h := &Handler{
 		personService: personService,
 		limiter:       limiter,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(h)
+		}
+	}
+	return h
 }
 
 // RegisterRoutes mounts all OpenAPI endpoints onto the provided router group.
@@ -44,6 +71,9 @@ func NewHandler(personService *person.Service, limiter *UploadLimiter) *Handler 
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	jsonEndpoints := rg.Group("")
 	jsonEndpoints.Use(httpmiddleware.MaxBodyLimit())
+
+	// Liveness and operational status (read-only; never touches the upload limiter or audit log).
+	rg.GET("/status", h.GetStatus)
 
 	// Person routes
 	jsonEndpoints.POST("/persons/:personId", h.UpsertPerson)
@@ -57,6 +87,51 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.DELETE("/persons/:personId/faces", h.ClearFaces)
 	rg.DELETE("/persons/:personId/faces/:faceId", h.DeleteFace)
 	jsonEndpoints.PUT("/persons/:personId/faces/:faceId/primary", h.SetPrimaryFace)
+}
+
+// GetStatus returns a sanitized point-in-time liveness and workload snapshot.
+// @Summary      Get device health and workload status
+// @Description  Returns a sanitized point-in-time liveness, resource, storage, and workload snapshot for this host.
+// @Description  Degraded subsystems still return HTTP 200 with status="degraded" and machine-readable reasons.
+// @Tags         OpenAPI
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  httputil.Response{data=DeviceStatusResponse}
+// @Failure      401  {object}  httputil.Response
+// @Failure      503  {object}  httputil.Response
+// @Router       /openapi/status [get]
+func (h *Handler) GetStatus(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	if h.statusProvider == nil {
+		httputil.WriteError(
+			c,
+			apperr.Unavailable("SERVICE_UNAVAILABLE", "Device status service is unavailable", nil),
+		)
+		return
+	}
+
+	resp, err := h.statusProvider.DeviceStatus(c.Request.Context())
+	if err != nil {
+		var appErr *apperr.Error
+		if errors.As(err, &appErr) {
+			httputil.WriteError(c, appErr)
+			return
+		}
+		httputil.WriteError(
+			c,
+			apperr.Unavailable("SERVICE_UNAVAILABLE", "Device status snapshot is unavailable", err),
+		)
+		return
+	}
+
+	resp.ReportedAt = resp.ReportedAt.UTC()
+	if resp.Reasons == nil {
+		resp.Reasons = []string{}
+	}
+	if resp.Status == "" {
+		resp.Status = "ready"
+	}
+	httputil.Success(c, resp)
 }
 
 // UpsertPerson creates or updates a person by external personId.

@@ -1,64 +1,133 @@
 import { describe, expect, it } from 'vitest'
-import { createAlertDestinationFormSchema } from './schema'
+import {
+  createAlertDestinationFormSchema,
+  isSameHttpOrigin,
+  type AlertDestinationFormValues,
+} from './schema'
+
+function makeBaseWebhookValues(
+  overrides: Partial<AlertDestinationFormValues> = {}
+): AlertDestinationFormValues {
+  return {
+    name: 'SOC Forwarder',
+    channelType: 'webhook',
+    eventsEnabled: true,
+    heartbeatEnabled: false,
+    imageMode: 'multipart',
+    heartbeatIntervalSeconds: 60,
+    url: 'https://api.example.com/alerts/webhook',
+    heartbeatUrl: '',
+    authType: 'none',
+    timeoutSeconds: 5,
+    token: '',
+    basicUser: '',
+    basicPass: '',
+    headers: [],
+    broker: '',
+    topic: '',
+    heartbeatTopic: '',
+    lwtEnabled: true,
+    clientId: '',
+    qos: 0,
+    keepAliveSeconds: 30,
+    mqttUser: '',
+    mqttPass: '',
+    tlsSkipVerify: false,
+    eventTypes: ['alarm'],
+    algorithmIds: ['algo-1'],
+    cameraIds: ['cam-1'],
+    ...overrides,
+  }
+}
 
 describe('createAlertDestinationFormSchema', () => {
   it('validates a valid webhook destination form values', () => {
     const schema = createAlertDestinationFormSchema()
-    const validWebhook = {
-      name: 'SOC Forwarder',
-      channelType: 'webhook' as const,
-      imageMode: 'multipart' as const,
-      url: 'https://api.example.com/alerts/webhook',
-      authType: 'none' as const,
-      timeoutSeconds: 5,
-      token: '',
-      basicUser: '',
-      basicPass: '',
-      headers: [{ key: 'X-Custom-Token', value: 'secret' }],
-      broker: '',
-      topic: '',
-      clientId: '',
-      qos: 0,
-      keepAliveSeconds: 30,
-      mqttUser: '',
-      mqttPass: '',
-      tlsSkipVerify: false,
-      eventTypes: ['alarm'],
-      algorithmIds: ['algo-1'],
-      cameraIds: ['cam-1'],
-    }
-
-    const res = schema.safeParse(validWebhook)
+    const res = schema.safeParse(
+      makeBaseWebhookValues({
+        headers: [{ key: 'X-Custom-Token', value: 'secret' }],
+      })
+    )
     expect(res.success).toBe(true)
+  })
+
+  it('rejects when both eventsEnabled and heartbeatEnabled are false', () => {
+    const schema = createAlertDestinationFormSchema()
+    const res = schema.safeParse(
+      makeBaseWebhookValues({
+        eventsEnabled: false,
+        heartbeatEnabled: false,
+      })
+    )
+    expect(res.success).toBe(false)
+    if (!res.success) {
+      expect(
+        res.error.issues.some((i) => i.path.includes('eventsEnabled'))
+      ).toBe(true)
+    }
+  })
+
+  it('validates heartbeat-only webhook destination and enforces same-origin when credentials exist', () => {
+    const schema = createAlertDestinationFormSchema()
+
+    // Same origin with implicit default 443 port -> valid
+    const sameOriginRes = schema.safeParse(
+      makeBaseWebhookValues({
+        eventsEnabled: false,
+        heartbeatEnabled: true,
+        heartbeatIntervalSeconds: 30,
+        url: 'https://api.example.com/v1/events',
+        heartbeatUrl: 'https://API.example.com:443/v1/heartbeat',
+        authType: 'bearer',
+        token: 'secret-token',
+      })
+    )
+    expect(sameOriginRes.success).toBe(true)
+
+    // Cross-origin with bearer credentials -> rejected
+    const crossOriginRes = schema.safeParse(
+      makeBaseWebhookValues({
+        eventsEnabled: false,
+        heartbeatEnabled: true,
+        url: 'https://api.example.com/v1/events',
+        heartbeatUrl: 'https://evil.other.org/v1/heartbeat',
+        authType: 'bearer',
+        token: 'secret-token',
+      })
+    )
+    expect(crossOriginRes.success).toBe(false)
+    if (!crossOriginRes.success) {
+      expect(
+        crossOriginRes.error.issues.some((i) => i.path.includes('heartbeatUrl'))
+      ).toBe(true)
+    }
+  })
+
+  it('rejects out-of-range heartbeatIntervalSeconds', () => {
+    const schema = createAlertDestinationFormSchema()
+    const res = schema.safeParse(
+      makeBaseWebhookValues({
+        heartbeatEnabled: true,
+        heartbeatIntervalSeconds: 10,
+      })
+    )
+    expect(res.success).toBe(false)
+    if (!res.success) {
+      expect(
+        res.error.issues.some((i) =>
+          i.path.includes('heartbeatIntervalSeconds')
+        )
+      ).toBe(true)
+    }
   })
 
   it('rejects invalid webhook url with userinfo', () => {
     const schema = createAlertDestinationFormSchema()
-    const invalidWebhook = {
-      name: 'SOC Forwarder',
-      channelType: 'webhook' as const,
-      imageMode: 'multipart' as const,
-      url: 'https://user:pass@api.example.com/alerts/webhook',
-      authType: 'none' as const,
-      timeoutSeconds: 5,
-      token: '',
-      basicUser: '',
-      basicPass: '',
-      headers: [],
-      broker: '',
-      topic: '',
-      clientId: '',
-      qos: 0,
-      keepAliveSeconds: 30,
-      mqttUser: '',
-      mqttPass: '',
-      tlsSkipVerify: false,
-      eventTypes: [],
-      algorithmIds: [],
-      cameraIds: [],
-    }
-
-    const res = schema.safeParse(invalidWebhook)
+    const res = schema.safeParse(
+      makeBaseWebhookValues({
+        url: 'https://user:pass@api.example.com/alerts/webhook',
+      })
+    )
     expect(res.success).toBe(false)
     if (!res.success) {
       expect(res.error.issues.some((i) => i.path.includes('url'))).toBe(true)
@@ -67,31 +136,11 @@ describe('createAlertDestinationFormSchema', () => {
 
   it('rejects reserved headers in webhook custom headers', () => {
     const schema = createAlertDestinationFormSchema()
-    const invalidHeaders = {
-      name: 'SOC Forwarder',
-      channelType: 'webhook' as const,
-      imageMode: 'multipart' as const,
-      url: 'https://api.example.com/alerts/webhook',
-      authType: 'none' as const,
-      timeoutSeconds: 5,
-      token: '',
-      basicUser: '',
-      basicPass: '',
-      headers: [{ key: 'Authorization', value: 'override-bearer' }],
-      broker: '',
-      topic: '',
-      clientId: '',
-      qos: 0,
-      keepAliveSeconds: 30,
-      mqttUser: '',
-      mqttPass: '',
-      tlsSkipVerify: false,
-      eventTypes: [],
-      algorithmIds: [],
-      cameraIds: [],
-    }
-
-    const res = schema.safeParse(invalidHeaders)
+    const res = schema.safeParse(
+      makeBaseWebhookValues({
+        headers: [{ key: 'Authorization', value: 'override-bearer' }],
+      })
+    )
     expect(res.success).toBe(false)
     if (!res.success) {
       expect(res.error.issues.some((i) => i.path.includes('headers'))).toBe(
@@ -100,66 +149,55 @@ describe('createAlertDestinationFormSchema', () => {
     }
   })
 
-  it('validates a valid mqtt destination form values', () => {
+  it('validates mqtt destination and rejects wildcards in topic or heartbeatTopic', () => {
     const schema = createAlertDestinationFormSchema()
-    const validMqtt = {
+    const validMqtt = makeBaseWebhookValues({
       name: 'IoT Gateway',
-      channelType: 'mqtt' as const,
-      imageMode: 'base64' as const,
+      channelType: 'mqtt',
+      imageMode: 'base64',
+      heartbeatEnabled: true,
       url: '',
-      authType: 'none' as const,
-      timeoutSeconds: 5,
-      token: '',
-      basicUser: '',
-      basicPass: '',
-      headers: [],
       broker: 'tcp://10.0.0.1:1883',
       topic: 'zhulong/events/alarm',
+      heartbeatTopic: 'zhulong/status/box01',
       clientId: 'zhulong-edge-01',
       qos: 1,
       keepAliveSeconds: 60,
       mqttUser: 'admin',
       mqttPass: 'password',
-      tlsSkipVerify: false,
-      eventTypes: [],
-      algorithmIds: [],
-      cameraIds: [],
-    }
+    })
 
-    const res = schema.safeParse(validMqtt)
-    expect(res.success).toBe(true)
+    expect(schema.safeParse(validMqtt).success).toBe(true)
+
+    const wildcardMain = schema.safeParse({
+      ...validMqtt,
+      topic: 'zhulong/events/+',
+    })
+    expect(wildcardMain.success).toBe(false)
+
+    const wildcardHeartbeat = schema.safeParse({
+      ...validMqtt,
+      heartbeatTopic: 'zhulong/status/#',
+    })
+    expect(wildcardHeartbeat.success).toBe(false)
+    if (!wildcardHeartbeat.success) {
+      expect(
+        wildcardHeartbeat.error.issues.some((i) =>
+          i.path.includes('heartbeatTopic')
+        )
+      ).toBe(true)
+    }
   })
 
-  it('rejects mqtt publish topic with wildcards', () => {
-    const schema = createAlertDestinationFormSchema()
-    const invalidMqtt = {
-      name: 'IoT Gateway',
-      channelType: 'mqtt' as const,
-      imageMode: 'base64' as const,
-      url: '',
-      authType: 'none' as const,
-      timeoutSeconds: 5,
-      token: '',
-      basicUser: '',
-      basicPass: '',
-      headers: [],
-      broker: 'tcp://10.0.0.1:1883',
-      topic: 'zhulong/events/+',
-      clientId: '',
-      qos: 0,
-      keepAliveSeconds: 30,
-      mqttUser: '',
-      mqttPass: '',
-      tlsSkipVerify: false,
-      eventTypes: [],
-      algorithmIds: [],
-      cameraIds: [],
-    }
-
-    const res = schema.safeParse(invalidMqtt)
-    expect(res.success).toBe(false)
-    if (!res.success) {
-      expect(res.error.issues.some((i) => i.path.includes('topic'))).toBe(true)
-    }
+  it('compares HTTP origins strictly across scheme, host, and default port', () => {
+    expect(
+      isSameHttpOrigin('https://example.com/a', 'https://EXAMPLE.com:443/b')
+    ).toBe(true)
+    expect(
+      isSameHttpOrigin('https://example.com/a', 'http://example.com/b')
+    ).toBe(false)
+    expect(
+      isSameHttpOrigin('https://example.com:8443/a', 'https://example.com/b')
+    ).toBe(false)
   })
 })

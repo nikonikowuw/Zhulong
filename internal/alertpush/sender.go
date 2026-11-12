@@ -5,10 +5,12 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 )
 
@@ -29,6 +31,7 @@ type MediaReader interface {
 // Sender defines the delivery mechanism for an alert destination.
 type Sender interface {
 	Send(ctx context.Context, ev record.AlarmEvent) error
+	SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, seq uint64) error
 	Close() error
 }
 
@@ -40,6 +43,115 @@ type Sender interface {
 // systeminfo; the host wires the implementation in.
 type DeviceIDProvider interface {
 	DeviceID() string
+}
+
+// HeartbeatSnapshotProvider supplies a point-in-time sanitized host health and
+// workload summary without coupling alertpush to sibling domain packages.
+type HeartbeatSnapshotProvider interface {
+	Snapshot(ctx context.Context) HeartbeatSnapshot
+}
+
+// HeartbeatSnapshot holds the sanitized operational telemetry assembled by the host.
+type HeartbeatSnapshot struct {
+	ReportedAt time.Time
+	Status     string
+	Reasons    []string
+	Host       HeartbeatHostPayload
+	Resources  HeartbeatResourcesPayload
+	Storage    HeartbeatStoragePayload
+	Workload   HeartbeatWorkloadPayload
+}
+
+// HeartbeatHostPayload describes host architecture, uptime and optional reachable base URL.
+type HeartbeatHostPayload struct {
+	Arch          string `json:"arch"`
+	UptimeSeconds uint64 `json:"uptime_seconds"`
+	PublicBaseURL string `json:"public_base_url,omitempty"`
+}
+
+// HeartbeatResourcesPayload describes core compute and thermal watermarks.
+type HeartbeatResourcesPayload struct {
+	CPUUsagePercent   float64 `json:"cpu_usage_percent"`
+	MemoryUsedPercent float64 `json:"memory_used_percent"`
+	NPUSupported      bool    `json:"npu_supported"`
+	NPULoadPercent    float64 `json:"npu_load_percent"`
+	MaxTemperatureC   float64 `json:"max_temperature_c"`
+}
+
+// HeartbeatStoragePayload describes media disk health and write-gate state.
+type HeartbeatStoragePayload struct {
+	Status      string `json:"status"`
+	Writable    bool   `json:"writable"`
+	UsedPercent int    `json:"used_percent"`
+	FreeMB      int64  `json:"free_mb"`
+}
+
+// HeartbeatCamerasPayload summarizes enabled camera health counts.
+type HeartbeatCamerasPayload struct {
+	Enabled  int `json:"enabled"`
+	Online   int `json:"online"`
+	Offline  int `json:"offline"`
+	Degraded int `json:"degraded"`
+}
+
+// HeartbeatTasksPayload summarizes enabled channel analysis tasks.
+type HeartbeatTasksPayload struct {
+	Enabled int `json:"enabled"`
+}
+
+// HeartbeatRunnersPayload summarizes active and circuit-broken algorithm runner processes.
+type HeartbeatRunnersPayload struct {
+	Active int `json:"active"`
+	Failed int `json:"failed"`
+}
+
+// HeartbeatDecodePayload summarizes native video decoder admission state.
+type HeartbeatDecodePayload struct {
+	Backend           string `json:"backend"`
+	HardwareAvailable bool   `json:"hardware_available"`
+	ActiveSessions    int    `json:"active_sessions"`
+	MaxSessions       int    `json:"max_sessions"`
+}
+
+// HeartbeatWorkloadPayload groups camera, task, runner and decoder summaries.
+type HeartbeatWorkloadPayload struct {
+	Cameras HeartbeatCamerasPayload `json:"cameras"`
+	Tasks   HeartbeatTasksPayload   `json:"tasks"`
+	Runners HeartbeatRunnersPayload `json:"runners"`
+	Decode  HeartbeatDecodePayload  `json:"decode"`
+}
+
+// HeartbeatPayload is the external snake_case contract for outbound liveness reports.
+type HeartbeatPayload struct {
+	ID         string                    `json:"id"`
+	DeviceID   string                    `json:"device_id,omitempty"`
+	EventType  string                    `json:"event_type"`
+	Seq        uint64                    `json:"seq"`
+	ReportedAt string                    `json:"reported_at"`
+	Status     string                    `json:"status"`
+	Reasons    []string                  `json:"reasons"`
+	Host       HeartbeatHostPayload      `json:"host"`
+	Resources  HeartbeatResourcesPayload `json:"resources"`
+	Storage    HeartbeatStoragePayload   `json:"storage"`
+	Workload   HeartbeatWorkloadPayload  `json:"workload"`
+}
+
+// mqttOfflineWillPayload is registered on the MQTT broker at connect time (LWT).
+// It intentionally omits reported_at because static will bytes cannot stamp the
+// future moment when power or network connectivity drops.
+type mqttOfflineWillPayload struct {
+	DeviceID  string `json:"device_id,omitempty"`
+	EventType string `json:"event_type"`
+	Reason    string `json:"reason"`
+}
+
+// mqttOfflineGracefulPayload is actively published before a clean MQTT disconnect.
+type mqttOfflineGracefulPayload struct {
+	ID         string `json:"id"`
+	DeviceID   string `json:"device_id,omitempty"`
+	EventType  string `json:"event_type"`
+	ReportedAt string `json:"reported_at"`
+	Reason     string `json:"reason"`
 }
 
 // AlarmDataPayload holds behavior & safety alarm details.
@@ -103,6 +215,111 @@ func resolveDeviceID(provider DeviceIDProvider) string {
 		return ""
 	}
 	return strings.TrimSpace(provider.DeviceID())
+}
+
+// resolveHeartbeatSnapshot fetches a live snapshot from provider or constructs a minimal
+// ready snapshot when running in isolated unit tests without full host wiring.
+func resolveHeartbeatSnapshot(
+	ctx context.Context,
+	provider HeartbeatSnapshotProvider,
+	publicBaseURL string,
+) HeartbeatSnapshot {
+	if provider != nil {
+		snap := provider.Snapshot(ctx)
+		if snap.ReportedAt.IsZero() {
+			snap.ReportedAt = time.Now().UTC()
+		}
+		if snap.Status == "" {
+			snap.Status = "ready"
+		}
+		if snap.Reasons == nil {
+			snap.Reasons = []string{}
+		}
+		if snap.Host.PublicBaseURL == "" && strings.TrimSpace(publicBaseURL) != "" {
+			snap.Host.PublicBaseURL = strings.TrimSpace(publicBaseURL)
+		}
+		return snap
+	}
+
+	return HeartbeatSnapshot{
+		ReportedAt: time.Now().UTC(),
+		Status:     "ready",
+		Reasons:    []string{},
+		Host: HeartbeatHostPayload{
+			Arch:          runtime.GOARCH,
+			PublicBaseURL: strings.TrimSpace(publicBaseURL),
+		},
+		Storage: HeartbeatStoragePayload{
+			Status:   "healthy",
+			Writable: true,
+		},
+		Workload: HeartbeatWorkloadPayload{
+			Decode: HeartbeatDecodePayload{
+				Backend: "auto",
+			},
+		},
+	}
+}
+
+func buildHeartbeatPayload(snap HeartbeatSnapshot, deviceID string, seq uint64) HeartbeatPayload {
+	reportedAt := snap.ReportedAt
+	if reportedAt.IsZero() {
+		reportedAt = time.Now().UTC()
+	}
+	status := snap.Status
+	if status == "" {
+		status = "ready"
+	}
+	reasons := snap.Reasons
+	if reasons == nil {
+		reasons = []string{}
+	}
+
+	return HeartbeatPayload{
+		ID:         idutil.New(),
+		DeviceID:   deviceID,
+		EventType:  EventTypeHeartbeat,
+		Seq:        seq,
+		ReportedAt: reportedAt.UTC().Format(time.RFC3339Nano),
+		Status:     status,
+		Reasons:    reasons,
+		Host:       snap.Host,
+		Resources:  snap.Resources,
+		Storage:    snap.Storage,
+		Workload:   snap.Workload,
+	}
+}
+
+// sameOrigin reports whether two HTTP(S) URLs share the exact same scheme, hostname
+// and effective port. Credentials bound to rawA may only be reused on rawB when true.
+func sameOrigin(rawA, rawB string) bool {
+	uA, errA := url.Parse(strings.TrimSpace(rawA))
+	uB, errB := url.Parse(strings.TrimSpace(rawB))
+	if errA != nil || errB != nil {
+		return false
+	}
+	schemeA := strings.ToLower(uA.Scheme)
+	schemeB := strings.ToLower(uB.Scheme)
+	isHTTPScheme := schemeA == "http" || schemeA == "https"
+	if !isHTTPScheme || schemeA != schemeB {
+		return false
+	}
+	hostA := strings.ToLower(uA.Hostname())
+	hostB := strings.ToLower(uB.Hostname())
+	if hostA == "" || hostA != hostB {
+		return false
+	}
+	return effectivePort(schemeA, uA.Port()) == effectivePort(schemeB, uB.Port())
+}
+
+func effectivePort(scheme, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if scheme == "https" {
+		return "443"
+	}
+	return "80"
 }
 
 // buildAlarmPayload creates the base payload from a perception event.

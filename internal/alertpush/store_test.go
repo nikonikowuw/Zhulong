@@ -114,8 +114,14 @@ func TestStoreCRUD(t *testing.T) {
 		t.Fatal("expected AAD mismatch error on wrong ID")
 	}
 
-	// 7. Update with enabled=false (verifying zero value is NOT ignored)
+	// 7. Update with enabled=false & capability toggle (verifying zero values are NOT ignored)
+	if !got.EventsEnabled || got.HeartbeatEnabled {
+		t.Fatalf("expected default capabilities events=true heartbeat=false, got events=%v heartbeat=%v",
+			got.EventsEnabled, got.HeartbeatEnabled)
+	}
 	got.Enabled = false
+	got.EventsEnabled = false
+	got.HeartbeatEnabled = true
 	got.Name = "Renamed Webhook"
 	if err := store.Update(ctx, got); err != nil {
 		t.Fatalf("Update failed: %v", err)
@@ -127,8 +133,41 @@ func TestStoreCRUD(t *testing.T) {
 	if reloaded.Enabled {
 		t.Fatal("expected Enabled to be false after update, but zero value was ignored!")
 	}
+	if reloaded.EventsEnabled || !reloaded.HeartbeatEnabled {
+		t.Fatalf("expected EventsEnabled=false HeartbeatEnabled=true after update, got events=%v heartbeat=%v",
+			reloaded.EventsEnabled, reloaded.HeartbeatEnabled)
+	}
 	if reloaded.Name != "Renamed Webhook" {
 		t.Fatalf("expected Renamed Webhook, got %s", reloaded.Name)
+	}
+
+	// 7b. Create explicit heartbeat-only destination (EventsEnabled=false, HeartbeatEnabled=true)
+	hbOnlyID := "01J8Z000000000000000000009"
+	hbOnly := &AlertDestination{
+		ID:               hbOnlyID,
+		Name:             "Heartbeat Only",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          true,
+		EventsEnabled:    false,
+		HeartbeatEnabled: true,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		SecretCiphertext: secData,
+		FilterJSON:       `{}`,
+	}
+	if err := store.Create(ctx, hbOnly); err != nil {
+		t.Fatalf("Create heartbeat-only failed: %v", err)
+	}
+	gotHB, err := store.GetByID(ctx, hbOnlyID)
+	if err != nil {
+		t.Fatalf("GetByID heartbeat-only failed: %v", err)
+	}
+	if gotHB.EventsEnabled || !gotHB.HeartbeatEnabled {
+		t.Fatalf("expected EventsEnabled=false HeartbeatEnabled=true on create, got events=%v heartbeat=%v",
+			gotHB.EventsEnabled, gotHB.HeartbeatEnabled)
+	}
+	if err := store.Delete(ctx, hbOnlyID); err != nil {
+		t.Fatalf("Delete heartbeat-only failed: %v", err)
 	}
 
 	// 8. SetEnabled

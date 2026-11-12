@@ -2103,3 +2103,128 @@ func TestSystemSettingsMigrationSymmetry(t *testing.T) {
 		t.Fatalf("expected exactly one seeded row after re-Up, got %d (err %v)", count, err)
 	}
 }
+
+// TestMigration000035_AlertDestinationCapabilitiesSymmetry pins migration 35:
+// existing alert_destinations rows acquire events_enabled=true and
+// heartbeat_enabled=false, and down/up steps round-trip cleanly.
+func TestMigration000035_AlertDestinationCapabilitiesSymmetry(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "migration_symmetry_35.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := db.Close(); closeErr != nil && !errors.Is(closeErr, sql.ErrConnDone) {
+			t.Errorf("db.Close: %v", closeErr)
+		}
+	})
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("sqlite3 instance: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("iofs driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
+	if err != nil {
+		t.Fatalf("migrator: %v", err)
+	}
+	t.Cleanup(func() {
+		srcErr, dbErr := migrator.Close()
+		if srcErr != nil {
+			t.Errorf("migrator source close: %v", srcErr)
+		}
+		if dbErr != nil {
+			t.Errorf("migrator db close: %v", dbErr)
+		}
+	})
+
+	// 1. Migrate to 34 and insert a legacy destination row before 35 runs.
+	if err := migrator.Migrate(34); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(34): %v", err)
+	}
+	legacyInsertSQL := `
+		INSERT INTO alert_destinations (id, name, channel_type, enabled, image_mode, config_json, filter_json)
+		VALUES ('legacy_dest', 'Legacy Webhook', 'webhook', 1, 'url', '{}', '{}')`
+	if _, err := db.Exec(legacyInsertSQL); err != nil {
+		t.Fatalf("insert legacy alert_destination: %v", err)
+	}
+
+	// 2. Apply migration 35 and verify legacy defaults.
+	if err := migrator.Migrate(35); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(35): %v", err)
+	}
+
+	var eventsEnabled, heartbeatEnabled bool
+	if err := db.QueryRow(
+		`SELECT events_enabled, heartbeat_enabled FROM alert_destinations WHERE id = 'legacy_dest'`,
+	).Scan(&eventsEnabled, &heartbeatEnabled); err != nil {
+		t.Fatalf("select legacy row after 35: %v", err)
+	}
+	if !eventsEnabled || heartbeatEnabled {
+		t.Fatalf(
+			"legacy row defaults: events_enabled=%v heartbeat_enabled=%v, want true/false",
+			eventsEnabled,
+			heartbeatEnabled,
+		)
+	}
+
+	// 3. Rollback 35 and confirm both columns are gone while legacy row survives.
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("rollback 35: %v", err)
+	}
+	rows, err := db.Query("PRAGMA table_info(alert_destinations)")
+	if err != nil {
+		t.Fatalf("pragma table_info: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(
+			&cid,
+			&name,
+			&ctype,
+			&notnull,
+			&dflt,
+			&pk,
+		); err != nil {
+			t.Fatalf("scan pragma: %v", err)
+		}
+		if name == "events_enabled" || name == "heartbeat_enabled" {
+			t.Fatalf("column %q must be dropped after rollback 35", name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate pragma: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close pragma rows: %v", err)
+	}
+
+	// 4. Re-apply 35 and verify columns return cleanly.
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("re-apply 35: %v", err)
+	}
+	if err := db.QueryRow(
+		`SELECT events_enabled, heartbeat_enabled FROM alert_destinations WHERE id = 'legacy_dest'`,
+	).Scan(&eventsEnabled, &heartbeatEnabled); err != nil {
+		t.Fatalf("select after re-Up(35): %v", err)
+	}
+	if !eventsEnabled || heartbeatEnabled {
+		t.Fatalf(
+			"after re-Up(35): events_enabled=%v heartbeat_enabled=%v, want true/false",
+			eventsEnabled,
+			heartbeatEnabled,
+		)
+	}
+}

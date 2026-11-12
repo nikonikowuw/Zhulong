@@ -24,30 +24,33 @@ var (
 	ErrWebhookURLMissing      = errors.New("webhook url is missing")
 	ErrPublicBaseURLMissing   = errors.New("public base url is required for url image mode")
 	ErrWebhookHTTPStatusError = errors.New("webhook target returned non-success http status")
+	ErrCrossOriginRedirect    = errors.New("refusing cross-origin redirect when credentials are configured")
 )
 
 // WebhookSenderOptions contains configuration for constructing a WebhookSender.
 type WebhookSenderOptions struct {
-	ID            string
-	Name          string
-	ImageMode     string
-	PublicBaseURL string
-	SignedURLTTL  time.Duration
-	Signer        *URLSigner
-	Media         MediaReader
-	URL           string
-	AuthType      string
-	Token         string
-	Username      string
-	Password      string
-	Headers       map[string]string
-	Timeout       time.Duration
+	ID                string
+	Name              string
+	ImageMode         string
+	SkipImageURLCheck bool
+	PublicBaseURL     string
+	SignedURLTTL      time.Duration
+	Signer            *URLSigner
+	Media             MediaReader
+	URL               string
+	HeartbeatURL      string
+	AuthType          string
+	Token             string
+	Username          string
+	Password          string
+	Headers           map[string]string
+	Timeout           time.Duration
 	// Identity supplies the host device_id stamped onto every payload. Nil omits it.
 	Identity DeviceIDProvider
 	Logger   *zap.Logger
 }
 
-// WebhookSender delivers alert events to HTTP/HTTPS webhook endpoints.
+// WebhookSender delivers alert and heartbeat events to HTTP/HTTPS webhook endpoints.
 type WebhookSender struct {
 	opts   WebhookSenderOptions
 	client *http.Client
@@ -59,7 +62,8 @@ func NewWebhookSender(opts WebhookSenderOptions) (*WebhookSender, error) {
 	if strings.TrimSpace(opts.URL) == "" {
 		return nil, ErrWebhookURLMissing
 	}
-	if opts.ImageMode == ImageModeURL && strings.TrimSpace(opts.PublicBaseURL) == "" {
+	needsPublicBaseURL := !opts.SkipImageURLCheck && opts.ImageMode == ImageModeURL
+	if needsPublicBaseURL && strings.TrimSpace(opts.PublicBaseURL) == "" {
 		return nil, ErrPublicBaseURLMissing
 	}
 	timeout := opts.Timeout
@@ -77,12 +81,17 @@ func NewWebhookSender(opts WebhookSenderOptions) (*WebhookSender, error) {
 		IdleConnTimeout:     30 * time.Second,
 	}
 
+	hasCredentials := (opts.AuthType != "" && opts.AuthType != AuthTypeNone) || len(opts.Headers) > 0
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return errors.New("stopped after 3 redirects")
+			}
+			mustGuardOrigin := hasCredentials && len(via) > 0
+			if mustGuardOrigin && !sameOrigin(via[0].URL.String(), req.URL.String()) {
+				return ErrCrossOriginRedirect
 			}
 			return nil
 		},
@@ -133,6 +142,30 @@ func (s *WebhookSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 	return lastErr
 }
 
+// SendHeartbeat posts a single point-in-time liveness snapshot without retrying stale state.
+func (s *WebhookSender) SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, seq uint64) error {
+	targetURL := strings.TrimSpace(s.opts.HeartbeatURL)
+	if targetURL == "" {
+		targetURL = s.opts.URL
+	}
+
+	payload := buildHeartbeatPayload(snap, resolveDeviceID(s.opts.Identity), seq)
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal heartbeat payload: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("create heartbeat http request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	s.applyAuthAndHeaders(req)
+
+	_, err = s.executeRequest(ctx, req, targetURL)
+	return err
+}
+
 func (s *WebhookSender) doSendOnce(ctx context.Context, ev record.AlarmEvent) (bool, error) {
 	req, cleanup, err := s.buildRequest(ctx, ev)
 	if cleanup != nil {
@@ -141,11 +174,18 @@ func (s *WebhookSender) doSendOnce(ctx context.Context, ev record.AlarmEvent) (b
 	if err != nil {
 		return false, err
 	}
+	return s.executeRequest(ctx, req, s.opts.URL)
+}
 
+func (s *WebhookSender) executeRequest(
+	ctx context.Context,
+	req *http.Request,
+	targetURL string,
+) (bool, error) {
 	resp, err := s.client.Do(req.WithContext(ctx))
 	if err != nil {
 		s.logger.Warn("webhook send network error",
-			zap.String("target_url", logsafe.URL(s.opts.URL)),
+			zap.String("target_url", logsafe.URL(targetURL)),
 			zap.Error(err),
 		)
 		return true, err

@@ -45,6 +45,78 @@ type DeleteResponse struct {
 	Deleted bool `json:"deleted"`
 }
 
+// DeviceStatusResponse is the camelCase read-only operational snapshot returned by
+// GET /api/v1/openapi/status.
+type DeviceStatusResponse struct {
+	DeviceID   string              `json:"deviceId"`
+	ReportedAt time.Time           `json:"reportedAt"`
+	Status     string              `json:"status"`
+	Reasons    []string            `json:"reasons"`
+	Host       DeviceHostInfo      `json:"host"`
+	Resources  DeviceResourcesInfo `json:"resources"`
+	Storage    DeviceStorageInfo   `json:"storage"`
+	Workload   DeviceWorkloadInfo  `json:"workload"`
+}
+
+// DeviceHostInfo describes host architecture, uptime and optional reachable base URL.
+type DeviceHostInfo struct {
+	Arch          string `json:"arch"`
+	UptimeSeconds uint64 `json:"uptimeSeconds"`
+	PublicBaseURL string `json:"publicBaseUrl,omitempty"`
+}
+
+// DeviceResourcesInfo describes compute utilization and thermal watermarks.
+type DeviceResourcesInfo struct {
+	CPUUsagePercent   float64 `json:"cpuUsagePercent"`
+	MemoryUsedPercent float64 `json:"memoryUsedPercent"`
+	NPUSupported      bool    `json:"npuSupported"`
+	NPULoadPercent    float64 `json:"npuLoadPercent"`
+	MaxTemperatureC   float64 `json:"maxTemperatureC"`
+}
+
+// DeviceStorageInfo describes media storage health and write-gate state.
+type DeviceStorageInfo struct {
+	Status      string `json:"status"`
+	Writable    bool   `json:"writable"`
+	UsedPercent int    `json:"usedPercent"`
+	FreeMB      int64  `json:"freeMb"`
+}
+
+// DeviceCamerasSummaryInfo summarizes enabled camera health counts.
+type DeviceCamerasSummaryInfo struct {
+	Enabled  int `json:"enabled"`
+	Online   int `json:"online"`
+	Offline  int `json:"offline"`
+	Degraded int `json:"degraded"`
+}
+
+// DeviceTasksSummaryInfo summarizes enabled channel analysis tasks.
+type DeviceTasksSummaryInfo struct {
+	Enabled int `json:"enabled"`
+}
+
+// DeviceRunnersSummaryInfo summarizes active and circuit-broken algorithm runners.
+type DeviceRunnersSummaryInfo struct {
+	Active int `json:"active"`
+	Failed int `json:"failed"`
+}
+
+// DeviceDecodeSummaryInfo summarizes native video decoder admission state.
+type DeviceDecodeSummaryInfo struct {
+	Backend           string `json:"backend"`
+	HardwareAvailable bool   `json:"hardwareAvailable"`
+	ActiveSessions    int    `json:"activeSessions"`
+	MaxSessions       int    `json:"maxSessions"`
+}
+
+// DeviceWorkloadInfo groups camera, task, runner and decoder summaries.
+type DeviceWorkloadInfo struct {
+	Cameras DeviceCamerasSummaryInfo `json:"cameras"`
+	Tasks   DeviceTasksSummaryInfo   `json:"tasks"`
+	Runners DeviceRunnersSummaryInfo `json:"runners"`
+	Decode  DeviceDecodeSummaryInfo  `json:"decode"`
+}
+
 // newPersonProvisionResponse projects a persisted person onto the machine API contract.
 //
 // Timestamps are normalized to UTC so they always serialize with a trailing Z: the

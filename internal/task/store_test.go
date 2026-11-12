@@ -625,3 +625,70 @@ func TestStoreDynamicPeakBudgetWithSchedule(t *testing.T) {
 		t.Fatalf("expected ErrComputeBudgetExceeded for overlapping schedule, got %v", err)
 	}
 }
+
+func TestStoreCountEnabledTasks(t *testing.T) {
+	store, db, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_cnt",
+		"helmet_detector",
+		10,
+	)
+
+	// 1. Enabled task with enabled algorithm -> counted
+	if err := store.CreateTask(ctx, &task.Task{
+		ID:       "t_enabled_with_algo",
+		CameraID: "cam_1",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{ID: "sub_1", AlgorithmID: "algo_cnt", Enabled: true, SampleFPS: 5, ConfigJSON: "{}"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateTask 1 failed: %v", err)
+	}
+
+	// 2. Disabled task with enabled algorithm -> not counted
+	if err := store.CreateTask(ctx, &task.Task{
+		ID:       "t_disabled",
+		CameraID: "cam_2",
+		Enabled:  false,
+		Algorithms: []task.TaskAlgorithm{
+			{ID: "sub_2", AlgorithmID: "algo_cnt", Enabled: true, SampleFPS: 5, ConfigJSON: "{}"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateTask 2 failed: %v", err)
+	}
+
+	// 3. Enabled orphan task with zero algorithms -> not counted
+	if err := store.CreateTask(ctx, &task.Task{
+		ID:       "t_enabled_empty",
+		CameraID: "cam_3",
+		Enabled:  true,
+	}); err != nil {
+		t.Fatalf("CreateTask 3 failed: %v", err)
+	}
+
+	// 4. Enabled task whose bound algorithm is disabled -> not counted
+	if err := store.CreateTask(ctx, &task.Task{
+		ID:       "t_enabled_algo_off",
+		CameraID: "cam_4",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{ID: "sub_4", AlgorithmID: "algo_cnt", Enabled: false, SampleFPS: 5, ConfigJSON: "{}"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateTask 4 failed: %v", err)
+	}
+
+	cnt, err := store.CountEnabledTasks(ctx)
+	if err != nil {
+		t.Fatalf("CountEnabledTasks failed: %v", err)
+	}
+	if cnt != 1 {
+		t.Fatalf("CountEnabledTasks = %d, want 1", cnt)
+	}
+}

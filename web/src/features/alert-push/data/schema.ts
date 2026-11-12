@@ -16,6 +16,41 @@ export interface HeaderEntry {
   value: string
 }
 
+function isValidHttpUrlWithoutUserinfo(raw: string): boolean {
+  try {
+    const parsed = new URL(raw)
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      !parsed.username &&
+      !parsed.password &&
+      Boolean(parsed.hostname)
+    )
+  } catch {
+    return false
+  }
+}
+
+export function isSameHttpOrigin(rawA: string, rawB: string): boolean {
+  try {
+    const a = new URL(rawA.trim())
+    const b = new URL(rawB.trim())
+    if (
+      (a.protocol !== 'http:' && a.protocol !== 'https:') ||
+      a.protocol !== b.protocol
+    ) {
+      return false
+    }
+    if (a.hostname.toLowerCase() !== b.hostname.toLowerCase()) {
+      return false
+    }
+    const portA = a.port || (a.protocol === 'https:' ? '443' : '80')
+    const portB = b.port || (b.protocol === 'https:' ? '443' : '80')
+    return portA === portB
+  } catch {
+    return false
+  }
+}
+
 /**
  * 告警推送目标表单校验 Schema 工厂
  */
@@ -27,6 +62,15 @@ export function createAlertDestinationFormSchema(
   const msg = {
     nameRequired: t ? t('validation.nameRequired') : '请输入通道名称',
     nameMax: t ? t('validation.nameMax') : '通道名称不能超过 64 个字符',
+    capabilityRequired: t
+      ? t('validation.capabilityRequired')
+      : '请至少开启“感知事件推送”或“设备存活上报”中的一项能力',
+    heartbeatIntervalRange: t
+      ? t('validation.heartbeatIntervalRange')
+      : '上报间隔必须在 15 到 3600 秒之间',
+    heartbeatCrossOrigin: t
+      ? t('validation.heartbeatCrossOrigin')
+      : '配置了鉴权凭据或自定义标头时，独立存活 URL 必须与主 Webhook URL 同源',
     urlRequired: t ? t('validation.urlRequired') : '请输入 Webhook URL',
     urlInvalid: t
       ? t('validation.urlInvalid')
@@ -66,9 +110,17 @@ export function createAlertDestinationFormSchema(
     .object({
       name: z.string().trim().min(1, msg.nameRequired).max(64, msg.nameMax),
       channelType: z.enum(['webhook', 'mqtt']),
+      eventsEnabled: z.boolean(),
+      heartbeatEnabled: z.boolean(),
       imageMode: z.enum(['url', 'multipart', 'base64']),
+      heartbeatIntervalSeconds: z
+        .number({ error: msg.heartbeatIntervalRange })
+        .int(msg.heartbeatIntervalRange)
+        .min(15, msg.heartbeatIntervalRange)
+        .max(3600, msg.heartbeatIntervalRange),
       // Webhook
       url: z.string(),
+      heartbeatUrl: z.string(),
       authType: z.enum(['none', 'bearer', 'basic']),
       timeoutSeconds: z.number().min(1).max(30),
       token: z.string(),
@@ -78,6 +130,8 @@ export function createAlertDestinationFormSchema(
       // MQTT
       broker: z.string(),
       topic: z.string(),
+      heartbeatTopic: z.string(),
+      lwtEnabled: z.boolean(),
       clientId: z.string().max(23, msg.clientIdMax),
       qos: z.number().min(0).max(2),
       keepAliveSeconds: z.number().min(5).max(300),
@@ -90,35 +144,57 @@ export function createAlertDestinationFormSchema(
       cameraIds: z.array(z.string()),
     })
     .superRefine((data, ctx) => {
+      // 0. 至少开启一项北向能力
+      if (!data.eventsEnabled && !data.heartbeatEnabled) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['eventsEnabled'],
+          message: msg.capabilityRequired,
+        })
+      }
+
       // 1. Webhook 协议校验
       if (data.channelType === 'webhook') {
         const trimmedUrl = data.url.trim()
+        const mainUrlValid = isValidHttpUrlWithoutUserinfo(trimmedUrl)
         if (!trimmedUrl) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['url'],
             message: msg.urlRequired,
           })
-        } else {
-          try {
-            const parsed = new URL(trimmedUrl)
+        } else if (!mainUrlValid) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['url'],
+            message: msg.urlInvalid,
+          })
+        }
+
+        // 独立存活接收 URL 校验（仅在开启设备存活上报且填写时检查）
+        const trimmedHbUrl = data.heartbeatUrl.trim()
+        if (data.heartbeatEnabled && trimmedHbUrl) {
+          if (!isValidHttpUrlWithoutUserinfo(trimmedHbUrl)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['heartbeatUrl'],
+              message: msg.urlInvalid,
+            })
+          } else {
+            const hasCredentialsOrHeaders =
+              data.authType !== 'none' ||
+              data.headers.some((h) => h.key.trim() !== '')
             if (
-              (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
-              parsed.username ||
-              parsed.password
+              hasCredentialsOrHeaders &&
+              mainUrlValid &&
+              !isSameHttpOrigin(trimmedUrl, trimmedHbUrl)
             ) {
               ctx.addIssue({
                 code: z.ZodIssueCode.custom,
-                path: ['url'],
-                message: msg.urlInvalid,
+                path: ['heartbeatUrl'],
+                message: msg.heartbeatCrossOrigin,
               })
             }
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ['url'],
-              message: msg.urlInvalid,
-            })
           }
         }
 
@@ -206,6 +282,19 @@ export function createAlertDestinationFormSchema(
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['topic'],
+            message: msg.topicNoWildcards,
+          })
+        }
+
+        const trimmedHbTopic = data.heartbeatTopic.trim()
+        if (
+          data.heartbeatEnabled &&
+          trimmedHbTopic &&
+          (trimmedHbTopic.includes('+') || trimmedHbTopic.includes('#'))
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['heartbeatTopic'],
             message: msg.topicNoWildcards,
           })
         }

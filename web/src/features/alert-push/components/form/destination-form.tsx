@@ -29,6 +29,7 @@ import type {
 } from '../../types'
 import { ChannelTypeCards } from './channel-type-cards'
 import { DestinationFiltersSection } from './destination-filters-section'
+import { HeartbeatCapabilitySection } from './heartbeat-capability-section'
 import { MqttConfigSection } from './mqtt-config-section'
 import { WebhookConfigSection } from './webhook-config-section'
 
@@ -85,11 +86,16 @@ export function DestinationForm({
     return {
       name: destination?.name || '',
       channelType: destination?.channelType || 'webhook',
+      eventsEnabled: destination ? destination.eventsEnabled : true,
+      heartbeatEnabled: destination ? destination.heartbeatEnabled : false,
       imageMode:
         destination?.imageMode ||
         (destination?.channelType === 'mqtt' ? 'base64' : 'multipart'),
+      heartbeatIntervalSeconds:
+        destination?.config.heartbeatIntervalSeconds || 60,
       // Webhook
       url: (isWebhook ? destination.config.url : '') || '',
+      heartbeatUrl: (isWebhook ? destination.config.heartbeatUrl : '') || '',
       authType: (isWebhook ? destination.config.authType : 'none') || 'none',
       timeoutSeconds: (isWebhook ? destination.config.timeoutSeconds : 5) || 5,
       token: '',
@@ -103,6 +109,8 @@ export function DestinationForm({
       broker:
         (isMqtt ? destination.config.broker : '') || 'tcp://10.0.0.1:1883',
       topic: (isMqtt ? destination.config.topic : '') || 'zhulong/alarms',
+      heartbeatTopic: (isMqtt ? destination.config.heartbeatTopic : '') || '',
+      lwtEnabled: isMqtt ? (destination.config.lwtEnabled ?? true) : true,
       clientId: (isMqtt ? destination.config.clientId : '') || '',
       qos: (isMqtt ? destination.config.qos : 0) ?? 0,
       keepAliveSeconds:
@@ -123,11 +131,42 @@ export function DestinationForm({
     defaultValues,
   })
 
-  // 只需监听 channelType 控制渲染 Webhook 还是 MQTT 区域
   const channelType = useWatch({
     control: form.control,
     name: 'channelType',
   })
+
+  const buildProtocolConfig = (
+    values: AlertDestinationFormValues,
+    includeEmptyOverrideForClear: boolean
+  ): Record<string, unknown> => {
+    if (values.channelType === 'webhook') {
+      const hbUrl = values.heartbeatUrl.trim()
+      return {
+        url: values.url.trim(),
+        heartbeatUrl: includeEmptyOverrideForClear ? hbUrl : hbUrl || undefined,
+        authType: values.authType,
+        timeoutSeconds: values.timeoutSeconds,
+        heartbeatIntervalSeconds: values.heartbeatIntervalSeconds,
+      }
+    }
+
+    const hbTopic = values.heartbeatTopic.trim()
+    return {
+      broker: values.broker.trim(),
+      clientId: values.clientId.trim() || undefined,
+      username: values.mqttUser.trim() || undefined,
+      topic: values.topic.trim(),
+      heartbeatTopic: includeEmptyOverrideForClear
+        ? hbTopic
+        : hbTopic || undefined,
+      lwtEnabled: values.lwtEnabled,
+      qos: values.qos,
+      keepAliveSeconds: values.keepAliveSeconds,
+      tlsSkipVerify: values.tlsSkipVerify,
+      heartbeatIntervalSeconds: values.heartbeatIntervalSeconds,
+    }
+  }
 
   // 连通性测试
   const handleRunTest = async () => {
@@ -148,23 +187,10 @@ export function DestinationForm({
       const res = await alertPushApi.test({
         id: destination?.id,
         channelType: values.channelType,
+        eventsEnabled: values.eventsEnabled,
+        heartbeatEnabled: values.heartbeatEnabled,
         imageMode: values.imageMode,
-        config:
-          values.channelType === 'webhook'
-            ? {
-                url: values.url.trim(),
-                authType: values.authType,
-                timeoutSeconds: values.timeoutSeconds,
-              }
-            : {
-                broker: values.broker.trim(),
-                clientId: values.clientId.trim() || undefined,
-                username: values.mqttUser.trim() || undefined,
-                topic: values.topic.trim(),
-                qos: values.qos,
-                keepAliveSeconds: values.keepAliveSeconds,
-                tlsSkipVerify: values.tlsSkipVerify,
-              },
+        config: buildProtocolConfig(values, isEdit),
         secret:
           values.channelType === 'webhook'
             ? {
@@ -202,28 +228,15 @@ export function DestinationForm({
       if (isEdit && destination) {
         const updatePayload: UpdateAlertDestinationInput = {
           name: values.name.trim(),
+          eventsEnabled: values.eventsEnabled,
+          heartbeatEnabled: values.heartbeatEnabled,
           imageMode: values.imageMode,
           filter: {
             eventTypes: values.eventTypes,
             algorithmIds: values.algorithmIds,
             cameraIds: values.cameraIds,
           },
-          config:
-            values.channelType === 'webhook'
-              ? {
-                  url: values.url.trim(),
-                  authType: values.authType,
-                  timeoutSeconds: values.timeoutSeconds,
-                }
-              : {
-                  broker: values.broker.trim(),
-                  clientId: values.clientId.trim() || undefined,
-                  username: values.mqttUser.trim() || undefined,
-                  topic: values.topic.trim(),
-                  qos: values.qos,
-                  keepAliveSeconds: values.keepAliveSeconds,
-                  tlsSkipVerify: values.tlsSkipVerify,
-                },
+          config: buildProtocolConfig(values, true),
           secret:
             values.channelType === 'webhook'
               ? {
@@ -243,28 +256,15 @@ export function DestinationForm({
         const createPayload: CreateAlertDestinationInput = {
           name: values.name.trim(),
           channelType: values.channelType,
+          eventsEnabled: values.eventsEnabled,
+          heartbeatEnabled: values.heartbeatEnabled,
           imageMode: values.imageMode,
           filter: {
             eventTypes: values.eventTypes,
             algorithmIds: values.algorithmIds,
             cameraIds: values.cameraIds,
           },
-          config:
-            values.channelType === 'webhook'
-              ? {
-                  url: values.url.trim(),
-                  authType: values.authType,
-                  timeoutSeconds: values.timeoutSeconds,
-                }
-              : {
-                  broker: values.broker.trim(),
-                  clientId: values.clientId.trim() || undefined,
-                  username: values.mqttUser.trim() || undefined,
-                  topic: values.topic.trim(),
-                  qos: values.qos,
-                  keepAliveSeconds: values.keepAliveSeconds,
-                  tlsSkipVerify: values.tlsSkipVerify,
-                },
+          config: buildProtocolConfig(values, false),
           secret:
             values.channelType === 'webhook'
               ? {
@@ -286,8 +286,10 @@ export function DestinationForm({
       handleFormError(form, err, {
         fieldMap: {
           'config.url': 'url',
+          'config.heartbeatUrl': 'heartbeatUrl',
           'config.broker': 'broker',
           'config.topic': 'topic',
+          'config.heartbeatTopic': 'heartbeatTopic',
           'config.clientId': 'clientId',
         },
         onConflict: (_err, message) => {
@@ -324,7 +326,7 @@ export function DestinationForm({
           </div>
         ) : null}
 
-        {/* 区域 1：基础信息与协议选择 */}
+        {/* 分区 1：基础连接与凭据 */}
         <ChannelTypeCards
           control={form.control}
           setValue={form.setValue}
@@ -332,7 +334,6 @@ export function DestinationForm({
           onResetTestResult={() => setTestResult(null)}
         />
 
-        {/* 区域 2：核心连接与凭据 */}
         {channelType === 'webhook' ? (
           <WebhookConfigSection
             control={form.control}
@@ -349,12 +350,15 @@ export function DestinationForm({
           />
         )}
 
-        {/* 区域 3：感知事件与数据过滤 */}
+        {/* 分区 2：感知事件推送能力（开关 + 图片交付 + 过滤器） */}
         <DestinationFiltersSection
           control={form.control}
           setValue={form.setValue}
           initialFiltersOpen={hasCustomFilters}
         />
+
+        {/* 分区 3：设备存活上报能力（开关 + 上报间隔 + 分流路由/LWT） */}
+        <HeartbeatCapabilitySection control={form.control} />
 
         {/* 底部 Footer */}
         <DialogFooter className='gap-y-3 border-t border-border/60 pt-3 sm:items-center sm:justify-between'>

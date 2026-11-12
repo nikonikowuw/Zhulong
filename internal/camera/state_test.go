@@ -154,3 +154,75 @@ func TestStateRegistryRevisionConflictRejection(t *testing.T) {
 		t.Fatalf("expected matching revision 2 to be accepted, got health=%s", s.Health)
 	}
 }
+
+func TestStateRegistrySummary(t *testing.T) {
+	registry := NewStateRegistry()
+
+	// Enabled + Online + Degraded
+	registry.InitCameraState(&Camera{
+		ID:      "cam_online_deg",
+		Enabled: true,
+		Streams: []CameraStream{{Role: StreamRoleMain}, {Role: StreamRoleSub}},
+	})
+	registry.RecordStreamSuccess(
+		"cam_online_deg",
+		0,
+		StreamRoleMain,
+		EvidenceRTSPDescribe,
+	)
+	registry.RecordStreamFailure(StreamFailureParams{
+		CameraID: "cam_online_deg",
+		Role:     StreamRoleSub,
+		Reason:   "timeout",
+	})
+
+	// Enabled + Offline (3 main failures)
+	registry.InitCameraState(&Camera{
+		ID:      "cam_offline",
+		Enabled: true,
+		Streams: []CameraStream{{Role: StreamRoleMain}},
+	})
+	for range 3 {
+		registry.RecordStreamFailure(StreamFailureParams{
+			CameraID: "cam_offline",
+			Role:     StreamRoleMain,
+			Reason:   "timeout",
+		})
+	}
+
+	// Enabled + Error (1 main failure after online -> main stream unreachable, counted in Offline)
+	registry.InitCameraState(&Camera{
+		ID:      "cam_error",
+		Enabled: true,
+		Streams: []CameraStream{{Role: StreamRoleMain}},
+	})
+	registry.RecordStreamSuccess(
+		"cam_error",
+		0,
+		StreamRoleMain,
+		EvidenceRTSPDescribe,
+	)
+	registry.RecordStreamFailure(StreamFailureParams{
+		CameraID: "cam_error",
+		Role:     StreamRoleMain,
+		Reason:   "timeout",
+	})
+
+	// Disabled camera (must not inflate enabled/offline/degraded)
+	registry.InitCameraState(&Camera{
+		ID:      "cam_disabled",
+		Enabled: false,
+		Streams: []CameraStream{{Role: StreamRoleMain}},
+	})
+
+	sum := registry.Summary()
+	want := CameraHealthSummary{
+		Enabled:  3,
+		Online:   1,
+		Offline:  2,
+		Degraded: 1,
+	}
+	if sum != want {
+		t.Fatalf("unexpected CameraHealthSummary: got %+v, want %+v", sum, want)
+	}
+}

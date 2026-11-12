@@ -1,6 +1,6 @@
 {
   "title": "告警多渠道推送",
-  "description": "配置感知事件分发通道（Webhook 与 MQTT）：支持行为告警、人脸识别、车辆车牌识别三类事件，按事件类型/算法/摄像机过滤、图片附带及连通性探测。推送载荷统一携带设备标识 device_id。",
+  "description": "配置感知事件分发与设备存活上报通道（Webhook 与 MQTT）：支持同一目标独立开关感知事件推送与周期存活摘要上报，共享连接与鉴权凭据，推送载荷统一携带设备标识 device_id。",
   "create": "新建推送目标",
   "edit": "编辑推送目标",
   "delete": "删除目标",
@@ -10,22 +10,30 @@
   "testFailed": "探测失败: {{reason}}",
   "refresh": "刷新",
   "empty": "暂无配置告警推送目标",
-  "emptyHint": "点击上方“新建推送目标”按钮添加 Webhook 或 MQTT 推送通道。",
+  "emptyHint": "点击上方“新建推送目标”按钮添加 Webhook 或 MQTT 推送与存活上报通道。",
   "maxLimitReached": "推送目标数量已达到上限 (32/32)",
   "limitUsage": "已配置 {{count}}/{{max}} 个推送目标",
   "deleteConfirmTitle": "确认删除推送目标？",
-  "deleteConfirmDesc": "删除后系统将停止向该目标分发告警事件，此操作不可撤销。",
+  "deleteConfirmDesc": "删除后系统将停止向该目标分发告警事件与存活上报，此操作不可撤销。",
   "dialog": {
     "createTitle": "新建推送目标",
-    "createDesc": "配置告警感知事件分发通道，支持 HTTP Webhook 与 MQTT 消息总线。",
+    "createDesc": "配置北向连接凭据，并按需开启感知事件推送与设备存活上报。",
     "editTitle": "编辑推送目标",
-    "editDesc": "修改推送目标传输配置、鉴权凭据与事件过滤规则。",
+    "editDesc": "修改推送目标连接凭据、事件过滤规则与设备存活上报策略。",
     "channelLockedNotice": "传输协议类型创建后固定，如需切换请新建推送目标。",
-    "testTooltip": "即时向目标端点发送连通性测试包，检验网络连通性与鉴权凭据。"
+    "testTooltip": "即时向目标端点发送探测包（仅开启存活上报时发送真实存活快照），检验网络连通性与鉴权凭据。"
+  },
+  "capabilities": {
+    "eventsTitle": "感知事件推送",
+    "eventsDesc": "实时分发行为告警、人脸识别与车牌识别事件及抓拍画面",
+    "heartbeatTitle": "设备存活上报",
+    "heartbeatDesc": "周期推送设备在线状态、CPU/NPU/温区水位、存储与通道负载摘要",
+    "eventsBadge": "事件推送",
+    "heartbeatBadge": "存活上报 · {{interval}}s"
   },
   "sections": {
     "channelSelect": "协议类型",
-    "channelSelectDesc": "选择告警事件分发的协议规范",
+    "channelSelectDesc": "选择北向数据分发的协议规范",
     "imageDelivery": "图片附带模式",
     "imageDeliveryDesc": "控制告警截图标注画面的交付格式",
     "webhookEndpoint": "Webhook 端点与鉴权凭据",
@@ -43,13 +51,13 @@
     "mqttTitle": "高级会话与 TLS 策略",
     "filtersTitle": "感知事件与数据过滤 (Filters)",
     "filtersAllSummary": "默认全量推送（全部事件 · 全部算法 · 全部摄像机）",
-    "filtersCustomSummary": "已配置自定义过滤规则",
+    "filtersCustomSummary": "已配置自定义过滤規則",
     "webhookSummary": "超时 {{timeout}} 秒 · {{count}} 个自定义标头",
-    "mqttSummary": "QoS {{qos}} · 心跳 {{keepAlive}} 秒 · {{clientId}}"
+    "mqttSummary": "QoS {{qos}} · 保活 {{keepAlive}} 秒 · {{clientId}}"
   },
   "fields": {
     "name": "通道名称",
-    "namePlaceholder": "例如：SOC Webhook 回调、生产线警报中心",
+    "namePlaceholder": "例如：SOC Webhook 回调、园区综合安防平台",
     "channelType": "协议类型",
     "imageMode": "图片附带模式",
     "enabled": "启用状态",
@@ -59,6 +67,17 @@
     "actions": "操作",
     "webhookUrl": "Webhook URL",
     "webhookUrlPlaceholder": "https://api.example.com/alerts/webhook",
+    "heartbeatInterval": "上报间隔",
+    "heartbeatIntervalUnit": "秒",
+    "heartbeatIntervalHint": "支持 15–3600 秒（默认 60 秒），附带微幅随机抖动防止多台设备齐射",
+    "heartbeatUrl": "独立存活接收 URL（可选）",
+    "heartbeatUrlPlaceholder": "留空默认复用上方 Webhook URL，如 https://api.example.com/devices/heartbeat",
+    "heartbeatUrlHint": "当配置了鉴权凭据或自定义标头时，独立存活 URL 必须与主 Webhook URL 同源（协议、域名与端口一致）",
+    "heartbeatTopic": "独立状态 Topic（可选）",
+    "heartbeatTopicPlaceholder": "留空默认复用上方发布 Topic，如 zhulong/status/box01",
+    "heartbeatTopicHint": "用于发布周期存活摘要与离线通知，禁止包含通配符（+ 或 #）",
+    "lwtEnabled": "断线遗嘱通知 (MQTT LWT)",
+    "lwtEnabledDesc": "开启后在 Broker 预埋离线遗嘱（断电/断网自动发布 connection_lost，正常停机主动发布 graceful_shutdown）",
     "authType": "鉴权方式",
     "bearerToken": "Bearer Token",
     "bearerTokenPlaceholder": "输入授权 Token",
@@ -88,7 +107,7 @@
     "mqttTopicPlaceholder": "zhulong/alarms",
     "mqttTopicHint": "发布目标 Topic，禁止使用通配符（+ 或 #）",
     "mqttQoS": "QoS 质量等级",
-    "mqttKeepAlive": "心跳周期",
+    "mqttKeepAlive": "MQTT 保活间隔",
     "mqttKeepAliveUnit": "秒",
     "tlsSkipVerify": "跳过 TLS 证书校验",
     "tlsSkipVerifyDesc": "启用后将跳过对 Broker 的 TLS 证书签名校验证明，仅建议在测试环境使用",
@@ -141,6 +160,9 @@
   "validation": {
     "nameRequired": "请输入通道名称",
     "nameMax": "通道名称不能超过 64 个字符",
+    "capabilityRequired": "请至少开启“感知事件推送”或“设备存活上报”中的一项能力",
+    "heartbeatIntervalRange": "上报间隔必须在 15 到 3600 秒之间",
+    "heartbeatCrossOrigin": "配置了鉴权凭据或自定义标头时，独立存活 URL 必须与主 Webhook URL 同源（协议、域名与端口一致）",
     "urlRequired": "请输入 Webhook URL",
     "urlInvalid": "URL 必须以 http:// 或 https:// 开头且不能包含账号凭证",
     "tokenRequired": "Bearer Token 不能为空",
@@ -169,13 +191,18 @@
   "failureReasons": {
     "timeout": "网络请求超时",
     "refused": "连接被拒绝",
+    "connection_refused": "连接被拒绝",
     "tls": "TLS 握手失败",
     "auth": "鉴权失败 (401/403)",
     "dns": "DNS 解析失败",
     "not_found": "目标端点不存在 (404)",
     "http_error": "目标服务返回 HTTP 错误",
+    "http_status": "目标服务返回非 2xx 状态码",
     "mqtt_connect": "MQTT 握手失败",
+    "not_connected": "MQTT 未连接",
+    "publish_failed": "MQTT 发布失败",
     "config_invalid": "目标配置无效",
-    "unsupported_channel": "不支持的协议"
+    "unsupported_channel": "不支持的协议",
+    "unknown": "未知传输异常"
   }
 }

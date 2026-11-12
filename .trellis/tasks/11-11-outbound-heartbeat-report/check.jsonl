@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端 Pre-Development Checklist 逐项核对"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go 格式化、-race 竞态测试与审计测试接线规范"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核验零心跳审计污染与 URL/凭据脱敏"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "核验 OpenAPI 与管理 API 响应信封、字段命名与 Swagger 同步"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核验 000035 迁移对称性与存量兼容"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端检查清单与跨特性隔离边界"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 lint/type-check 与真实无头浏览器组件测试规范"}
+{"file": ".trellis/tasks/11-11-outbound-heartbeat-report/research/industry-heartbeat-patterns.md", "reason": "核验载荷脱敏边界与数据源非阻塞要求"}

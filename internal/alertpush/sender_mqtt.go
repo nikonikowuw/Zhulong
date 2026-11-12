@@ -13,12 +13,16 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/logsafe"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 	"go.uber.org/zap"
 )
 
-const maxMQTTBase64Bytes = 500 * 1024 // 500KB
+const (
+	maxMQTTBase64Bytes         = 500 * 1024 // 500KB
+	mqttGracefulOfflineTimeout = 500 * time.Millisecond
+)
 
 var (
 	ErrMQTTBrokerMissing = errors.New("mqtt broker url is missing")
@@ -30,33 +34,39 @@ var (
 
 // MQTTSenderOptions contains configuration for MQTTSender.
 type MQTTSenderOptions struct {
-	ID            string
-	Name          string
-	ImageMode     string
-	PublicBaseURL string
-	SignedURLTTL  time.Duration
-	Signer        *URLSigner
-	Media         MediaReader
-	Broker        string
-	ClientID      string
-	Username      string
-	Password      string
-	Topic         string
-	QoS           uint8
-	KeepAlive     time.Duration
-	TLSSkipVerify bool
+	ID                string
+	Name              string
+	ImageMode         string
+	SkipImageURLCheck bool
+	PublicBaseURL     string
+	SignedURLTTL      time.Duration
+	Signer            *URLSigner
+	Media             MediaReader
+	Broker            string
+	ClientID          string
+	Username          string
+	Password          string
+	Topic             string
+	HeartbeatEnabled  bool
+	HeartbeatTopic    string
+	LWTEnabled        bool
+	QoS               uint8
+	KeepAlive         time.Duration
+	TLSSkipVerify     bool
 	// Identity supplies the host device_id stamped onto every payload. Nil omits it.
 	Identity DeviceIDProvider
 	Logger   *zap.Logger
 }
 
-// MQTTSender dispatches alert events over MQTT protocol.
+// MQTTSender dispatches alert and heartbeat events over MQTT protocol.
 type MQTTSender struct {
-	opts   MQTTSenderOptions
-	client mqtt.Client
-	logger *zap.Logger
-	mu     sync.Mutex
-	closed bool
+	opts         MQTTSenderOptions
+	client       mqtt.Client
+	willDeviceID string
+	willArmed    bool
+	logger       *zap.Logger
+	mu           sync.Mutex
+	closed       bool
 }
 
 // NewMQTTSender constructs a new MQTTSender.
@@ -70,7 +80,11 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 	if strings.ContainsAny(opts.Topic, "+#") {
 		return nil, ErrMQTTWildcardTopic
 	}
-	if opts.ImageMode == ImageModeURL && strings.TrimSpace(opts.PublicBaseURL) == "" {
+	if strings.TrimSpace(opts.HeartbeatTopic) != "" && strings.ContainsAny(opts.HeartbeatTopic, "+#") {
+		return nil, ErrMQTTWildcardTopic
+	}
+	needsPublicBaseURL := !opts.SkipImageURLCheck && opts.ImageMode == ImageModeURL
+	if needsPublicBaseURL && strings.TrimSpace(opts.PublicBaseURL) == "" {
 		return nil, ErrPublicBaseURLMissing
 	}
 	logger := opts.Logger
@@ -99,6 +113,32 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 		clientOpts.SetPassword(opts.Password)
 	}
 
+	var willDeviceID string
+	var willArmed bool
+	if opts.HeartbeatEnabled && opts.LWTEnabled {
+		willDeviceID = resolveDeviceID(opts.Identity)
+		willPayload := mqttOfflineWillPayload{
+			DeviceID:  willDeviceID,
+			EventType: EventTypeOffline,
+			Reason:    OfflineReasonConnectionLost,
+		}
+		willBytes, err := json.Marshal(willPayload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal mqtt will payload: %w", err)
+		}
+		statusTopic := strings.TrimSpace(opts.HeartbeatTopic)
+		if statusTopic == "" {
+			statusTopic = opts.Topic
+		}
+		clientOpts.SetWill(
+			statusTopic,
+			string(willBytes),
+			byte(opts.QoS),
+			false,
+		)
+		willArmed = true
+	}
+
 	isSecureScheme := strings.HasPrefix(opts.Broker, "ssl://") ||
 		strings.HasPrefix(opts.Broker, "tls://") ||
 		strings.HasPrefix(opts.Broker, "tcps://")
@@ -110,12 +150,29 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 
 	client := mqtt.NewClient(clientOpts)
 	sender := &MQTTSender{
-		opts:   opts,
-		client: client,
-		logger: logger.Named("alertpush.mqtt").With(zap.String("destination_id", opts.ID)),
+		opts:         opts,
+		client:       client,
+		willDeviceID: willDeviceID,
+		willArmed:    willArmed,
+		logger:       logger.Named("alertpush.mqtt").With(zap.String("destination_id", opts.ID)),
 	}
 
 	return sender, nil
+}
+
+func (s *MQTTSender) statusTopic() string {
+	if topic := strings.TrimSpace(s.opts.HeartbeatTopic); topic != "" {
+		return topic
+	}
+	return s.opts.Topic
+}
+
+// hasStaleWillDeviceID reports whether an armed LWT carries an outdated device_id.
+func (s *MQTTSender) hasStaleWillDeviceID() bool {
+	if !s.willArmed {
+		return false
+	}
+	return s.willDeviceID != resolveDeviceID(s.opts.Identity)
 }
 
 // Connect initiates connection to the MQTT broker asynchronously or returns error.
@@ -147,8 +204,18 @@ func (s *MQTTSender) IsConnected() bool {
 	return s.client.IsConnected()
 }
 
-// Close disconnects client and releases resources.
+// Close publishes a bounded graceful-offline notice when LWT is armed, then disconnects.
 func (s *MQTTSender) Close() error {
+	return s.closeInternal(true)
+}
+
+// closeWithoutOffline cleanly disconnects so the broker discards any armed LWT without
+// publishing a false graceful_shutdown event during in-place configuration hot-reloads.
+func (s *MQTTSender) closeWithoutOffline() error {
+	return s.closeInternal(false)
+}
+
+func (s *MQTTSender) closeInternal(emitOffline bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -156,24 +223,45 @@ func (s *MQTTSender) Close() error {
 	}
 	s.closed = true
 	if s.client != nil && s.client.IsConnected() {
+		if emitOffline && s.willArmed {
+			s.publishGracefulOfflineLocked()
+		}
 		s.client.Disconnect(250)
 	}
 	return nil
 }
 
+func (s *MQTTSender) publishGracefulOfflineLocked() {
+	offline := mqttOfflineGracefulPayload{
+		ID:         idutil.New(),
+		DeviceID:   resolveDeviceID(s.opts.Identity),
+		EventType:  EventTypeOffline,
+		ReportedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Reason:     OfflineReasonGracefulShutdown,
+	}
+	data, err := json.Marshal(offline)
+	if err != nil {
+		return
+	}
+	tok := s.client.Publish(
+		s.statusTopic(),
+		byte(s.opts.QoS),
+		false,
+		data,
+	)
+	if !tok.WaitTimeout(mqttGracefulOfflineTimeout) {
+		s.logger.Debug("publish graceful offline notice timed out")
+		return
+	}
+	if pubErr := tok.Error(); pubErr != nil {
+		s.logger.Debug("publish graceful offline notice failed", zap.Error(pubErr))
+	}
+}
+
 // Send formats and publishes an alarm event to the target topic.
 func (s *MQTTSender) Send(ctx context.Context, ev record.AlarmEvent) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return errors.New("sender closed")
-	}
-	s.mu.Unlock()
-
-	if !s.client.IsConnected() {
-		if err := s.Connect(); err != nil {
-			return fmt.Errorf("%w: %v", ErrMQTTNotConnected, err)
-		}
+	if err := s.ensureConnected(); err != nil {
+		return err
 	}
 
 	payload := buildAlarmPayload(ev, resolveDeviceID(s.opts.Identity))
@@ -197,8 +285,43 @@ func (s *MQTTSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 		return fmt.Errorf("marshal mqtt payload: %w", err)
 	}
 
+	return s.publishBytes(ctx, s.opts.Topic, data)
+}
+
+// SendHeartbeat formats and publishes a liveness snapshot to the configured status topic.
+func (s *MQTTSender) SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, seq uint64) error {
+	if err := s.ensureConnected(); err != nil {
+		return err
+	}
+
+	payload := buildHeartbeatPayload(snap, resolveDeviceID(s.opts.Identity), seq)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal mqtt heartbeat payload: %w", err)
+	}
+
+	return s.publishBytes(ctx, s.statusTopic(), data)
+}
+
+func (s *MQTTSender) ensureConnected() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("sender closed")
+	}
+	s.mu.Unlock()
+
+	if !s.client.IsConnected() {
+		if err := s.Connect(); err != nil {
+			return fmt.Errorf("%w: %v", ErrMQTTNotConnected, err)
+		}
+	}
+	return nil
+}
+
+func (s *MQTTSender) publishBytes(ctx context.Context, topic string, data []byte) error {
 	token := s.client.Publish(
-		s.opts.Topic,
+		topic,
 		byte(s.opts.QoS),
 		false,
 		data,

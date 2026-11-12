@@ -132,4 +132,52 @@ describe('alertPushApi', () => {
       id: 'dest_01',
     })
   })
+
+  it('normalizes Go backend AlertDestinationStatus and capability flags', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      data: {
+        code: 'OK',
+        data: {
+          items: [
+            {
+              id: 'dest_go_01',
+              name: 'Heartbeat Only Go Payload',
+              channelType: 'webhook',
+              enabled: true,
+              eventsEnabled: false,
+              heartbeatEnabled: true,
+              imageMode: 'url',
+              config: {
+                url: 'https://ops.example.com/events',
+                heartbeatUrl: 'https://ops.example.com/heartbeat',
+                authType: 'bearer',
+                timeoutSeconds: 5,
+                heartbeatIntervalSeconds: 30,
+              },
+              filter: {
+                eventTypes: [],
+                algorithmIds: [],
+                cameraIds: [],
+              },
+              secretSet: true,
+              status: {
+                state: 'connected',
+                lastError: '',
+                lastSuccessAt: null,
+                dropped: 0,
+                queued: 0,
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    const res = await alertPushApi.list()
+    expect(res).toHaveLength(1)
+    expect(res[0].eventsEnabled).toBe(false)
+    expect(res[0].heartbeatEnabled).toBe(true)
+    expect(res[0].status.state).toBe('running')
+    expect(res[0].status.queueLength).toBe(0)
+  })
 })

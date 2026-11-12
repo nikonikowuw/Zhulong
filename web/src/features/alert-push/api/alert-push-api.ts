@@ -3,22 +3,59 @@ import { apiClient } from '@/lib/api-client'
 import type {
   AlertDestination,
   CreateAlertDestinationInput,
+  DestinationStatus,
   TestDestinationInput,
   TestDestinationResult,
   UpdateAlertDestinationInput,
 } from '../types'
 
-export const destinationStatusSchema = z.object({
-  lastAttemptAt: z.string().optional(),
-  lastSuccessAt: z.string().optional(),
-  lastFailureAt: z.string().optional(),
-  lastFailureReason: z.string().optional(),
-  consecutiveFailures: z.number().default(0),
-  totalDispatched: z.number().default(0),
-  queueLength: z.number().default(0),
-  queueCapacity: z.number().default(32),
-  state: z.enum(['idle', 'running', 'degraded', 'disabled']).default('idle'),
-})
+export const destinationStatusSchema = z
+  .object({
+    lastAttemptAt: z.string().nullish(),
+    lastSuccessAt: z.string().nullish(),
+    lastFailureAt: z.string().nullish(),
+    lastFailureReason: z.string().nullish(),
+    lastError: z.string().nullish(),
+    consecutiveFailures: z.number().default(0),
+    totalDispatched: z.number().default(0),
+    dropped: z.number().optional(),
+    queued: z.number().optional(),
+    queueLength: z.number().optional(),
+    queueCapacity: z.number().default(16),
+    state: z
+      .enum([
+        'disabled',
+        'unverified',
+        'connecting',
+        'connected',
+        'failed',
+        'idle',
+        'running',
+        'degraded',
+      ])
+      .default('idle'),
+  })
+  .transform(
+    (raw): DestinationStatus => ({
+      state:
+        raw.state === 'connected' || raw.state === 'running'
+          ? 'running'
+          : raw.state === 'failed' || raw.state === 'degraded'
+            ? 'degraded'
+            : raw.state === 'disabled'
+              ? 'disabled'
+              : 'idle',
+      lastAttemptAt: raw.lastAttemptAt ?? raw.lastSuccessAt ?? undefined,
+      lastSuccessAt: raw.lastSuccessAt ?? undefined,
+      lastFailureAt: raw.lastFailureAt ?? undefined,
+      lastFailureReason: raw.lastFailureReason || raw.lastError || undefined,
+      consecutiveFailures: raw.consecutiveFailures,
+      totalDispatched: raw.totalDispatched,
+      dropped: raw.dropped ?? 0,
+      queueLength: raw.queueLength ?? raw.queued ?? 0,
+      queueCapacity: raw.queueCapacity,
+    })
+  )
 
 export const destinationFilterSchema = z.object({
   eventTypes: z.array(z.string()).default([]),
@@ -28,8 +65,13 @@ export const destinationFilterSchema = z.object({
 
 export const webhookConfigSchema = z.object({
   url: z.string().optional(),
+  heartbeatUrl: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? undefined),
   authType: z.enum(['none', 'bearer', 'basic']).default('none'),
   timeoutSeconds: z.number().optional(),
+  heartbeatIntervalSeconds: z.number().optional(),
 })
 
 export const mqttConfigSchema = z.object({
@@ -37,15 +79,23 @@ export const mqttConfigSchema = z.object({
   clientId: z.string().optional(),
   username: z.string().optional(),
   topic: z.string().default(''),
+  heartbeatTopic: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? undefined),
+  lwtEnabled: z.boolean().optional(),
   qos: z.number().optional(),
   keepAliveSeconds: z.number().optional(),
   tlsSkipVerify: z.boolean().default(false),
+  heartbeatIntervalSeconds: z.number().optional(),
 })
 
 const baseDestinationSchema = {
   id: z.string(),
   name: z.string(),
   enabled: z.boolean(),
+  eventsEnabled: z.boolean().default(true),
+  heartbeatEnabled: z.boolean().default(false),
   imageMode: z.enum(['url', 'multipart', 'base64']),
   filter: destinationFilterSchema,
   secretSet: z.boolean().default(false),

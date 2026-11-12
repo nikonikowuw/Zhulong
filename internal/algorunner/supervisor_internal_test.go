@@ -275,3 +275,18 @@ func TestStopAlgorithmReturnsSpawnedStopFailure(t *testing.T) {
 		t.Fatal("StopAlgorithm must still retire the watcher it stopped")
 	}
 }
+
+func TestSupervisorSummaryCounts(t *testing.T) {
+	supervisor := newInternalTestSupervisor(nil)
+	supervisor.watchers["r1"] = &workerWatcher{status: StatusRunning}
+	supervisor.watchers["r2"] = &workerWatcher{status: StatusStarting}
+	supervisor.watchers["r3"] = &workerWatcher{status: StatusRollingBack}
+	supervisor.watchers["f1"] = &workerWatcher{status: StatusCrashed}
+	supervisor.watchers["f2"] = &workerWatcher{status: StatusCrashLoop}
+	supervisor.watchers["s1"] = &workerWatcher{status: StatusDisabled}
+
+	active, failed := supervisor.SummaryCounts()
+	if active != 3 || failed != 2 {
+		t.Fatalf("SummaryCounts() = (%d, %d), want (3, 2)", active, failed)
+	}
+}

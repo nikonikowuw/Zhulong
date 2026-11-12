@@ -4,8 +4,10 @@ export type AuthType = 'none' | 'bearer' | 'basic'
 
 export interface WebhookConfig {
   url?: string
+  heartbeatUrl?: string
   authType: AuthType
   timeoutSeconds?: number
+  heartbeatIntervalSeconds?: number
 }
 
 export interface MQTTConfig {
@@ -13,9 +15,12 @@ export interface MQTTConfig {
   clientId?: string
   username?: string
   topic: string
+  heartbeatTopic?: string
+  lwtEnabled?: boolean
   qos?: number
   keepAliveSeconds?: number
   tlsSkipVerify?: boolean
+  heartbeatIntervalSeconds?: number
 }
 
 export interface DestinationFilter {
@@ -38,6 +43,7 @@ export interface DestinationStatus {
   lastFailureReason?: string
   consecutiveFailures: number
   totalDispatched: number
+  dropped?: number
   queueLength: number
   queueCapacity: number
   state: 'idle' | 'running' | 'degraded' | 'disabled'
@@ -48,6 +54,8 @@ export interface WebhookAlertDestination {
   name: string
   channelType: 'webhook'
   enabled: boolean
+  eventsEnabled: boolean
+  heartbeatEnabled: boolean
   imageMode: ImageMode
   config: WebhookConfig
   filter: DestinationFilter
@@ -61,6 +69,8 @@ export interface MQTTAlertDestination {
   name: string
   channelType: 'mqtt'
   enabled: boolean
+  eventsEnabled: boolean
+  heartbeatEnabled: boolean
   imageMode: ImageMode
   config: MQTTConfig
   filter: DestinationFilter
@@ -78,7 +88,9 @@ export type DestinationConfig = WebhookConfig & Partial<MQTTConfig>
 export interface CreateAlertDestinationInput {
   name: string
   channelType: ChannelType
-  imageMode: ImageMode
+  eventsEnabled?: boolean
+  heartbeatEnabled?: boolean
+  imageMode?: ImageMode
   config: Record<string, unknown>
   filter?: DestinationFilter
   secret?: DestinationSecret
@@ -86,6 +98,8 @@ export interface CreateAlertDestinationInput {
 
 export interface UpdateAlertDestinationInput {
   name?: string
+  eventsEnabled?: boolean
+  heartbeatEnabled?: boolean
   imageMode?: ImageMode
   config?: Record<string, unknown>
   filter?: DestinationFilter
@@ -95,6 +109,8 @@ export interface UpdateAlertDestinationInput {
 export interface TestDestinationInput {
   id?: string
   channelType?: ChannelType
+  eventsEnabled?: boolean
+  heartbeatEnabled?: boolean
   imageMode?: ImageMode
   config?: Record<string, unknown>
   secret?: DestinationSecret

@@ -257,6 +257,23 @@ func (s *Store) DeleteTask(ctx context.Context, id string) error {
 	return nil
 }
 
+// CountEnabledTasks returns the count of enabled channel tasks that hold at least one enabled algorithm binding.
+func (s *Store) CountEnabledTasks(ctx context.Context) (int, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return 0, err
+	}
+	activeAlgoSubquery := "SELECT 1 FROM task_algorithms " +
+		"WHERE task_algorithms.task_id = analysis_tasks.id AND task_algorithms.enabled = ?"
+	count, err := gorm.G[Task](db).
+		Where("enabled = ? AND EXISTS ("+activeAlgoSubquery+")", true, true).
+		Count(ctx, "*")
+	if err != nil {
+		return 0, fmt.Errorf("count enabled analysis tasks: %w", err)
+	}
+	return int(count), nil
+}
+
 func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
 	if s.dbProvider == nil {
 		return nil, errStoreUnavailable

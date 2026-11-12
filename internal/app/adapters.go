@@ -12,17 +12,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"runtime"
+	"strings"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/alertpush"
+	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
+	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/faceextract"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
+	"github.com/nikonikowuw/Zhulong/internal/openapi"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 	"github.com/nikonikowuw/Zhulong/internal/schedule"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
+	"github.com/nikonikowuw/Zhulong/internal/systeminfo"
 	"github.com/nikonikowuw/Zhulong/internal/task"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -421,4 +429,361 @@ func (a *faceFeatureExtractorAdapter) ExtractFaceFeature(ctx context.Context, im
 		return nil, err
 	}
 	return features, nil
+}
+
+// --- Northbound Device Liveness & Health Snapshot Adapter ---
+
+type statusIdentitySource interface {
+	DeviceID() string
+}
+
+type statusHardwareSource interface {
+	GetHardwareStatus(ctx context.Context) (*systeminfo.SystemHardwareResponse, error)
+}
+
+type statusStorageSource interface {
+	GetStatus(ctx context.Context) (*storage.StorageStatus, error)
+	CanWrite() bool
+}
+
+type statusCameraSource interface {
+	HealthSummary() camera.CameraHealthSummary
+}
+
+type statusRunnerSource interface {
+	SummaryCounts() (active, failed int)
+	GetStatus(id string) string
+}
+
+type statusAlgorithmSource interface {
+	ListAlgorithms(ctx context.Context) ([]algorithm.Algorithm, error)
+}
+
+type statusTaskSource interface {
+	CountEnabledTasks(ctx context.Context) (int, error)
+}
+
+type statusDecodeSource interface {
+	Ready() bool
+	GetDecodeStats() (engine.DecodeStats, error)
+}
+
+type statusLogSource interface {
+	Health() (error, uint64)
+}
+
+// statusSnapshotAdapter builds one authoritative, sanitized operational snapshot and
+// projects it into both alertpush's snake_case HeartbeatSnapshot and openapi's
+// camelCase DeviceStatusResponse without letting either domain import siblings.
+type statusSnapshotAdapter struct {
+	identity              statusIdentitySource
+	hardware              statusHardwareSource
+	storage               statusStorageSource
+	cameras               statusCameraSource
+	runners               statusRunnerSource
+	algorithms            statusAlgorithmSource
+	tasks                 statusTaskSource
+	decode                statusDecodeSource
+	logSink               statusLogSource
+	decodeBackend         string
+	allowSoftwareFallback bool
+	publicBaseURL         string
+}
+
+type unifiedStatusSnapshot struct {
+	deviceID          string
+	reportedAt        time.Time
+	status            string
+	reasons           []string
+	arch              string
+	uptimeSeconds     uint64
+	publicBaseURL     string
+	cpuUsagePercent   float64
+	memoryUsedPercent float64
+	npuSupported      bool
+	npuLoadPercent    float64
+	maxTemperatureC   float64
+	storageStatus     string
+	storageWritable   bool
+	storageUsedPct    int
+	storageFreeMB     int64
+	cameras           camera.CameraHealthSummary
+	enabledTasks      int
+	runnersActive     int
+	runnersFailed     int
+	decodeBackend     string
+	decodeHWAvailable bool
+	decodeActive      int
+	decodeMax         int
+}
+
+func (a *statusSnapshotAdapter) Snapshot(ctx context.Context) alertpush.HeartbeatSnapshot {
+	raw := a.collect(ctx)
+	return alertpush.HeartbeatSnapshot{
+		ReportedAt: raw.reportedAt,
+		Status:     raw.status,
+		Reasons:    raw.reasons,
+		Host: alertpush.HeartbeatHostPayload{
+			Arch:          raw.arch,
+			UptimeSeconds: raw.uptimeSeconds,
+			PublicBaseURL: raw.publicBaseURL,
+		},
+		Resources: alertpush.HeartbeatResourcesPayload{
+			CPUUsagePercent:   raw.cpuUsagePercent,
+			MemoryUsedPercent: raw.memoryUsedPercent,
+			NPUSupported:      raw.npuSupported,
+			NPULoadPercent:    raw.npuLoadPercent,
+			MaxTemperatureC:   raw.maxTemperatureC,
+		},
+		Storage: alertpush.HeartbeatStoragePayload{
+			Status:      raw.storageStatus,
+			Writable:    raw.storageWritable,
+			UsedPercent: raw.storageUsedPct,
+			FreeMB:      raw.storageFreeMB,
+		},
+		Workload: alertpush.HeartbeatWorkloadPayload{
+			Cameras: alertpush.HeartbeatCamerasPayload{
+				Enabled:  raw.cameras.Enabled,
+				Online:   raw.cameras.Online,
+				Offline:  raw.cameras.Offline,
+				Degraded: raw.cameras.Degraded,
+			},
+			Tasks: alertpush.HeartbeatTasksPayload{
+				Enabled: raw.enabledTasks,
+			},
+			Runners: alertpush.HeartbeatRunnersPayload{
+				Active: raw.runnersActive,
+				Failed: raw.runnersFailed,
+			},
+			Decode: alertpush.HeartbeatDecodePayload{
+				Backend:           raw.decodeBackend,
+				HardwareAvailable: raw.decodeHWAvailable,
+				ActiveSessions:    raw.decodeActive,
+				MaxSessions:       raw.decodeMax,
+			},
+		},
+	}
+}
+
+func (a *statusSnapshotAdapter) DeviceStatus(ctx context.Context) (openapi.DeviceStatusResponse, error) {
+	raw := a.collect(ctx)
+	return openapi.DeviceStatusResponse{
+		DeviceID:   raw.deviceID,
+		ReportedAt: raw.reportedAt,
+		Status:     raw.status,
+		Reasons:    raw.reasons,
+		Host: openapi.DeviceHostInfo{
+			Arch:          raw.arch,
+			UptimeSeconds: raw.uptimeSeconds,
+			PublicBaseURL: raw.publicBaseURL,
+		},
+		Resources: openapi.DeviceResourcesInfo{
+			CPUUsagePercent:   raw.cpuUsagePercent,
+			MemoryUsedPercent: raw.memoryUsedPercent,
+			NPUSupported:      raw.npuSupported,
+			NPULoadPercent:    raw.npuLoadPercent,
+			MaxTemperatureC:   raw.maxTemperatureC,
+		},
+		Storage: openapi.DeviceStorageInfo{
+			Status:      raw.storageStatus,
+			Writable:    raw.storageWritable,
+			UsedPercent: raw.storageUsedPct,
+			FreeMB:      raw.storageFreeMB,
+		},
+		Workload: openapi.DeviceWorkloadInfo{
+			Cameras: openapi.DeviceCamerasSummaryInfo{
+				Enabled:  raw.cameras.Enabled,
+				Online:   raw.cameras.Online,
+				Offline:  raw.cameras.Offline,
+				Degraded: raw.cameras.Degraded,
+			},
+			Tasks: openapi.DeviceTasksSummaryInfo{
+				Enabled: raw.enabledTasks,
+			},
+			Runners: openapi.DeviceRunnersSummaryInfo{
+				Active: raw.runnersActive,
+				Failed: raw.runnersFailed,
+			},
+			Decode: openapi.DeviceDecodeSummaryInfo{
+				Backend:           raw.decodeBackend,
+				HardwareAvailable: raw.decodeHWAvailable,
+				ActiveSessions:    raw.decodeActive,
+				MaxSessions:       raw.decodeMax,
+			},
+		},
+	}, nil
+}
+
+const statusSnapshotCollectTimeout = 200 * time.Millisecond
+
+func (a *statusSnapshotAdapter) collect(ctx context.Context) unifiedStatusSnapshot {
+	collectCtx, cancel := context.WithTimeout(ctx, statusSnapshotCollectTimeout)
+	defer cancel()
+
+	decodeBackend := strings.ToLower(strings.TrimSpace(a.decodeBackend))
+	if decodeBackend == "" {
+		decodeBackend = "auto"
+	}
+
+	out := unifiedStatusSnapshot{
+		reportedAt:      time.Now().UTC(),
+		status:          "ready",
+		reasons:         []string{},
+		arch:            runtime.GOARCH,
+		publicBaseURL:   strings.TrimSpace(a.publicBaseURL),
+		storageStatus:   string(storage.StatusHealthy),
+		storageWritable: true,
+		decodeBackend:   decodeBackend,
+	}
+
+	if a.identity != nil {
+		out.deviceID = strings.TrimSpace(a.identity.DeviceID())
+	}
+
+	a.collectHardware(collectCtx, &out)
+	storageDegraded := a.collectStorage(collectCtx, &out)
+
+	if a.cameras != nil {
+		out.cameras = a.cameras.HealthSummary()
+	}
+	if a.tasks != nil {
+		if cnt, err := a.tasks.CountEnabledTasks(collectCtx); err == nil {
+			out.enabledTasks = cnt
+		}
+	}
+
+	a.collectRunners(collectCtx, &out)
+	decodeDegraded := a.collectDecode(decodeBackend, &out)
+	logDegraded := a.isLogDegraded()
+
+	// Deterministic reason order:
+	// storage_unavailable -> camera_offline -> runner_failed -> decode_degraded -> log_degraded
+	if storageDegraded {
+		out.reasons = append(out.reasons, "storage_unavailable")
+	}
+	if out.cameras.Offline > 0 {
+		out.reasons = append(out.reasons, "camera_offline")
+	}
+	if out.runnersFailed > 0 {
+		out.reasons = append(out.reasons, "runner_failed")
+	}
+	if decodeDegraded {
+		out.reasons = append(out.reasons, "decode_degraded")
+	}
+	if logDegraded {
+		out.reasons = append(out.reasons, "log_degraded")
+	}
+
+	if len(out.reasons) > 0 {
+		out.status = "degraded"
+	}
+	return out
+}
+
+func (a *statusSnapshotAdapter) collectHardware(ctx context.Context, out *unifiedStatusSnapshot) {
+	if a.hardware == nil {
+		return
+	}
+	hw, err := a.hardware.GetHardwareStatus(ctx)
+	if err != nil || hw == nil {
+		return
+	}
+
+	if arch := strings.TrimSpace(hw.Host.Arch); arch != "" {
+		out.arch = arch
+	}
+	out.uptimeSeconds = hw.Host.UptimeSeconds
+	out.cpuUsagePercent = round1Finite(hw.CPU.UsagePercent)
+	out.memoryUsedPercent = round1Finite(hw.Memory.UsedPercent)
+	out.npuSupported = hw.Heterogeneous.NPU.Supported
+	out.npuLoadPercent = round1Finite(hw.Heterogeneous.NPU.LoadPercent)
+
+	hottest := max(hw.CPU.Temperature, hw.Heterogeneous.NPU.Temperature)
+	for _, z := range hw.Heterogeneous.Temperatures {
+		hottest = max(hottest, z.Temperature)
+	}
+	out.maxTemperatureC = round1Finite(hottest)
+}
+
+func (a *statusSnapshotAdapter) collectStorage(ctx context.Context, out *unifiedStatusSnapshot) bool {
+	if a.storage == nil {
+		return false
+	}
+
+	out.storageWritable = a.storage.CanWrite()
+	st, err := a.storage.GetStatus(ctx)
+	if err != nil || st == nil {
+		out.storageStatus = string(storage.StatusError)
+		out.storageWritable = false
+		return true
+	}
+
+	out.storageStatus = string(st.Status)
+	out.storageWritable = st.CanWrite && out.storageWritable
+	out.storageUsedPct = st.UsagePercent
+	out.storageFreeMB = int64(st.FreeBytes / (1024 * 1024))
+
+	isHaltedStatus := st.Status == storage.StatusEmergencyStopped || st.Status == storage.StatusError
+	return !out.storageWritable || isHaltedStatus
+}
+
+func (a *statusSnapshotAdapter) collectRunners(ctx context.Context, out *unifiedStatusSnapshot) {
+	if a.runners != nil {
+		out.runnersActive, out.runnersFailed = a.runners.SummaryCounts()
+	}
+	if a.algorithms == nil {
+		return
+	}
+	list, err := a.algorithms.ListAlgorithms(ctx)
+	if err != nil {
+		return
+	}
+	for _, algo := range list {
+		if algo.Status != algorithm.StatusCrashLoop {
+			continue
+		}
+		if a.runners != nil {
+			live := a.runners.GetStatus(algo.ID)
+			if live == algorunner.StatusCrashed || live == algorunner.StatusCrashLoop {
+				continue
+			}
+		}
+		out.runnersFailed++
+	}
+}
+
+func (a *statusSnapshotAdapter) collectDecode(decodeBackend string, out *unifiedStatusSnapshot) bool {
+	if a.decode == nil {
+		return false
+	}
+	if !a.decode.Ready() {
+		return true
+	}
+	stats, err := a.decode.GetDecodeStats()
+	if err != nil {
+		return true
+	}
+
+	out.decodeHWAvailable = stats.HardwareAvailable
+	out.decodeActive = stats.ActiveSessions
+	out.decodeMax = stats.MaxSessions
+
+	requiresHardware := decodeBackend == "mpp" || !a.allowSoftwareFallback
+	return requiresHardware && !stats.HardwareAvailable
+}
+
+func (a *statusSnapshotAdapter) isLogDegraded() bool {
+	if a.logSink == nil {
+		return false
+	}
+	sinkErr, dropped := a.logSink.Health()
+	return sinkErr != nil || dropped > 0
+}
+
+func round1Finite(v float64) float64 {
+	isInvalid := math.IsNaN(v) || math.IsInf(v, 0)
+	if isInvalid || v < 0 {
+		return 0
+	}
+	return math.Round(v*10) / 10
 }

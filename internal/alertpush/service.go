@@ -19,6 +19,9 @@ var (
 	ErrInvalidImageMode           = errors.New("invalid image_mode for channel_type")
 	ErrInvalidConfig              = errors.New("invalid alert destination config")
 	ErrReservedHeaderUsed         = errors.New("reserved header is not allowed in custom headers")
+	ErrCrossOriginHeartbeatURL    = errors.New(
+		"heartbeat_url must share origin with url when credentials are configured",
+	)
 )
 
 // ServiceOptions holds dependencies for constructing a Service.
@@ -43,12 +46,14 @@ type Service struct {
 
 // UpdateParams contains mutable fields for updating an alert destination.
 type UpdateParams struct {
-	Name       *string
-	ImageMode  *string
-	ConfigJSON *string
-	FilterJSON *string
-	SecretRaw  destinationSecret
-	ClientID   *string
+	Name             *string
+	EventsEnabled    *bool
+	HeartbeatEnabled *bool
+	ImageMode        *string
+	ConfigJSON       *string
+	FilterJSON       *string
+	SecretRaw        destinationSecret
+	ClientID         *string
 }
 
 // TestExecutionResult holds the result of a connection test.
@@ -76,7 +81,10 @@ func NewService(opts ServiceOptions) *Service {
 
 // Create validates and saves a new destination, then requests reload.
 func (s *Service) Create(ctx context.Context, dest *AlertDestination, secretRaw destinationSecret) error {
-	if err := s.validateDestination(dest); err != nil {
+	if !dest.EventsEnabled && strings.TrimSpace(dest.ImageMode) == "" {
+		dest.ImageMode = ImageModeURL
+	}
+	if err := s.validateDestination(dest, secretRaw); err != nil {
 		return err
 	}
 
@@ -116,6 +124,12 @@ func (s *Service) Update(ctx context.Context, existing *AlertDestination, params
 	if params.Name != nil && strings.TrimSpace(*params.Name) != "" {
 		existing.Name = strings.TrimSpace(*params.Name)
 	}
+	if params.EventsEnabled != nil {
+		existing.EventsEnabled = *params.EventsEnabled
+	}
+	if params.HeartbeatEnabled != nil {
+		existing.HeartbeatEnabled = *params.HeartbeatEnabled
+	}
 	if params.ImageMode != nil && strings.TrimSpace(*params.ImageMode) != "" {
 		existing.ImageMode = strings.TrimSpace(*params.ImageMode)
 	}
@@ -142,7 +156,7 @@ func (s *Service) Update(ctx context.Context, existing *AlertDestination, params
 		existing.MQTTClientID = &targetClientID
 	}
 
-	if err := s.validateDestination(existing); err != nil {
+	if err := s.validateDestination(existing, params.SecretRaw); err != nil {
 		return err
 	}
 
@@ -180,7 +194,8 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Test attempts sending a dummy ping/test event to the destination.
+// Test attempts sending a dummy ping/test event (or an immediate heartbeat when
+// events are disabled) to the destination.
 func (s *Service) Test(
 	ctx context.Context,
 	dest *AlertDestination,
@@ -189,6 +204,13 @@ func (s *Service) Test(
 	const testTimeout = 10 * time.Second
 	testCtx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
+
+	if !dest.EventsEnabled && strings.TrimSpace(dest.ImageMode) == "" {
+		dest.ImageMode = ImageModeURL
+	}
+	if err := s.validateDestination(dest, secretRaw); err != nil {
+		return TestExecutionResult{OK: false, Reason: "config_invalid"}, err
+	}
 
 	var (
 		sender Sender
@@ -222,16 +244,8 @@ func (s *Service) Test(
 		}
 	}()
 
-	testEvent := record.AlarmEvent{
-		ID:         "01TESTALARM0000000000000",
-		CameraID:   "test_cam",
-		AlarmType:  "test_ping",
-		Score:      1.0,
-		CapturedAt: time.Now().UTC(),
-	}
-
 	start := time.Now()
-	sendErr := sender.Send(testCtx, testEvent)
+	sendErr := s.sendTestProbe(testCtx, sender, dest)
 	latency := time.Since(start).Milliseconds()
 
 	success := sendErr == nil
@@ -251,6 +265,21 @@ func (s *Service) Test(
 	}, nil
 }
 
+func (s *Service) sendTestProbe(ctx context.Context, sender Sender, dest *AlertDestination) error {
+	if !dest.EventsEnabled && dest.HeartbeatEnabled {
+		snap := resolveHeartbeatSnapshot(ctx, s.config.HeartbeatSnapshot, s.config.PublicBaseURL)
+		return sender.SendHeartbeat(ctx, snap, 1)
+	}
+	testEvent := record.AlarmEvent{
+		ID:         "01TESTALARM0000000000000",
+		CameraID:   "test_cam",
+		AlarmType:  "test_ping",
+		Score:      1.0,
+		CapturedAt: time.Now().UTC(),
+	}
+	return sender.Send(ctx, testEvent)
+}
+
 func (s *Service) buildTestWebhookSender(
 	dest *AlertDestination,
 	sec *webhookSecret,
@@ -264,22 +293,24 @@ func (s *Service) buildTestWebhookSender(
 	}
 
 	return NewWebhookSender(WebhookSenderOptions{
-		ID:            dest.ID,
-		Name:          dest.Name,
-		ImageMode:     dest.ImageMode,
-		PublicBaseURL: s.config.PublicBaseURL,
-		SignedURLTTL:  s.config.SignedURLTTL,
-		Signer:        s.signer,
-		Media:         s.media,
-		URL:           sec.URL,
-		AuthType:      cfg.AuthType,
-		Token:         sec.Token,
-		Username:      sec.Username,
-		Password:      sec.Password,
-		Headers:       sec.Headers,
-		Timeout:       timeout,
-		Identity:      s.config.DeviceID,
-		Logger:        s.logger,
+		ID:                dest.ID,
+		Name:              dest.Name,
+		ImageMode:         dest.ImageMode,
+		SkipImageURLCheck: !dest.EventsEnabled,
+		PublicBaseURL:     s.config.PublicBaseURL,
+		SignedURLTTL:      s.config.SignedURLTTL,
+		Signer:            s.signer,
+		Media:             s.media,
+		URL:               sec.URL,
+		HeartbeatURL:      sec.HeartbeatURL,
+		AuthType:          cfg.AuthType,
+		Token:             sec.Token,
+		Username:          sec.Username,
+		Password:          sec.Password,
+		Headers:           sec.Headers,
+		Timeout:           timeout,
+		Identity:          s.config.DeviceID,
+		Logger:            s.logger,
 	})
 }
 
@@ -291,31 +322,40 @@ func (s *Service) buildTestMQTTSender(dest *AlertDestination, sec *mqttSecret) (
 		}
 	}
 
-	// Probe connectivity must strictly use a transient ClientID to avoid kicking online workers off broker
+	// Probe connectivity must strictly use a transient ClientID to avoid kicking
+	// online workers off broker, and never arm LWT / graceful offline notices.
 	clientID := "test-probe-" + idutil.New()[:12]
 
 	return NewMQTTSender(MQTTSenderOptions{
-		ID:            dest.ID,
-		Name:          dest.Name,
-		ImageMode:     dest.ImageMode,
-		PublicBaseURL: s.config.PublicBaseURL,
-		SignedURLTTL:  s.config.SignedURLTTL,
-		Signer:        s.signer,
-		Media:         s.media,
-		Broker:        cfg.Broker,
-		ClientID:      clientID,
-		Username:      cfg.Username,
-		Password:      sec.Password,
-		Topic:         cfg.Topic,
-		QoS:           cfg.QoS,
-		KeepAlive:     30 * time.Second,
-		TLSSkipVerify: cfg.TLSSkipVerify,
-		Identity:      s.config.DeviceID,
-		Logger:        s.logger,
+		ID:                dest.ID,
+		Name:              dest.Name,
+		ImageMode:         dest.ImageMode,
+		SkipImageURLCheck: !dest.EventsEnabled,
+		PublicBaseURL:     s.config.PublicBaseURL,
+		SignedURLTTL:      s.config.SignedURLTTL,
+		Signer:            s.signer,
+		Media:             s.media,
+		Broker:            cfg.Broker,
+		ClientID:          clientID,
+		Username:          cfg.Username,
+		Password:          sec.Password,
+		Topic:             cfg.Topic,
+		HeartbeatEnabled:  dest.HeartbeatEnabled,
+		HeartbeatTopic:    cfg.HeartbeatTopic,
+		LWTEnabled:        false,
+		QoS:               cfg.QoS,
+		KeepAlive:         30 * time.Second,
+		TLSSkipVerify:     cfg.TLSSkipVerify,
+		Identity:          s.config.DeviceID,
+		Logger:            s.logger,
 	})
 }
 
-func (s *Service) validateDestination(dest *AlertDestination) error {
+func (s *Service) validateDestination(dest *AlertDestination, secretRaw destinationSecret) error {
+	if !dest.EventsEnabled && !dest.HeartbeatEnabled {
+		return ErrInvalidConfig
+	}
+
 	if dest.ChannelType != ChannelTypeWebhook && dest.ChannelType != ChannelTypeMQTT {
 		return ErrInvalidChannelType
 	}
@@ -326,15 +366,75 @@ func (s *Service) validateDestination(dest *AlertDestination) error {
 		if dest.ImageMode != ImageModeURL && dest.ImageMode != ImageModeMultipart {
 			return ErrInvalidImageMode
 		}
+		if err := validateWebhookTarget(dest.ConfigJSON, secretRaw); err != nil {
+			return err
+		}
 	case ChannelTypeMQTT:
 		if dest.ImageMode != ImageModeURL && dest.ImageMode != ImageModeBase64 {
 			return ErrInvalidImageMode
 		}
+		if err := validateMQTTTarget(dest.ConfigJSON); err != nil {
+			return err
+		}
 	}
 
-	if dest.ImageMode == ImageModeURL && strings.TrimSpace(s.config.PublicBaseURL) == "" {
+	needsPublicBaseURL := dest.EventsEnabled && dest.ImageMode == ImageModeURL
+	if needsPublicBaseURL && strings.TrimSpace(s.config.PublicBaseURL) == "" {
 		return ErrPublicBaseURLNotConfigured
 	}
 
+	return nil
+}
+
+func validateWebhookTarget(configJSON string, secretRaw destinationSecret) error {
+	var cfg webhookConfig
+	if configJSON != "" {
+		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
+		if cfg.HeartbeatIntervalSeconds != 0 && !isValidHeartbeatInterval(cfg.HeartbeatIntervalSeconds) {
+			return fmt.Errorf("%w: heartbeat_interval_seconds must be between 15 and 3600", ErrInvalidConfig)
+		}
+	}
+	if sec, ok := secretRaw.(*webhookSecret); ok && sec != nil {
+		if err := validateWebhookURL(sec.URL); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
+		if err := validateWebhookHeartbeatOrigin(cfg.AuthType, sec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateWebhookHeartbeatOrigin(authType string, sec *webhookSecret) error {
+	hbURL := strings.TrimSpace(sec.HeartbeatURL)
+	if hbURL == "" {
+		return nil
+	}
+	if err := validateWebhookURL(hbURL); err != nil {
+		return err
+	}
+	hasCredentials := (authType != "" && authType != AuthTypeNone) || len(sec.Headers) > 0
+	if hasCredentials && !sameOrigin(sec.URL, hbURL) {
+		return ErrCrossOriginHeartbeatURL
+	}
+	return nil
+}
+
+func validateMQTTTarget(configJSON string) error {
+	if configJSON == "" {
+		return nil
+	}
+	var cfg mqttConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	if cfg.HeartbeatIntervalSeconds != 0 && !isValidHeartbeatInterval(cfg.HeartbeatIntervalSeconds) {
+		return fmt.Errorf("%w: heartbeat_interval_seconds must be between 15 and 3600", ErrInvalidConfig)
+	}
+	if strings.TrimSpace(cfg.HeartbeatTopic) != "" && strings.ContainsAny(cfg.HeartbeatTopic, "+#") {
+		return fmt.Errorf("%w: mqtt heartbeat_topic must not contain wildcards", ErrInvalidConfig)
+	}
 	return nil
 }

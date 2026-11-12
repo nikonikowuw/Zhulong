@@ -892,6 +892,38 @@ var apiTokenModule = fx.Module("apitoken",
 
 // --- OpenAPI Module ---
 
+type statusSnapshotParams struct {
+	fx.In
+
+	Identity       *systeminfo.IdentityService `optional:"true"`
+	Hardware       *systeminfo.Service         `optional:"true"`
+	Storage        *storage.Service            `optional:"true"`
+	CameraService  *camera.CameraService       `optional:"true"`
+	Supervisor     *algorunner.Supervisor      `optional:"true"`
+	AlgorithmStore *algorithm.Store            `optional:"true"`
+	TaskStore      *task.Store                 `optional:"true"`
+	Engine         *engine.Engine              `optional:"true"`
+	LogSink        loggerOutput                `optional:"true"`
+	Config         Config                      `optional:"true"`
+}
+
+func provideStatusSnapshotAdapter(p statusSnapshotParams) *statusSnapshotAdapter {
+	return &statusSnapshotAdapter{
+		identity:              p.Identity,
+		hardware:              p.Hardware,
+		storage:               p.Storage,
+		cameras:               p.CameraService,
+		runners:               p.Supervisor,
+		algorithms:            p.AlgorithmStore,
+		tasks:                 p.TaskStore,
+		decode:                p.Engine,
+		logSink:               p.LogSink,
+		decodeBackend:         p.Config.Decode.Backend,
+		allowSoftwareFallback: p.Config.Decode.AllowSoftwareFallback,
+		publicBaseURL:         p.Config.AlertPushPublicBaseURL,
+	}
+}
+
 type openAPIOut struct {
 	fx.Out
 
@@ -899,8 +931,19 @@ type openAPIOut struct {
 	OpenAPIRoutes RouteRegistrar `group:"openapi_routes"`
 }
 
-func provideOpenAPI(personSvc *person.Service) openAPIOut {
-	handler := openapi.NewHandler(personSvc, openapi.NewUploadLimiter())
+type openAPIParams struct {
+	fx.In
+
+	PersonService  *person.Service
+	StatusSnapshot *statusSnapshotAdapter `optional:"true"`
+}
+
+func provideOpenAPI(p openAPIParams) openAPIOut {
+	opts := []openapi.HandlerOption{}
+	if p.StatusSnapshot != nil {
+		opts = append(opts, openapi.WithStatusProvider(p.StatusSnapshot))
+	}
+	handler := openapi.NewHandler(p.PersonService, openapi.NewUploadLimiter(), opts...)
 	return openAPIOut{
 		Handler:       handler,
 		OpenAPIRoutes: handler,
@@ -908,7 +951,7 @@ func provideOpenAPI(personSvc *person.Service) openAPIOut {
 }
 
 var openAPIModule = fx.Module("openapi",
-	fx.Provide(provideOpenAPI),
+	fx.Provide(provideStatusSnapshotAdapter, provideOpenAPI),
 )
 
 // --- AlertPush Module ---
@@ -929,18 +972,23 @@ type alertPushOut struct {
 type alertPushParams struct {
 	fx.In
 
-	DBProvider    database.DBProvider
-	CameraCipher  *camera.LazyCipher
-	CameraManager *camera.LifecycleManager
-	MediaService  *mediafile.Service
-	MediaHandler  *mediafile.Handler
-	RecordService *record.Service
-	SystemInfo    *systeminfo.IdentityService
-	Config        Config
-	Logger        *zap.Logger
+	DBProvider     database.DBProvider
+	CameraCipher   *camera.LazyCipher
+	CameraManager  *camera.LifecycleManager
+	MediaService   *mediafile.Service
+	MediaHandler   *mediafile.Handler
+	RecordService  *record.Service
+	SystemInfo     *systeminfo.IdentityService
+	StatusSnapshot *statusSnapshotAdapter `optional:"true"`
+	Config         Config
+	Logger         *zap.Logger
 }
 
 func provideAlertPush(p alertPushParams) alertPushOut {
+	var hbProvider alertpush.HeartbeatSnapshotProvider
+	if p.StatusSnapshot != nil {
+		hbProvider = p.StatusSnapshot
+	}
 	comp := alertpush.NewComponents(alertpush.Options{
 		DBProvider:   p.DBProvider,
 		Cipher:       p.CameraCipher,
@@ -948,9 +996,10 @@ func provideAlertPush(p alertPushParams) alertPushOut {
 		MediaHandler: p.MediaHandler,
 		DataDir:      p.Config.DataDir,
 		Config: alertpush.Config{
-			PublicBaseURL: p.Config.AlertPushPublicBaseURL,
-			SignedURLTTL:  p.Config.AlertPushSignedURLTTL,
-			DeviceID:      p.SystemInfo,
+			PublicBaseURL:     p.Config.AlertPushPublicBaseURL,
+			SignedURLTTL:      p.Config.AlertPushSignedURLTTL,
+			DeviceID:          p.SystemInfo,
+			HeartbeatSnapshot: hbProvider,
 		},
 		Logger: p.Logger,
 	})

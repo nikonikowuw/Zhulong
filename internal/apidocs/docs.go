@@ -3147,6 +3147,55 @@ const docTemplate = `{
                 }
             }
         },
+        "/openapi/status": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns a sanitized point-in-time liveness, resource, storage, and workload snapshot for this host.\nDegraded subsystems still return HTTP 200 with status=\"degraded\" and machine-readable reasons.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "OpenAPI"
+                ],
+                "summary": "Get device health and workload status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/openapi.DeviceStatusResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/persons": {
             "get": {
                 "produces": [
@@ -6850,8 +6899,20 @@ const docTemplate = `{
                 "clientId": {
                     "type": "string"
                 },
+                "heartbeatIntervalSeconds": {
+                    "type": "integer"
+                },
+                "heartbeatTopic": {
+                    "type": "string"
+                },
+                "heartbeatUrl": {
+                    "type": "string"
+                },
                 "keepAliveSeconds": {
                     "type": "integer"
+                },
+                "lwtEnabled": {
+                    "type": "boolean"
                 },
                 "qos": {
                     "type": "integer"
@@ -6919,6 +6980,9 @@ const docTemplate = `{
                 "enabled": {
                     "type": "boolean"
                 },
+                "eventsEnabled": {
+                    "type": "boolean"
+                },
                 "filter": {
                     "$ref": "#/definitions/alertpush.AlertDestinationFilterInfo"
                 },
@@ -6927,6 +6991,9 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "heartbeatEnabled": {
+                    "type": "boolean"
                 },
                 "id": {
                     "type": "string"
@@ -6990,7 +7057,6 @@ const docTemplate = `{
             "required": [
                 "channelType",
                 "config",
-                "imageMode",
                 "name"
             ],
             "properties": {
@@ -7000,8 +7066,14 @@ const docTemplate = `{
                 "config": {
                     "$ref": "#/definitions/alertpush.AlertDestinationConfigInfo"
                 },
+                "eventsEnabled": {
+                    "type": "boolean"
+                },
                 "filter": {
                     "$ref": "#/definitions/alertpush.AlertDestinationFilterInfo"
+                },
+                "heartbeatEnabled": {
+                    "type": "boolean"
                 },
                 "imageMode": {
                     "type": "string"
@@ -7022,6 +7094,12 @@ const docTemplate = `{
                 },
                 "config": {
                     "$ref": "#/definitions/alertpush.AlertDestinationConfigInfo"
+                },
+                "eventsEnabled": {
+                    "type": "boolean"
+                },
+                "heartbeatEnabled": {
+                    "type": "boolean"
                 },
                 "id": {
                     "type": "string"
@@ -7054,8 +7132,14 @@ const docTemplate = `{
                 "config": {
                     "$ref": "#/definitions/alertpush.AlertDestinationConfigInfo"
                 },
+                "eventsEnabled": {
+                    "type": "boolean"
+                },
                 "filter": {
                     "$ref": "#/definitions/alertpush.AlertDestinationFilterInfo"
+                },
+                "heartbeatEnabled": {
+                    "type": "boolean"
                 },
                 "imageMode": {
                     "type": "string"
@@ -8799,6 +8883,159 @@ const docTemplate = `{
             "properties": {
                 "deleted": {
                     "type": "boolean"
+                }
+            }
+        },
+        "openapi.DeviceCamerasSummaryInfo": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "type": "integer"
+                },
+                "enabled": {
+                    "type": "integer"
+                },
+                "offline": {
+                    "type": "integer"
+                },
+                "online": {
+                    "type": "integer"
+                }
+            }
+        },
+        "openapi.DeviceDecodeSummaryInfo": {
+            "type": "object",
+            "properties": {
+                "activeSessions": {
+                    "type": "integer"
+                },
+                "backend": {
+                    "type": "string"
+                },
+                "hardwareAvailable": {
+                    "type": "boolean"
+                },
+                "maxSessions": {
+                    "type": "integer"
+                }
+            }
+        },
+        "openapi.DeviceHostInfo": {
+            "type": "object",
+            "properties": {
+                "arch": {
+                    "type": "string"
+                },
+                "publicBaseUrl": {
+                    "type": "string"
+                },
+                "uptimeSeconds": {
+                    "type": "integer"
+                }
+            }
+        },
+        "openapi.DeviceResourcesInfo": {
+            "type": "object",
+            "properties": {
+                "cpuUsagePercent": {
+                    "type": "number"
+                },
+                "maxTemperatureC": {
+                    "type": "number"
+                },
+                "memoryUsedPercent": {
+                    "type": "number"
+                },
+                "npuLoadPercent": {
+                    "type": "number"
+                },
+                "npuSupported": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "openapi.DeviceRunnersSummaryInfo": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                }
+            }
+        },
+        "openapi.DeviceStatusResponse": {
+            "type": "object",
+            "properties": {
+                "deviceId": {
+                    "type": "string"
+                },
+                "host": {
+                    "$ref": "#/definitions/openapi.DeviceHostInfo"
+                },
+                "reasons": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reportedAt": {
+                    "type": "string"
+                },
+                "resources": {
+                    "$ref": "#/definitions/openapi.DeviceResourcesInfo"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "storage": {
+                    "$ref": "#/definitions/openapi.DeviceStorageInfo"
+                },
+                "workload": {
+                    "$ref": "#/definitions/openapi.DeviceWorkloadInfo"
+                }
+            }
+        },
+        "openapi.DeviceStorageInfo": {
+            "type": "object",
+            "properties": {
+                "freeMb": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "usedPercent": {
+                    "type": "integer"
+                },
+                "writable": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "openapi.DeviceTasksSummaryInfo": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "integer"
+                }
+            }
+        },
+        "openapi.DeviceWorkloadInfo": {
+            "type": "object",
+            "properties": {
+                "cameras": {
+                    "$ref": "#/definitions/openapi.DeviceCamerasSummaryInfo"
+                },
+                "decode": {
+                    "$ref": "#/definitions/openapi.DeviceDecodeSummaryInfo"
+                },
+                "runners": {
+                    "$ref": "#/definitions/openapi.DeviceRunnersSummaryInfo"
+                },
+                "tasks": {
+                    "$ref": "#/definitions/openapi.DeviceTasksSummaryInfo"
                 }
             }
         },

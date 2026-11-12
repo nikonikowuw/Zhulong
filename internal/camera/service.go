@@ -804,3 +804,11 @@ func validateStreamProtocol(proto string) (string, error) {
 	}
 	return p, nil
 }
+
+// HealthSummary returns aggregated in-memory health counts across enabled cameras.
+func (s *CameraService) HealthSummary() CameraHealthSummary {
+	if s == nil || s.registry == nil {
+		return CameraHealthSummary{}
+	}
+	return s.registry.Summary()
+}

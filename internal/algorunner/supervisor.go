@@ -723,6 +723,30 @@ func (s *Supervisor) GetStatus(algoID string) string {
 	return w.currentStatus()
 }
 
+// SummaryCounts returns the number of active (running/starting/rolling-back) and
+// failed (crashed/crash-loop) runner watchers currently tracked in memory.
+func (s *Supervisor) SummaryCounts() (active, failed int) {
+	if s == nil {
+		return 0, 0
+	}
+	s.mu.RLock()
+	watchers := make([]*workerWatcher, 0, len(s.watchers))
+	for _, w := range s.watchers {
+		watchers = append(watchers, w)
+	}
+	s.mu.RUnlock()
+
+	for _, w := range watchers {
+		switch w.currentStatus() {
+		case StatusRunning, StatusStarting, StatusRollingBack:
+			active++
+		case StatusCrashed, StatusCrashLoop:
+			failed++
+		}
+	}
+	return active, failed
+}
+
 // StopAll stops all managed processes gracefully on application shutdown.
 func (s *Supervisor) StopAll(timeout time.Duration) {
 	s.stopOnce.Do(func() { close(s.stopCh) })

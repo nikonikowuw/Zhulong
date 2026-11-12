@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
@@ -27,6 +28,18 @@ func (mockExtractor) ExtractFaceFeature(_ context.Context, _ []byte) ([]float32,
 	return make([]float32, 512), nil
 }
 
+type mockStatusProvider struct {
+	resp DeviceStatusResponse
+	err  error
+}
+
+func (m *mockStatusProvider) DeviceStatus(_ context.Context) (DeviceStatusResponse, error) {
+	if m.err != nil {
+		return DeviceStatusResponse{}, m.err
+	}
+	return m.resp, nil
+}
+
 // mockJPEGBytes is a JPEG header followed by filler: enough for content sniffing, and
 // deliberately not a decodable image since the extractor is mocked.
 var mockJPEGBytes = []byte(
@@ -35,8 +48,10 @@ var mockJPEGBytes = []byte(
 
 // openAPITestEnv is one provisioned test host plus the wiring under test.
 type openAPITestEnv struct {
-	router  *gin.Engine
-	service *person.Service
+	router   *gin.Engine
+	service  *person.Service
+	limiter  *UploadLimiter
+	provider *mockStatusProvider
 }
 
 // newOpenAPITestEnv builds the production middleware shape: the group is sized for
@@ -62,7 +77,42 @@ func newOpenAPITestEnv(t *testing.T) *openAPITestEnv {
 		zap.NewNop(),
 		person.Options{Extractor: mockExtractor{}},
 	)
-	handler := NewHandler(personSvc, NewUploadLimiter())
+	limiter := NewUploadLimiter()
+	cstZone := time.FixedZone("CST", 8*3600)
+	reportedAt := time.Date(
+		2026,
+		11,
+		11,
+		10,
+		0,
+		0,
+		0,
+		cstZone,
+	)
+	provider := &mockStatusProvider{
+		resp: DeviceStatusResponse{
+			DeviceID:   "edge-box-test-01",
+			ReportedAt: reportedAt,
+			Status:     "ready",
+			Reasons:    nil, // intentionally nil to verify handler normalizes to []
+			Host: DeviceHostInfo{
+				Arch:          "arm64",
+				UptimeSeconds: 1200,
+			},
+			Storage: DeviceStorageInfo{
+				Status:      "healthy",
+				Writable:    true,
+				UsedPercent: 35,
+				FreeMB:      16384,
+			},
+			Workload: DeviceWorkloadInfo{
+				Decode: DeviceDecodeSummaryInfo{
+					Backend: "auto",
+				},
+			},
+		},
+	}
+	handler := NewHandler(personSvc, limiter, WithStatusProvider(provider))
 
 	router := gin.New()
 	group := router.Group("/api/v1/openapi")
@@ -75,7 +125,12 @@ func newOpenAPITestEnv(t *testing.T) *openAPITestEnv {
 	)
 	handler.RegisterRoutes(group)
 
-	return &openAPITestEnv{router: router, service: personSvc}
+	return &openAPITestEnv{
+		router:   router,
+		service:  personSvc,
+		limiter:  limiter,
+		provider: provider,
+	}
 }
 
 // envelope is the subset of the standard response body a test needs to inspect.
@@ -655,5 +710,84 @@ func TestOpenAPI_ResponsesOmitInternalPaths(t *testing.T) {
 	rec := env.do(t, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/persons/EMP-PATH", nil))
 	if strings.Contains(rec.Body.String(), "imagePath") {
 		t.Fatalf("response leaks the internal image path: %s", rec.Body.String())
+	}
+}
+
+func TestOpenAPI_GetStatus_ReadyDegradedAndLimiterIsolation(t *testing.T) {
+	env := newOpenAPITestEnv(t)
+	env.createPerson(t, "EMP-LIM", "Limiter Check")
+
+	// Saturate both global and per-token upload limiter slots so face upload answers 429,
+	// while GET /openapi/status still answers 200 OK.
+	slot, ok := env.limiter.acquireToken("tok_test")
+	if !ok {
+		t.Fatal("failed to acquire per-token slot")
+	}
+	defer env.limiter.releaseToken("tok_test", slot)
+	for range GlobalMaxFaceUploads {
+		env.limiter.globalSem <- struct{}{}
+	}
+	defer func() {
+		for range GlobalMaxFaceUploads {
+			<-env.limiter.globalSem
+		}
+	}()
+
+	faceRec := env.uploadFace(
+		t,
+		"EMP-LIM",
+		"",
+		"a.jpg",
+		mockJPEGBytes,
+	)
+	if faceRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected face upload to be rate-limited (429), got %d", faceRec.Code)
+	}
+
+	rec := env.do(t, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /openapi/status while upload limiter full: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cc)
+	}
+	if strings.Contains(rec.Body.String(), "+08:00") {
+		t.Fatalf("reportedAt must be normalized to UTC Z, got: %s", rec.Body.String())
+	}
+
+	var ready DeviceStatusResponse
+	decodeData(t, rec, &ready)
+	readyOK := ready.DeviceID == "edge-box-test-01" && ready.Status == "ready" && len(ready.Reasons) == 0
+	if !readyOK {
+		t.Fatalf("unexpected ready status payload: %+v", ready)
+	}
+
+	// Degraded state still answers HTTP 200 with machine-readable reasons.
+	env.provider.resp.Status = "degraded"
+	env.provider.resp.Reasons = []string{"storage_unavailable", "camera_offline"}
+	degRec := env.do(t, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/status", nil))
+	if degRec.Code != http.StatusOK {
+		t.Fatalf("degraded status must still return HTTP 200, got %d", degRec.Code)
+	}
+	var deg DeviceStatusResponse
+	decodeData(t, degRec, &deg)
+	if deg.Status != "degraded" || len(deg.Reasons) != 2 {
+		t.Fatalf("unexpected degraded payload: %+v", deg)
+	}
+}
+
+func TestOpenAPI_GetStatus_NilProviderReturns503(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	group := router.Group("/api/v1/openapi")
+	NewHandler(nil, NewUploadLimiter()).RegisterRoutes(group)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/status", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when status provider is nil, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if code := decodeEnvelope(t, rec).Code; code != "SERVICE_UNAVAILABLE" {
+		t.Fatalf("code = %q, want SERVICE_UNAVAILABLE", code)
 	}
 }

@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/architecture.md", "reason": "系统跨层责任边界与单向依赖契约"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Go 后端开发前检查清单与模块规范索引"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "HTTP 信封、命名约定 (*Request/*Response/*Info/*Status) 与 Swagger 2.0 规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 版本化迁移规范与禁用 AutoMigrate 约束"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Uber Fx 纯构造函数、四路路由值组与组合根生命周期停机序列"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "禁止心跳型审计 (No Heartbeat Auditing) 红线与日志脱敏规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "apperr 类型化错误与三语本地化错误码映射"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "React 前端特性切片、Zod 解析与浏览器单测门禁"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "状态徽章调色板与 zh-Hans/zh-Hant/en 三语国际化规范"}
+{"file": ".trellis/tasks/11-11-outbound-heartbeat-report/research/industry-heartbeat-patterns.md", "reason": "北向存活上报行业范式与本仓零阻塞遥测数据源审计"}

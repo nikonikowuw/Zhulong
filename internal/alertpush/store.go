@@ -124,6 +124,12 @@ func (s *Store) Create(ctx context.Context, dest *AlertDestination) error {
 	if err != nil {
 		return err
 	}
+	// Preserve legacy zero-literal callers when neither capability flag was explicitly set.
+	// Service validation rejects both-false before reaching Store, so a heartbeats-only
+	// destination (EventsEnabled=false, HeartbeatEnabled=true) stays untouched.
+	if !dest.EventsEnabled && !dest.HeartbeatEnabled {
+		dest.EventsEnabled = true
+	}
 	now := time.Now().UTC()
 	dest.CreatedAt = now
 	dest.UpdatedAt = now
@@ -149,6 +155,8 @@ func (s *Store) Update(ctx context.Context, dest *AlertDestination) error {
 			"name",
 			"channel_type",
 			"enabled",
+			"events_enabled",
+			"heartbeat_enabled",
 			"image_mode",
 			"mqtt_client_id",
 			"config_json",

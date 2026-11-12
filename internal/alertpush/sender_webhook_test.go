@@ -292,3 +292,210 @@ func TestWebhookSenderNoRetryOn400(t *testing.T) {
 		t.Errorf("expected 1 attempt without retry on 400, got %d", attempts.Load())
 	}
 }
+
+func TestWebhookSenderHeartbeatRouteSplitAndSingleShot(t *testing.T) {
+	var mainHits atomic.Int32
+	var hbHits atomic.Int32
+	var gotAuth string
+	gotBody := []byte{}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		mainHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		hbHits.Add(1)
+		gotAuth = r.Header.Get("Authorization")
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		gotBody = body
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/heartbeat-500", func(w http.ResponseWriter, r *http.Request) {
+		hbHits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	sender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:                "dest_hb_01",
+		ImageMode:         ImageModeURL,
+		SkipImageURLCheck: true,
+		URL:               server.URL + "/events",
+		HeartbeatURL:      server.URL + "/heartbeat",
+		AuthType:          AuthTypeBearer,
+		Token:             "shared-token-xyz",
+		Identity:          &fakeIdentity{value: "edge-box-09"},
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender (heartbeat-only without PublicBaseURL): %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("sender.Close: %v", closeErr)
+		}
+	}()
+
+	reportedAt, parseErr := time.Parse(time.RFC3339, "2026-11-11T08:00:00Z")
+	if parseErr != nil {
+		t.Fatalf("parse timestamp: %v", parseErr)
+	}
+	snap := HeartbeatSnapshot{
+		ReportedAt: reportedAt,
+		Status:     "degraded",
+		Reasons:    []string{"camera_offline"},
+		Host:       HeartbeatHostPayload{Arch: "arm64", UptimeSeconds: 3600},
+		Storage:    HeartbeatStoragePayload{Status: "healthy", Writable: true, UsedPercent: 42, FreeMB: 8192},
+	}
+
+	if err := sender.SendHeartbeat(context.Background(), snap, 7); err != nil {
+		t.Fatalf("SendHeartbeat failed: %v", err)
+	}
+	if mainHits.Load() != 0 || hbHits.Load() != 1 {
+		t.Fatalf("expected mainHits=0 hbHits=1, got main=%d hb=%d", mainHits.Load(), hbHits.Load())
+	}
+	if gotAuth != "Bearer shared-token-xyz" {
+		t.Fatalf("expected shared bearer auth, got %q", gotAuth)
+	}
+
+	var payload HeartbeatPayload
+	if err := json.Unmarshal(gotBody, &payload); err != nil {
+		t.Fatalf("unmarshal heartbeat payload: %v", err)
+	}
+	headerOK := payload.EventType == EventTypeHeartbeat && payload.Seq == 7 && payload.DeviceID == "edge-box-09"
+	if !headerOK {
+		t.Fatalf("unexpected heartbeat payload header: %+v", payload)
+	}
+	reasonsOK := len(payload.Reasons) == 1 && payload.Reasons[0] == "camera_offline"
+	if payload.Status != "degraded" || !reasonsOK {
+		t.Fatalf("unexpected status/reasons: %+v", payload)
+	}
+
+	// Verify SendHeartbeat does NOT retry on HTTP 500 (single-shot only).
+	hbHits.Store(0)
+	failSender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:                "dest_hb_02",
+		ImageMode:         ImageModeURL,
+		SkipImageURLCheck: true,
+		URL:               server.URL + "/events",
+		HeartbeatURL:      server.URL + "/heartbeat-500",
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender failSender: %v", err)
+	}
+	defer func() {
+		if closeErr := failSender.Close(); closeErr != nil {
+			t.Errorf("failSender.Close: %v", closeErr)
+		}
+	}()
+
+	if err := failSender.SendHeartbeat(context.Background(), snap, 1); err == nil {
+		t.Fatal("expected error on HTTP 500 heartbeat")
+	}
+	if hbHits.Load() != 1 {
+		t.Fatalf("expected single-shot (1 attempt) for heartbeat on 500, got %d", hbHits.Load())
+	}
+}
+
+func TestWebhookSenderBlocksCrossOriginRedirectWithCredentials(t *testing.T) {
+	var evilHits atomic.Int32
+	evilServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		evilHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer evilServer.Close()
+
+	originServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(
+			w,
+			r,
+			evilServer.URL+"/collect",
+			http.StatusTemporaryRedirect,
+		)
+	}))
+	defer originServer.Close()
+
+	sender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:                "dest_redir_guard",
+		ImageMode:         ImageModeURL,
+		SkipImageURLCheck: true,
+		URL:               originServer.URL + "/hb",
+		Headers:           map[string]string{"X-Api-Secret": "top-secret"},
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("sender.Close: %v", closeErr)
+		}
+	}()
+
+	snap := HeartbeatSnapshot{ReportedAt: time.Now().UTC(), Status: "ready", Reasons: []string{}}
+	sendErr := sender.SendHeartbeat(context.Background(), snap, 1)
+	if !errors.Is(sendErr, ErrCrossOriginRedirect) {
+		t.Fatalf("expected ErrCrossOriginRedirect, got %v", sendErr)
+	}
+	if evilHits.Load() != 0 {
+		t.Fatalf("credentials leaked across redirect: evilHits=%d", evilHits.Load())
+	}
+}
+
+func TestSameOrigin(t *testing.T) {
+	cases := []struct {
+		name string
+		a    string
+		b    string
+		want bool
+	}{
+		{
+			name: "implicit default https port",
+			a:    "https://api.example.com/v1/events",
+			b:    "https://API.example.com:443/v1/hb",
+			want: true,
+		},
+		{
+			name: "implicit default http port",
+			a:    "http://10.0.0.5:80/events",
+			b:    "http://10.0.0.5/hb",
+			want: true,
+		},
+		{
+			name: "scheme downgrade forbidden",
+			a:    "https://api.example.com/events",
+			b:    "http://api.example.com/hb",
+			want: false,
+		},
+		{
+			name: "different port forbidden",
+			a:    "https://api.example.com:8443/events",
+			b:    "https://api.example.com/hb",
+			want: false,
+		},
+		{
+			name: "different host forbidden",
+			a:    "https://api.example.com/events",
+			b:    "https://evil.example.org/hb",
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameOrigin(tc.a, tc.b); got != tc.want {
+				t.Fatalf(
+					"sameOrigin(%q, %q) = %v, want %v",
+					tc.a,
+					tc.b,
+					got,
+					tc.want,
+				)
+			}
+		})
+	}
+}

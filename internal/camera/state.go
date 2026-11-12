@@ -130,6 +130,38 @@ func (r *StateRegistry) GetAllStates() map[string]*CameraStateInfo {
 	return result
 }
 
+// CameraHealthSummary aggregates runtime health counts across enabled cameras.
+type CameraHealthSummary struct {
+	Enabled  int
+	Online   int
+	Offline  int
+	Degraded int
+}
+
+// Summary computes aggregated health counts from in-memory camera states without cloning.
+func (r *StateRegistry) Summary() CameraHealthSummary {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var summary CameraHealthSummary
+	for _, st := range r.states {
+		if st == nil || !st.Enabled {
+			continue
+		}
+		summary.Enabled++
+		switch st.Health {
+		case HealthStateOnline:
+			summary.Online++
+			if st.Degraded {
+				summary.Degraded++
+			}
+		case HealthStateOffline, HealthStateError:
+			summary.Offline++
+		}
+	}
+	return summary
+}
+
 // DeleteState removes a camera's state from the registry.
 func (r *StateRegistry) DeleteState(cameraID string) {
 	r.mu.Lock()

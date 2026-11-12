@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +36,8 @@ type Config struct {
 	// It is read per send (not cached at construction) so editing it under
 	// settings → system takes effect without rebuilding destinations.
 	DeviceID DeviceIDProvider
+	// HeartbeatSnapshot supplies sanitized point-in-time host and workload summaries.
+	HeartbeatSnapshot HeartbeatSnapshotProvider
 }
 
 // DispatcherOptions holds parameters for constructing a Dispatcher.
@@ -45,7 +49,8 @@ type DispatcherOptions struct {
 	Logger *zap.Logger
 }
 
-// Dispatcher coordinates multi-target event filtering and asynchronous fan-out.
+// Dispatcher coordinates multi-target event filtering, asynchronous fan-out, and
+// dual-rail periodic heartbeat reporting.
 type Dispatcher struct {
 	store    *Store
 	signer   *URLSigner
@@ -56,6 +61,8 @@ type Dispatcher struct {
 	mu       sync.RWMutex
 	statsMu  sync.RWMutex
 	stats    map[string]AlertDestinationStatus
+	seqMu    sync.Mutex
+	seqMap   map[string]*atomic.Uint64
 	reloadCh chan struct{}
 	stopCh   chan struct{}
 	running  atomic.Bool
@@ -76,9 +83,22 @@ func NewDispatcher(opts DispatcherOptions) *Dispatcher {
 		logger:   logger.Named("alertpush.dispatcher"),
 		workers:  make(map[string]*destinationWorker),
 		stats:    make(map[string]AlertDestinationStatus),
+		seqMap:   make(map[string]*atomic.Uint64),
 		reloadCh: make(chan struct{}, 1),
 		stopCh:   make(chan struct{}),
 	}
+}
+
+func (d *Dispatcher) counterFor(destID string) *atomic.Uint64 {
+	d.seqMu.Lock()
+	defer d.seqMu.Unlock()
+
+	if c, ok := d.seqMap[destID]; ok {
+		return c
+	}
+	c := &atomic.Uint64{}
+	d.seqMap[destID] = c
+	return c
 }
 
 // Start begins background reconciliation loop and loads initial destinations.
@@ -125,7 +145,7 @@ func (d *Dispatcher) OnAlarm(ctx context.Context, ev record.AlarmEvent) {
 	d.Dispatch(ev)
 }
 
-// Dispatch matches destinations and enqueues events without blocking.
+// Dispatch matches destinations with events enabled and enqueues events without blocking.
 func (d *Dispatcher) Dispatch(ev record.AlarmEvent) {
 	if !d.running.Load() {
 		return
@@ -135,6 +155,9 @@ func (d *Dispatcher) Dispatch(ev record.AlarmEvent) {
 	defer d.mu.RUnlock()
 
 	for _, w := range d.workers {
+		if !w.eventsEnabled {
+			continue
+		}
 		if !w.filter.Matches(string(ev.EventType), ev.AlgorithmID, ev.CameraID) {
 			continue
 		}
@@ -240,44 +263,63 @@ func (d *Dispatcher) reconcile() {
 		return
 	}
 
+	currentDeviceID := resolveDeviceID(d.config.DeviceID)
 	activeIDs := make(map[string]struct{}, len(enabledDestinations))
-	toRetire := []*destinationWorker{}
+	toRetireReload := []*destinationWorker{}
+	toRetireOffline := []*destinationWorker{}
 	toStart := []*destinationWorker{}
 
 	d.mu.Lock()
 	for _, dest := range enabledDestinations {
 		activeIDs[dest.ID] = struct{}{}
-		fp := computeFingerprint(dest)
+		fp := computeFingerprint(dest, currentDeviceID)
 
-		if currentWorker, exists := d.workers[dest.ID]; exists {
-			if currentWorker.fingerprint == fp {
-				// Destination config has not changed, keep running worker intact
-				continue
+		currentWorker, exists := d.workers[dest.ID]
+		if exists && currentWorker.fingerprint == fp {
+			// Destination config has not changed, keep running worker intact
+			continue
+		}
+
+		// Destination is new or updated, build replacement sender before retiring
+		sender, filter, hbInterval, err := d.buildSender(dest)
+		if err != nil {
+			d.logger.Warn("failed to build sender for destination, skipping",
+				zap.String("id", dest.ID),
+				zap.Error(err),
+			)
+			if exists {
+				toRetireOffline = append(toRetireOffline, currentWorker)
+				delete(d.workers, dest.ID)
+				d.statsMu.Lock()
+				d.stats[dest.ID] = currentWorker.getStatus()
+				d.statsMu.Unlock()
 			}
-			// Config changed: retire old worker
-			toRetire = append(toRetire, currentWorker)
+			continue
+		}
+
+		if exists {
+			if dest.HeartbeatEnabled {
+				toRetireReload = append(toRetireReload, currentWorker)
+			} else {
+				toRetireOffline = append(toRetireOffline, currentWorker)
+			}
 			delete(d.workers, dest.ID)
 			d.statsMu.Lock()
 			d.stats[dest.ID] = currentWorker.getStatus()
 			d.statsMu.Unlock()
 		}
 
-		// Destination is new or updated, build sender
-		sender, filter, err := d.buildSender(dest)
-		if err != nil {
-			d.logger.Warn("failed to build sender for destination, skipping",
-				zap.String("id", dest.ID),
-				zap.Error(err),
-			)
-			continue
-		}
-
 		w := newDestinationWorker(destinationWorkerOptions{
-			dest:        dest,
-			sender:      sender,
-			filter:      filter,
-			fingerprint: fp,
-			logger:      d.logger,
+			dest:              dest,
+			sender:            sender,
+			filter:            filter,
+			fingerprint:       fp,
+			heartbeatInterval: hbInterval,
+			snapshotProvider:  d.config.HeartbeatSnapshot,
+			publicBaseURL:     d.config.PublicBaseURL,
+			seqCounter:        d.counterFor(dest.ID),
+			onWillStale:       d.RequestReload,
+			logger:            d.logger,
 		})
 		d.workers[dest.ID] = w
 		toStart = append(toStart, w)
@@ -286,7 +328,7 @@ func (d *Dispatcher) reconcile() {
 	// Retire destinations that are no longer enabled or removed
 	for id, w := range d.workers {
 		if _, active := activeIDs[id]; !active {
-			toRetire = append(toRetire, w)
+			toRetireOffline = append(toRetireOffline, w)
 			delete(d.workers, id)
 			d.statsMu.Lock()
 			d.stats[id] = w.getStatus()
@@ -295,76 +337,85 @@ func (d *Dispatcher) reconcile() {
 	}
 	d.mu.Unlock()
 
+	// Stop retiring workers BEFORE starting replacements so shared MQTT ClientIDs
+	// disconnect cleanly without broker session-takeover kicks or false LWT fires.
+	for _, w := range toRetireReload {
+		w.stopForReload()
+	}
+	for _, w := range toRetireOffline {
+		w.stop()
+	}
 	for _, w := range toStart {
 		w.start()
 	}
-	for _, w := range toRetire {
-		w.stop()
-	}
 }
 
-func (d *Dispatcher) buildSender(dest *AlertDestination) (Sender, destinationFilter, error) {
+func (d *Dispatcher) buildSender(dest *AlertDestination) (Sender, destinationFilter, time.Duration, error) {
 	var filter destinationFilter
 	if dest.FilterJSON != "" {
 		if err := json.Unmarshal([]byte(dest.FilterJSON), &filter); err != nil {
-			return nil, filter, fmt.Errorf("unmarshal destination filter: %w", err)
+			return nil, filter, 0, fmt.Errorf("unmarshal destination filter: %w", err)
 		}
 	}
 
 	switch dest.ChannelType {
 	case ChannelTypeWebhook:
-		sender, err := d.buildWebhookSender(dest)
-		return sender, filter, err
+		sender, interval, err := d.buildWebhookSender(dest)
+		return sender, filter, interval, err
 	case ChannelTypeMQTT:
-		sender, err := d.buildMQTTSender(dest)
-		return sender, filter, err
+		sender, interval, err := d.buildMQTTSender(dest)
+		return sender, filter, interval, err
 	default:
-		return nil, filter, errors.New("unsupported channel type")
+		return nil, filter, 0, errors.New("unsupported channel type")
 	}
 }
 
-func (d *Dispatcher) buildWebhookSender(dest *AlertDestination) (Sender, error) {
+func (d *Dispatcher) buildWebhookSender(dest *AlertDestination) (Sender, time.Duration, error) {
 	var cfg webhookConfig
 	if dest.ConfigJSON != "" {
 		if err := json.Unmarshal([]byte(dest.ConfigJSON), &cfg); err != nil {
-			return nil, fmt.Errorf("unmarshal webhook config: %w", err)
+			return nil, 0, fmt.Errorf("unmarshal webhook config: %w", err)
 		}
 	}
 	secret, err := d.store.DecryptWebhookSecret(dest.ID, dest.SecretCiphertext)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return NewWebhookSender(WebhookSenderOptions{
-		ID:            dest.ID,
-		Name:          dest.Name,
-		ImageMode:     dest.ImageMode,
-		PublicBaseURL: d.config.PublicBaseURL,
-		SignedURLTTL:  d.config.SignedURLTTL,
-		Signer:        d.signer,
-		Media:         d.media,
-		URL:           secret.URL,
-		AuthType:      cfg.AuthType,
-		Token:         secret.Token,
-		Username:      secret.Username,
-		Password:      secret.Password,
-		Headers:       secret.Headers,
-		Timeout:       time.Duration(cfg.TimeoutSeconds) * time.Second,
-		Identity:      d.config.DeviceID,
-		Logger:        d.logger,
+	interval := time.Duration(normalizeHeartbeatInterval(cfg.HeartbeatIntervalSeconds)) * time.Second
+	sender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:                dest.ID,
+		Name:              dest.Name,
+		ImageMode:         dest.ImageMode,
+		SkipImageURLCheck: !dest.EventsEnabled,
+		PublicBaseURL:     d.config.PublicBaseURL,
+		SignedURLTTL:      d.config.SignedURLTTL,
+		Signer:            d.signer,
+		Media:             d.media,
+		URL:               secret.URL,
+		HeartbeatURL:      secret.HeartbeatURL,
+		AuthType:          cfg.AuthType,
+		Token:             secret.Token,
+		Username:          secret.Username,
+		Password:          secret.Password,
+		Headers:           secret.Headers,
+		Timeout:           time.Duration(cfg.TimeoutSeconds) * time.Second,
+		Identity:          d.config.DeviceID,
+		Logger:            d.logger,
 	})
+	return sender, interval, err
 }
 
-func (d *Dispatcher) buildMQTTSender(dest *AlertDestination) (Sender, error) {
+func (d *Dispatcher) buildMQTTSender(dest *AlertDestination) (Sender, time.Duration, error) {
 	var cfg mqttConfig
 	if dest.ConfigJSON != "" {
 		if err := json.Unmarshal([]byte(dest.ConfigJSON), &cfg); err != nil {
-			return nil, fmt.Errorf("unmarshal mqtt config: %w", err)
+			return nil, 0, fmt.Errorf("unmarshal mqtt config: %w", err)
 		}
 	}
 	secret, err := d.store.DecryptMQTTSecret(dest.ID, dest.SecretCiphertext)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var clientID string
@@ -372,77 +423,122 @@ func (d *Dispatcher) buildMQTTSender(dest *AlertDestination) (Sender, error) {
 		clientID = *dest.MQTTClientID
 	}
 
+	interval := time.Duration(normalizeHeartbeatInterval(cfg.HeartbeatIntervalSeconds)) * time.Second
 	s, err := NewMQTTSender(MQTTSenderOptions{
-		ID:            dest.ID,
-		Name:          dest.Name,
-		ImageMode:     dest.ImageMode,
-		PublicBaseURL: d.config.PublicBaseURL,
-		SignedURLTTL:  d.config.SignedURLTTL,
-		Signer:        d.signer,
-		Media:         d.media,
-		Broker:        cfg.Broker,
-		ClientID:      clientID,
-		Username:      cfg.Username,
-		Password:      secret.Password,
-		Topic:         cfg.Topic,
-		QoS:           cfg.QoS,
-		KeepAlive:     time.Duration(cfg.KeepAliveSeconds) * time.Second,
-		TLSSkipVerify: cfg.TLSSkipVerify,
-		Identity:      d.config.DeviceID,
-		Logger:        d.logger,
+		ID:                dest.ID,
+		Name:              dest.Name,
+		ImageMode:         dest.ImageMode,
+		SkipImageURLCheck: !dest.EventsEnabled,
+		PublicBaseURL:     d.config.PublicBaseURL,
+		SignedURLTTL:      d.config.SignedURLTTL,
+		Signer:            d.signer,
+		Media:             d.media,
+		Broker:            cfg.Broker,
+		ClientID:          clientID,
+		Username:          cfg.Username,
+		Password:          secret.Password,
+		Topic:             cfg.Topic,
+		HeartbeatEnabled:  dest.HeartbeatEnabled,
+		HeartbeatTopic:    cfg.HeartbeatTopic,
+		LWTEnabled:        cfg.effectiveLWTEnabled(),
+		QoS:               cfg.QoS,
+		KeepAlive:         time.Duration(cfg.KeepAliveSeconds) * time.Second,
+		TLSSkipVerify:     cfg.TLSSkipVerify,
+		Identity:          d.config.DeviceID,
+		Logger:            d.logger,
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-
-	// Attempt initial connection asynchronously
-	go func() {
-		if connectErr := s.Connect(); connectErr != nil {
-			d.logger.Debug("initial mqtt connect attempt failed", zap.String("id", dest.ID), zap.Error(connectErr))
-		}
-	}()
-	return s, nil
+	return s, interval, nil
 }
 
 type destinationWorkerOptions struct {
-	dest        *AlertDestination
-	sender      Sender
-	filter      destinationFilter
-	fingerprint string
-	logger      *zap.Logger
+	dest              *AlertDestination
+	sender            Sender
+	filter            destinationFilter
+	fingerprint       string
+	heartbeatInterval time.Duration
+	noJitter          bool
+	snapshotProvider  HeartbeatSnapshotProvider
+	publicBaseURL     string
+	seqCounter        *atomic.Uint64
+	onWillStale       func()
+	logger            *zap.Logger
 }
 
 type destinationWorker struct {
-	id            string
-	name          string
-	channelType   string
-	filter        destinationFilter
-	sender        Sender
-	queue         chan record.AlarmEvent
-	dropped       atomic.Int64
-	state         atomic.Value // string
-	lastError     atomic.Value // string
-	lastSuccessAt atomic.Pointer[time.Time]
-	fingerprint   string
-	started       atomic.Bool
-	stopOnce      sync.Once
-	stopCh        chan struct{}
-	doneCh        chan struct{}
-	logger        *zap.Logger
+	id                string
+	name              string
+	channelType       string
+	eventsEnabled     bool
+	heartbeatEnabled  bool
+	heartbeatInterval time.Duration
+	noJitter          bool
+	snapshotProvider  HeartbeatSnapshotProvider
+	publicBaseURL     string
+	seqCounter        *atomic.Uint64
+	onWillStale       func()
+	filter            destinationFilter
+	sender            Sender
+	queue             chan record.AlarmEvent
+	dropped           atomic.Int64
+	state             atomic.Value // string
+	lastError         atomic.Value // string
+	lastSuccessAt     atomic.Pointer[time.Time]
+	fingerprint       string
+	started           atomic.Bool
+	suppressOffline   atomic.Bool
+	stopOnce          sync.Once
+	stopCh            chan struct{}
+	hbCtx             context.Context
+	hbCancel          context.CancelFunc
+	wg                sync.WaitGroup
+	doneCh            chan struct{}
+	logger            *zap.Logger
 }
 
 func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
+	eventsEnabled := opts.dest.EventsEnabled
+	heartbeatEnabled := opts.dest.HeartbeatEnabled
+	if !eventsEnabled && !heartbeatEnabled {
+		// Legacy unit test struct literals omit both capability flags; treat as events-only.
+		eventsEnabled = true
+	}
+
+	hbInterval := opts.heartbeatInterval
+	if hbInterval <= 0 {
+		hbInterval = time.Duration(DefaultHeartbeatIntervalSeconds) * time.Second
+	}
+
+	seqCounter := opts.seqCounter
+	if seqCounter == nil {
+		seqCounter = &atomic.Uint64{}
+	}
+
+	hbCtx, hbCancel := context.WithCancel(context.Background())
+
 	w := &destinationWorker{
-		id:          opts.dest.ID,
-		name:        opts.dest.Name,
-		channelType: opts.dest.ChannelType,
-		filter:      opts.filter,
-		sender:      opts.sender,
-		queue:       make(chan record.AlarmEvent, 16),
-		fingerprint: opts.fingerprint,
-		stopCh:      make(chan struct{}),
-		doneCh:      make(chan struct{}),
-		logger:      opts.logger.With(zap.String("destination_id", opts.dest.ID)),
+		id:                opts.dest.ID,
+		name:              opts.dest.Name,
+		channelType:       opts.dest.ChannelType,
+		eventsEnabled:     eventsEnabled,
+		heartbeatEnabled:  heartbeatEnabled,
+		heartbeatInterval: hbInterval,
+		noJitter:          opts.noJitter,
+		snapshotProvider:  opts.snapshotProvider,
+		publicBaseURL:     opts.publicBaseURL,
+		seqCounter:        seqCounter,
+		onWillStale:       opts.onWillStale,
+		filter:            opts.filter,
+		sender:            opts.sender,
+		queue:             make(chan record.AlarmEvent, 16),
+		fingerprint:       opts.fingerprint,
+		stopCh:            make(chan struct{}),
+		hbCtx:             hbCtx,
+		hbCancel:          hbCancel,
+		doneCh:            make(chan struct{}),
+		logger:            opts.logger.With(zap.String("destination_id", opts.dest.ID)),
 	}
 
 	initialState := StateUnverified
@@ -455,25 +551,43 @@ func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
 }
 
 func (w *destinationWorker) start() {
-	if w.started.CompareAndSwap(false, true) {
-		go w.run()
+	if !w.started.CompareAndSwap(false, true) {
+		return
 	}
-}
 
-func (w *destinationWorker) run() {
-	defer func() {
-		if w.sender != nil {
-			if closeErr := w.sender.Close(); closeErr != nil {
-				w.logger.Debug("close destination sender", zap.Error(closeErr))
-			}
-		}
+	if mqttSender, ok := w.sender.(*MQTTSender); ok {
+		w.initMQTTConnection(mqttSender)
+	}
+
+	w.wg.Add(1)
+	go w.runEvents()
+
+	if w.heartbeatEnabled {
+		w.wg.Add(1)
+		go w.runHeartbeats()
+	}
+
+	go func() {
+		w.wg.Wait()
+		w.closeSender()
 		close(w.doneCh)
 	}()
+}
 
-	// If MQTT sender, update connected state initially
-	if mqttSender, ok := w.sender.(*MQTTSender); ok && mqttSender.IsConnected() {
+func (w *destinationWorker) initMQTTConnection(mqttSender *MQTTSender) {
+	if mqttSender.IsConnected() {
 		w.state.Store(StateConnected)
+		return
 	}
+	go func() {
+		if connectErr := mqttSender.Connect(); connectErr != nil {
+			w.logger.Debug("initial mqtt connect attempt failed", zap.Error(connectErr))
+		}
+	}()
+}
+
+func (w *destinationWorker) runEvents() {
+	defer w.wg.Done()
 
 	for {
 		select {
@@ -499,21 +613,116 @@ func (w *destinationWorker) run() {
 			cancel()
 
 			if err == nil {
-				w.state.Store(StateConnected)
-				w.lastError.Store("")
-				now := time.Now().UTC()
-				w.lastSuccessAt.Store(&now)
+				w.recordSuccess()
 			} else {
+				reason := classifyError(err)
 				w.state.Store(StateFailed)
-				w.lastError.Store(classifyError(err))
+				w.lastError.Store(reason)
 				w.logger.Warn("destination dispatch failed", zap.Error(err))
 			}
 		}
 	}
 }
 
+func (w *destinationWorker) runHeartbeats() {
+	defer w.wg.Done()
+
+	var prevErrReason string
+	timer := time.NewTimer(w.initialHeartbeatDelay())
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-w.stopCh:
+			return
+		case <-timer.C:
+			if mqttSender, ok := w.sender.(*MQTTSender); ok && mqttSender.hasStaleWillDeviceID() {
+				if w.onWillStale != nil {
+					w.onWillStale()
+					return
+				}
+			}
+
+			sendCtx, cancel := context.WithTimeout(w.hbCtx, 10*time.Second)
+			snap := resolveHeartbeatSnapshot(sendCtx, w.snapshotProvider, w.publicBaseURL)
+			seq := w.seqCounter.Add(1)
+			err := w.sender.SendHeartbeat(sendCtx, snap, seq)
+			cancel()
+
+			if w.hbCtx.Err() != nil {
+				return
+			}
+
+			prevErrReason = w.recordHeartbeatOutcome(err, prevErrReason)
+			timer.Reset(w.nextHeartbeatDelay())
+		}
+	}
+}
+
+func (w *destinationWorker) recordHeartbeatOutcome(err error, prevReason string) string {
+	if err == nil {
+		w.recordSuccess()
+		if prevReason != "" {
+			w.logger.Info("destination heartbeat recovered")
+		}
+		return ""
+	}
+
+	reason := classifyError(err)
+	w.state.Store(StateFailed)
+	w.lastError.Store(reason)
+	if prevReason != reason {
+		w.logger.Warn("destination heartbeat failed",
+			zap.String("reason", reason),
+			zap.Error(err),
+		)
+		return reason
+	}
+	w.logger.Debug("destination heartbeat still failing",
+		zap.String("reason", reason),
+		zap.Error(err),
+	)
+	return reason
+}
+
+func (w *destinationWorker) recordSuccess() {
+	w.state.Store(StateConnected)
+	w.lastError.Store("")
+	now := time.Now().UTC()
+	w.lastSuccessAt.Store(&now)
+}
+
+func (w *destinationWorker) initialHeartbeatDelay() time.Duration {
+	if w.noJitter {
+		return 0
+	}
+	maxJitter := min(2*time.Second, w.heartbeatInterval/10)
+	if maxJitter <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(maxJitter)))
+}
+
+func (w *destinationWorker) nextHeartbeatDelay() time.Duration {
+	if w.noJitter {
+		return w.heartbeatInterval
+	}
+	window := w.heartbeatInterval / 20 // ±5%
+	if window <= 0 {
+		return w.heartbeatInterval
+	}
+	delta := rand.Int64N(int64(window)*2+1) - int64(window)
+	return w.heartbeatInterval + time.Duration(delta)
+}
+
+func (w *destinationWorker) stopForReload() {
+	w.suppressOffline.Store(true)
+	w.stop()
+}
+
 func (w *destinationWorker) stop() {
 	w.stopOnce.Do(func() {
+		w.hbCancel()
 		close(w.stopCh)
 	})
 
@@ -521,10 +730,23 @@ func (w *destinationWorker) stop() {
 		<-w.doneCh
 		return
 	}
-	if w.sender != nil {
-		if closeErr := w.sender.Close(); closeErr != nil {
-			w.logger.Debug("close unstarted destination sender", zap.Error(closeErr))
+	w.closeSender()
+}
+
+func (w *destinationWorker) closeSender() {
+	if w.sender == nil {
+		return
+	}
+	if w.suppressOffline.Load() {
+		if mqttSender, ok := w.sender.(*MQTTSender); ok {
+			if closeErr := mqttSender.closeWithoutOffline(); closeErr != nil {
+				w.logger.Debug("close destination mqtt sender on reload", zap.Error(closeErr))
+			}
+			return
 		}
+	}
+	if closeErr := w.sender.Close(); closeErr != nil {
+		w.logger.Debug("close destination sender", zap.Error(closeErr))
 	}
 }
 
@@ -547,17 +769,27 @@ func (w *destinationWorker) getStatus() AlertDestinationStatus {
 	}
 }
 
-func computeFingerprint(dest *AlertDestination) string {
+func computeFingerprint(dest *AlertDestination, currentDeviceID string) string {
 	var clientID string
 	if dest.MQTTClientID != nil {
 		clientID = *dest.MQTTClientID
 	}
 
+	// Include device_id when MQTT heartbeat is active so editing host identity
+	// triggers a clean reconnect that refreshes the broker's LWT will payload.
+	var lwtIdentity string
+	if dest.ChannelType == ChannelTypeMQTT && dest.HeartbeatEnabled {
+		lwtIdentity = currentDeviceID
+	}
+
 	h := sha256.New()
 	for _, part := range []string{
 		dest.ChannelType,
+		strconv.FormatBool(dest.EventsEnabled),
+		strconv.FormatBool(dest.HeartbeatEnabled),
 		dest.ImageMode,
 		clientID,
+		lwtIdentity,
 		dest.ConfigJSON,
 		dest.FilterJSON,
 	} {

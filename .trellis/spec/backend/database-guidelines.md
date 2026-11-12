@@ -170,4 +170,6 @@ sqlDB.SetMaxIdleConns(1)
 6. **动态 Map 更新取舍**：
    - 强类型实体更新或单列更新优先使用 `gorm.G[Model](db).Where(...).Update(ctx, "col", val)` 或 `.Updates(ctx, model)`；
    - 对于包含 `gorm.Expr`（如自增/CASE WHEN 补丁）或带动态空值排除逻辑的复杂字典更新，保持 `tx.Model(&Model{}).Where(...).Updates(updates)`，确保 SQLite 表达式求值与字段选择语义清晰可控。
+7. **布尔列禁止标注 GORM `default:true` 标签**：
+   - SQLite 迁移使用 `INTEGER NOT NULL DEFAULT 1` 为存量行回填默认值时，GORM 模型对应的 `bool` 字段**不得**写 `gorm:"default:true"`（如 `AlertDestination.EventsEnabled`）；否则显式写入 `false`（Go 零值）时 GORM 会在 `INSERT` 列清单中省略该列，导致 SQLite 按 `DEFAULT 1` 静默写回 `true`。同理，结构体 `Updates` 更新布尔列时必须用 `Select(...)` 显式列出列名，避免 `false` 零值被跳过。
 

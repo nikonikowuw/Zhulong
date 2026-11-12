@@ -9,6 +9,7 @@ import (
 	"testing/fstest"
 
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/openapi"
 	"github.com/nikonikowuw/Zhulong/internal/person"
@@ -36,13 +37,30 @@ func TestOpenAPIAndTokenWiring(t *testing.T) {
 	personStore := person.NewStore(dbStore)
 	personSvc := person.NewService(personStore, tempDir, zap.NewNop(), person.Options{Extractor: dummyExtractor{}})
 
+	auditStore := audit.NewStore(dbStore)
+	auditSvc := audit.NewService(auditStore, zap.NewNop(), audit.DefaultConfig())
+	if err := auditSvc.Start(context.Background()); err != nil {
+		t.Fatalf("auditSvc.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if stopErr := auditSvc.Stop(context.Background()); stopErr != nil {
+			t.Errorf("auditSvc.Stop: %v", stopErr)
+		}
+	})
+
+	statusAdapter := &statusSnapshotAdapter{
+		publicBaseURL:         "http://10.0.0.50:8000",
+		allowSoftwareFallback: true,
+	}
+
 	limiter := openapi.NewUploadLimiter()
-	openAPIHandler := openapi.NewHandler(personSvc, limiter)
+	openAPIHandler := openapi.NewHandler(personSvc, limiter, openapi.WithStatusProvider(statusAdapter))
 	tokenHandler := apitoken.NewHandler(tokenSvc, zap.NewNop())
 
 	router := newRouter(RouterParams{
 		Logger:          zap.NewNop(),
 		Database:        dbStore,
+		AuditService:    auditSvc,
 		APITokenService: tokenSvc,
 		ProtectedRoutes: []RouteRegistrar{tokenHandler},
 		OpenAPIRoutes:   []RouteRegistrar{openAPIHandler},
@@ -88,5 +106,44 @@ func TestOpenAPIAndTokenWiring(t *testing.T) {
 	}
 	if p.Source != person.PersonSourceAPI || p.SourceName != tok.Name {
 		t.Errorf("unexpected source tracking: %s / %s", p.Source, p.SourceName)
+	}
+
+	// 5. GET /api/v1/openapi/status with valid token -> 200 OK & ZERO audit_logs rows for status polling!
+	for range 3 {
+		reqStatus := httptest.NewRequest(http.MethodGet, "/api/v1/openapi/status", nil)
+		reqStatus.Header.Set("Authorization", "Bearer "+rawToken)
+		wStatus := httptest.NewRecorder()
+		router.ServeHTTP(wStatus, reqStatus)
+		if wStatus.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on GET /openapi/status, got %d: %s", wStatus.Code, wStatus.Body.String())
+		}
+	}
+
+	// Stop and flush audit service queue before inspecting rows so async writes cannot hide!
+	if err := auditSvc.Stop(context.Background()); err != nil {
+		t.Fatalf("auditSvc.Stop: %v", err)
+	}
+	actions := []string{}
+	if err := dbStore.DB().Table("audit_logs").Pluck("action", &actions).Error; err != nil {
+		t.Fatalf("pluck audit_logs actions: %v", err)
+	}
+	// Step 1's unauthenticated call emits 1 api_token.auth_rejected; the 3 valid status polls emit 0!
+	if len(actions) != 1 || actions[0] != "api_token.auth_rejected" {
+		t.Fatalf("GET /openapi/status must never pollute audit_logs; got actions=%v", actions)
+	}
+
+	// 6. Revoked token calling GET /api/v1/openapi/status -> 401 + WWW-Authenticate: Bearer
+	if err := tokenSvc.RevokeToken(context.Background(), tok.ID); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+	reqRevoked := httptest.NewRequest(http.MethodGet, "/api/v1/openapi/status", nil)
+	reqRevoked.Header.Set("Authorization", "Bearer "+rawToken)
+	wRevoked := httptest.NewRecorder()
+	router.ServeHTTP(wRevoked, reqRevoked)
+	if wRevoked.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 after token revoke, got %d", wRevoked.Code)
+	}
+	if gotHdr := wRevoked.Header().Get("WWW-Authenticate"); gotHdr != "Bearer" {
+		t.Errorf("expected WWW-Authenticate: Bearer on revoked status call, got %q", gotHdr)
 	}
 }

@@ -274,3 +274,107 @@ func TestMQTTSenderRespectsContextCancel(t *testing.T) {
 		t.Fatalf("expected immediate return on canceled context, took %v", elapsed)
 	}
 }
+
+func TestMQTTSenderHeartbeatAndGracefulOffline(t *testing.T) {
+	brokerURL, cleanup := startInProcessBroker(t)
+	defer cleanup()
+
+	subOpts := mqtt.NewClientOptions().AddBroker(brokerURL).SetClientID("test-sub-hb")
+	subClient := mqtt.NewClient(subOpts)
+	if token := subClient.Connect(); token.Wait() && token.Error() != nil {
+		t.Fatalf("subscriber connect failed: %v", token.Error())
+	}
+	defer subClient.Disconnect(100)
+
+	msgCh := make(chan []byte, 4)
+	if tok := subClient.Subscribe("zhulong/status/box01", 1, func(_ mqtt.Client, msg mqtt.Message) {
+		cp := append([]byte(nil), msg.Payload()...)
+		msgCh <- cp
+	}); tok.Wait() && tok.Error() != nil {
+		t.Fatalf("subscribe failed: %v", tok.Error())
+	}
+
+	identity := &fakeIdentity{value: "box-01"}
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:                "mqtt_hb_01",
+		ImageMode:         ImageModeURL,
+		SkipImageURLCheck: true,
+		Broker:            brokerURL,
+		ClientID:          "zhulong-hb-01",
+		Topic:             "zhulong/events/box01",
+		HeartbeatEnabled:  true,
+		HeartbeatTopic:    "zhulong/status/box01",
+		LWTEnabled:        true,
+		QoS:               1,
+		Identity:          identity,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+
+	snap := HeartbeatSnapshot{
+		ReportedAt: time.Now().UTC(),
+		Status:     "ready",
+		Reasons:    []string{},
+	}
+	if err := sender.SendHeartbeat(context.Background(), snap, 3); err != nil {
+		t.Fatalf("SendHeartbeat failed: %v", err)
+	}
+
+	select {
+	case raw := <-msgCh:
+		var hb HeartbeatPayload
+		if err := json.Unmarshal(raw, &hb); err != nil {
+			t.Fatalf("unmarshal heartbeat: %v", err)
+		}
+		headerOK := hb.EventType == EventTypeHeartbeat && hb.Seq == 3 && hb.DeviceID == "box-01"
+		if !headerOK {
+			t.Fatalf("unexpected mqtt heartbeat: %+v", hb)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for mqtt heartbeat on heartbeat_topic")
+	}
+
+	// Verify hasStaleWillDeviceID detects live device_id change
+	if sender.hasStaleWillDeviceID() {
+		t.Fatal("expected hasStaleWillDeviceID=false before identity change")
+	}
+	identity.value = "box-01-renamed"
+	if !sender.hasStaleWillDeviceID() {
+		t.Fatal("expected hasStaleWillDeviceID=true after identity change")
+	}
+
+	// Clean Close() should publish graceful_shutdown offline notice before disconnecting
+	if err := sender.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	select {
+	case raw := <-msgCh:
+		var offline mqttOfflineGracefulPayload
+		if err := json.Unmarshal(raw, &offline); err != nil {
+			t.Fatalf("unmarshal graceful offline: %v", err)
+		}
+		if offline.EventType != EventTypeOffline || offline.Reason != OfflineReasonGracefulShutdown {
+			t.Fatalf("unexpected graceful offline payload: %+v", offline)
+		}
+		fieldsPopulated := offline.DeviceID == "box-01-renamed" && offline.ReportedAt != "" && offline.ID != ""
+		if !fieldsPopulated {
+			t.Fatalf("expected populated id/device_id/reported_at on graceful offline: %+v", offline)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for graceful offline MQTT message")
+	}
+}
+
+func TestMQTTSenderHeartbeatTopicWildcardRejected(t *testing.T) {
+	_, err := NewMQTTSender(MQTTSenderOptions{
+		Broker:           "tcp://127.0.0.1:1883",
+		Topic:            "zhulong/events",
+		HeartbeatEnabled: true,
+		HeartbeatTopic:   "zhulong/status/#",
+	})
+	if err != ErrMQTTWildcardTopic {
+		t.Fatalf("expected ErrMQTTWildcardTopic for heartbeat_topic, got %v", err)
+	}
+}

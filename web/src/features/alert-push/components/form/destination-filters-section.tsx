@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useWatch, type Control, type UseFormSetValue } from 'react-hook-form'
 import {
+  BellRing,
   Car,
   Check,
   ChevronDown,
@@ -20,13 +21,36 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import {
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import type { AlertDestinationFormValues } from '../../data/schema'
 import {
   useDestinationFilterOptions,
   type FilterOption,
 } from '../../hooks/use-destination-filter-options'
+import type { ImageMode } from '../../types'
+
+const IMAGE_MODE_DESC_KEYS: Record<string, string> = {
+  url: 'imageModes.urlDesc',
+  multipart: 'imageModes.multipartDesc',
+  base64: 'imageModes.base64Desc',
+}
 
 interface DestinationFiltersSectionProps {
   control: Control<AlertDestinationFormValues>
@@ -71,6 +95,16 @@ export function DestinationFiltersSection({
 
   const { algorithms: availableAlgorithms, cameras: availableCameras } =
     useDestinationFilterOptions()
+
+  const eventsEnabled = useWatch({
+    control,
+    name: 'eventsEnabled',
+  })
+
+  const channelType = useWatch({
+    control,
+    name: 'channelType',
+  })
 
   const selectedEventTypes =
     useWatch({
@@ -149,161 +183,280 @@ export function DestinationFiltersSection({
   }, [availableCameras, camSearch])
 
   return (
-    <Collapsible
-      open={filtersOpen}
-      onOpenChange={setFiltersOpen}
-      className='space-y-3.5 rounded-xl border border-border/80 bg-card/60 p-4 shadow-2xs transition-colors'
-    >
-      <div className='flex items-center justify-between'>
-        <div className='flex items-center gap-2 text-xs font-semibold text-foreground'>
-          <Filter className='size-3.5 text-primary' />
-          <span>{t('advanced.filtersTitle')}</span>
-          <FiltersSummaryBadge control={control} />
-        </div>
+    <div className='space-y-3.5 rounded-xl border border-border/80 bg-card/60 p-4 shadow-2xs transition-colors'>
+      {/* 能力头：感知事件推送开关 */}
+      <FormField
+        control={control}
+        name='eventsEnabled'
+        render={({ field }) => (
+          <FormItem className='space-y-1.5'>
+            <div className='flex items-start justify-between gap-3'>
+              <div className='flex items-start gap-2.5'>
+                <div className='mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background text-primary shadow-2xs'>
+                  <BellRing className='size-3.5' />
+                </div>
+                <div className='space-y-0.5'>
+                  <FormLabel className='cursor-pointer text-xs font-semibold text-foreground'>
+                    {t('capabilities.eventsTitle')}
+                  </FormLabel>
+                  <FormDescription className='text-[11px] leading-relaxed text-muted-foreground'>
+                    {t('capabilities.eventsDesc')}
+                  </FormDescription>
+                </div>
+              </div>
+              <FormControl>
+                <Switch
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                  aria-label={t('capabilities.eventsTitle')}
+                />
+              </FormControl>
+            </div>
+            <FormMessage className='text-xs' />
+          </FormItem>
+        )}
+      />
 
-        <CollapsibleTrigger asChild>
-          <Button
-            type='button'
-            variant='ghost'
-            size='sm'
-            className='h-7 w-7 p-0'
-          >
-            <ChevronDown
-              className={`size-4 transition-transform duration-200 ${
-                filtersOpen ? 'rotate-180' : ''
-              }`}
-            />
-            <span className='sr-only'>Toggle Filters</span>
-          </Button>
-        </CollapsibleTrigger>
-      </div>
+      {eventsEnabled ? (
+        <div className='space-y-3.5 border-t border-border/50 pt-3.5'>
+          {/* 图片交付模式 */}
+          <FormField
+            control={control}
+            name='imageMode'
+            render={({ field }) => {
+              const currentMode =
+                field.value || (channelType === 'mqtt' ? 'base64' : 'multipart')
+              const descKey = currentMode
+                ? IMAGE_MODE_DESC_KEYS[currentMode]
+                : undefined
 
-      <CollapsibleContent className='space-y-4 pt-1'>
-        {/* 1. 事件类型订阅 */}
-        <div className='space-y-2.5 rounded-lg border border-border/60 bg-background/60 p-3.5'>
-          <div className='flex items-center justify-between border-b border-border/40 pb-2'>
-            <Label className='text-xs font-semibold text-foreground'>
-              {t('sections.filterEventTypes')}
-            </Label>
-            <span className='text-[11px] text-muted-foreground'>
-              {selectedEventTypes.length === 0
-                ? t('eventTypes.all')
-                : t('filters.selectedCount', {
-                    count: selectedEventTypes.length,
-                  })}
-            </span>
-          </div>
-
-          <div className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
-            {[
-              {
-                type: 'alarm',
-                icon: ShieldAlert,
-                label: t('eventTypes.alarm'),
-                desc: t('eventTypes.alarmDesc'),
-              },
-              {
-                type: 'face_recognition',
-                icon: UserCheck,
-                label: t('eventTypes.face_recognition'),
-                desc: t('eventTypes.face_recognitionDesc'),
-              },
-              {
-                type: 'plate_recognition',
-                icon: Car,
-                label: t('eventTypes.plate_recognition'),
-                desc: t('eventTypes.plate_recognitionDesc'),
-              },
-            ].map(({ type, icon: Icon, label, desc }) => {
-              const selected = selectedEventTypes.includes(type)
               return (
-                <button
-                  key={type}
-                  type='button'
-                  onClick={() => toggleEventType(type)}
-                  className={cn(
-                    'flex flex-col justify-between rounded-lg border p-2.5 text-start shadow-2xs transition-all',
-                    selected
-                      ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
-                      : 'border-border/70 bg-background hover:border-border hover:bg-muted/30'
-                  )}
-                >
-                  <div className='flex items-center justify-between'>
-                    <div
-                      className={cn(
-                        'flex size-6 items-center justify-center rounded-md border text-xs',
-                        selected
-                          ? 'border-primary/40 bg-primary/10 text-primary'
-                          : 'border-border/60 bg-muted/40 text-muted-foreground'
-                      )}
+                <FormItem className='space-y-1.5 rounded-lg border border-border/60 bg-muted/20 p-3'>
+                  <FormLabel className='text-xs font-medium text-foreground'>
+                    {t('fields.imageMode')}
+                  </FormLabel>
+
+                  <FormControl>
+                    <Select
+                      value={currentMode}
+                      onValueChange={(val) => field.onChange(val as ImageMode)}
                     >
-                      <Icon className='size-3' />
-                    </div>
-                    {selected ? (
-                      <div className='flex size-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground'>
-                        <Check className='size-2.5 stroke-[3]' />
-                      </div>
-                    ) : (
-                      <div className='size-3.5 rounded-full border border-muted-foreground/30' />
-                    )}
-                  </div>
-                  <div className='mt-2 space-y-0.5'>
-                    <span className='text-xs font-semibold text-foreground'>
-                      {label}
-                    </span>
-                    <p className='line-clamp-2 text-[10px] leading-relaxed text-muted-foreground'>
-                      {desc}
-                    </p>
-                  </div>
-                </button>
+                      <SelectTrigger className='h-8 w-full bg-background text-xs font-medium'>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='url'>
+                          <div className='flex flex-col py-0.5 text-start'>
+                            <span className='text-xs font-medium text-foreground'>
+                              {t('imageModes.url')}
+                            </span>
+                            <span className='text-[11px] text-muted-foreground'>
+                              {t('imageModes.urlDesc')}
+                            </span>
+                          </div>
+                        </SelectItem>
+                        {channelType === 'webhook' ? (
+                          <SelectItem value='multipart'>
+                            <div className='flex flex-col py-0.5 text-start'>
+                              <span className='text-xs font-medium text-foreground'>
+                                {t('imageModes.multipart')}
+                              </span>
+                              <span className='text-[11px] text-muted-foreground'>
+                                {t('imageModes.multipartDesc')}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ) : null}
+                        {channelType === 'mqtt' ? (
+                          <SelectItem value='base64'>
+                            <div className='flex flex-col py-0.5 text-start'>
+                              <span className='text-xs font-medium text-foreground'>
+                                {t('imageModes.base64')}
+                              </span>
+                              <span className='text-[11px] text-muted-foreground'>
+                                {t('imageModes.base64Desc')}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ) : null}
+                      </SelectContent>
+                    </Select>
+                  </FormControl>
+
+                  {descKey ? (
+                    <FormDescription className='text-[11px] leading-relaxed text-muted-foreground'>
+                      {t(descKey)}
+                    </FormDescription>
+                  ) : null}
+                  <FormMessage className='text-xs' />
+                </FormItem>
               )
-            })}
-          </div>
+            }}
+          />
+
+          {/* 可折叠的事件与通道过滤 */}
+          <Collapsible
+            open={filtersOpen}
+            onOpenChange={setFiltersOpen}
+            className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3 transition-colors'
+          >
+            <div className='flex items-center justify-between'>
+              <div className='flex items-center gap-2 text-xs font-semibold text-foreground'>
+                <Filter className='size-3.5 text-primary' />
+                <span>{t('advanced.filtersTitle')}</span>
+                <FiltersSummaryBadge control={control} />
+              </div>
+
+              <CollapsibleTrigger asChild>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  className='h-7 w-7 p-0'
+                >
+                  <ChevronDown
+                    className={`size-4 transition-transform duration-200 ${
+                      filtersOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                  <span className='sr-only'>Toggle Filters</span>
+                </Button>
+              </CollapsibleTrigger>
+            </div>
+
+            <CollapsibleContent className='space-y-4 pt-1'>
+              {/* 1. 事件类型订阅 */}
+              <div className='space-y-2.5 rounded-lg border border-border/60 bg-background/60 p-3.5'>
+                <div className='flex items-center justify-between border-b border-border/40 pb-2'>
+                  <Label className='text-xs font-semibold text-foreground'>
+                    {t('sections.filterEventTypes')}
+                  </Label>
+                  <span className='text-[11px] text-muted-foreground'>
+                    {selectedEventTypes.length === 0
+                      ? t('eventTypes.all')
+                      : t('filters.selectedCount', {
+                          count: selectedEventTypes.length,
+                        })}
+                  </span>
+                </div>
+
+                <div className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
+                  {[
+                    {
+                      type: 'alarm',
+                      icon: ShieldAlert,
+                      label: t('eventTypes.alarm'),
+                      desc: t('eventTypes.alarmDesc'),
+                    },
+                    {
+                      type: 'face_recognition',
+                      icon: UserCheck,
+                      label: t('eventTypes.face_recognition'),
+                      desc: t('eventTypes.face_recognitionDesc'),
+                    },
+                    {
+                      type: 'plate_recognition',
+                      icon: Car,
+                      label: t('eventTypes.plate_recognition'),
+                      desc: t('eventTypes.plate_recognitionDesc'),
+                    },
+                  ].map(({ type, icon: Icon, label, desc }) => {
+                    const selected = selectedEventTypes.includes(type)
+                    return (
+                      <button
+                        key={type}
+                        type='button'
+                        onClick={() => toggleEventType(type)}
+                        className={cn(
+                          'flex flex-col justify-between rounded-lg border p-2.5 text-start shadow-2xs transition-all',
+                          selected
+                            ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                            : 'border-border/70 bg-background hover:border-border hover:bg-muted/30'
+                        )}
+                      >
+                        <div className='flex items-center justify-between'>
+                          <div
+                            className={cn(
+                              'flex size-6 items-center justify-center rounded-md border text-xs',
+                              selected
+                                ? 'border-primary/40 bg-primary/10 text-primary'
+                                : 'border-border/60 bg-muted/40 text-muted-foreground'
+                            )}
+                          >
+                            <Icon className='size-3' />
+                          </div>
+                          {selected ? (
+                            <div className='flex size-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground'>
+                              <Check className='size-2.5 stroke-[3]' />
+                            </div>
+                          ) : (
+                            <div className='size-3.5 rounded-full border border-muted-foreground/30' />
+                          )}
+                        </div>
+                        <div className='mt-2 space-y-0.5'>
+                          <span className='text-xs font-semibold text-foreground'>
+                            {label}
+                          </span>
+                          <p className='line-clamp-2 text-[10px] leading-relaxed text-muted-foreground'>
+                            {desc}
+                          </p>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* 2. 算法过滤 */}
+              <FilterOptionsSelector
+                icon={Layers}
+                title={t('sections.filterAlgos')}
+                options={availableAlgorithms}
+                filteredOptions={filteredAlgos}
+                selectedIds={selectedAlgoIds}
+                searchValue={algoSearch}
+                onSearchChange={setAlgoSearch}
+                onToggle={toggleAlgoSelection}
+                onSelectAll={handleSelectAllAlgos}
+                onClearAll={handleClearAllAlgos}
+                searchPlaceholder={t('filters.searchAlgoPlaceholder')}
+                emptyText={t('filters.noAlgos')}
+                notFoundText={t('filters.noAlgosFound')}
+                allActiveText={t('filters.allAlgosActive')}
+                selectedCountText={(count) =>
+                  t('filters.selectedCount', { count })
+                }
+                selectAllText={t('filters.selectAll')}
+                clearAllText={t('filters.clearAll')}
+              />
+
+              {/* 3. 摄像机过滤 */}
+              <FilterOptionsSelector
+                icon={Globe}
+                title={t('sections.filterCameras')}
+                options={availableCameras}
+                filteredOptions={filteredCams}
+                selectedIds={selectedCamIds}
+                searchValue={camSearch}
+                onSearchChange={setCamSearch}
+                onToggle={toggleCamSelection}
+                onSelectAll={handleSelectAllCams}
+                onClearAll={handleClearAllCams}
+                searchPlaceholder={t('filters.searchCameraPlaceholder')}
+                emptyText={t('filters.noCameras')}
+                notFoundText={t('filters.noCamerasFound')}
+                allActiveText={t('filters.allCamerasActive')}
+                selectedCountText={(count) =>
+                  t('filters.selectedCount', { count })
+                }
+                selectAllText={t('filters.selectAll')}
+                clearAllText={t('filters.clearAll')}
+              />
+            </CollapsibleContent>
+          </Collapsible>
         </div>
-
-        {/* 2. 算法过滤 */}
-        <FilterOptionsSelector
-          icon={Layers}
-          title={t('sections.filterAlgos')}
-          options={availableAlgorithms}
-          filteredOptions={filteredAlgos}
-          selectedIds={selectedAlgoIds}
-          searchValue={algoSearch}
-          onSearchChange={setAlgoSearch}
-          onToggle={toggleAlgoSelection}
-          onSelectAll={handleSelectAllAlgos}
-          onClearAll={handleClearAllAlgos}
-          searchPlaceholder={t('filters.searchAlgoPlaceholder')}
-          emptyText={t('filters.noAlgos')}
-          notFoundText={t('filters.noAlgosFound')}
-          allActiveText={t('filters.allAlgosActive')}
-          selectedCountText={(count) => t('filters.selectedCount', { count })}
-          selectAllText={t('filters.selectAll')}
-          clearAllText={t('filters.clearAll')}
-        />
-
-        {/* 3. 摄像机过滤 */}
-        <FilterOptionsSelector
-          icon={Globe}
-          title={t('sections.filterCameras')}
-          options={availableCameras}
-          filteredOptions={filteredCams}
-          selectedIds={selectedCamIds}
-          searchValue={camSearch}
-          onSearchChange={setCamSearch}
-          onToggle={toggleCamSelection}
-          onSelectAll={handleSelectAllCams}
-          onClearAll={handleClearAllCams}
-          searchPlaceholder={t('filters.searchCameraPlaceholder')}
-          emptyText={t('filters.noCameras')}
-          notFoundText={t('filters.noCamerasFound')}
-          allActiveText={t('filters.allCamerasActive')}
-          selectedCountText={(count) => t('filters.selectedCount', { count })}
-          selectAllText={t('filters.selectAll')}
-          clearAllText={t('filters.clearAll')}
-        />
-      </CollapsibleContent>
-    </Collapsible>
+      ) : null}
+    </div>
   )
 }
 

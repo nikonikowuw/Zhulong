@@ -1,9 +1,11 @@
 import React from 'react'
 import {
   AlertTriangle,
+  BellRing,
   CheckCircle2,
   Clock,
   Globe,
+  HeartPulse,
   Layers,
   MoreHorizontal,
   Pencil,
@@ -89,7 +91,10 @@ export function DestinationStatusBadge({
           <TooltipTrigger asChild>
             <Badge variant='destructive' className='cursor-help gap-1'>
               <AlertTriangle className='size-3' />
-              {t('states.degraded')} ({status.consecutiveFailures})
+              {t('states.degraded')}
+              {status.consecutiveFailures > 0
+                ? ` (${status.consecutiveFailures})`
+                : ''}
             </Badge>
           </TooltipTrigger>
           <TooltipContent>
@@ -144,29 +149,50 @@ export const AlertDestinationTableRow = React.memo(
     onTest,
   }: DestinationTableRowProps) {
     const { t } = useTranslation('alertPush')
+    const hbInterval = dest.config.heartbeatIntervalSeconds ?? 60
 
     return (
       <TableRow>
         <TableCell className='font-medium'>
-          <div className='flex flex-col gap-1'>
-            <div className='flex items-center gap-1.5'>
+          <div className='flex flex-col gap-1.5'>
+            <div className='flex flex-wrap items-center gap-1.5'>
               <span>{dest.name}</span>
-              {dest.filter?.eventTypes && dest.filter.eventTypes.length > 0 ? (
-                <div className='flex flex-wrap gap-1'>
-                  {dest.filter.eventTypes.map((et) => (
-                    <span
-                      key={et}
-                      className='rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground'
-                    >
-                      {t(`eventTypes.${et}`)}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <span className='rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground'>
-                  {t('eventTypes.all')}
-                </span>
-              )}
+              {dest.eventsEnabled ? (
+                <Badge
+                  variant='outline'
+                  className='h-5 gap-1 px-1.5 text-[10px] font-normal'
+                >
+                  <BellRing className='size-2.5 text-primary' />
+                  {t('capabilities.eventsBadge')}
+                </Badge>
+              ) : null}
+              {dest.heartbeatEnabled ? (
+                <Badge
+                  variant='outline'
+                  className='h-5 gap-1 px-1.5 text-[10px] font-normal'
+                >
+                  <HeartPulse className='size-2.5 text-emerald-500' />
+                  {t('capabilities.heartbeatBadge', { interval: hbInterval })}
+                </Badge>
+              ) : null}
+              {dest.eventsEnabled ? (
+                dest.filter?.eventTypes && dest.filter.eventTypes.length > 0 ? (
+                  <div className='flex flex-wrap gap-1'>
+                    {dest.filter.eventTypes.map((et) => (
+                      <span
+                        key={et}
+                        className='rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground'
+                      >
+                        {t(`eventTypes.${et}`)}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className='rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground'>
+                    {t('eventTypes.all')}
+                  </span>
+                )
+              ) : null}
             </div>
             <span className='max-w-[240px] truncate font-mono text-xs text-muted-foreground'>
               {dest.channelType === 'webhook'
@@ -188,7 +214,11 @@ export const AlertDestinationTableRow = React.memo(
         </TableCell>
 
         <TableCell>
-          <DestinationImageModeBadge mode={dest.imageMode} />
+          {dest.eventsEnabled ? (
+            <DestinationImageModeBadge mode={dest.imageMode} />
+          ) : (
+            <span className='text-xs text-muted-foreground'>—</span>
+          )}
         </TableCell>
 
         <TableCell>
@@ -203,12 +233,16 @@ export const AlertDestinationTableRow = React.memo(
         </TableCell>
 
         <TableCell>
-          <div className='flex items-center gap-1 text-xs text-muted-foreground'>
-            <Layers className='size-3.5' />
-            <span>
-              {dest.status.queueLength} / {dest.status.queueCapacity}
-            </span>
-          </div>
+          {dest.eventsEnabled ? (
+            <div className='flex items-center gap-1 text-xs text-muted-foreground'>
+              <Layers className='size-3.5' />
+              <span>
+                {dest.status.queueLength} / {dest.status.queueCapacity}
+              </span>
+            </div>
+          ) : (
+            <span className='text-xs text-muted-foreground'>—</span>
+          )}
         </TableCell>
 
         <TableCell>

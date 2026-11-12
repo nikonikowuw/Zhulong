@@ -1,6 +1,6 @@
 {
   "title": "告警多渠道推送",
-  "description": "配置感知事件分發通道（Webhook 與 MQTT）：支援行為告警、人臉辨識、車輛車牌辨識三類事件，依事件類型/演算法/攝影機過濾、圖片附帶及連通性探測。推送載荷統一攜帶裝置標識 device_id。",
+  "description": "配置感知事件分發與裝置存活上報通道（Webhook 與 MQTT）：支援同一目標獨立開關感知事件推送與週期存活摘要上報，共享連線與鑑權憑證，推送載荷統一攜帶裝置標識 device_id。",
   "create": "新增推送目標",
   "edit": "編輯推送目標",
   "delete": "刪除目標",
@@ -10,22 +10,30 @@
   "testFailed": "探測失敗: {{reason}}",
   "refresh": "重新整理",
   "empty": "尚未設定告警推送目標",
-  "emptyHint": "點擊上方“新增推送目標”按鈕新增 Webhook 或 MQTT 推送通道。",
+  "emptyHint": "點擊上方“新增推送目標”按鈕新增 Webhook 或 MQTT 推送與存活上報通道。",
   "maxLimitReached": "推送目標數量已達上限 (32/32)",
   "limitUsage": "已配置 {{count}}/{{max}} 個推送目標",
   "deleteConfirmTitle": "確認刪除推送目標？",
-  "deleteConfirmDesc": "刪除後系統將停止向該目標分發告警事件，此操作不可撤銷。",
+  "deleteConfirmDesc": "刪除後系統將停止向該目標分發告警事件與存活上報，此操作不可撤銷。",
   "dialog": {
     "createTitle": "新增推送目標",
-    "createDesc": "配置告警感知事件分發通道，支援 HTTP Webhook 與 MQTT 訊息匯流排。",
+    "createDesc": "配置北向連線憑證，並依需求開啟感知事件推送與裝置存活上報。",
     "editTitle": "編輯推送目標",
-    "editDesc": "修改推送目標傳輸配置、鑑權憑證與事件過濾規則。",
+    "editDesc": "修改推送目標連線憑證、事件過濾規則與裝置存活上報策略。",
     "channelLockedNotice": "傳輸協定類型建立後固定，如需切換請新建推送目標。",
-    "testTooltip": "即時向目標端點發送連通性測試封包，檢驗網路連通性與鑑權憑證。"
+    "testTooltip": "即時向目標端點發送探測封包（僅開啟存活上報時發送真實存活快照），檢驗網路連通性與鑑權憑證。"
+  },
+  "capabilities": {
+    "eventsTitle": "感知事件推送",
+    "eventsDesc": "即時分發行為告警、人臉辨識與車牌辨識事件及抓拍畫面",
+    "heartbeatTitle": "裝置存活上報",
+    "heartbeatDesc": "週期推送裝置在線狀態、CPU/NPU/溫區水位、儲存與通道負載摘要",
+    "eventsBadge": "事件推送",
+    "heartbeatBadge": "存活上報 · {{interval}}s"
   },
   "sections": {
     "channelSelect": "協定類型",
-    "channelSelectDesc": "選擇告警事件分發的協定規範",
+    "channelSelectDesc": "選擇北向資料分發的協定規範",
     "imageDelivery": "圖片附帶模式",
     "imageDeliveryDesc": "控制告警截圖標註畫面的交付格式",
     "webhookEndpoint": "Webhook 端點與鑑權憑證",
@@ -45,11 +53,11 @@
     "filtersAllSummary": "預設全量推送（全部事件 · 全部演算法 · 全部攝影機）",
     "filtersCustomSummary": "已配置自訂過濾規則",
     "webhookSummary": "逾時 {{timeout}} 秒 · {{count}} 個自訂標頭",
-    "mqttSummary": "QoS {{qos}} · 心跳 {{keepAlive}} 秒 · {{clientId}}"
+    "mqttSummary": "QoS {{qos}} · 保活 {{keepAlive}} 秒 · {{clientId}}"
   },
   "fields": {
     "name": "通道名稱",
-    "namePlaceholder": "例如：SOC Webhook 回調、生產線警報中心",
+    "namePlaceholder": "例如：SOC Webhook 回調、園區綜合安防平台",
     "channelType": "協定類型",
     "imageMode": "圖片附帶模式",
     "enabled": "啟用狀態",
@@ -59,6 +67,17 @@
     "actions": "操作",
     "webhookUrl": "Webhook URL",
     "webhookUrlPlaceholder": "https://api.example.com/alerts/webhook",
+    "heartbeatInterval": "上報間隔",
+    "heartbeatIntervalUnit": "秒",
+    "heartbeatIntervalHint": "支援 15–3600 秒（預設 60 秒），附帶微幅隨機抖動防止多台裝置齊射",
+    "heartbeatUrl": "獨立存活接收 URL（選填）",
+    "heartbeatUrlPlaceholder": "留空預設複用上方 Webhook URL，如 https://api.example.com/devices/heartbeat",
+    "heartbeatUrlHint": "當配置了鑑權憑證或自訂標頭時，獨立存活 URL 必須與主 Webhook URL 同源（協定、網域與連接埠一致）",
+    "heartbeatTopic": "獨立狀態 Topic（選填）",
+    "heartbeatTopicPlaceholder": "留空預設複用上方發布 Topic，如 zhulong/status/box01",
+    "heartbeatTopicHint": "用於發布週期存活摘要與離線通知，禁止包含萬用字元（+ 或 #）",
+    "lwtEnabled": "斷線遺囑通知 (MQTT LWT)",
+    "lwtEnabledDesc": "開啟後在 Broker 預埋離線遺囑（斷電/斷網自動發布 connection_lost，正常停機主動發布 graceful_shutdown）",
     "authType": "鑑權方式",
     "bearerToken": "Bearer Token",
     "bearerTokenPlaceholder": "輸入授權 Token",
@@ -88,12 +107,12 @@
     "mqttTopicPlaceholder": "zhulong/alarms",
     "mqttTopicHint": "發布目標 Topic，禁止使用萬用字元（+ 或 #）",
     "mqttQoS": "QoS 品質等級",
-    "mqttKeepAlive": "心跳週期",
+    "mqttKeepAlive": "MQTT 保活間隔",
     "mqttKeepAliveUnit": "秒",
     "tlsSkipVerify": "略過 TLS 憑證校驗",
     "tlsSkipVerifyDesc": "啟用後將略過對 Broker 的 TLS 憑證簽名校驗證明，僅建議在測試環境使用",
     "filterEvents": "事件類型訂閱 (留空為全部)",
-    "filterAlgorithms": "演算法過濾 (留空为全部)",
+    "filterAlgorithms": "演算法過濾 (留空為全部)",
     "filterCameras": "攝影機過濾 (留空為全部)",
     "secretRetained": "憑證已儲存，留空表示維持不變"
   },
@@ -141,6 +160,9 @@
   "validation": {
     "nameRequired": "請輸入通道名稱",
     "nameMax": "通道名稱不能超過 64 個字元",
+    "capabilityRequired": "請至少開啟「感知事件推送」或「裝置存活上報」中的一項能力",
+    "heartbeatIntervalRange": "上報間隔必須在 15 到 3600 秒之間",
+    "heartbeatCrossOrigin": "配置了鑑權憑證或自訂標頭時，獨立存活 URL 必須與主 Webhook URL 同源（協定、網域與連接埠一致）",
     "urlRequired": "請輸入 Webhook URL",
     "urlInvalid": "URL 必須以 http:// 或 https:// 開頭且不能包含帳號憑證",
     "tokenRequired": "Bearer Token 不能為空",
@@ -169,13 +191,18 @@
   "failureReasons": {
     "timeout": "網路請求逾時",
     "refused": "連線被拒絕",
+    "connection_refused": "連線被拒絕",
     "tls": "TLS 握手失敗",
     "auth": "鑑權失敗 (401/403)",
     "dns": "DNS 解析失敗",
     "not_found": "目標端點不存在 (404)",
     "http_error": "目標服務回傳 HTTP 錯誤",
+    "http_status": "目標服務回傳非 2xx 狀態碼",
     "mqtt_connect": "MQTT 握手失敗",
+    "not_connected": "MQTT 未連線",
+    "publish_failed": "MQTT 發布失敗",
     "config_invalid": "目標設定無效",
-    "unsupported_channel": "不支援的協定"
+    "unsupported_channel": "不支援的協定",
+    "unknown": "未知傳輸異常"
   }
 }

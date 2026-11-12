@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import {
   FormControl,
-  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -13,21 +12,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import type { AlertDestinationFormValues } from '../../data/schema'
-import type { ChannelType, ImageMode } from '../../types'
-
-const IMAGE_MODE_DESC_KEYS: Record<string, string> = {
-  url: 'imageModes.urlDesc',
-  multipart: 'imageModes.multipartDesc',
-  base64: 'imageModes.base64Desc',
-}
+import type { ChannelType } from '../../types'
 
 interface ChannelTypeCardsProps {
   control: Control<AlertDestinationFormValues>
@@ -174,81 +160,6 @@ export function ChannelTypeCards({
           </Label>
         </RadioGroup>
       </div>
-
-      {/* 图片交付模式 */}
-      <FormField
-        control={control}
-        name='imageMode'
-        render={({ field }) => {
-          const currentMode =
-            field.value || (channelType === 'mqtt' ? 'base64' : 'multipart')
-          const descKey = currentMode
-            ? IMAGE_MODE_DESC_KEYS[currentMode]
-            : undefined
-
-          return (
-            <FormItem className='space-y-1.5 rounded-lg border border-border/60 bg-muted/20 p-3'>
-              <FormLabel className='text-xs font-medium text-foreground'>
-                {t('fields.imageMode')}
-              </FormLabel>
-
-              <FormControl>
-                <Select
-                  value={currentMode}
-                  onValueChange={(val) => field.onChange(val as ImageMode)}
-                >
-                  <SelectTrigger className='h-8 w-full bg-background text-xs font-medium'>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='url'>
-                      <div className='flex flex-col py-0.5 text-start'>
-                        <span className='text-xs font-medium text-foreground'>
-                          {t('imageModes.url')}
-                        </span>
-                        <span className='text-[11px] text-muted-foreground'>
-                          {t('imageModes.urlDesc')}
-                        </span>
-                      </div>
-                    </SelectItem>
-                    {channelType === 'webhook' ? (
-                      <SelectItem value='multipart'>
-                        <div className='flex flex-col py-0.5 text-start'>
-                          <span className='text-xs font-medium text-foreground'>
-                            {t('imageModes.multipart')}
-                          </span>
-                          <span className='text-[11px] text-muted-foreground'>
-                            {t('imageModes.multipartDesc')}
-                          </span>
-                        </div>
-                      </SelectItem>
-                    ) : null}
-                    {channelType === 'mqtt' ? (
-                      <SelectItem value='base64'>
-                        <div className='flex flex-col py-0.5 text-start'>
-                          <span className='text-xs font-medium text-foreground'>
-                            {t('imageModes.base64')}
-                          </span>
-                          <span className='text-[11px] text-muted-foreground'>
-                            {t('imageModes.base64Desc')}
-                          </span>
-                        </div>
-                      </SelectItem>
-                    ) : null}
-                  </SelectContent>
-                </Select>
-              </FormControl>
-
-              {descKey ? (
-                <FormDescription className='text-[11px] leading-relaxed text-muted-foreground'>
-                  {t(descKey)}
-                </FormDescription>
-              ) : null}
-              <FormMessage className='text-xs' />
-            </FormItem>
-          )
-        }}
-      />
     </div>
   )
 }

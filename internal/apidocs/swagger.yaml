@@ -127,8 +127,16 @@ definitions:
         type: string
       clientId:
         type: string
+      heartbeatIntervalSeconds:
+        type: integer
+      heartbeatTopic:
+        type: string
+      heartbeatUrl:
+        type: string
       keepAliveSeconds:
         type: integer
+      lwtEnabled:
+        type: boolean
       qos:
         type: integer
       timeoutSeconds:
@@ -172,12 +180,16 @@ definitions:
         $ref: '#/definitions/alertpush.AlertDestinationConfigInfo'
       enabled:
         type: boolean
+      eventsEnabled:
+        type: boolean
       filter:
         $ref: '#/definitions/alertpush.AlertDestinationFilterInfo'
       headerNames:
         items:
           type: string
         type: array
+      heartbeatEnabled:
+        type: boolean
       id:
         type: string
       imageMode:
@@ -221,8 +233,12 @@ definitions:
         type: string
       config:
         $ref: '#/definitions/alertpush.AlertDestinationConfigInfo'
+      eventsEnabled:
+        type: boolean
       filter:
         $ref: '#/definitions/alertpush.AlertDestinationFilterInfo'
+      heartbeatEnabled:
+        type: boolean
       imageMode:
         type: string
       name:
@@ -232,7 +248,6 @@ definitions:
     required:
     - channelType
     - config
-    - imageMode
     - name
     type: object
   alertpush.TestAlertDestinationRequest:
@@ -241,6 +256,10 @@ definitions:
         type: string
       config:
         $ref: '#/definitions/alertpush.AlertDestinationConfigInfo'
+      eventsEnabled:
+        type: boolean
+      heartbeatEnabled:
+        type: boolean
       id:
         type: string
       imageMode:
@@ -261,8 +280,12 @@ definitions:
     properties:
       config:
         $ref: '#/definitions/alertpush.AlertDestinationConfigInfo'
+      eventsEnabled:
+        type: boolean
       filter:
         $ref: '#/definitions/alertpush.AlertDestinationFilterInfo'
+      heartbeatEnabled:
+        type: boolean
       imageMode:
         type: string
       name:
@@ -1458,6 +1481,105 @@ definitions:
     properties:
       deleted:
         type: boolean
+    type: object
+  openapi.DeviceCamerasSummaryInfo:
+    properties:
+      degraded:
+        type: integer
+      enabled:
+        type: integer
+      offline:
+        type: integer
+      online:
+        type: integer
+    type: object
+  openapi.DeviceDecodeSummaryInfo:
+    properties:
+      activeSessions:
+        type: integer
+      backend:
+        type: string
+      hardwareAvailable:
+        type: boolean
+      maxSessions:
+        type: integer
+    type: object
+  openapi.DeviceHostInfo:
+    properties:
+      arch:
+        type: string
+      publicBaseUrl:
+        type: string
+      uptimeSeconds:
+        type: integer
+    type: object
+  openapi.DeviceResourcesInfo:
+    properties:
+      cpuUsagePercent:
+        type: number
+      maxTemperatureC:
+        type: number
+      memoryUsedPercent:
+        type: number
+      npuLoadPercent:
+        type: number
+      npuSupported:
+        type: boolean
+    type: object
+  openapi.DeviceRunnersSummaryInfo:
+    properties:
+      active:
+        type: integer
+      failed:
+        type: integer
+    type: object
+  openapi.DeviceStatusResponse:
+    properties:
+      deviceId:
+        type: string
+      host:
+        $ref: '#/definitions/openapi.DeviceHostInfo'
+      reasons:
+        items:
+          type: string
+        type: array
+      reportedAt:
+        type: string
+      resources:
+        $ref: '#/definitions/openapi.DeviceResourcesInfo'
+      status:
+        type: string
+      storage:
+        $ref: '#/definitions/openapi.DeviceStorageInfo'
+      workload:
+        $ref: '#/definitions/openapi.DeviceWorkloadInfo'
+    type: object
+  openapi.DeviceStorageInfo:
+    properties:
+      freeMb:
+        type: integer
+      status:
+        type: string
+      usedPercent:
+        type: integer
+      writable:
+        type: boolean
+    type: object
+  openapi.DeviceTasksSummaryInfo:
+    properties:
+      enabled:
+        type: integer
+    type: object
+  openapi.DeviceWorkloadInfo:
+    properties:
+      cameras:
+        $ref: '#/definitions/openapi.DeviceCamerasSummaryInfo'
+      decode:
+        $ref: '#/definitions/openapi.DeviceDecodeSummaryInfo'
+      runners:
+        $ref: '#/definitions/openapi.DeviceRunnersSummaryInfo'
+      tasks:
+        $ref: '#/definitions/openapi.DeviceTasksSummaryInfo'
     type: object
   openapi.FaceClearResponse:
     properties:
@@ -4533,6 +4655,36 @@ paths:
       security:
       - BearerAuth: []
       summary: Set primary face
+      tags:
+      - OpenAPI
+  /openapi/status:
+    get:
+      description: |-
+        Returns a sanitized point-in-time liveness, resource, storage, and workload snapshot for this host.
+        Degraded subsystems still return HTTP 200 with status="degraded" and machine-readable reasons.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/openapi.DeviceStatusResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      security:
+      - BearerAuth: []
+      summary: Get device health and workload status
       tags:
       - OpenAPI
   /persons:

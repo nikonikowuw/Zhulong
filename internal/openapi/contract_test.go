@@ -117,6 +117,7 @@ func TestContract_DocumentedRoutesAreServed(t *testing.T) {
 	mounted := openAPIRoutes(t, env)
 
 	documented := []route{
+		{method: "GET", path: "/openapi/status"},
 		{method: "POST", path: "/openapi/persons/{personId}"},
 		{method: "GET", path: "/openapi/persons/{personId}"},
 		{method: "DELETE", path: "/openapi/persons/{personId}"},
@@ -133,43 +134,70 @@ func TestContract_DocumentedRoutesAreServed(t *testing.T) {
 	}
 }
 
-// TestContract_DocsMatchImplementation keeps the third-party guide honest. The guide is a
-// deliverable in its own right, and every path it tells a caller to use has to exist.
+// TestContract_DocsMatchImplementation keeps the third-party guides honest. The guides are
+// deliverables in their own right, and every path they tell a caller to use has to exist.
 func TestContract_DocsMatchImplementation(t *testing.T) {
 	env := newOpenAPITestEnv(t)
 	mounted := openAPIRoutes(t, env)
 
-	guidePath := filepath.Join("..", "..", "docs", "openapi", "person-face.md")
-	guide, err := os.ReadFile(guidePath)
+	guideDir := filepath.Join(
+		"..",
+		"..",
+		"docs",
+		"openapi",
+	)
+	entries, err := os.ReadDir(guideDir)
 	if err != nil {
-		t.Fatalf("read %s: %v", guidePath, err)
+		t.Fatalf("read %s: %v", guideDir, err)
 	}
 
-	// Every "/openapi/..." literal in the guide must resolve to a mounted route once its
-	// {placeholders} are translated back to the Gin form.
-	var found []route
-	for _, candidate := range extractOpenAPIPaths(string(guide)) {
-		if routeExists(mounted, candidate) {
-			found = append(found, candidate)
+	found := []route{}
+	seen := make(map[route]bool)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		t.Errorf("guide references %s %s, which is not mounted", candidate.method, candidate.path)
+		guidePath := filepath.Join(guideDir, entry.Name())
+		guide, err := os.ReadFile(guidePath)
+		if err != nil {
+			t.Fatalf("read %s: %v", guidePath, err)
+		}
+		for _, candidate := range extractOpenAPIPaths(string(guide)) {
+			if routeExists(mounted, candidate) {
+				if !seen[candidate] {
+					seen[candidate] = true
+					found = append(found, candidate)
+				}
+				continue
+			}
+			t.Errorf(
+				"guide %s references %s %s, which is not mounted",
+				guidePath,
+				candidate.method,
+				candidate.path,
+			)
+		}
 	}
 	if len(found) == 0 {
-		t.Fatalf("no /openapi paths found in %s; the contract check is not looking at the guide", guidePath)
+		t.Fatalf("no /openapi paths found in %s; the contract check is not looking at the guides", guideDir)
 	}
 
-	// Each mounted route has to appear in the guide, or a caller cannot discover it.
+	// Each mounted route has to appear in at least one guide, or a caller cannot discover it.
 	for r := range mounted {
-		documented := false
+		var documented bool
 		for _, candidate := range found {
-			if candidate == r {
+			if samePathShape(r.path, candidate.path) && r.method == candidate.method {
 				documented = true
 				break
 			}
 		}
 		if !documented {
-			t.Errorf("%s %s has no entry in %s", r.method, r.path, guidePath)
+			t.Errorf(
+				"%s %s has no entry in %s/*.md",
+				r.method,
+				r.path,
+				guideDir,
+			)
 		}
 	}
 }
@@ -326,5 +354,16 @@ func TestContract_EmptyCollectionsSerializeAsArrays(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"faces":[]`) {
 		t.Fatalf("empty face list did not serialize as []: %s", rec.Body.String())
+	}
+
+	statusRec := env.do(t, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/status", nil))
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("GET /openapi/status: got %d: %s", statusRec.Code, statusRec.Body.String())
+	}
+	if strings.Contains(statusRec.Body.String(), `"reasons":null`) {
+		t.Fatalf("empty status reasons serialized as null: %s", statusRec.Body.String())
+	}
+	if !strings.Contains(statusRec.Body.String(), `"reasons":[]`) {
+		t.Fatalf("empty status reasons did not serialize as []: %s", statusRec.Body.String())
 	}
 }
