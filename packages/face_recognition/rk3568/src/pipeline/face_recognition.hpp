@@ -13,6 +13,7 @@
 #include "detection/detector.hpp"
 #include "feature/extractor.hpp"
 #include "matching/matcher.hpp"
+#include "quality/quality_assessor.hpp"
 #include "common/face_feature_fusion.hpp"
 #include "common/match_config.hpp"
 
@@ -124,9 +125,10 @@ private:
     /** @brief 取本 worker 的会话副本；无对应会话时返回空指针（调用方按缺失处理） */
     std::shared_ptr<zhulong::Session> lookup_session(const SessionTable& table, uint32_t worker_id);
 
-    /** @brief 单张人脸：质量门禁 → 对齐 → 可选图像门禁 → 单帧特征提取；未达标返回 false */
+    /** @brief 单张人脸：几何硬门禁 → 对齐 → eDifFIQA(T) 质量门禁 → 单帧特征提取；未达标返回 false */
     bool extract_qualified_face(const zhulong::Image& image,
                                 const FaceDetection& detection,
+                                zhulong::Session& quality_session,
                                 zhulong::Session& rec_session,
                                 zhulong::Tensor& rec_input,
                                 const MatchParams& match_params,
@@ -142,13 +144,16 @@ private:
 
     zhulong::Model person_model_;
     zhulong::Model det_model_;
+    zhulong::Model quality_model_;
     zhulong::Model rec_model_;
     std::mutex sessions_mu_;
     mutable std::mutex detector_mu_;
     SessionTable person_sessions_;
+    SessionTable quality_sessions_;
     SessionTable rec_sessions_;
     PersonDetector person_detector_;
     FaceDetector detector_;
+    FaceQualityAssessor quality_assessor_;
     FaceFeatureExtractor extractor_;
     Matcher matcher_;
     TaskFeatureFusionManager fusion_manager_;
@@ -197,11 +202,15 @@ private:
     /** @brief 上一次懒加载的结果；非 OK 表示环境坏了，后续请求直接复用这个裁决 */
     zhulong_status_t init_status_{ZHULONG_PLUGIN_OK};
     zhulong::Model det_model_;
+    zhulong::Model quality_model_;
     zhulong::Model rec_model_;
     zhulong::Session det_session_;
+    zhulong::Session quality_session_;
     zhulong::Session rec_session_;
     FaceDetector detector_{kDefaultModelWidth, kDefaultModelHeight};
+    FaceQualityAssessor quality_assessor_;
     FaceFeatureExtractor extractor_;
+    MatchParams match_params_{load_match_params_from_env()};
     std::vector<uint8_t> rgb_scratch_;
 };
 

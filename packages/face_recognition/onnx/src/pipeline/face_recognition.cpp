@@ -161,6 +161,8 @@ static_assert(std::string_view(zhulong::TARGET_MODEL_EXT) == kModelExtension,
 // 「融合后相似度全部乱掉」而不是编译失败 —— 所以在翻译单元级别钉死。
 static_assert(kFeatureDimension == kFusionFeatureDim,
               "特征抽取维度必须与跨帧特征融合池维度一致");
+static_assert(kFeaturePatchWidth == kQualityPatchWidth && kFeaturePatchHeight == kQualityPatchHeight,
+              "质量评估与特征抽取必须共用 112×112 对齐脸块尺寸");
 
 // ============================================================================
 // FaceRecognitionPlugin
@@ -177,11 +179,16 @@ zhulong_status_t FaceRecognitionPlugin::init(const std::string& config_json) {
     person_model_ = load_target_model("models/scrfd_person_2.5g");
     // 2. 人脸检测模型 (SCRFD det_500m)
     det_model_ = load_target_model("models/det_500m");
-    // 3. 人脸特征提取模型 (FaceLiVTv2-L)
+    // 3. 人脸质量评估模型 (eDifFIQA-T)
+    quality_model_ = load_target_model("models/ediffiqa_t");
+    // 4. 人脸特征提取模型 (FaceLiVTv2-L)
     rec_model_ = load_target_model("models/facelivtv2-l");
 
     if (!det_model_.valid()) {
         return model_unavailable_status("models/det_500m");
+    }
+    if (!quality_model_.valid()) {
+        return model_unavailable_status("models/ediffiqa_t");
     }
     if (!rec_model_.valid()) {
         return model_unavailable_status("models/facelivtv2-l");
@@ -191,6 +198,7 @@ zhulong_status_t FaceRecognitionPlugin::init(const std::string& config_json) {
 
 zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
     zhulong::Session det_session = det_model_.create_session(worker_id);
+    zhulong::Session quality_session = quality_model_.create_session(worker_id);
     zhulong::Session rec_session = rec_model_.create_session(worker_id);
 
     zhulong::Session person_session;
@@ -202,12 +210,13 @@ zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
     }
 
     // 级联会话防降级保护：任一阶段会话创建失败，必须立即中止并返回非法 session
-    if (!det_session.valid() || !rec_session.valid()) {
+    if (!det_session.valid() || !quality_session.valid() || !rec_session.valid()) {
         return {};
     }
 
     {
         std::lock_guard<std::mutex> lock(sessions_mu_);
+        quality_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(quality_session));
         rec_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(rec_session));
         if (person_session.valid()) {
             person_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(person_session));
@@ -226,6 +235,7 @@ std::shared_ptr<zhulong::Session> FaceRecognitionPlugin::lookup_session(const Se
 bool FaceRecognitionPlugin::extract_qualified_face(
     const zhulong::Image& image,
     const FaceDetection& detection,
+    zhulong::Session& quality_session,
     zhulong::Session& rec_session,
     zhulong::Tensor& rec_input,
     const MatchParams& match_params,
@@ -234,15 +244,16 @@ bool FaceRecognitionPlugin::extract_qualified_face(
         return false;
     }
 
-    // 纯数据逻辑人脸质量评估 (尺寸硬门槛、宽高比、偏航对称性、俯仰结构比)
-    const FaceQualityAssessment quality = assess_face_quality(
+    // 1. 零成本几何与拓扑硬门禁（只拦截 min_face_size 不达标及关键点塌缩/倒置等畸形检测，
+    //    综合质量评判交由后续 eDifFIQA-T 神经网络给出，避免规则打分误伤侧脸/遮挡边界）
+    const FaceQualityAssessment geom_check = assess_face_quality(
         detection, image.width(), image.height(),
-        match_params.min_face_size, match_params.min_face_quality);
-    if (!quality.pass) {
-        // 未通过质量门禁：拒绝进入特征提取流水线，直接丢弃该目标（阻断低质/假人脸，保护 NPU 算力）
+        match_params.min_face_size, 0.0f);
+    if (!geom_check.pass) {
         return false;
     }
 
+    // 2. 5 点相似变换对齐至 112×112 RGB24（eDifFIQA-T 与 FaceLiVTv2-L 共用）
     const auto src_pixels = pixel_landmarks(detection, image.width(), image.height());
     std::array<float, 6> affine_mat{};
     if (!Aligner::estimate_similarity_transform(src_pixels, affine_mat)) {
@@ -254,7 +265,7 @@ bool FaceRecognitionPlugin::extract_qualified_face(
         return false;
     }
 
-    // 可选流式图像质量门禁（默认关闭；开启后在 512 维特征抽取前拦截严重模糊或欠曝/过曝脸块）
+    // 3. 可选流式图像清晰度/曝光门禁（默认关闭）
     if (!passes_face_image_gate(rec_input.data<uint8_t>(),
                                 kFeaturePatchWidth, kFeaturePatchHeight,
                                 affine_determinant(affine_mat),
@@ -262,13 +273,23 @@ bool FaceRecognitionPlugin::extract_qualified_face(
         return false;
     }
 
+    // 4. 轻量级深度学习质量评估 (eDifFIQA-T)：在 512 维特征抽取前拦截低质人脸
+    float quality_score = 0.0f;
+    if (!quality_assessor_.assess(quality_session, rec_input, quality_score)) {
+        return false;
+    }
+    if (match_params.min_face_quality > 0.0f && quality_score < match_params.min_face_quality) {
+        return false;
+    }
+
+    // 5. 512 维特征抽取
     const std::vector<float> probe_features = extractor_.extract(rec_session, rec_input);
     if (probe_features.size() != kFeatureDimension) {
         return false;
     }
 
     out_qualified.detection = detection;
-    out_qualified.quality_score = quality.quality_score;
+    out_qualified.quality_score = quality_score;
     std::copy(probe_features.begin(), probe_features.end(), out_qualified.probe_features.begin());
     return true;
 }
@@ -319,6 +340,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
         task_context.params.json, default_match_params_);
 
     const uint32_t worker_id = session.worker_id();
+    const std::shared_ptr<zhulong::Session> quality_session = lookup_session(quality_sessions_, worker_id);
     const std::shared_ptr<zhulong::Session> rec_session = lookup_session(rec_sessions_, worker_id);
     const std::shared_ptr<zhulong::Session> person_session = lookup_session(person_sessions_, worker_id);
 
@@ -350,17 +372,18 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
         return {};
     }
 
-    // 3. 每张合格人脸：仿射对齐 → 单帧特征抽取 → 按流跨帧特征融合 → 底库比对（一帧只取一次底库快照）
+    // 3. 每张合格人脸：仿射对齐 → eDifFIQA(T) 质检 → 单帧特征抽取 → 按流跨帧特征融合 → 底库比对（一帧只取一次底库快照）
     std::vector<ProcessedFace> processed_faces;
     processed_faces.reserve(face_detections.size());
-    if (rec_session && rec_session->valid() && !face_detections.empty()) {
+    if (quality_session && quality_session->valid() &&
+        rec_session && rec_session->valid() && !face_detections.empty()) {
         std::vector<QualifiedFace> qualified_faces;
         qualified_faces.reserve(face_detections.size());
         zhulong::Tensor rec_input({1, kFeaturePatchHeight, kFeaturePatchWidth, 3}, zhulong::DataType::UINT8);
         for (const auto& detection : face_detections) {
             QualifiedFace qualified;
-            if (extract_qualified_face(image, detection, *rec_session, rec_input,
-                                       match_params, qualified)) {
+            if (extract_qualified_face(image, detection, *quality_session, *rec_session,
+                                       rec_input, match_params, qualified)) {
                 qualified_faces.push_back(std::move(qualified));
             }
         }
@@ -526,8 +549,10 @@ void FaceExtractorContext::release() {
         return;
     }
     det_session_ = zhulong::Session();
+    quality_session_ = zhulong::Session();
     rec_session_ = zhulong::Session();
     det_model_ = zhulong::Model();
+    quality_model_ = zhulong::Model();
     rec_model_ = zhulong::Model();
     // TTL 回收的意义就是把常驻内存还回去，缓冲也一并释放
     std::vector<uint8_t>().swap(rgb_scratch_);
@@ -582,30 +607,43 @@ zhulong_status_t FaceExtractorContext::init_locked() {
         return init_status_;
     }
 
+    match_params_ = load_match_params_from_env();
+
     // 1. 人脸检测模型 (SCRFD det_500m)
     det_model_ = load_target_model("models/det_500m");
-    // 2. 人脸特征提取模型 (FaceLiVTv2-L)
+    // 2. 人脸质量评估模型 (eDifFIQA-T)
+    quality_model_ = load_target_model("models/ediffiqa_t");
+    // 3. 人脸特征提取模型 (FaceLiVTv2-L)
     rec_model_ = load_target_model("models/facelivtv2-l");
 
     // 模型缺失属于「能力不可用」，绝不等同于「图中没有人脸」：必须闭环报错，禁止伪造特征。
-    // 任一侧权重不可用就把**两侧**都放掉：负缓存期间它们是白占内存的死引用，
+    // 任一侧权重不可用就把全部权重放掉：负缓存期间它们是白占内存的死引用，
     // 而下次重试（`release()` 之后）本来就要重新加载。
-    if (!det_model_.valid() || !rec_model_.valid()) {
-        init_status_ = det_model_.valid() ? model_unavailable_status("models/facelivtv2-l")
-                                          : model_unavailable_status("models/det_500m");
+    if (!det_model_.valid() || !quality_model_.valid() || !rec_model_.valid()) {
+        if (!det_model_.valid()) {
+            init_status_ = model_unavailable_status("models/det_500m");
+        } else if (!quality_model_.valid()) {
+            init_status_ = model_unavailable_status("models/ediffiqa_t");
+        } else {
+            init_status_ = model_unavailable_status("models/facelivtv2-l");
+        }
         det_model_ = zhulong::Model();
+        quality_model_ = zhulong::Model();
         rec_model_ = zhulong::Model();
         return init_status_;
     }
 
     det_session_ = det_model_.create_session(kExtractSessionWorkerID);
+    quality_session_ = quality_model_.create_session(kExtractSessionWorkerID);
     rec_session_ = rec_model_.create_session(kExtractSessionWorkerID);
-    if (!det_session_.valid() || !rec_session_.valid()) {
+    if (!det_session_.valid() || !quality_session_.valid() || !rec_session_.valid()) {
         // 会话建不出来时把权重一起放掉：留着它们只会让负缓存期间白占几 MB，
         // 而下次重试（`release()` 之后）本来就要重新加载。
         det_session_ = zhulong::Session();
+        quality_session_ = zhulong::Session();
         rec_session_ = zhulong::Session();
         det_model_ = zhulong::Model();
+        quality_model_ = zhulong::Model();
         rec_model_ = zhulong::Model();
         init_status_ = ZHULONG_PLUGIN_ERR_INTERNAL;
         return init_status_;
@@ -701,7 +739,12 @@ zhulong_status_t FaceExtractorContext::extract(
         return ZHULONG_PLUGIN_ERR_NOT_FOUND;
     }
 
-    // 4. 关键点仿射对齐
+    // 4. 关键点拓扑校验 + 仿射对齐
+    const FaceQualityAssessment geom_check = assess_face_quality(*best_detection, width, height, 0, 0.0f);
+    if (!geom_check.pass) {
+        return ZHULONG_PLUGIN_ERR_NOT_FOUND;
+    }
+
     const auto src_pixels = pixel_landmarks(*best_detection, width, height);
     std::array<float, 6> affine_mat{};
     if (!Aligner::estimate_similarity_transform(src_pixels, affine_mat)) {
@@ -710,10 +753,21 @@ zhulong_status_t FaceExtractorContext::extract(
 
     zhulong::Tensor rec_input({1, kFeaturePatchHeight, kFeaturePatchWidth, 3}, zhulong::DataType::UINT8);
     if (!Aligner::crop_and_align_direct(image, affine_mat, rec_input.data<uint8_t>(),
+                                        rec_input.element_count(),
                                         kFeaturePatchWidth, kFeaturePatchHeight)) {
         return ZHULONG_PLUGIN_ERR_INTERNAL;
     }
 
+    // 5. eDifFIQA(T) 质量门禁：低质登记照按帧级 NO_FACE_DETECTED 拒绝，不杀掉热进程
+    float quality_score = 0.0f;
+    if (!quality_assessor_.assess(quality_session_, rec_input, quality_score)) {
+        return ZHULONG_PLUGIN_ERR_INTERNAL;
+    }
+    if (match_params_.min_face_quality > 0.0f && quality_score < match_params_.min_face_quality) {
+        return ZHULONG_PLUGIN_ERR_NOT_FOUND;
+    }
+
+    // 6. 512 维特征提取
     const std::vector<float> features = extractor_.extract(rec_session_, rec_input);
     if (features.size() != kFeatureDimension) {
         return ZHULONG_PLUGIN_ERR_INTERNAL;

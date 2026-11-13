@@ -17,6 +17,7 @@ find_package(Threads REQUIRED)
 add_library(face_recognition_core OBJECT
     src/detection/detector.cpp
     src/alignment/aligner.cpp
+    src/quality/quality_assessor.cpp
     src/feature/extractor.cpp
     src/matching/matcher.cpp
     src/pipeline/face_recognition.cpp
