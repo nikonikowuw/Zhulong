@@ -14,7 +14,7 @@
 #include "platform/dmabuf/dmabuf_sync.hpp"
 
 #include <cstring>
-#include <memory>
+#include <limits>
 #include <optional>
 
 #if defined(__linux__)
@@ -71,37 +71,128 @@ private:
 };
 #endif
 
-/** @brief 为分平面/连续布局计算需要 mmap 的源字节数。 */
-size_t source_map_size(const HardwareFrame& frame) noexcept {
+/** @brief 连续内存布局推导结果（同时服务于 mmap 长度与平面基址定位，保证单一来源）。 */
+struct ContinuousLayout {
+    size_t u_offset{0};
+    size_t v_offset{0};
+    size_t total_bytes{0};
+    uint32_t y_stride{0};
+    uint32_t u_stride{0};
+    uint32_t v_stride{0};
+};
+
+bool checked_mul(size_t a, size_t b, size_t& out) noexcept {
+    if (b != 0 && a > std::numeric_limits<size_t>::max() / b) {
+        return false;
+    }
+    out = a * b;
+    return true;
+}
+
+bool checked_add(size_t a, size_t b, size_t& out) noexcept {
+    if (a > std::numeric_limits<size_t>::max() - b) {
+        return false;
+    }
+    out = a + b;
+    return true;
+}
+
+/** @brief 统一计算单块连续帧（host_ptr / dmabuf）的平面偏移与总映射大小。 */
+bool resolve_continuous_layout(const HardwareFrame& frame, ContinuousLayout& out) noexcept {
+    if (frame.format != FRAME_FORMAT_NV12 && frame.format != FRAME_FORMAT_YUV420P) {
+        return false;
+    }
+    if (frame.width < 2 || frame.height < 2 || frame.stride < frame.width) {
+        return false;
+    }
     if (frame.vstride != 0 && frame.vstride < frame.height) {
+        return false;
+    }
+
+    const uint32_t y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+    // 连续缓冲使用 y_plane_size()（基于 frame.stride）定位色度平面，y_stride 不得超过 frame.stride
+    if (y_stride < frame.width || y_stride > frame.stride) {
+        return false;
+    }
+    const size_t v_rows =
+        frame.vstride > 0 ? static_cast<size_t>(frame.vstride) : static_cast<size_t>(frame.height);
+    size_t y_size = 0;
+    if (!checked_mul(static_cast<size_t>(frame.stride), v_rows, y_size)) {
+        return false;
+    }
+    const size_t chroma_rows = (static_cast<size_t>(frame.height) + 1) / 2;
+
+    if (frame.format == FRAME_FORMAT_NV12) {
+        const uint32_t uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
+        if (uv_stride < frame.width) {
+            return false;
+        }
+        size_t uv_size = 0;
+        size_t total = 0;
+        if (!checked_mul(static_cast<size_t>(uv_stride), chroma_rows, uv_size) ||
+            !checked_add(y_size, uv_size, total)) {
+            return false;
+        }
+        out.y_stride = y_stride;
+        out.u_stride = uv_stride;
+        out.v_stride = 0;
+        out.u_offset = y_size;
+        out.v_offset = 0;
+        out.total_bytes = total;
+        return true;
+    }
+
+    const size_t default_chroma_stride = (static_cast<size_t>(frame.stride) + 1) / 2;
+    const size_t min_chroma_width = (static_cast<size_t>(frame.width) + 1) / 2;
+    const uint32_t u_stride = frame.plane_strides[1] > 0
+                                  ? frame.plane_strides[1]
+                                  : static_cast<uint32_t>(default_chroma_stride);
+    const uint32_t v_stride = frame.plane_strides[2] > 0
+                                  ? frame.plane_strides[2]
+                                  : static_cast<uint32_t>(default_chroma_stride);
+    if (static_cast<size_t>(u_stride) < min_chroma_width ||
+        static_cast<size_t>(v_stride) < min_chroma_width) {
+        return false;
+    }
+    size_t u_size = 0;
+    size_t v_size = 0;
+    size_t v_offset = 0;
+    size_t total = 0;
+    if (!checked_mul(static_cast<size_t>(u_stride), chroma_rows, u_size) ||
+        !checked_mul(static_cast<size_t>(v_stride), chroma_rows, v_size) ||
+        !checked_add(y_size, u_size, v_offset) ||
+        !checked_add(v_offset, v_size, total)) {
+        return false;
+    }
+    out.y_stride = y_stride;
+    out.u_stride = u_stride;
+    out.v_stride = v_stride;
+    out.u_offset = y_size;
+    out.v_offset = v_offset;
+    out.total_bytes = total;
+    return true;
+}
+
+/** @brief 为连续布局计算需要 mmap 的源字节数。 */
+size_t source_map_size(const HardwareFrame& frame) noexcept {
+    ContinuousLayout layout;
+    if (!resolve_continuous_layout(frame, layout)) {
         return 0;
     }
-    if (frame.format == FRAME_FORMAT_NV12) {
-        const size_t uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
-        return frame.y_plane_size() + uv_stride * ((static_cast<size_t>(frame.height) + 1) / 2);
-    }
-    if (frame.format == FRAME_FORMAT_YUV420P) {
-        const size_t u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : (frame.stride + 1) / 2;
-        const size_t v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : (frame.stride + 1) / 2;
-        const size_t chroma_rows = (static_cast<size_t>(frame.height) + 1) / 2;
-        return static_cast<size_t>(frame.stride) * frame.height + u_stride * chroma_rows +
-               v_stride * chroma_rows;
-    }
-    return 0;
+    return layout.total_bytes;
 }
 
 /**
  * @brief 解析源平面：优先 host_planes（各自独立），其次 host_ptr / dmabuf 连续基址。
  *
- * 连续基址的平面偏移与 FrameBroker 的既有 memcpy 布局保持一致（Y 用 stride，
- * chroma 用 (stride+1)/2；NV12 的 UV 用 y_plane_size 定位）。
+ * 连续基址的平面偏移与 `resolve_continuous_layout` 单一来源保持一致。
  */
 bool resolve_source(const HardwareFrame& frame, const uint8_t* base,
                     SourcePlanes& out) noexcept {
     if (frame.format != FRAME_FORMAT_NV12 && frame.format != FRAME_FORMAT_YUV420P) {
         return false;
     }
-    if (frame.width == 0 || frame.height == 0 || frame.stride < frame.width) {
+    if (frame.width < 2 || frame.height < 2 || frame.stride < frame.width) {
         return false;
     }
     if (frame.vstride != 0 && frame.vstride < frame.height) {
@@ -127,32 +218,34 @@ bool resolve_source(const HardwareFrame& frame, const uint8_t* base,
         }
         out.u = frame.host_planes[1];
         out.v = frame.host_planes[2];
-        out.u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : (frame.stride + 1) / 2;
-        out.v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : (frame.stride + 1) / 2;
-        return out.u_stride >= (frame.width + 1) / 2 && out.v_stride >= (frame.width + 1) / 2;
+        const size_t default_chroma_stride = (static_cast<size_t>(frame.stride) + 1) / 2;
+        const size_t min_chroma_width = (static_cast<size_t>(frame.width) + 1) / 2;
+        out.u_stride = frame.plane_strides[1] > 0
+                           ? frame.plane_strides[1]
+                           : static_cast<uint32_t>(default_chroma_stride);
+        out.v_stride = frame.plane_strides[2] > 0
+                           ? frame.plane_strides[2]
+                           : static_cast<uint32_t>(default_chroma_stride);
+        return static_cast<size_t>(out.u_stride) >= min_chroma_width &&
+               static_cast<size_t>(out.v_stride) >= min_chroma_width;
     }
 
     if (base == nullptr) {
         return false;
     }
-    out.y = base;
-    out.y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
-    if (out.y_stride < frame.width) {
+    ContinuousLayout layout;
+    if (!resolve_continuous_layout(frame, layout)) {
         return false;
     }
-    if (frame.format == FRAME_FORMAT_NV12) {
-        out.u = base + frame.y_plane_size();
-        out.u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
-        return out.u_stride >= frame.width;
+    out.y = base;
+    out.y_stride = layout.y_stride;
+    out.u = base + layout.u_offset;
+    out.u_stride = layout.u_stride;
+    if (frame.format == FRAME_FORMAT_YUV420P) {
+        out.v = base + layout.v_offset;
+        out.v_stride = layout.v_stride;
     }
-    const size_t y_size = static_cast<size_t>(frame.stride) * frame.height;
-    const size_t chroma_stride = (frame.stride + 1) / 2;
-    const size_t chroma_rows = (static_cast<size_t>(frame.height) + 1) / 2;
-    out.u = base + y_size;
-    out.v = out.u + chroma_stride * chroma_rows;
-    out.u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : static_cast<uint32_t>(chroma_stride);
-    out.v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : static_cast<uint32_t>(chroma_stride);
-    return out.u_stride >= (frame.width + 1) / 2 && out.v_stride >= (frame.width + 1) / 2;
+    return true;
 }
 
 } // namespace

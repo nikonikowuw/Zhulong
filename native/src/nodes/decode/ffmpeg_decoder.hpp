@@ -13,12 +13,30 @@
 
 #include "nodes/decode/decoder.hpp"
 
+#include <memory>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
 }
 
 namespace zhulong {
+
+namespace detail {
+
+struct AvCodecContextDeleter {
+    void operator()(AVCodecContext *ctx) const noexcept { avcodec_free_context(&ctx); }
+};
+
+struct AvPacketDeleter {
+    void operator()(AVPacket *pkt) const noexcept { av_packet_free(&pkt); }
+};
+
+struct AvFrameDeleter {
+    void operator()(AVFrame *frame) const noexcept { av_frame_free(&frame); }
+};
+
+} // namespace detail
 
 /**
  * @brief 基于 FFmpeg 静态库的确定性软件解码实现
@@ -40,8 +58,8 @@ public:
     FFmpegDecodeNode(int32_t codec, const uint8_t *extradata, size_t extradata_size,
                      int32_t time_base_num = 1, int32_t time_base_den = 90000, uint64_t stream_id = 0);
 
-    /** @brief 析构函数，释放复用的 AVPacket 与 AVCodecContext 资源 */
-    ~FFmpegDecodeNode() override;
+    /** @brief 析构函数（由 unique_ptr 自定义 deleter 自动回收资源） */
+    ~FFmpegDecodeNode() override = default;
 
     /**
      * @brief 送入待解码的压缩数据包
@@ -66,14 +84,14 @@ public:
     void flush() override;
 
 private:
-    AVCodecContext *codec_ctx_{nullptr}; /**< FFmpeg 解码器上下文 */
-    AVPacket *packet_{nullptr};          /**< 复用的输入包容器句柄 */
-    AVFrame *cached_frame_{nullptr};     /**< 复用的临时接收帧句柄，避免 EAGAIN 轮询反复堆分配 */
+    std::unique_ptr<AVCodecContext, detail::AvCodecContextDeleter> codec_ctx_; /**< FFmpeg 解码器上下文 */
+    std::unique_ptr<AVPacket, detail::AvPacketDeleter> packet_;               /**< 复用的输入包容器句柄 */
+    std::unique_ptr<AVFrame, detail::AvFrameDeleter> cached_frame_;           /**< 复用的临时接收帧句柄 */
     int32_t time_base_num_{1};           /**< 源流时间基分子 */
     int32_t time_base_den_{90000};       /**< 源流时间基分母 */
     uint64_t stream_id_{0};              /**< 原生日志关联的流 ID */
     bool unsupported_format_logged_{false}; /**< 未知像素格式仅告警一次，避免低帧率流刷屏 */
-    bool negative_linesize_logged_{false}; /**< 负 linesize（垂直翻转帧）仅告警一次 */
+    bool invalid_stride_logged_{false};     /**< 负 linesize 或非法步长仅告警一次 */
 };
 
 } // namespace zhulong

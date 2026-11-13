@@ -24,6 +24,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cerrno>
@@ -314,6 +315,7 @@ std::string redact_credentials(std::string text) {
         // ⚠️ 防截断脱敏：若 authority 直到字符串末尾仍未闭合（无 '/'、'?'、'#' 或空白），
         //    且不含 '@'，则可能是超长日志在 user:password 段被缓冲截断（'@' 尚未出现）。
         //    非 IPv6 字面量下，只要 ':' 之后不全是 1..5 位数字端口号，一律按截断凭据脱敏。
+        //    已知边界：若截断恰好落在 1~5 位纯数字密码处（如 user:1234），无法与 host:port 区分。
         if (authority_end == std::string::npos && authority_start < scan_end &&
             text[authority_start] != '[') {
             const size_t colon = text.find(':', authority_start);
@@ -367,9 +369,6 @@ std::string summarize_rtsp_block(const std::string &block) {
     return summary;
 }
 
-/** @brief 静默日志回调：本类的存在正是为了「任何 FFmpeg 输出都不外泄」 */
-void silent_log_callback(void *, int, const char *, va_list) {}
-
 struct TraceEntry {
     int64_t started_ticks;
     uint64_t stream_id;
@@ -381,11 +380,12 @@ struct TraceEntry {
 /** @brief 单调递增的追踪序号，仅用于识别「同一个指针上换了一个上下文」。 */
 std::atomic<uint64_t> trace_token_source{0};
 
+/** @brief 当前处于建连追踪窗口的上下文数量；为 0 时日志回调直接静默返回（无锁快路径）。 */
+std::atomic<size_t> active_trace_count{0};
+
 struct TraceRegistry {
     std::shared_mutex mutex;
-    std::map<AVFormatContext *, TraceEntry> active;
-    int saved_level = AV_LOG_QUIET;
-    size_t users = 0;
+    std::map<const void *, TraceEntry> active;
 };
 
 TraceRegistry &trace_registry() {
@@ -394,14 +394,15 @@ TraceRegistry &trace_registry() {
 }
 
 void trace_log_callback(void *avcl, int /*level*/, const char *format, va_list arguments) {
-    if (avcl == nullptr) return;
+    // 非追踪上下文或无任何活跃追踪时直接丢弃：既杜绝凭据泄露，也避免运行期修改全局回调产生数据竞争。
+    if (avcl == nullptr || active_trace_count.load(std::memory_order_acquire) == 0) return;
 
     int64_t elapsed_ms = -1;
     uint64_t stream_id = 0;
     {
         auto &registry = trace_registry();
         std::shared_lock<std::shared_mutex> lock(registry.mutex);
-        const auto found = registry.active.find(static_cast<AVFormatContext *>(avcl));
+        const auto found = registry.active.find(avcl);
         if (found == registry.active.end()) return;
         stream_id = found->second.stream_id;
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -437,7 +438,7 @@ void trace_log_callback(void *avcl, int /*level*/, const char *format, va_list a
         static_cast<long long>(elapsed_ms), summary.c_str());
 }
 
-/** @brief 在作用域内开启 RTSP 事务计时（可嵌套，最后一个析构时恢复原状） */
+/** @brief 在作用域内开启 RTSP 事务计时（仅操作进程内注册表，不修改 FFmpeg 全局日志状态） */
 class RtspTransactionTrace {
 public:
     RtspTransactionTrace(AVFormatContext *context, uint64_t stream_id) : context_(context) {
@@ -446,12 +447,7 @@ public:
         std::unique_lock<std::shared_mutex> lock(registry.mutex);
         token_ = ++trace_token_source;
         registry.active[context_] = TraceEntry{Clock::now().time_since_epoch().count(), stream_id, token_};
-        if (registry.users++ == 0) {
-            registry.saved_level = av_log_get_level();
-            // 必须开到 TRACE：FFmpeg 的 RTSP 请求行只在 AV_LOG_TRACE 输出。
-            av_log_set_level(AV_LOG_TRACE);
-            av_log_set_callback(trace_log_callback);
-        }
+        active_trace_count.fetch_add(1, std::memory_order_release);
         installed_ = true;
     }
 
@@ -463,10 +459,7 @@ public:
         if (found != registry.active.end() && found->second.token == token_) {
             registry.active.erase(found);
         }
-        if (--registry.users == 0) {
-            av_log_set_callback(silent_log_callback);
-            av_log_set_level(registry.saved_level);
-        }
+        active_trace_count.fetch_sub(1, std::memory_order_release);
     }
 
     RtspTransactionTrace(const RtspTransactionTrace &) = delete;
@@ -475,7 +468,7 @@ public:
     RtspTransactionTrace &operator=(RtspTransactionTrace &&) = delete;
 
 private:
-    AVFormatContext *context_;
+    const void *context_;
     uint64_t token_ = 0;
     bool installed_ = false;
 };
@@ -640,12 +633,11 @@ Zhulong_video_view Video::borrowed_view() const {
 void initialize_ffmpeg() {
     static std::once_flag once;
     std::call_once(once, [] {
-        // 进程级别静默 FFmpeg 日志，防止 RTSP 认证凭据（URL 内 user:pass@）打入控制台或日志文件。
-        // ⚠️ 刻意取舍：这里用「构造性保证」而非「正则脱敏」——只要没有任何输出，就不可能泄露凭据，
-        //    代价是 FFmpeg 自身诊断全部丢失。因此本模块的错误路径必须自带 rc 与 operation 上下文
-        //    （见 check()），不得依赖 FFmpeg 日志排障。
-        av_log_set_level(AV_LOG_QUIET);
-        av_log_set_callback(silent_log_callback);
+        // 进程级别一次性接管 FFmpeg 日志：日常全局静默（防止 RTSP 凭据落盘），
+        // 仅放行在 RtspTransactionTrace 登记且经过 redact_credentials() 脱敏的建连事务。
+        // 一次性注册回调且不再运行期切换，消除多线程下 av_log_set_callback 的数据竞争。
+        av_log_set_level(AV_LOG_TRACE);
+        av_log_set_callback(trace_log_callback);
         // 初始化网络子系统
         const int ret = avformat_network_init();
         if (ret < 0) {
@@ -723,12 +715,12 @@ int32_t audio_codec_id(AVCodecID id) {
  */
 void apply_aac_asc(const uint8_t *asc, int asc_size, int &sample_rate, int &channels) {
     if (!asc || asc_size < 2) return;
-    static const int aac_sample_rates[] = {
+    static constexpr std::array<int, 13> aac_sample_rates{
         96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350
     };
     const int frequency_index = ((asc[0] & 0x07) << 1) | ((asc[1] & 0x80) >> 7);
-    if (frequency_index >= 0 && frequency_index < static_cast<int>(sizeof(aac_sample_rates) / sizeof(aac_sample_rates[0]))) {
-        sample_rate = aac_sample_rates[frequency_index];
+    if (frequency_index >= 0 && frequency_index < static_cast<int>(aac_sample_rates.size())) {
+        sample_rate = aac_sample_rates[static_cast<size_t>(frequency_index)];
     }
     const int channel_config = (asc[1] >> 3) & 0x0f;
     if (channel_config >= 1 && channel_config <= 2) {
@@ -780,10 +772,6 @@ ProbeSession open_and_probe(Input &input, const std::string &url, const Options 
         throw Failure{Zhulong_ERR_UNSUPPORTED};
     }
 
-    if (request_audio && session.index >= 0) {
-        session.audio_index = av_find_best_stream(input.context, AVMEDIA_TYPE_AUDIO, -1, session.index, nullptr, 0);
-    }
-
     // 快速前置编解码格式检查（在解析深度流信息前拒绝不支持的格式）
     // ⚠️ RTSP 的 SDP 可能尚未解析出 codec（AV_CODEC_ID_NONE），此时不得过早拒绝；
     //    权威判定在 avformat_find_stream_info 之后使用 codecpar->codec_id 完成。
@@ -827,6 +815,7 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
                 const std::function<void(const Zhulong_packet_view &)> &consume,
                 const std::function<void(const Zhulong_packet_view &)> &consume_audio,
                 const std::function<void(const Media &)> &ready, uint64_t stream_id) {
+    initialize_ffmpeg();
     // 打开阶段的**绝对**预算：音频降级只允许在这条预算内重开，绝不重新计时。
     //
     // Go 侧 Acquire 是同步阻塞的 CGO 调用，已把 ctx deadline 折叠进 open_timeout_ms

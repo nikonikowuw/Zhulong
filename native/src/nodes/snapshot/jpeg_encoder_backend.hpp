@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace zhulong {
@@ -133,6 +134,7 @@ private:
 
     std::atomic<int> dma_failures_{0};
     std::atomic<DmaState> dma_state_{DmaState::unverified};
+    std::mutex dma_verify_mutex_;
 };
 
 } // namespace zhulong

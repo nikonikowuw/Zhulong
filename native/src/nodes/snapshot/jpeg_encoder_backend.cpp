@@ -95,16 +95,31 @@ bool JpegBackend::encode_dma(const HardwareFrame &frame, const CpuFrameView &vie
     out_jpeg.clear();
     const int full_w = static_cast<int>(frame.width & ~1U);
     const int full_h = static_cast<int>(frame.height & ~1U);
-    if (hw_ == nullptr || dma_state_.load(std::memory_order_relaxed) == DmaState::disabled ||
+    const DmaState state = dma_state_.load(std::memory_order_acquire);
+    if (hw_ == nullptr || state == DmaState::disabled ||
         w != full_w || h != full_h || !prefer_hardware(w, h)) {
         return false;
     }
 
-    if (hw_->encode_dma_frame(frame, quality, out_jpeg)) {
-        dma_failures_.store(0, std::memory_order_relaxed);
-
-        // 首次自证：对同一帧的两条路径做逐字节比对（仅一次，代价约一次编码）
-        if (dma_state_.load(std::memory_order_relaxed) == DmaState::unverified) {
+    // 首次自证期间加锁串行化：避免并发线程同时自证时出现 validated -> disabled 交错跳变
+    if (state == DmaState::unverified) {
+        std::lock_guard<std::mutex> lock(dma_verify_mutex_);
+        const DmaState locked_state = dma_state_.load(std::memory_order_acquire);
+        if (locked_state == DmaState::disabled) {
+            return false;
+        }
+        if (locked_state == DmaState::unverified) {
+            if (!hw_->encode_dma_frame(frame, quality, out_jpeg)) {
+                if (dma_failures_.fetch_add(1, std::memory_order_relaxed) + 1 >= max_dma_failures) {
+                    if (dma_state_.exchange(DmaState::disabled, std::memory_order_release) !=
+                        DmaState::disabled) {
+                        ZL_LOGW(0, log_module,
+                                "jpeg_dmabuf_passthrough_disabled: consecutive_failures=%d",
+                                max_dma_failures);
+                    }
+                }
+                return false;
+            }
             std::vector<uint8_t> reference;
             if (!hw_->encode_region(view, 0, 0, w, h, quality, reference)) {
                 // 参考路径失败 → 本次不下结论，让调用方走常规路径，下次再试
@@ -112,30 +127,29 @@ bool JpegBackend::encode_dma(const HardwareFrame &frame, const CpuFrameView &vie
                 return false;
             }
             if (reference == out_jpeg) {
-                DmaState expected = DmaState::unverified;
-                if (dma_state_.compare_exchange_strong(expected, DmaState::validated,
-                                                       std::memory_order_relaxed)) {
-                    ZL_LOGI(0, log_module, "jpeg_dmabuf_passthrough_validated: %dx%d", w, h);
-                } else if (expected == DmaState::disabled) {
-                    out_jpeg.clear();
-                    return false;
-                }
-            } else {
-                dma_state_.store(DmaState::disabled, std::memory_order_relaxed);
-                ZL_LOGE(0, log_module,
-                        "jpeg_dmabuf_passthrough_mismatch: disabled (passthrough=%zu B "
-                        "reference=%zu B)",
-                        out_jpeg.size(), reference.size());
-                out_jpeg.clear();
-                return false;
+                dma_failures_.store(0, std::memory_order_relaxed);
+                dma_state_.store(DmaState::validated, std::memory_order_release);
+                ZL_LOGI(0, log_module, "jpeg_dmabuf_passthrough_validated: %dx%d", w, h);
+                return true;
             }
+            dma_state_.store(DmaState::disabled, std::memory_order_release);
+            ZL_LOGE(0, log_module,
+                    "jpeg_dmabuf_passthrough_mismatch: disabled (passthrough=%zu B "
+                    "reference=%zu B)",
+                    out_jpeg.size(), reference.size());
+            out_jpeg.clear();
+            return false;
         }
+    }
+
+    if (hw_->encode_dma_frame(frame, quality, out_jpeg)) {
+        dma_failures_.store(0, std::memory_order_relaxed);
         return true;
     }
 
     // 连续失败 → 永久关闭：避免「每帧先付 import 开销再回退」的隐性退化
     if (dma_failures_.fetch_add(1, std::memory_order_relaxed) + 1 >= max_dma_failures) {
-        if (dma_state_.exchange(DmaState::disabled, std::memory_order_relaxed) !=
+        if (dma_state_.exchange(DmaState::disabled, std::memory_order_release) !=
             DmaState::disabled) {
             ZL_LOGW(0, log_module, "jpeg_dmabuf_passthrough_disabled: consecutive_failures=%d",
                     max_dma_failures);

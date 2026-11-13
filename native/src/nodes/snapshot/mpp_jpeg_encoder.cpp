@@ -20,13 +20,15 @@
 #include "common/mpp/mpp_api_types.hpp"
 
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <algorithm>
-#include <cstdio>
+#include <chrono>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <tuple>
 #include <utility>
 
@@ -93,10 +95,12 @@ struct Symbols {
     void *(*mpp_buffer_get_ptr_with_caller)(MppBuffer, const char *){nullptr};
 
     static bool load(Symbols &out) {
-        // 1. 硬件节点探针：无 /dev/mpp_service 时无需尝试装载
-        if (access("/dev/mpp_service", R_OK | W_OK) != 0) {
+        // 1. 硬件节点探针：无 /dev/mpp_service 或当前进程（effective UID）无读写权限时无需尝试装载
+        const int dev_fd = ::open("/dev/mpp_service", O_RDWR | O_CLOEXEC);
+        if (dev_fd < 0) {
             return false;
         }
+        ::close(dev_fd);
 
         // 2. 库名按板端实际存在顺序尝试（Debian 包为 librockchip_mpp.so.1）
         static const char *lib_names[] = {"librockchip_mpp.so.1", "librockchip_mpp.so",
@@ -359,17 +363,29 @@ struct MppJpegEncoder::Impl {
         if (!apply_cfg(s, s.width, s.height, s.hor_stride, s.ver_stride, 85)) {
             return false;
         }
+        return true;
+    }
 
-        // 输出缓冲：一次申请、整会话复用。类型选 DMA_HEAP（板端普遍可用），
+    /**
+     * @brief 为上传路径按需分配会话专属输出缓冲；DMA-BUF 直通路径不需要该缓冲，避免浪费 CMA 内存
+     */
+    bool ensure_upload_buffer(Session &s) {
+        if (s.buffer != nullptr) {
+            return true;
+        }
+        // 输出缓冲：首次上传时申请、整会话复用。类型选 DMA_HEAP（板端普遍可用），
         // 失败则退到 ION 以兼容老 BSP。
-        size_t size = static_cast<size_t>(s.hor_stride) * static_cast<size_t>(s.ver_stride) * 3 / 2;
-        if (sym.mpp_buffer_group_get(&s.group, MPP_BUFFER_TYPE_DMA_HEAP, MPP_BUFFER_INTERNAL,
-                                     group_tag, caller_name) != MPP_OK ||
-            s.group == nullptr) {
-            if (sym.mpp_buffer_group_get(&s.group, MPP_BUFFER_TYPE_ION, MPP_BUFFER_INTERNAL, group_tag,
-                                         caller_name) != MPP_OK ||
+        const size_t size =
+            static_cast<size_t>(s.hor_stride) * static_cast<size_t>(s.ver_stride) * 3 / 2;
+        if (s.group == nullptr) {
+            if (sym.mpp_buffer_group_get(&s.group, MPP_BUFFER_TYPE_DMA_HEAP, MPP_BUFFER_INTERNAL,
+                                         group_tag, caller_name) != MPP_OK ||
                 s.group == nullptr) {
-                return false;
+                if (sym.mpp_buffer_group_get(&s.group, MPP_BUFFER_TYPE_ION, MPP_BUFFER_INTERNAL,
+                                             group_tag, caller_name) != MPP_OK ||
+                    s.group == nullptr) {
+                    return false;
+                }
             }
         }
         if (sym.mpp_buffer_get_with_tag(s.group, &s.buffer, size, group_tag, caller_name) != MPP_OK ||
@@ -408,6 +424,9 @@ struct MppJpegEncoder::Impl {
      * CPU 拷贝只发生在本路径。
      */
     bool upload(Session &s, const CpuFrameView &src, const Rect &r) {
+        if (!ensure_upload_buffer(s)) {
+            return false;
+        }
         auto *dst = static_cast<uint8_t *>(sym.mpp_buffer_get_ptr_with_caller(s.buffer, caller_name));
         if (dst == nullptr) {
             return false;
@@ -530,7 +549,7 @@ struct MppJpegEncoder::Impl {
                 }
                 return false;
             }
-            usleep(packet_retry_sleep_us);
+            std::this_thread::sleep_for(std::chrono::microseconds(packet_retry_sleep_us));
         }
         return false;
     }

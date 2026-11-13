@@ -19,6 +19,7 @@ extern "C" {
 }
 
 #include <cerrno>
+#include <climits>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -145,8 +146,12 @@ void MppDecodeNode::setup_mpp(int32_t codec, const uint8_t *extradata, size_t ex
 
     // 若调用方提供了 extradata（SPS/PPS 参数集），作为初始化包预先送入
     if (extradata && extradata_size > 0) {
+        if (extradata_size > static_cast<size_t>(INT_MAX)) {
+            throw std::invalid_argument("Extradata size exceeds INT_MAX");
+        }
         mpp::MppPacket packet = nullptr;
-        if (!api.packet_init || api.packet_init(&packet, const_cast<uint8_t *>(extradata), extradata_size) != mpp::MPP_OK ||
+        if (!api.packet_init || !api.packet_deinit ||
+            api.packet_init(&packet, const_cast<uint8_t *>(extradata), extradata_size) != mpp::MPP_OK ||
             !packet) {
             throw std::runtime_error("mpp_packet_init for extradata failed");
         }
@@ -244,6 +249,10 @@ int MppDecodeNode::configure_buffer_group(mpp::MppFrame frame) {
     if (control(mpp::MPP_DEC_SET_EXT_BUF_GROUP, holder->raw, "set_ext_buf_group") != decode_ok) {
         return decode_backend_failure;
     }
+    // ⚠️ ctx_ 已引用该外部缓冲组：即使后续 info_change_ready 失败，也不能让 holder 在此提前销毁，
+    //    必须由 buf_group_ 保活直至 destroy_mpp() 销毁 ctx_ 之后。
+    //    旧组不在此销毁：仍持有它的在途帧会在释放时把引用计数降为 0。
+    buf_group_ = std::move(holder);
     if (control(mpp::MPP_DEC_SET_INFO_CHANGE_READY, nullptr, "info_change_ready") != decode_ok) {
         return decode_backend_failure;
     }
@@ -251,8 +260,6 @@ int MppDecodeNode::configure_buffer_group(mpp::MppFrame frame) {
     ZL_LOGI(stream_id_, log_module, "mpp_info_change width=%u height=%u stride=%u vstride=%u buffers=%d", width,
             height, hor_stride, ver_stride, count);
 
-    // 旧组不在此销毁：仍持有它的在途帧会在释放时把引用计数降为 0
-    buf_group_ = std::move(holder);
     return decode_ok;
 }
 
@@ -270,7 +277,8 @@ int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, in
     // 排空 (Drain) 信号：data 为 nullptr 或 size 为 0
     if (!data || size == 0) {
         mpp::MppPacket packet = nullptr;
-        if (!api.packet_init || api.packet_init(&packet, nullptr, 0) != mpp::MPP_OK || !packet) {
+        if (!api.packet_init || !api.packet_deinit || api.packet_init(&packet, nullptr, 0) != mpp::MPP_OK ||
+            !packet) {
             ZL_LOGE(stream_id_, log_module, "mpp_eos_packet_init_failed");
             return decode_backend_failure;
         }
@@ -291,9 +299,15 @@ int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, in
         return decode_ok;
     }
 
+    if (size > static_cast<size_t>(INT_MAX)) {
+        ZL_LOGE(stream_id_, log_module, "mpp_packet_too_large size=%zu", size);
+        return AVERROR(EINVAL);
+    }
+
     mpp::MppPacket packet = nullptr;
     // 借用入参缓冲区构造 MppPacket：仅在 decode_put_packet 同步调用期间有效，返回后立即 deinit
-    if (api.packet_init(&packet, const_cast<uint8_t *>(data), size) != mpp::MPP_OK || !packet) {
+    if (!api.packet_init || !api.packet_deinit ||
+        api.packet_init(&packet, const_cast<uint8_t *>(data), size) != mpp::MPP_OK || !packet) {
         ZL_LOGE(stream_id_, log_module, "mpp_packet_init_failed size=%zu", size);
         return decode_backend_failure;
     }
@@ -330,7 +344,7 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
             return decode_again; // 暂无输出，需继续喂包
         }
         if (ret != mpp::MPP_OK || !frame) {
-            // EOS 之后的终止态不是故障：排空完成，继续喂包即可
+            // EOS 之后的终止态不是故障：排空已完成，调用方须先 flush() 才可继续喂包
             if (eos_sent_) {
                 return decode_again;
             }

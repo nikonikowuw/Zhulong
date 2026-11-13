@@ -210,6 +210,74 @@ void test_rejects_invalid_inputs() {
     bad_plane_stride.plane_strides[0] = kWidth - 2;
     assert(!crop.copy(bad_plane_stride, ViewWindow{true, 0, 0, 64, 64}, dst.data(), dst.size(),
                       static_cast<int>(layout.stride), -1));
+
+    // 连续缓冲帧（host_ptr）plane_strides[0] 大于 frame.stride 会导致 y_plane_size 偏移冲突：必须拒绝
+    HardwareFrame overshot_plane_stride;
+    overshot_plane_stride.width = kWidth;
+    overshot_plane_stride.height = kHeight;
+    overshot_plane_stride.stride = src.frame.stride;
+    overshot_plane_stride.vstride = src.frame.vstride;
+    overshot_plane_stride.format = FRAME_FORMAT_NV12;
+    overshot_plane_stride.host_ptr = src.buffer.data();
+    overshot_plane_stride.plane_strides[0] = src.frame.stride + 64;
+    assert(!crop.copy(overshot_plane_stride, ViewWindow{true, 0, 0, 64, 64}, dst.data(),
+                      dst.size(), static_cast<int>(layout.stride), -1));
+}
+
+/** @brief 连续 YUV420P（host_ptr）带 vstride > height 且独立 chroma plane_strides 的偏移一致性回归。 */
+void test_yuv420p_continuous_with_vstride_and_chroma_strides() {
+    const int stride = align_up(kWidth, 64);
+    const int vstride = kHeight + 16;
+    const int u_stride = align_up(kWidth / 2 + 8, 32);
+    const int v_stride = align_up(kWidth / 2 + 16, 32);
+    const size_t y_bytes = static_cast<size_t>(stride) * vstride;
+    const size_t u_bytes = static_cast<size_t>(u_stride) * (kHeight / 2);
+    const size_t v_bytes = static_cast<size_t>(v_stride) * (kHeight / 2);
+
+    std::vector<uint8_t> buf(y_bytes + u_bytes + v_bytes, 0);
+    for (size_t i = 0; i < y_bytes; ++i) buf[i] = static_cast<uint8_t>((i * 3 + 1) & 0xFF);
+    for (size_t i = 0; i < u_bytes; ++i) buf[y_bytes + i] = static_cast<uint8_t>((i * 5 + 7) & 0xFF);
+    for (size_t i = 0; i < v_bytes; ++i) {
+        buf[y_bytes + u_bytes + i] = static_cast<uint8_t>((i * 7 + 13) & 0xFF);
+    }
+
+    HardwareFrame frame;
+    frame.width = kWidth;
+    frame.height = kHeight;
+    frame.stride = static_cast<uint32_t>(stride);
+    frame.vstride = static_cast<uint32_t>(vstride);
+    frame.format = FRAME_FORMAT_YUV420P;
+    frame.host_ptr = buf.data();
+    frame.plane_strides[0] = static_cast<uint32_t>(stride);
+    frame.plane_strides[1] = static_cast<uint32_t>(u_stride);
+    frame.plane_strides[2] = static_cast<uint32_t>(v_stride);
+
+    const ViewWindow view{true, kViewX, kViewY, kViewW, kViewH};
+    const PackedLayout layout = packed_layout_for(view, FRAME_FORMAT_YUV420P);
+    assert(layout.valid);
+
+    std::vector<uint8_t> dst(layout.bytes, 0xEE);
+    WindowCrop crop;
+    assert(crop.copy(frame, view, dst.data(), dst.size(), static_cast<int>(layout.stride), -1));
+
+    for (int r = 0; r < kViewH; ++r) {
+        for (int c = 0; c < kViewW; ++c) {
+            assert(dst[static_cast<size_t>(r) * layout.stride + c] ==
+                   buf[static_cast<size_t>(kViewY + r) * stride + kViewX + c]);
+        }
+    }
+    for (int r = 0; r < kViewH / 2; ++r) {
+        for (int c = 0; c < kViewW / 2; ++c) {
+            const uint8_t got_u =
+                dst[layout.offsets[1] + static_cast<size_t>(r) * layout.strides[1] + c];
+            const uint8_t got_v =
+                dst[layout.offsets[2] + static_cast<size_t>(r) * layout.strides[2] + c];
+            assert(got_u == buf[y_bytes + static_cast<size_t>(kViewY / 2 + r) * u_stride +
+                                kViewX / 2 + c]);
+            assert(got_v == buf[y_bytes + u_bytes +
+                                static_cast<size_t>(kViewY / 2 + r) * v_stride + kViewX / 2 + c]);
+        }
+    }
 }
 
 } // namespace
@@ -217,6 +285,7 @@ void test_rejects_invalid_inputs() {
 int main() {
     test_nv12_window_with_vstride();
     test_yuv420p_independent_plane_strides();
+    test_yuv420p_continuous_with_vstride_and_chroma_strides();
     test_rejects_invalid_inputs();
     std::cout << "[PASS] window_crop_test" << std::endl;
     return 0;
