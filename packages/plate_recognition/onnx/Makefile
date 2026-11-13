@@ -54,7 +54,7 @@ test: $(DEVTEST)
 	@mkdir -p $(OUT_DIR)
 	@# 模型在包根 models/，而二进制在 build/：用包作者也会用的 env 覆盖指明包根。
 	@ZHULONG_PLATE_MODEL_DIR=$(CURDIR) \
-		$(DEVTEST) --sample $(CURDIR)/sample.jpg --out $(RESULT)
+		$(DEVTEST) --sample $(CURDIR)/sample.jpg --out $(RESULT) --check
 	@test -s $(RESULT) || (echo "错误: 没有生成 $(RESULT)" && exit 1)
 	@echo "[✓] $(RESULT)"
 

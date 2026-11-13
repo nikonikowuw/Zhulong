@@ -412,18 +412,6 @@ target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_ALGO_RUNTIME_PRIVATE_
 target_link_libraries(ZhulongAlgoRuntimeStatic PUBLIC ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS} ZhulongLog)
 
 # ==============================================================================
-#  4.0.9 迁移期：人脸包按 target 选源码目录（阶段 3.9 删掉这段桥接）
-# ==============================================================================
-# 包源码已按 target 分家：`packages/face_recognition/{onnx,rk3568}/src`。
-# 宿主构建按推理后端选择一份——rknn 构建用板端实现，其余（onnx / test_stub 夹具）
-# 用主机实现。包真正独立构建后（SDK 前缀），这个变量应当消失。
-if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
-    set(ZHULONG_FACE_IMPL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/rk3568)
-else()
-    set(ZHULONG_FACE_IMPL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/onnx)
-endif()
-
-# ==============================================================================
 #  4.1.1 算法包 SDK 安装（make sdk-install → build/sdk/prefix）
 # ==============================================================================
 # 交给第三方的是「已编译好的公共头 + 静态归档 + CMake 包配置」，不含 native/src。
@@ -680,119 +668,6 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongGallerySync COMMAND ZhulongGallerySyncTests)
     set_tests_properties(ZhulongGallerySync PROPERTIES TIMEOUT 10)
 
-    # 夹具（test_stub）构建没有真实推理能力：这里只注册不依赖真实模型的断言，
-    # 模型相关断言在源码里用 ZHULONG_INFERENCE_TEST_STUB 编译期排除（不再运行期 SKIP）。
-    if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub" OR ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
-        add_executable(ZhulongFaceRecognitionPluginTests
-            tests/face_recognition_plugin_test.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/detection/detector.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/alignment/aligner.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/feature/extractor.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/matching/matcher.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/pipeline/face_recognition.cpp
-        )
-        target_compile_features(ZhulongFaceRecognitionPluginTests PRIVATE cxx_std_17)
-        target_include_directories(ZhulongFaceRecognitionPluginTests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${ZHULONG_FACE_IMPL_DIR}/src
-        )
-        target_link_libraries(ZhulongFaceRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
-        add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests)
-        set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
-    endif()
-
-
-
-    # 人脸几何对齐 + 1:N 比对自测。
-    #
-    # ⚠️ 源文件在**包内**（packages/face_recognition/<target>/tests/），这里只把它编进
-    #    ctest 以便 `make check` 覆盖：包内 `make unit-test` 与这里编译的是同一份文件，
-    #    不复制副本。归属理由见 .trellis/spec/native/algo-plugin-contract.md §5.5。
-    #    该测试不加载模型、不需要会话，因此两种推理后端档位都注册。
-    add_executable(ZhulongFaceGeometryTests
-        ${ZHULONG_FACE_IMPL_DIR}/tests/aligner_matcher_test.cpp
-        ${ZHULONG_FACE_IMPL_DIR}/src/alignment/aligner.cpp
-        ${ZHULONG_FACE_IMPL_DIR}/src/matching/matcher.cpp
-    )
-    target_compile_features(ZhulongFaceGeometryTests PRIVATE cxx_std_17)
-    target_include_directories(ZhulongFaceGeometryTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-        ${ZHULONG_FACE_IMPL_DIR}/src
-    )
-    target_link_libraries(ZhulongFaceGeometryTests PRIVATE ZhulongAlgoRuntime Threads::Threads)
-    add_test(NAME ZhulongFaceGeometry COMMAND ZhulongFaceGeometryTests)
-    set_tests_properties(ZhulongFaceGeometry PROPERTIES TIMEOUT 10)
-
-    # 人员聚集算法包的纯逻辑自测（配置解析 / 透视自适应聚类几何 / 时序防抖）。
-    #
-    # ⚠️ 源文件同样在**包内**（packages/crowd_gathering/onnx/tests/unit_test.cpp），这里只把
-    #    它编进 ctest 以便 `make check` 覆盖：包内 `make unit-test` 与这里编译的是同一份文件。
-    #    该测试不加载模型、不需要会话、不碰硬件后端，因此任何档位都注册。
-    add_executable(ZhulongCrowdGatheringTests
-        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/crowd_gathering/onnx/tests/unit_test.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/crowd_gathering/onnx/src/analysis/spatial_clustering.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/crowd_gathering/onnx/src/analysis/temporal_tracker.cpp
-    )
-    target_compile_features(ZhulongCrowdGatheringTests PRIVATE cxx_std_17)
-    target_include_directories(ZhulongCrowdGatheringTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/crowd_gathering/onnx/src
-    )
-    target_link_libraries(ZhulongCrowdGatheringTests PRIVATE ZhulongAlgoRuntime Threads::Threads)
-    add_test(NAME ZhulongCrowdGathering COMMAND ZhulongCrowdGatheringTests)
-    set_tests_properties(ZhulongCrowdGathering PROPERTIES TIMEOUT 10)
-
-    if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
-        add_executable(ZhulongFaceRecognitionOnnxTests
-            tests/face_recognition_onnx_test.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/detection/detector.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/alignment/aligner.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/feature/extractor.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/matching/matcher.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/pipeline/face_recognition.cpp
-        )
-        target_compile_features(ZhulongFaceRecognitionOnnxTests PRIVATE cxx_std_17)
-        target_include_directories(ZhulongFaceRecognitionOnnxTests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${ZHULONG_FACE_IMPL_DIR}/src
-        )
-        target_link_libraries(ZhulongFaceRecognitionOnnxTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
-        add_test(NAME ZhulongFaceRecognitionOnnx COMMAND ZhulongFaceRecognitionOnnxTests)
-        set_tests_properties(ZhulongFaceRecognitionOnnx PROPERTIES TIMEOUT 20)
-    endif()
-
-    # 车牌包的 ONNX 金标回归（fixture 图 → 真实权重 → 号码/颜色逐字断言）。
-    #
-    # ⚠️ 这是**唯一**会跑车牌的自动门禁：包内 `make test` 的产物是给人看的 result.jpg，
-    #    没有任何机器结论。源文件全在包内（src/ + tests/），这里只给它编一份可执行文件；
-    #    `ASSERT_TEST_TARGETS` 会为本目标补 -UNDEBUG（本用例全靠 assert）。
-    #    只注册在 onnx 档位：包里只有 .onnx 权重，rknn 构建没有可加载的模型。
-    if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
-        set(ZHULONG_PLATE_IMPL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx)
-        add_executable(ZhulongPlateRecognitionPluginTests
-            tests/plate_recognition_onnx_test.cpp
-            ${ZHULONG_PLATE_IMPL_DIR}/src/detection/plate_detector.cpp
-            ${ZHULONG_PLATE_IMPL_DIR}/src/recognition/plate_recognizer.cpp
-            ${ZHULONG_PLATE_IMPL_DIR}/src/format/plate_format.cpp
-            ${ZHULONG_PLATE_IMPL_DIR}/src/pipeline/plate_recognition.cpp
-        )
-        target_compile_features(ZhulongPlateRecognitionPluginTests PRIVATE cxx_std_17)
-        target_compile_definitions(ZhulongPlateRecognitionPluginTests PRIVATE
-            ZHULONG_PLATE_PKG_DIR="${ZHULONG_PLATE_IMPL_DIR}")
-        target_include_directories(ZhulongPlateRecognitionPluginTests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-            ${ZHULONG_PLATE_IMPL_DIR}/src
-            ${ZHULONG_PLATE_IMPL_DIR}/tests
-        )
-        target_link_libraries(ZhulongPlateRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
-        add_test(NAME ZhulongPlateRecognitionPlugin
-                 COMMAND ZhulongPlateRecognitionPluginTests
-                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/onnx/plate_sample.ppm)
-        set_tests_properties(ZhulongPlateRecognitionPlugin PROPERTIES TIMEOUT 30)
-    endif()
-
     # ⚠️ MPP 手工镜像 ↔ 厂商头一致性（编译期断言）。
     #    native/src/common/mpp/mpp_api_types.hpp 是手写镜像（不依赖厂商 SDK 也能编译），
     #    而仓库内带着 vendored 头（native/vendor/mpp/include/rockchip）。两边一旦漂移，
@@ -860,15 +735,6 @@ if(BUILD_TESTING)
         ZhulongStallWatchTests
         ZhulongResultSerializerTests
     )
-    if(TARGET ZhulongFaceRecognitionPluginTests)
-        list(APPEND ASSERT_TEST_TARGETS ZhulongFaceRecognitionPluginTests)
-    endif()
-    if(TARGET ZhulongPlateRecognitionPluginTests)
-        list(APPEND ASSERT_TEST_TARGETS ZhulongPlateRecognitionPluginTests)
-    endif()
-    if(TARGET ZhulongFaceRecognitionOnnxTests)
-        list(APPEND ASSERT_TEST_TARGETS ZhulongFaceRecognitionOnnxTests)
-    endif()
     foreach(TEST_TARGET ${ASSERT_TEST_TARGETS})
         target_compile_options(${TEST_TARGET} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
     endforeach()

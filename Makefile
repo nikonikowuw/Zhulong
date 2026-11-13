@@ -23,7 +23,7 @@ BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)
 
-.PHONY: all build go-build check frontend-install frontend-build frontend-check webui-dist-check native-deps native-configure native-build native-test native-cross-build cross cross-board sdk-cross-install sdk-install sdk-dist sdk-clean-check board-check api-docs go-check pkg-drift-check smoke run web-dev dev-backend dev-frontend dev
+.PHONY: all build go-build check frontend-install frontend-build frontend-check webui-dist-check native-deps native-configure native-build native-test native-cross-build cross cross-board sdk-cross-install sdk-install sdk-dist sdk-clean-check board-check api-docs go-check pkg-drift-check pkg-test smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -219,6 +219,24 @@ pkg-drift-check:
 	python3 native/scripts/check_package_drift.py packages/plate_recognition
 	python3 native/scripts/check_package_drift.py packages/crowd_gathering
 
+# 算法包独立回归（只依赖已安装 SDK 前缀，不进 native/CMakeLists.txt）：
+# test_stub 构建不产 SDK 前缀，自动跳过；常规 onnx 宿主跑全量 onnx 包自测与金标断言。
+pkg-test:
+	@if [ "$(INFERENCE_BACKEND)" = "test_stub" ]; then \
+		echo "[跳过] pkg-test: test_stub 档位不产 SDK 前缀"; \
+	else \
+		$(MAKE) sdk-install; \
+		abs_sdk="$$(cd "$(SDK_PREFIX)" && pwd)"; \
+		ort_arg=""; \
+		if [ -d "$(CURDIR)/build/deps/onnxruntime" ]; then \
+			ort_arg="ONNXRUNTIME_ROOT=$(CURDIR)/build/deps/onnxruntime"; \
+		fi; \
+		for pkg in packages/face_recognition/onnx packages/plate_recognition/onnx packages/crowd_gathering/onnx; do \
+			echo "[*] pkg-test: $$pkg"; \
+			$(MAKE) -C "$$pkg" test SDK_PREFIX="$$abs_sdk" $$ort_arg || exit 1; \
+		done; \
+	fi
+
 api-docs:
 	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/audit,internal/asyncjob,internal/camera,internal/network,internal/systemtime,internal/systeminfo,internal/storage,internal/algorithm,internal/person,internal/mediafile,internal/record,internal/task,internal/gb28181,internal/aitypes,internal/region,internal/spatial,internal/apitoken,internal/alertpush,internal/openapi --generalInfo main.go --output internal/apidocs --parseInternal
 
@@ -232,6 +250,7 @@ check:
 	$(MAKE) frontend-check
 	$(MAKE) pkg-drift-check
 	$(MAKE) native-test
+	$(MAKE) pkg-test
 	$(MAKE) api-docs
 	$(MAKE) go-check
 

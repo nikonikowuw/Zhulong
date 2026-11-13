@@ -9,12 +9,10 @@
  *    仓库早就踩过（`native/CMakeLists.txt` 的 ASSERT_TEST_TARGETS 就是那次事故的补丁），
  *    这里用永远求值的 `PLATE_CHECK`。
  *
- * 2. **是 header 而不是 TU**。同一份断言要同时被两个可执行文件编译：包内 devtest
- *    （给人看框和号码）与仓库 native 金标测试（给 `make check` 机器结论）。复制两份
- *    必然漂移，而漂移后的「测试通过」毫无意义。
+ * 2. **是 header 而不是 TU**。保持 header-only 便于在包内自测与 `devtest` 中复用。
  *
  * 3. **不加载模型**。这里只测纯函数，因此不需要 Session、不需要权重、不需要推理后端，
- *    任何档位都能跑；模型相关的断言留给 `native/tests/plate_recognition_onnx_test.cpp`。
+ *    任何档位都能跑；模型金标与多 worker 回归断言由 `tests/dev_infer.cpp --check` 承担。
  */
 
 #pragma once

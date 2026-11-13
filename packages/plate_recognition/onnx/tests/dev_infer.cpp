@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
     std::string sample_path = "sample.jpg";
     std::string output_path = "build/out/result.jpg";
     std::string config_json = "{}";
+    bool run_check = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--sample" && i + 1 < argc) {
@@ -132,6 +133,8 @@ int main(int argc, char** argv) {
             output_path = argv[++i];
         } else if (arg == "--config" && i + 1 < argc) {
             config_json = argv[++i];
+        } else if (arg == "--check") {
+            run_check = true;
         } else {
             std::fprintf(stderr, "unknown argument: %s\n", arg.c_str());
             return 2;
@@ -215,5 +218,68 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "failed to write %s\n", output_path.c_str());
         return 1;
     }
+
+    if (run_check) {
+        auto check_fail = [&](const char* msg) {
+            std::fprintf(stderr, "[✗] plate regression check failed: %s\n", msg);
+            return 1;
+        };
+        if (vehicles.size() != 2) {
+            return check_fail("expected 2 vehicles on sample.jpg");
+        }
+        const std::vector<std::string> expected_numbers = {"辽DU4356", "豫B2V9L7"};
+        for (std::size_t i = 0; i < expected_numbers.size(); ++i) {
+            const auto& vehicle = vehicles[i];
+            if (vehicle.track_id != 0 || vehicle.plates.size() != 1 || vehicle.vehicle_type != "unknown") {
+                return check_fail("unexpected vehicle degenerate semantics");
+            }
+            if (!(vehicle.vehicle_score > 0.0f && vehicle.vehicle_score <= 1.0f)) {
+                return check_fail("invalid vehicle_score");
+            }
+            const auto& plate = vehicle.plates[0];
+            if (plate.plate_number != expected_numbers[i]) {
+                std::fprintf(stderr, "第 %zu 块车牌号码不符：期望 %s，实际 %s\n",
+                             i, expected_numbers[i].c_str(), plate.plate_number.c_str());
+                return 1;
+            }
+            if (plate.plate_color != "蓝色" ||
+                plate.plate_type != static_cast<int32_t>(zhulong::plate::PlateKind::SingleLine) ||
+                !(plate.score > 0.0f && plate.score <= 1.0f)) {
+                return check_fail("plate color/type/score mismatch");
+            }
+            for (std::size_t k = 0; k < 4; ++k) {
+                if (plate.box[k] != vehicle.vehicle_box[k] ||
+                    plate.box[k] < 0.0f || plate.box[k] > 1.0f) {
+                    return check_fail("plate/vehicle box mismatch or out of bounds");
+                }
+            }
+            if (!(plate.box[2] > plate.box[0] && plate.box[3] > plate.box[1])) {
+                return check_fail("degenerate plate box");
+            }
+        }
+
+        // 级联会话按 worker_id 配对：换一个 worker 也必须能拿到识别会话
+        zhulong::Session other_worker = plugin.create_session(7);
+        if (!other_worker.valid()) {
+            return check_fail("other_worker create_session failed");
+        }
+        const auto other_vehicles = plugin.detect_vehicles(other_worker, zhulong::Image(frame), task_context);
+        if (other_vehicles.size() != vehicles.size() ||
+            other_vehicles[0].plates.empty() ||
+            other_vehicles[0].plates[0].plate_number != expected_numbers[0]) {
+            return check_fail("other_worker cascade recognition mismatch");
+        }
+
+        // 阈值通道：0.99 远高于样本检测置信度，必须一块都不报
+        if (plugin.init(R"({"confidence_threshold": 0.99})") != ZHULONG_PLUGIN_OK) {
+            return check_fail("re-init with confidence_threshold=0.99 failed");
+        }
+        const auto suppressed = plugin.detect_vehicles(session, zhulong::Image(frame), task_context);
+        if (!suppressed.empty()) {
+            return check_fail("confidence_threshold=0.99 did not suppress detections");
+        }
+        std::printf("[✓] plate onnx gold: %s / %s\n", expected_numbers[0].c_str(), expected_numbers[1].c_str());
+    }
+
     return pure_failures == 0 ? 0 : 1;
 }

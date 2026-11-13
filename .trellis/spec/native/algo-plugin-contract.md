@@ -95,7 +95,7 @@ native/tests/check_plugin_symbols.py --entry <包根可执行文件>
   {"status":"passed","sample":"/tmp/test.ppm","sample_decoded":true,"width":1920,"height":1080,"result_type":1,"count":1,"cost_ms":28,"result":{"stream_id":0,"pts":1000,"cost_ms":28,"task_type":"detection","detections":[{"box":[0.1,0.2,0.3,0.4],"label":"helmet","score":0.95}],"classifications":[],"persons":[],"vehicles":[]}}
   ```
   该结果支持宿主「单图试跑（Trial Inference）」提取单帧检出与结构化目标。
-- 算法包自身的准确率回归由 native 金标测试负责（如 `ZhulongPlateRecognitionPluginTests` 用 `native/tests/fixtures/onnx/plate_sample.ppm` 钉住车牌号与颜色），黑盒验包不重复承担该职责；不需要模型的纯逻辑自测留在包内 `tests/`，见 [§5.5 测试归属](#55-测试归属包内自测-vs-金标回归)。
+- 算法包自身的准确率与逻辑回归由包内 `tests/`（`make unit-test` 与 `dev_infer --check`）承担，并通过根 `make pkg-test`（经 SDK 前缀独立构建运行，已纳入 `make check`）自动门禁；`native/tests/` 不再直编算法包源码或依赖具体算法权重。见 [§5.5 测试归属](#55-测试归属包内独立测试)。
 
 ---
 
@@ -423,26 +423,22 @@ env 覆盖与「开发期源码树候选」只能排在后面。原因不是洁�
 宿主侧实现与进程生命周期（并发 1、崩溃单帧重试 1 次、超时杀进程组、空闲回收、入口指纹失效）
 见 [CGO 契约 §6](./cgo-contract.md)。
 
-### 5.5 测试归属：包内自测 vs. 金标回归
+### 5.5 测试归属：包内独立测试（与 `native/tests/` 彻底解耦）
 
-算法包是**独立交付物**：第三方只拿到「SDK 前缀 + 包目录」。因此测试按「能不能脱离仓库运行」
-分成两类，**不要**把所有算法测试都往 `native/tests/` 塞：
+算法包是**独立交付物**：第三方只拿到「SDK 前缀 + 包目录」。因此 `native/CMakeLists.txt` 与
+`native/tests/` **不得**直编任何算法包源码、不得 `#include` 包内私有头文件、也不得存放具体算法包的模型回归测试；原生侧只测引擎、SDK、Runtime、IPC、硬件后端与 C ABI。
+
+算法包自身的测试全部留在 `packages/<id>/<target>/tests/`，通过 `ZhulongAlgoSDK` 前缀独立构建与运行：
 
 | 类型 | 放哪 | 驱动方式 | 判据 |
 | :--- | :--- | :--- | :--- |
-| **包内自测** | `packages/<id>/<target>/tests/` | 包自己 `make unit-test`（并入 `make test`）；`make sdk-clean-check` 的干净容器覆盖 | 不加载模型、不需要会话与技术栈之外的依赖；纯几何/后处理/比对/协议数学 |
-| **金标回归** | `native/tests/` + `native/tests/fixtures/` | `make check` / `make native-test`（ctest） | 需要真实权重与金标样本，钉住准确率与结果语义（如车牌号、1:N 相似度基线） |
+| **包内纯逻辑自测** | `packages/<id>/<target>/tests/` | 包内 `make unit-test`（并入 `make test`） | 不加载模型、不需要会话与外部依赖；纯几何/后处理/比对/协议数学 |
+| **包内模型回归自测** | `packages/<id>/<target>/tests/dev_infer.cpp --check` | 包内 `make test`；根 `make pkg-test`（经 `make sdk-install` 触发，已纳入 `make check`）；`make sdk-clean-check` 干净容器覆盖 | 加载包内 `models/` 与 `sample.jpg`，输出结构化校验、特征/质量分基线与结果图 |
 
-- 包内自测源文件是**唯一事实源**：仓库门禁若要覆盖它，在 `native/CMakeLists.txt` 里直接编译
-  `${ZHULONG_FACE_IMPL_DIR}/tests/...`（现有 `ZhulongFaceGeometryTests` 即此形态），**不得**在
-  `native/tests/` 再放一份副本。
-- 包内自测不得依赖 `stb` 之外的额外第三方库，也不得 `#include` 仓库内路径（只有 `sdk/include`
+- 包内测试不得依赖 `stb` 之外的额外第三方库，也不得 `#include` 仓库内路径（只有 `sdk/include`
   与包自身目录可 include）。
-- ⚠️ 包内自测不要用 `assert()` 作为唯一判据：宿主与 CI 的 `RelWithDebInfo` 会定义 `NDEBUG` 把断言
-  整段编译掉（`native/CMakeLists.txt` 的 `-UNDEBUG` 列表就是为这个坑设的）。包内的做法是显式检查
-  + 非零退出码，失败时打印用例名。
-- 反过来，`native/tests/` 里的包测试只能证明「仓库内这套源码 + 这套夹具没问题」，**不能**证明包可
-  独立开发——那是 `make sdk-clean-check` 的职责。
+- ⚠️ 包内测试不要用 `assert()` 作为唯一判据：宿主与 CI 的 `RelWithDebInfo` 会定义 `NDEBUG` 把断言
+  整段编译掉。包内的做法是显式检查 + 非零退出码，失败时打印具体用例名。
 - **多 target 包必须过漂移检查**：`packages/<id>/<a>/` 与 `<id>/<b>/` 是两份自包含副本，同一处逻辑修复
   容易只落到一侧。`make pkg-drift-check`（`native/scripts/check_package_drift.py`）比较各档位的
   `src/**`、`tests/**`，只允许脚本里显式登记的差异；未登记的差异即门禁失败。已进 `make check`。

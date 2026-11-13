@@ -34,7 +34,7 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 
   推理/视觉后端是编译期开关，只作用于 `libZhulongAlgoRuntime`；宿主 `Zhulong` 不链它们，
   所以没有「宿主 rknn 版 / rga 版」之分。快捷目标不重建前端，发版前先 `make frontend-build`。
-- 收工前过 `make check`（前端 format/lint/type-check/test + pkg-drift-check + native-test + api-docs + go-check）。
+- 收工前过 `make check`（前端 format/lint/type-check/test + pkg-drift-check + native-test + pkg-test + api-docs + go-check）。
 - 算法包/SDK 相关：`make sdk-install BUNDLE_RUNTIME=1`（前缀）、`make sdk-dist`（分发 tarball）、
   `make sdk-clean-check`（干净容器里从零构建内置算法包 + 脚手架 round-trip）、
   `make board-check`（交叉产 aarch64 前缀后在 RK3568 上构建/自测/验包）。后两者分别要

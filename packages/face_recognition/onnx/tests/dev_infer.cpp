@@ -19,6 +19,8 @@
  */
 
 #include <zhulong/algo.hpp>
+#include <zhulong/plugin.h>
+#include <zhulong/runtime/gallery_registry.hpp>
 
 #include "pipeline/face_recognition.hpp"
 
@@ -27,11 +29,26 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
+
+extern "C" {
+zhulong_status_t zhulong_face_extract_feature(
+    const uint8_t* pixel_data,
+    int32_t width,
+    int32_t height,
+    int32_t stride,
+    int32_t format,
+    float* out_features,
+    uint32_t* feature_dim
+);
+void zhulong_face_extract_release();
+}
 
 namespace {
 
@@ -100,6 +117,262 @@ void print_table(const std::string& sample, const char* result_type_name, uint32
     }
 }
 
+#define DEV_CHECK(cond, msg)                                                                           \
+    do {                                                                                               \
+        if (!(cond)) {                                                                                 \
+            std::fprintf(stderr, "[✗] regression check failed: %s (%s:%d)\n", (msg), __FILE__, __LINE__); \
+            return false;                                                                              \
+        }                                                                                              \
+    } while (false)
+
+struct RgbBuffer {
+    int width{0};
+    int height{0};
+    std::vector<uint8_t> rgb;
+};
+
+RgbBuffer crop_face_padded(const uint8_t* src, int src_w, int src_h, const float box[4], int canvas_size) {
+    const float bw = std::max(1.0f, (box[2] - box[0]) * static_cast<float>(src_w));
+    const float bh = std::max(1.0f, (box[3] - box[1]) * static_cast<float>(src_h));
+    const float cx = 0.5f * (box[0] + box[2]) * static_cast<float>(src_w);
+    const float cy = 0.5f * (box[1] + box[3]) * static_cast<float>(src_h);
+    const float side = std::max(bw, bh) * 1.8f;
+    const int x1 = std::max(0, static_cast<int>(std::floor(cx - side * 0.5f)));
+    const int y1 = std::max(0, static_cast<int>(std::floor(cy - side * 0.5f)));
+    const int x2 = std::min(src_w, static_cast<int>(std::ceil(cx + side * 0.5f)));
+    const int y2 = std::min(src_h, static_cast<int>(std::ceil(cy + side * 0.5f)));
+    const int cw = std::max(1, x2 - x1);
+    const int ch = std::max(1, y2 - y1);
+
+    RgbBuffer out;
+    out.width = canvas_size;
+    out.height = canvas_size;
+    out.rgb.assign(static_cast<size_t>(canvas_size) * static_cast<size_t>(canvas_size) * 3, 128);
+
+    const int target = std::min(canvas_size - 40, std::max(cw, ch));
+    const int dst_w = std::max(1, static_cast<int>(std::round(static_cast<float>(target) * cw / std::max(cw, ch))));
+    const int dst_h = std::max(1, static_cast<int>(std::round(static_cast<float>(target) * ch / std::max(cw, ch))));
+    const int off_x = (canvas_size - dst_w) / 2;
+    const int off_y = (canvas_size - dst_h) / 2;
+
+    for (int y = 0; y < dst_h; ++y) {
+        const float sy = (static_cast<float>(y) + 0.5f) * static_cast<float>(ch) / static_cast<float>(dst_h) - 0.5f;
+        const int sy0 = std::max(0, std::min(ch - 1, static_cast<int>(std::floor(sy))));
+        const int sy1 = std::min(ch - 1, sy0 + 1);
+        const float wy = std::max(0.0f, std::min(1.0f, sy - static_cast<float>(sy0)));
+        for (int x = 0; x < dst_w; ++x) {
+            const float sx = (static_cast<float>(x) + 0.5f) * static_cast<float>(cw) / static_cast<float>(dst_w) - 0.5f;
+            const int sx0 = std::max(0, std::min(cw - 1, static_cast<int>(std::floor(sx))));
+            const int sx1 = std::min(cw - 1, sx0 + 1);
+            const float wx = std::max(0.0f, std::min(1.0f, sx - static_cast<float>(sx0)));
+            for (int c = 0; c < 3; ++c) {
+                const float p00 = src[((y1 + sy0) * src_w + (x1 + sx0)) * 3 + c];
+                const float p01 = src[((y1 + sy0) * src_w + (x1 + sx1)) * 3 + c];
+                const float p10 = src[((y1 + sy1) * src_w + (x1 + sx0)) * 3 + c];
+                const float p11 = src[((y1 + sy1) * src_w + (x1 + sx1)) * 3 + c];
+                const float val = (1.0f - wy) * ((1.0f - wx) * p00 + wx * p01) +
+                                  wy * ((1.0f - wx) * p10 + wx * p11);
+                out.rgb[((off_y + y) * canvas_size + (off_x + x)) * 3 + c] =
+                    static_cast<uint8_t>(std::round(val));
+            }
+        }
+    }
+    return out;
+}
+
+RgbBuffer blur_downsample_buffer(const RgbBuffer& src, int small_dim) {
+    std::vector<uint8_t> small(static_cast<size_t>(small_dim) * static_cast<size_t>(small_dim) * 3, 0);
+    for (int y = 0; y < small_dim; ++y) {
+        const int sy = (y * src.height + src.height / 2) / small_dim;
+        for (int x = 0; x < small_dim; ++x) {
+            const int sx = (x * src.width + src.width / 2) / small_dim;
+            for (int c = 0; c < 3; ++c) {
+                small[(y * small_dim + x) * 3 + c] = src.rgb[(sy * src.width + sx) * 3 + c];
+            }
+        }
+    }
+    RgbBuffer out;
+    out.width = src.width;
+    out.height = src.height;
+    out.rgb.resize(src.rgb.size());
+    for (int y = 0; y < src.height; ++y) {
+        const float fy = (static_cast<float>(y) + 0.5f) * static_cast<float>(small_dim) / static_cast<float>(src.height) - 0.5f;
+        const int y0 = std::max(0, std::min(small_dim - 1, static_cast<int>(std::floor(fy))));
+        const int y1 = std::min(small_dim - 1, y0 + 1);
+        const float wy = std::max(0.0f, std::min(1.0f, fy - static_cast<float>(y0)));
+        for (int x = 0; x < src.width; ++x) {
+            const float fx = (static_cast<float>(x) + 0.5f) * static_cast<float>(small_dim) / static_cast<float>(src.width) - 0.5f;
+            const int x0 = std::max(0, std::min(small_dim - 1, static_cast<int>(std::floor(fx))));
+            const int x1 = std::min(small_dim - 1, x0 + 1);
+            const float wx = std::max(0.0f, std::min(1.0f, fx - static_cast<float>(x0)));
+            for (int c = 0; c < 3; ++c) {
+                const float p00 = small[(y0 * small_dim + x0) * 3 + c];
+                const float p01 = small[(y0 * small_dim + x1) * 3 + c];
+                const float p10 = small[(y1 * small_dim + x0) * 3 + c];
+                const float p11 = small[(y1 * small_dim + x1) * 3 + c];
+                const float val = (1.0f - wy) * ((1.0f - wx) * p00 + wx * p01) +
+                                  wy * ((1.0f - wx) * p10 + wx * p11);
+                out.rgb[(y * src.width + x) * 3 + c] = static_cast<uint8_t>(std::round(val));
+            }
+        }
+    }
+    return out;
+}
+
+bool check_unit_norm(const std::vector<float>& feat) {
+    if (feat.size() != 512) return false;
+    float norm_sq = 0.0f;
+    for (float v : feat) {
+        if (!std::isfinite(v)) return false;
+        norm_sq += v * v;
+    }
+    return std::fabs(std::sqrt(norm_sq) - 1.0f) < 0.01f;
+}
+
+bool run_regression_checks(zhulong::face::FaceRecognitionPlugin& plugin,
+                           zhulong::Session& session,
+                           const uint8_t* sample_rgb,
+                           int width,
+                           int height) {
+    zhulong::runtime::GalleryRegistry::instance().clear();
+
+    // 1. 合成噪声与全黑帧必须 fail-closed（零检出）
+    {
+        std::vector<uint8_t> noise(100 * 100 * 3, 0);
+        for (size_t i = 0; i < noise.size(); ++i) {
+            noise[i] = static_cast<uint8_t>((i * 7 + 13) % 256);
+        }
+        std::vector<uint8_t> black(100 * 100 * 3, 0);
+        for (const auto* buf : {noise.data(), black.data()}) {
+            zhulong_frame_view fv{};
+            fv.frame_id = 1;
+            fv.width = 100;
+            fv.height = 100;
+            fv.format = ZHULONG_PIXEL_FORMAT_RGB24;
+            fv.planes[0] = buf;
+            fv.strides[0] = 300;
+            fv.dma_buf_fd = -1;
+            zhulong::TaskContext ctx;
+            ctx.task_id = 900;
+            const auto out = plugin.detect_scene_structure(session, zhulong::Image(fv), ctx);
+            DEV_CHECK(out.persons.empty() && out.faces.empty(), "synthetic noise/black frame must yield 0 detections");
+        }
+    }
+
+    // 2. SceneStructure v2 主路径：真实图必须检出人体与人脸，且特征与 eDifFIQA(T) 质量合法
+    zhulong_frame_view sample_fv{};
+    sample_fv.frame_id = 10;
+    sample_fv.pts = 400000;
+    sample_fv.timestamp_us = 1000000;
+    sample_fv.width = width;
+    sample_fv.height = height;
+    sample_fv.format = ZHULONG_PIXEL_FORMAT_RGB24;
+    sample_fv.planes[0] = sample_rgb;
+    sample_fv.strides[0] = width * 3;
+    sample_fv.dma_buf_fd = -1;
+
+    zhulong::TaskContext base_ctx;
+    base_ctx.task_id = 901;
+    const auto scene = plugin.detect_scene_structure(session, zhulong::Image(sample_fv), base_ctx);
+    DEV_CHECK(!scene.persons.empty(), "expected >= 1 person on sample");
+    DEV_CHECK(scene.faces.size() >= 2, "expected >= 2 faces on sample");
+    for (const auto& p : scene.persons) {
+        DEV_CHECK(p.faces.empty(), "SceneStructure person item faces must be empty");
+        DEV_CHECK(p.body_box[0] >= 0.0f && p.body_box[2] <= 1.0f && p.body_box[0] < p.body_box[2], "valid body x");
+        DEV_CHECK(p.body_box[1] >= 0.0f && p.body_box[3] <= 1.0f && p.body_box[1] < p.body_box[3], "valid body y");
+    }
+    for (const auto& f : scene.faces) {
+        DEV_CHECK(f.quality >= 0.40f && f.quality <= 1.0f, "face quality must pass default eDifFIQA(T) gate");
+        DEV_CHECK(check_unit_norm(f.features), "face feature must be 512-d L2 normalized");
+    }
+
+    // 3. 任务级 min_face_quality=0.99 门禁必须拦截常规人脸
+    {
+        zhulong::TaskContext strict_ctx;
+        strict_ctx.task_id = 902;
+        strict_ctx.params.json = "{\"min_face_quality\":0.99}";
+        const auto strict_scene = plugin.detect_scene_structure(session, zhulong::Image(sample_fv), strict_ctx);
+        DEV_CHECK(strict_scene.faces.empty(), "min_face_quality=0.99 must filter out normal faces");
+    }
+
+    // 4. 构造单人裁剪图，验证 eDifFIQA(T) 退化区分、跨帧融合与底库登记门禁
+    const auto& face0 = scene.faces[0];
+    const auto& face1 = scene.faces[1];
+    const RgbBuffer photo_a = crop_face_padded(sample_rgb, width, height, face0.box, 320);
+    const RgbBuffer photo_b = crop_face_padded(sample_rgb, width, height, face1.box, 320);
+    const RgbBuffer photo_degraded = blur_downsample_buffer(photo_a, 16);
+
+    // 4a. 底库登记提取入口 (--extract-feature) + eDifFIQA(T) 质检
+    std::vector<float> enroll_feat(512, 0.0f);
+    uint32_t enroll_dim = 512;
+    zhulong_status_t ext_rc = zhulong_face_extract_feature(
+        photo_a.rgb.data(), photo_a.width, photo_a.height, photo_a.width * 3,
+        ZHULONG_PIXEL_FORMAT_RGB24, enroll_feat.data(), &enroll_dim);
+    DEV_CHECK(ext_rc == ZHULONG_PLUGIN_OK && enroll_dim == 512, "single-face enrollment photo should succeed");
+    DEV_CHECK(check_unit_norm(enroll_feat), "extracted enrollment feature must have unit L2 norm");
+
+    uint32_t bad_dim = 512;
+    std::vector<float> bad_feat(512, 0.0f);
+    const zhulong_status_t bad_rc = zhulong_face_extract_feature(
+        photo_degraded.rgb.data(), photo_degraded.width, photo_degraded.height, photo_degraded.width * 3,
+        ZHULONG_PIXEL_FORMAT_RGB24, bad_feat.data(), &bad_dim);
+    DEV_CHECK(bad_rc == ZHULONG_PLUGIN_ERR_NOT_FOUND, "severely degraded photo must be rejected by enrollment gate");
+
+    const zhulong_status_t multi_rc = zhulong_face_extract_feature(
+        sample_rgb, width, height, width * 3,
+        ZHULONG_PIXEL_FORMAT_RGB24, bad_feat.data(), &bad_dim);
+    DEV_CHECK(multi_rc == ZHULONG_PLUGIN_ERR_AMBIGUOUS, "multi-face photo must return AMBIGUOUS");
+    zhulong_face_extract_release();
+
+    // 4b. 跨帧特征融合与陌生人隔离
+    zhulong::runtime::GalleryRegistry::instance().upsert({
+        "face_sample_0",
+        "PERSON_SAMPLE_0",
+        "SamplePerson0",
+        "sample0.jpg",
+        enroll_feat,
+    });
+
+    auto run_photo = [&](const RgbBuffer& img, int64_t ts_us, uint64_t fid, uint64_t tid, const char* params) {
+        zhulong_frame_view fv{};
+        fv.frame_id = fid;
+        fv.pts = fid * 40000;
+        fv.timestamp_us = ts_us;
+        fv.width = img.width;
+        fv.height = img.height;
+        fv.format = ZHULONG_PIXEL_FORMAT_RGB24;
+        fv.planes[0] = img.rgb.data();
+        fv.strides[0] = img.width * 3;
+        fv.dma_buf_fd = -1;
+        zhulong::TaskContext ctx;
+        ctx.task_id = tid;
+        ctx.params.json = params;
+        return plugin.detect_scene_structure(session, zhulong::Image(fv), ctx);
+    };
+
+    const auto r1 = run_photo(photo_a, 1000000, 1, 903, "{\"threshold\":0.50,\"top_k\":3}");
+    DEV_CHECK(r1.faces.size() >= 1 && r1.faces[0].matched && !r1.faces[0].is_fused,
+              "first observation must match gallery with is_fused=false");
+    const auto r2 = run_photo(photo_a, 1200000, 2, 903, "{\"threshold\":0.50,\"top_k\":3}");
+    DEV_CHECK(r2.faces.size() >= 1 && r2.faces[0].matched && r2.faces[0].is_fused,
+              "second consecutive same-person frame must activate is_fused=true");
+    DEV_CHECK(r2.faces[0].person_id == "PERSON_SAMPLE_0", "fused face must keep enrolled person_id");
+    const auto r3 = run_photo(photo_b, 1400000, 3, 903, "{\"threshold\":0.50,\"top_k\":3}");
+    DEV_CHECK(r3.faces.size() >= 1 && !r3.faces[0].matched && !r3.faces[0].is_fused,
+              "different person must stay isolated from fusion pool");
+
+    // 4c. 退化图像质量分远低于清晰图像或直接被拒
+    const auto r_deg = run_photo(photo_degraded, 1600000, 4, 904, "{\"min_face_quality\":0.0}");
+    if (!r_deg.faces.empty()) {
+        DEV_CHECK(r_deg.faces[0].quality < r1.faces[0].quality - 0.15f,
+                  "degraded face must receive significantly lower eDifFIQA(T) score");
+    }
+
+    zhulong::runtime::GalleryRegistry::instance().clear();
+    std::printf("[✓] face_recognition regression checks passed\n");
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -109,6 +382,7 @@ int main(int argc, char** argv) {
     // 任务级配置原文：与宿主经 MSG_TASK_CONFIG 下发的内容等价，用来在本地验证
     // 「每个 stream 一份配置」的解析路径（不需要跑 broker 与包进程）。
     std::string task_config_json = "{}";
+    bool run_check = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--sample" && i + 1 < argc) {
@@ -119,6 +393,8 @@ int main(int argc, char** argv) {
             config_json = argv[++i];
         } else if (arg == "--task-config" && i + 1 < argc) {
             task_config_json = argv[++i];
+        } else if (arg == "--check") {
+            run_check = true;
         } else {
             std::fprintf(stderr, "unknown argument: %s\n", arg.c_str());
             return 2;
@@ -147,6 +423,10 @@ int main(int argc, char** argv) {
     zhulong::Session session = plugin.create_session(0);
     if (!session.valid()) {
         std::fprintf(stderr, "create_session failed\n");
+        return 1;
+    }
+
+    if (run_check && !run_regression_checks(plugin, session, canvas.data(), width, height)) {
         return 1;
     }
 
