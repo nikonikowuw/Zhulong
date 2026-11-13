@@ -134,14 +134,14 @@ export function PersonsFaceImportDialog() {
       open={isOpen}
       onOpenChange={(nextOpen) => !nextOpen && handleClose()}
     >
-      <DialogContent className='max-w-xl'>
-        <DialogHeader>
+      <DialogContent className='overflow-hidden sm:max-w-xl'>
+        <DialogHeader className='min-w-0'>
           <DialogTitle>{t('faceImport.title')}</DialogTitle>
           <DialogDescription>{t('faceImport.description')}</DialogDescription>
         </DialogHeader>
 
         {!activeJobId ? (
-          <div className='space-y-4'>
+          <div className='min-w-0 space-y-4'>
             <input
               ref={fileInputRef}
               type='file'
@@ -216,33 +216,34 @@ export function PersonsFaceImportDialog() {
             </Button>
           </div>
         ) : (
-          <div className='space-y-4 py-2'>
-            <div className='flex items-center justify-between'>
-              <div className='flex items-center gap-2'>
+          <div className='min-w-0 space-y-4 py-2'>
+            <div className='flex min-w-0 flex-wrap items-center justify-between gap-2'>
+              <div className='flex min-w-0 flex-1 items-center gap-2'>
                 {isBusy ? (
-                  <Loader2 className='size-5 animate-spin text-primary' />
+                  <Loader2 className='size-5 shrink-0 animate-spin text-primary' />
                 ) : job?.status === 'COMPLETED' ? (
                   <CheckCircle2
-                    className={cn('size-5', statusTextClass('active'))}
+                    className={cn('size-5 shrink-0', statusTextClass('active'))}
                   />
                 ) : (
-                  <XCircle className='size-5 text-destructive' />
+                  <XCircle className='size-5 shrink-0 text-destructive' />
                 )}
-                <span className='font-medium'>
+                <span className='truncate font-medium'>
                   {job ? t(STATUS_LABEL_KEYS[job.status]) : null}
                 </span>
               </div>
               <Badge
+                className='shrink-0'
                 variant={job?.status === 'COMPLETED' ? 'default' : 'secondary'}
               >
                 {job?.status ?? 'PENDING'}
               </Badge>
             </div>
 
-            <div className='space-y-1.5'>
+            <div className='min-w-0 space-y-1.5'>
               <div className='flex justify-between text-xs text-muted-foreground'>
                 <span>{t('faceImport.progressLabel')}</span>
-                <span>{percent}%</span>
+                <span className='tabular-nums'>{percent}%</span>
               </div>
               <div
                 role='progressbar'
@@ -257,42 +258,55 @@ export function PersonsFaceImportDialog() {
                 />
               </div>
               {job?.currentFile && isBusy && (
-                <p className='truncate text-xs text-muted-foreground'>
+                <p
+                  className='min-w-0 truncate text-xs text-muted-foreground'
+                  title={job.currentFile}
+                >
                   {t('faceImport.currentFile')} {job.currentFile}
                 </p>
               )}
             </div>
 
-            <div className='grid grid-cols-4 gap-2 text-center'>
-              <div className='rounded-md border border-border bg-muted/20 p-2'>
-                <div className='text-xs text-muted-foreground'>
+            <div className='grid min-w-0 grid-cols-2 gap-2 text-center sm:grid-cols-4'>
+              <div className='min-w-0 rounded-md border border-border bg-muted/20 p-2'>
+                <div className='truncate text-xs text-muted-foreground'>
                   {t('faceImport.total')}
                 </div>
-                <div className='text-lg font-semibold'>{total}</div>
+                <div className='text-lg font-semibold tabular-nums'>
+                  {total}
+                </div>
               </div>
-              <div className='rounded-md border border-border bg-muted/20 p-2'>
-                <div className='text-xs text-muted-foreground'>
+              <div className='min-w-0 rounded-md border border-border bg-muted/20 p-2'>
+                <div className='truncate text-xs text-muted-foreground'>
                   {t('faceImport.processed')}
                 </div>
-                <div className='text-lg font-semibold'>{processed}</div>
+                <div className='text-lg font-semibold tabular-nums'>
+                  {processed}
+                </div>
               </div>
               <div
                 className={cn(
-                  'rounded-md border p-2',
+                  'min-w-0 rounded-md border p-2',
                   STATUS_LEVEL_CLASS.active
                 )}
               >
-                <div className='text-xs'>{t('faceImport.succeeded')}</div>
-                <div className='text-lg font-semibold'>{succeeded}</div>
+                <div className='truncate text-xs'>
+                  {t('faceImport.succeeded')}
+                </div>
+                <div className='text-lg font-semibold tabular-nums'>
+                  {succeeded}
+                </div>
               </div>
               <div
                 className={cn(
-                  'rounded-md border p-2',
+                  'min-w-0 rounded-md border p-2',
                   STATUS_LEVEL_CLASS.destructive
                 )}
               >
-                <div className='text-xs'>{t('faceImport.failed')}</div>
-                <div className='text-lg font-semibold'>{failed}</div>
+                <div className='truncate text-xs'>{t('faceImport.failed')}</div>
+                <div className='text-lg font-semibold tabular-nums'>
+                  {failed}
+                </div>
               </div>
             </div>
 

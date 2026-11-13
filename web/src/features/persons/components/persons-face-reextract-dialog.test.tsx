@@ -180,4 +180,58 @@ describe('PersonsFaceReextractDialog', () => {
       .toBe(1)
     expect(personsApi.cancelFaceReextractJob).toHaveBeenCalledWith('re-job-200')
   })
+
+  it('truncates long currentFile without overflowing dialog bounds and shows localized labels', async () => {
+    const longTarget =
+      '叶旋 (01M79RP82NM0GBEEZY1WX2CJBZ_01M79RP8ERGCBXNBFEGATM6XRR.jpg)'
+    const runningJob = makeJob({
+      jobId: 're-job-300',
+      scope: 'all',
+      status: 'PROCESSING',
+      progress: 58,
+      total: 48,
+      processed: 28,
+      succeeded: 27,
+      failed: 0,
+      currentFile: longTarget,
+    })
+    vi.mocked(personsApi.createFaceReextractJob).mockResolvedValueOnce(
+      runningJob
+    )
+    vi.mocked(personsApi.getFaceReextractJob).mockResolvedValue(runningJob)
+
+    const { getByRole, getByText } = await render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <PersonsProvider>
+            <Harness />
+          </PersonsProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    )
+
+    await getByRole('button', { name: 'Reextract All' }).click()
+    await getByRole('button', { name: /开始重新提取/i }).click()
+
+    await expect.element(getByText('处理中')).toBeInTheDocument()
+    await expect.element(getByText('总照片数')).toBeInTheDocument()
+    await expect
+      .element(getByText(/01M79RP8ERGCBXNBFEGATM6XRR\.jpg/))
+      .toBeInTheDocument()
+
+    const dialog = document.querySelector(
+      '[data-slot="dialog-content"]'
+    ) as HTMLElement | null
+    const progressBar = document.querySelector(
+      '[role="progressbar"]'
+    ) as HTMLElement | null
+    expect(dialog).not.toBeNull()
+    expect(progressBar).not.toBeNull()
+    if (dialog && progressBar) {
+      expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth)
+      expect(progressBar.getBoundingClientRect().right).toBeLessThanOrEqual(
+        dialog.getBoundingClientRect().right
+      )
+    }
+  })
 })

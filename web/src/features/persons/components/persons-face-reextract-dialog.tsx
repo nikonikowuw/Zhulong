@@ -41,6 +41,15 @@ const STATUS_LABEL_KEYS = {
   CANCELLED: 'faceReextract.statusCancelled',
 } as const
 
+const STATUS_BADGE_KEYS = {
+  PENDING: 'faceReextract.statusBadgePending',
+  EXTRACTING: 'faceReextract.statusBadgeProcessing',
+  PROCESSING: 'faceReextract.statusBadgeProcessing',
+  COMPLETED: 'faceReextract.statusBadgeCompleted',
+  FAILED: 'faceReextract.statusBadgeFailed',
+  CANCELLED: 'faceReextract.statusBadgeCancelled',
+} as const
+
 export function PersonsFaceReextractDialog() {
   const { t } = useTranslation('persons')
   const { open, reextractTarget } = usePersonsState()
@@ -128,10 +137,10 @@ export function PersonsFaceReextractDialog() {
       open={isOpen}
       onOpenChange={(nextOpen) => !nextOpen && handleClose()}
     >
-      <DialogContent className='max-w-lg'>
-        <DialogHeader>
+      <DialogContent className='overflow-hidden sm:max-w-lg'>
+        <DialogHeader className='min-w-0'>
           <DialogTitle className='flex items-center gap-2'>
-            <ScanFace className='size-5 text-primary' />
+            <ScanFace className='size-5 shrink-0 text-primary' />
             <span>{t('faceReextract.title')}</span>
           </DialogTitle>
           <DialogDescription>
@@ -140,12 +149,14 @@ export function PersonsFaceReextractDialog() {
         </DialogHeader>
 
         {!activeJobId ? (
-          <div className='space-y-4 py-1'>
+          <div className='min-w-0 space-y-4 py-1'>
             <div className='rounded-lg border border-border bg-muted/30 p-3 text-sm'>
               <div className='font-medium text-foreground'>
                 {t('faceReextract.scopeLabel')}
               </div>
-              <p className='mt-1 text-muted-foreground'>{scopeSummary}</p>
+              <p className='mt-1 break-words text-muted-foreground'>
+                {scopeSummary}
+              </p>
             </div>
 
             <div className='space-y-1.5 rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground'>
@@ -160,7 +171,7 @@ export function PersonsFaceReextractDialog() {
             </div>
           </div>
         ) : isJobQueryError ? (
-          <div className='flex flex-col items-center justify-center gap-2 py-8 text-center text-destructive'>
+          <div className='flex min-w-0 flex-col items-center justify-center gap-2 py-8 text-center text-destructive'>
             <AlertCircle className='size-6' />
             <span className='font-medium'>{t('table.loadFailed')}</span>
             <Button
@@ -174,23 +185,23 @@ export function PersonsFaceReextractDialog() {
             </Button>
           </div>
         ) : (
-          <div className='space-y-4 py-2'>
-            <div className='flex items-center justify-between'>
-              <div className='flex items-center gap-2'>
+          <div className='min-w-0 space-y-4 py-2'>
+            <div className='flex min-w-0 flex-wrap items-center justify-between gap-2'>
+              <div className='flex min-w-0 flex-1 items-center gap-2'>
                 {isBusy ? (
-                  <Loader2 className='size-5 animate-spin text-primary' />
+                  <Loader2 className='size-5 shrink-0 animate-spin text-primary' />
                 ) : job?.status === 'COMPLETED' ? (
                   <CheckCircle2
-                    className={cn('size-5', statusTextClass('active'))}
+                    className={cn('size-5 shrink-0', statusTextClass('active'))}
                   />
                 ) : (
-                  <XCircle className='size-5 text-destructive' />
+                  <XCircle className='size-5 shrink-0 text-destructive' />
                 )}
-                <span className='font-medium'>
+                <span className='truncate font-medium'>
                   {job ? t(STATUS_LABEL_KEYS[job.status]) : null}
                 </span>
               </div>
-              <div className='flex items-center gap-1.5'>
+              <div className='flex shrink-0 items-center gap-1.5'>
                 {job?.scope && (
                   <Badge variant='outline'>
                     {job.scope === 'selected'
@@ -203,15 +214,15 @@ export function PersonsFaceReextractDialog() {
                     job?.status === 'COMPLETED' ? 'default' : 'secondary'
                   }
                 >
-                  {job?.status ?? 'PENDING'}
+                  {t(STATUS_BADGE_KEYS[job?.status ?? 'PENDING'])}
                 </Badge>
               </div>
             </div>
 
-            <div className='space-y-1.5'>
-              <div className='flex justify-between text-xs text-muted-foreground'>
+            <div className='min-w-0 space-y-1.5'>
+              <div className='flex items-center justify-between gap-2 text-xs text-muted-foreground'>
                 <span>{t('faceReextract.progressLabel')}</span>
-                <span>{percent}%</span>
+                <span className='tabular-nums'>{percent}%</span>
               </div>
               <div
                 role='progressbar'
@@ -226,42 +237,57 @@ export function PersonsFaceReextractDialog() {
                 />
               </div>
               {job?.currentFile && isBusy && (
-                <p className='truncate text-xs text-muted-foreground'>
+                <p
+                  className='min-w-0 truncate text-xs text-muted-foreground'
+                  title={job.currentFile}
+                >
                   {t('faceReextract.currentTarget')} {job.currentFile}
                 </p>
               )}
             </div>
 
-            <div className='grid grid-cols-4 gap-2 text-center'>
-              <div className='rounded-md border border-border bg-muted/20 p-2'>
-                <div className='text-xs text-muted-foreground'>
+            <div className='grid min-w-0 grid-cols-2 gap-2 text-center sm:grid-cols-4'>
+              <div className='min-w-0 rounded-md border border-border bg-muted/20 p-2'>
+                <div className='truncate text-xs text-muted-foreground'>
                   {t('faceReextract.total')}
                 </div>
-                <div className='text-lg font-semibold'>{total}</div>
+                <div className='text-lg font-semibold tabular-nums'>
+                  {total}
+                </div>
               </div>
-              <div className='rounded-md border border-border bg-muted/20 p-2'>
-                <div className='text-xs text-muted-foreground'>
+              <div className='min-w-0 rounded-md border border-border bg-muted/20 p-2'>
+                <div className='truncate text-xs text-muted-foreground'>
                   {t('faceReextract.processed')}
                 </div>
-                <div className='text-lg font-semibold'>{processed}</div>
+                <div className='text-lg font-semibold tabular-nums'>
+                  {processed}
+                </div>
               </div>
               <div
                 className={cn(
-                  'rounded-md border p-2',
+                  'min-w-0 rounded-md border p-2',
                   STATUS_LEVEL_CLASS.active
                 )}
               >
-                <div className='text-xs'>{t('faceReextract.succeeded')}</div>
-                <div className='text-lg font-semibold'>{succeeded}</div>
+                <div className='truncate text-xs'>
+                  {t('faceReextract.succeeded')}
+                </div>
+                <div className='text-lg font-semibold tabular-nums'>
+                  {succeeded}
+                </div>
               </div>
               <div
                 className={cn(
-                  'rounded-md border p-2',
+                  'min-w-0 rounded-md border p-2',
                   STATUS_LEVEL_CLASS.destructive
                 )}
               >
-                <div className='text-xs'>{t('faceReextract.failed')}</div>
-                <div className='text-lg font-semibold'>{failed}</div>
+                <div className='truncate text-xs'>
+                  {t('faceReextract.failed')}
+                </div>
+                <div className='text-lg font-semibold tabular-nums'>
+                  {failed}
+                </div>
               </div>
             </div>
 
@@ -269,7 +295,7 @@ export function PersonsFaceReextractDialog() {
               <Alert variant='destructive'>
                 <AlertCircle className='size-4' />
                 <AlertTitle>{t('faceReextract.errorTitle')}</AlertTitle>
-                <AlertDescription>
+                <AlertDescription className='break-words'>
                   {job.errorMessage || t('faceReextract.unknownError')}
                 </AlertDescription>
               </Alert>
@@ -297,7 +323,7 @@ export function PersonsFaceReextractDialog() {
           </div>
         )}
 
-        <DialogFooter className='gap-2 sm:justify-between'>
+        <DialogFooter className='min-w-0 gap-2 sm:justify-between'>
           {activeJobId ? (
             <>
               {isTerminal && failed > 0 ? (
@@ -315,7 +341,7 @@ export function PersonsFaceReextractDialog() {
                 <div />
               )}
 
-              <div className='flex gap-2'>
+              <div className='flex flex-wrap justify-end gap-2'>
                 {isTerminal ? (
                   <>
                     <Button
@@ -335,10 +361,11 @@ export function PersonsFaceReextractDialog() {
                   <>
                     <Button
                       type='button'
-                      variant='destructive'
+                      variant='outline'
                       size='sm'
                       disabled={cancelMutation.isPending}
                       onClick={() => void handleCancelJob()}
+                      className='border-destructive/30 text-destructive hover:bg-destructive/10'
                     >
                       {cancelMutation.isPending && (
                         <Loader2 className='me-1.5 size-4 animate-spin' />
