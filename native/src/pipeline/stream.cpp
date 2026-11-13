@@ -443,6 +443,11 @@ void DecodeSession::decode_loop_body() {
                         pushed_pts_us_entry = false;
                     }
                     drain_frames(dec);
+                    if (need_keyframe) {
+                        dec->flush();
+                        recycle_buffer(std::move(pkt.data));
+                        continue;
+                    }
                     if (pkt.has_pts_us && pkt.has_pts) {
                         if (pts_us_history.size() >= max_pts_us_history) {
                             pts_us_history.pop_front();
@@ -490,8 +495,8 @@ void DecodeSession::decode_loop_body() {
         recycle_buffer(std::move(pkt.data));
     }
 
-    // 退出前排空残留帧
-    if (decoder) {
+    // 退出前排空残留帧（仅当帧队列仍未被取消时，否则排空帧会被直接丢弃）
+    if (decoder && !frame_queue_.is_cancelled()) {
         try {
             decoder->send_packet(nullptr, 0, 0, 0);
             drain_frames(decoder.get());
@@ -866,15 +871,19 @@ Stream::ViewSnapshot Stream::view_snapshot(int frame_w, int frame_h) {
     std::lock_guard<std::mutex> lock(mutex);
     ViewSnapshot snapshot{};
 
-    if (view_configured_) {
+    if (frame_w >= 2 && frame_h >= 2) {
         const bool size_changed = !view_geometry_ready_ || frame_w != view_frame_w_ || frame_h != view_frame_h_;
         if (size_changed) {
-            view_window_ = compute_view_window(view_rect_, frame_w, frame_h);
             view_frame_w_ = frame_w;
             view_frame_h_ = frame_h;
             view_geometry_ready_ = true;
-            advance_since_locked();
+            if (view_configured_) {
+                view_window_ = compute_view_window(view_rect_, frame_w, frame_h);
+                advance_since_locked();
+            }
         }
+    }
+    if (view_configured_) {
         snapshot.window = view_window_;
     }
 

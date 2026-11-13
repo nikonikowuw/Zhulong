@@ -154,6 +154,7 @@ int main(void) {
     /* 参数齐全但引擎已停止：必须拒绝而不是悄悄注册回调。 */
     if (Zhulong_stream_subscribe_track(engine, 1, 1, ZHULONG_TRACK_MASK_AUDIO, packet_callback, 0, &track_sub) !=
         Zhulong_ERR_NOT_RUNNING) return 50;
+    if (Zhulong_stream_unsubscribe_ai_results(engine, 1, 1) != Zhulong_ERR_NOT_RUNNING) return 51;
 
     /* 8. 销毁安全测试：传入 NULL 指针必须保证安全无崩溃 */
     Zhulong_probe_result_destroy(0);

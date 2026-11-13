@@ -139,10 +139,8 @@ bool MotionDetector::sample_y_plane(const HardwareFrame& frame, const ViewWindow
     } else if (frame.host_ptr != nullptr) {
         y_src = frame.host_ptr;
     } else if (frame.dma_fd >= 0) {
-        size_t map_size = frame.y_plane_size();
-        if (map_size == 0) {
-            map_size = static_cast<size_t>(stride) * frame.height;
-        }
+        const size_t min_y_bytes = static_cast<size_t>(stride) * frame.height;
+        const size_t map_size = std::max(frame.y_plane_size(), min_y_bytes);
         y_src = dma_reader.open(frame.dma_fd, map_size);
     }
 

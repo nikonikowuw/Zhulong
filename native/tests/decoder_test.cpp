@@ -1087,6 +1087,43 @@ int main() {
             engine.publishers.clear();
             engine.streams.clear();
             engine.running = false;
+
+            // 停机后注销 AI 订阅必须报 ERR_NOT_RUNNING
+            bool saw_not_running = false;
+            try {
+                engine.unsubscribe_ai_results(1088, sub_id);
+            } catch (const zhulong::Failure &f) {
+                saw_not_running = (f.status == Zhulong_ERR_NOT_RUNNING);
+            }
+            CHECK(saw_not_running);
+        }
+
+        // 7. Stream::view_snapshot 分辨率热切换在清除视图后仍跟踪解码帧尺寸
+        {
+            zhulong::Stream view_stream(2001, "rtsp://127.0.0.1/view", zhulong::Options{});
+            const zhulong::ViewRect rect{0.25f, 0.25f, 0.75f, 0.75f};
+
+            // 首帧 1920x1080 建几何缓存，设置并清除
+            (void)view_stream.view_snapshot(1920, 1080);
+            const auto first_apply = view_stream.set_view(false, rect);
+            CHECK(first_apply.ready);
+            CHECK(first_apply.effective_since_ms > 0);
+            (void)view_stream.set_view(true, zhulong::identity_view_rect());
+
+            // 无裁剪期间分辨率热切换为 1280x720
+            const auto cleared_snap = view_stream.view_snapshot(1280, 720);
+            CHECK(!cleared_snap.window.active);
+
+            // 再次设窗必须直接按 1280x720 生效，且下一帧不再重复推进 effective_since_ms
+            const auto second_apply = view_stream.set_view(false, rect);
+            CHECK(second_apply.ready);
+            const auto active_snap = view_stream.view_snapshot(1280, 720);
+            CHECK(active_snap.window.active);
+            CHECK(active_snap.window.x == 320 && active_snap.window.y == 180);
+            CHECK(active_snap.window.w == 640 && active_snap.window.h == 360);
+            int64_t persisted_since = 0;
+            view_stream.get_view(nullptr, &persisted_since);
+            CHECK(persisted_since == second_apply.effective_since_ms);
         }
 
         std::cout << "All Decoder & BoundedQueue tests passed successfully!" << std::endl;

@@ -420,12 +420,12 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
     if (is_idr) {
         out.frame_class = Zhulong_FRAME_IDR;
         out.gop_id = ++gop_id_;
-        if (!parameter_sets_.empty() &&
+        if (in.data != nullptr && !parameter_sets_.empty() &&
             !has_complete_parameter_sets(codec, in.data, in.size)) {
             // 复用 stitch_ 缓冲：只在关键帧触发，容量一次长到最大帧后不再增长
             stitch_.resize(parameter_sets_.size() + in.size);
             std::memcpy(stitch_.data(), parameter_sets_.data(), parameter_sets_.size());
-            if (in.size > 0 && in.data != nullptr) {
+            if (in.size > 0) {
                 std::memcpy(stitch_.data() + parameter_sets_.size(), in.data, in.size);
             }
             out.data = stitch_.data();

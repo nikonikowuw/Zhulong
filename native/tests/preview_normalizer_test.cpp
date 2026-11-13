@@ -178,6 +178,23 @@ void TestClockStateAndDiscontinuityGeneration() {
     Check(normalizer.discontinuity_generation() == 1, "generation must increment after discontinuity");
 }
 
+void TestNullDataKeyFrameDoesNotStitchZeroBytes() {
+    zhulong::PreviewNormalizer normalizer;
+    const std::vector<uint8_t> annex_b_extra{0, 0, 0, 1, 0x67, 0x42, 0, 0x1e, 0, 0, 0, 1, 0x68, 0xce};
+    normalizer.update_metadata(Zhulong_CODEC_H264, annex_b_extra.data(), annex_b_extra.size(), 1, 25);
+
+    Zhulong_packet_view bad_key{};
+    bad_key.codec = Zhulong_CODEC_H264;
+    bad_key.key_frame = 1;
+    bad_key.data = nullptr;
+    bad_key.size = 128;
+
+    const auto out = normalizer.normalize(bad_key);
+    Check((out.pkt_flags & ZHULONG_PKT_FLAG_PARAM_SETS_INJECTED) == 0,
+          "null payload keyframe must not trigger parameter-set stitching");
+    Check(out.data == nullptr, "null payload must remain null");
+}
+
 } // namespace
 
 int main() {
@@ -187,6 +204,7 @@ int main() {
     TestDtsAvailabilityTransitionDoesNotSignalDiscontinuity();
     TestMissingDtsGetsSyntheticDecodeClock();
     TestClockStateAndDiscontinuityGeneration();
+    TestNullDataKeyFrameDoesNotStitchZeroBytes();
     std::cout << "Preview normalizer tests passed\n";
     return 0;
 }

@@ -367,17 +367,18 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
                         active_decode_sessions_.load(), decode_policy_.max_sessions);
                 throw Failure{Zhulong_ERR_CAPACITY_EXCEEDED};
             }
-            active_decode_sessions_.fetch_add(1, std::memory_order_relaxed);
         }
 
         if (!next_stream) {
-            if (is_new_decode) active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
             throw Failure{Zhulong_ERR_INTERNAL};
         }
         auto fresh = std::make_shared<Stream>(next_stream++, url, options);
         fresh->consumers.emplace(consumer, kind);
         streams.emplace(fresh->id, fresh);
 
+        if (is_new_decode) {
+            active_decode_sessions_.fetch_add(1, std::memory_order_relaxed);
+        }
         try {
             // ⚠️ 必须传入全局解码策略：默认值会把「仅 MPP」静默降级为 AUTO，绕过 fail-closed
             fresh->start(decode_policy_);
@@ -451,10 +452,15 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
 
     bool committed = false;
     Zhulong_status_t failure = Zhulong_ERR_IO;
+    const auto stream_it = streams.find(id);
     if (!running) {
         // 停机已在窗口内发生：stop() 负责流与池，本次只需丢弃自己启动的 broker
         discard.broker = std::move(broker);
         failure = Zhulong_ERR_NOT_RUNNING;
+    } else if (stream_it == streams.end() || stream_it->second != stream) {
+        // 锁外启动 broker 期间发生了 stop() + start() 重启，原 stream 已退役并从流池清理
+        discard.broker = std::move(broker);
+        failure = Zhulong_ERR_NOT_FOUND;
     } else if (!stream->consumers.count(consumer)) {
         discard.broker = std::move(broker);
         failure = Zhulong_ERR_NOT_FOUND;
@@ -723,6 +729,8 @@ Zhulong_subscription_id Engine::subscribe_ai_results(Zhulong_stream_id id,
 void Engine::unsubscribe_ai_results(Zhulong_stream_id id, Zhulong_subscription_id subscription) {
     std::shared_ptr<AISubscription> removed;
     {
+        std::lock_guard<std::mutex> operation(control);
+        if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
         std::lock_guard<std::mutex> lock(ai_sub_mutex);
         const auto found = ai_subscriptions.find(subscription);
         if (found == ai_subscriptions.end() || found->second->stream_id != id) {

@@ -76,7 +76,7 @@ public:
      * @return true 成功入队；false 队列已被取消或因 DROP_NEWEST 策略被拒绝
      */
     bool push(const T &item) {
-        return push_internal(item);
+        return push_with([&](std::deque<T> &q) { q.push_back(item); });
     }
 
     /**
@@ -90,7 +90,7 @@ public:
      * @return true 成功入队；false 队列已被取消或因 DROP_NEWEST 策略被拒绝
      */
     bool push(T &&item) {
-        return push_internal(std::move(item));
+        return push_with([&](std::deque<T> &q) { q.push_back(std::move(item)); });
     }
 
     /**
@@ -98,29 +98,7 @@ public:
      */
     template <typename... Args>
     bool emplace(Args &&...args) {
-        std::optional<T> discarded;
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            if (cancelled_) return false;
-
-            if (queue_.size() >= capacity_) {
-                if (strategy_ == OverflowStrategy::drop_oldest) {
-                    discarded = std::move(queue_.front());
-                    queue_.pop_front();
-                } else if (strategy_ == OverflowStrategy::drop_newest) {
-                    return false;
-                } else { // block
-                    not_full_.wait(lock, [this] {
-                        return cancelled_ || queue_.size() < capacity_;
-                    });
-                    if (cancelled_) return false;
-                }
-            }
-
-            queue_.emplace_back(std::forward<Args>(args)...);
-            not_empty_.notify_one();
-        }
-        return true;
+        return push_with([&](std::deque<T> &q) { q.emplace_back(std::forward<Args>(args)...); });
     }
 
     /**
@@ -190,7 +168,7 @@ public:
      */
     void cancel() {
         mark_cancelled();
-        drain();
+        (void)drain_impl(false);
     }
 
     /**
@@ -209,13 +187,7 @@ public:
      * 与 clear() 相同的锁外语义，但把元素交还给调用方（例如回收包缓冲进复用池）。
      */
     std::deque<T> drain() {
-        std::deque<T> discarded;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            discarded.swap(queue_); // swap 不分配、不抛出
-        }
-        not_full_.notify_all();
-        return discarded;
+        return drain_impl(true);
     }
 
     /** @brief 检查队列是否已被取消 */
@@ -263,8 +235,20 @@ private:
         return true;
     }
 
-    template <typename U>
-    bool push_internal(U &&item) {
+    std::deque<T> drain_impl(bool notify_not_full) {
+        std::deque<T> discarded;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            discarded.swap(queue_); // swap 不分配、不抛出
+        }
+        if (notify_not_full) {
+            not_full_.notify_all();
+        }
+        return discarded;
+    }
+
+    template <typename Inserter>
+    bool push_with(Inserter &&insert) {
         std::optional<T> discarded;
         {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -284,7 +268,7 @@ private:
                 }
             }
 
-            queue_.push_back(std::forward<U>(item));
+            insert(queue_);
             not_empty_.notify_one();
         }
         return true;
