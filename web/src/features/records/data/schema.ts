@@ -9,16 +9,19 @@ export type BoundingBox = [number, number, number, number]
 export const faceCandidateSchema = z
   .object({
     personId: z.string().optional(),
+    personRowId: z.string().optional(),
     personName: z.string().optional(),
     faceId: z.string().optional(),
     similarity: z.number().default(0),
     // 兼容蛇形命名
     person_id: z.string().optional(),
+    person_row_id: z.string().optional(),
     person_name: z.string().optional(),
     face_id: z.string().optional(),
   })
   .transform((data) => ({
     personId: data.personId ?? data.person_id ?? '',
+    personRowId: data.personRowId ?? data.person_row_id ?? '',
     personName: data.personName ?? data.person_name ?? '',
     faceId: data.faceId ?? data.face_id ?? '',
     similarity: data.similarity,

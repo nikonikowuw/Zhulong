@@ -1186,6 +1186,7 @@ func (s *Service) ListRecognitions(
 	for i := range items {
 		responses[i] = items[i].ToResponse()
 	}
+	s.enrichRecognitionCandidates(ctx, responses)
 	return responses, total, nil
 }
 
@@ -1198,8 +1199,46 @@ func (s *Service) GetRecognition(ctx context.Context, id string) (*RecognitionRe
 	if item == nil {
 		return nil, apperr.NotFound("RECOGNITION_NOT_FOUND", "recognition not found", nil)
 	}
-	resp := item.ToResponse()
-	return &resp, nil
+	responses := []RecognitionResponse{item.ToResponse()}
+	s.enrichRecognitionCandidates(ctx, responses)
+	return &responses[0], nil
+}
+
+// enrichRecognitionCandidates batch-resolves candidate face IDs against the local
+// person gallery so each candidate carries its owning persons.id (PersonRowID) for
+// fetching /persons/{personRowId}/faces/{faceId}/image.
+func (s *Service) enrichRecognitionCandidates(ctx context.Context, responses []RecognitionResponse) {
+	if len(responses) == 0 {
+		return
+	}
+	var faceIDs []string
+	for i := range responses {
+		for j := range responses[i].Candidates {
+			if fid := responses[i].Candidates[j].FaceID; fid != "" {
+				faceIDs = append(faceIDs, fid)
+			}
+		}
+	}
+	if len(faceIDs) == 0 {
+		return
+	}
+	gallery := s.resolveGalleryFaces(ctx, faceIDs)
+	if len(gallery) == 0 {
+		return
+	}
+	for i := range responses {
+		for j := range responses[i].Candidates {
+			cand := &responses[i].Candidates[j]
+			ref, ok := gallery[cand.FaceID]
+			if !ok {
+				continue
+			}
+			cand.PersonRowID = ref.PersonRowID
+			if cand.PersonName == "" && ref.PersonName != "" {
+				cand.PersonName = ref.PersonName
+			}
+		}
+	}
 }
 
 // ListAlarms returns filtered and paginated AlarmResponse items.

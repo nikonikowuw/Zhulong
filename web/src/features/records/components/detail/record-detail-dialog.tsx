@@ -12,10 +12,12 @@ import {
   Eye,
   EyeOff,
   Layers,
+  Maximize2,
   Sparkles,
   UserCheck,
   UserX,
   Video,
+  ZoomIn,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { boxesCoincide } from '@/lib/box-geometry'
@@ -47,6 +49,10 @@ import { formatTargetType, targetTypeBadgeClass } from '../../data/target-type'
 import { BoundingBoxCanvas } from '../common/bounding-box-canvas'
 import { MediaImage } from '../common/media-image'
 import { getGalleryImageUrl, getMediaUrl } from '../common/media-utils'
+import {
+  RecordImagePreviewDialog,
+  type RecordPreviewImageItem,
+} from './record-image-preview-dialog'
 import { RecordJsonViewer } from './record-json-viewer'
 
 export interface RecordDetailDialogProps {
@@ -88,16 +94,22 @@ export function RecordDetailDialog({
   const [copiedId, setCopiedId] = useState(false)
   const [copiedExternalId, setCopiedExternalId] = useState(false)
   const [showBoxes, setShowBoxes] = useState(true)
+  const [selectedCandidateIdx, setSelectedCandidateIdx] = useState<
+    number | null
+  >(null)
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [dimensions, setDimensions] = useState<{
     width: number
     height: number
   } | null>(null)
 
-  // 切换记录时重置当前图像分辨率尺寸，防止标题栏残留上个记录的数据
+  // 切换记录时重置当前图像分辨率尺寸、候选对比选择与全屏预览，防止残留上个记录的数据
   const [prevRecordId, setPrevRecordId] = useState(record?.id)
   if (record?.id !== prevRecordId) {
     setPrevRecordId(record?.id)
     setDimensions(null)
+    setSelectedCandidateIdx(null)
+    setPreviewIndex(null)
   }
 
   if (!record) return null
@@ -113,6 +125,106 @@ export function RecordDetailDialog({
   const isAlarm = alm !== null
   const isVehicleCapture = cap !== null && tab === 'vehicles'
   const isCapture = cap !== null
+
+  const activeCandidate =
+    isRecognition &&
+    rec &&
+    selectedCandidateIdx !== null &&
+    selectedCandidateIdx >= 0 &&
+    selectedCandidateIdx < rec.candidates.length
+      ? rec.candidates[selectedCandidateIdx]
+      : null
+  const activeGalleryUrl = activeCandidate
+    ? getGalleryImageUrl(activeCandidate.personRowId, activeCandidate.faceId)
+    : rec
+      ? getGalleryImageUrl(rec.personId, rec.matchedFaceId)
+      : ''
+
+  // 汇总当前记录可全屏查看的图片序列，支持跨图左右切换与缩略图跳转
+  const previewImages: RecordPreviewImageItem[] = []
+  if (record.imagePath) {
+    previewImages.push({
+      id: 'full',
+      url: getMediaUrl(record.imagePath),
+      title: t('detail.fullImage'),
+    })
+  }
+  if (isRecognition && rec) {
+    if (rec.faceImagePath) {
+      previewImages.push({
+        id: 'face-crop',
+        url: getMediaUrl(rec.faceImagePath),
+        title: t('detail.snapshot'),
+      })
+    }
+    const matchedGalleryUrl = getGalleryImageUrl(
+      rec.personId,
+      rec.matchedFaceId
+    )
+    const candidatePhotoItems: RecordPreviewImageItem[] = []
+    rec.candidates.forEach((cand, idx) => {
+      const url = getGalleryImageUrl(cand.personRowId, cand.faceId)
+      if (!url) return
+      const name =
+        cand.personName ||
+        cand.personId ||
+        t('detail.candidatePreview', { rank: idx + 1 })
+      candidatePhotoItems.push({
+        id: `cand-${idx}`,
+        url,
+        title: `${t('detail.candidatePreview', { rank: idx + 1 })} · ${name}`,
+        subtitle: `${Math.max(0, Math.min(100, Math.round(cand.similarity * 100)))}%`,
+      })
+    })
+    if (
+      matchedGalleryUrl &&
+      !candidatePhotoItems.some((item) => item.url === matchedGalleryUrl)
+    ) {
+      previewImages.push({
+        id: 'matched-gallery',
+        url: matchedGalleryUrl,
+        title: t('detail.gallery'),
+        subtitle: rec.personName || rec.personExternalId || undefined,
+      })
+    }
+    previewImages.push(...candidatePhotoItems)
+  }
+  if (isAlarm && alm && alm.cropPath) {
+    previewImages.push({
+      id: 'alarm-crop',
+      url: getMediaUrl(alm.cropPath),
+      title: t('detail.snapshot'),
+      subtitle: alm.alarmType,
+    })
+  }
+  if (isCapture && cap && cap.cropPath) {
+    previewImages.push({
+      id: 'capture-crop',
+      url: getMediaUrl(cap.cropPath),
+      title: isVehicleCapture ? t('detail.vehicleCrop') : t('detail.snapshot'),
+    })
+  }
+
+  const openPreviewById = (id: string) => {
+    const idx = previewImages.findIndex((item) => item.id === id)
+    if (idx !== -1) {
+      setPreviewIndex(idx)
+    }
+  }
+
+  const openActiveGalleryPreview = () => {
+    if (!activeGalleryUrl) return
+    if (activeCandidate && selectedCandidateIdx !== null) {
+      openPreviewById(`cand-${selectedCandidateIdx}`)
+      return
+    }
+    const byMatched = previewImages.findIndex(
+      (item) => item.id === 'matched-gallery' || item.url === activeGalleryUrl
+    )
+    if (byMatched !== -1) {
+      setPreviewIndex(byMatched)
+    }
+  }
 
   // 识别记录的 body_box 在「纯人脸退化项」里是人脸框的别名（逐位相等，见插件契约）。
   // 这种记录只画人脸框，否则同一张脸会叠出两个框。
@@ -304,6 +416,17 @@ export function RecordDetailDialog({
                       variant='ghost'
                       size='sm'
                       className='h-7 px-2 text-[11px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200'
+                      onClick={() => openPreviewById('full')}
+                      title={t('detail.previewFullscreen')}
+                      aria-label={t('detail.previewFullscreen')}
+                    >
+                      <Maximize2 className='size-3.5' />
+                    </Button>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      className='h-7 px-2 text-[11px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200'
                       asChild
                     >
                       <a
@@ -338,7 +461,7 @@ export function RecordDetailDialog({
               </div>
             </div>
 
-            <div className='relative flex flex-1 items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-black/90 p-2'>
+            <div className='group relative flex flex-1 items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-black/90 p-2'>
               <BoundingBoxCanvas
                 key={record.imagePath}
                 imagePath={record.imagePath}
@@ -362,6 +485,16 @@ export function RecordDetailDialog({
                 }
                 className='max-h-[540px]'
               />
+              {record.imagePath && (
+                <button
+                  type='button'
+                  onClick={() => openPreviewById('full')}
+                  aria-label={t('detail.previewImageLabel', {
+                    name: t('detail.fullImage'),
+                  })}
+                  className='absolute inset-0 cursor-zoom-in bg-transparent focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
+                />
+              )}
             </div>
             <div className='mt-2 flex items-center justify-between text-[11px] text-neutral-500'>
               <span className='font-mono'>{t('detail.highlightNotice')}</span>
@@ -450,7 +583,26 @@ export function RecordDetailDialog({
                         className='size-full'
                         imageClassName='object-contain'
                       />
-                      <div className='absolute end-2 top-2 opacity-0 transition-opacity group-hover:opacity-100'>
+                      <button
+                        type='button'
+                        onClick={() => openPreviewById('capture-crop')}
+                        aria-label={t('detail.previewImageLabel', {
+                          name: t('detail.vehicleCrop'),
+                        })}
+                        className='absolute inset-0 cursor-zoom-in bg-transparent focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
+                      />
+                      <div className='absolute end-2 top-2 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100'>
+                        <Button
+                          type='button'
+                          variant='secondary'
+                          size='sm'
+                          className='size-7 p-0 shadow-sm'
+                          onClick={() => openPreviewById('capture-crop')}
+                          title={t('detail.previewFullscreen')}
+                          aria-label={t('detail.previewFullscreen')}
+                        >
+                          <ZoomIn className='size-3.5' />
+                        </Button>
                         <Button
                           type='button'
                           variant='secondary'
@@ -508,7 +660,7 @@ export function RecordDetailDialog({
                       <span className='text-[11px] font-medium text-muted-foreground'>
                         {t('detail.snapshot')}
                       </span>
-                      <div className='size-24 overflow-hidden rounded-md border border-border bg-muted/40 shadow-xs'>
+                      <div className='group relative size-24 overflow-hidden rounded-md border border-border bg-muted/40 shadow-xs'>
                         <MediaImage
                           path={rec.faceImagePath}
                           alt={t('detail.snapshot')}
@@ -516,26 +668,92 @@ export function RecordDetailDialog({
                           imageClassName='object-contain'
                           fallbackText='Face Crop'
                         />
+                        {rec.faceImagePath && (
+                          <button
+                            type='button'
+                            onClick={() => openPreviewById('face-crop')}
+                            aria-label={t('detail.previewImageLabel', {
+                              name: t('detail.snapshot'),
+                            })}
+                            className='absolute inset-0 flex cursor-zoom-in items-center justify-center bg-black/0 text-white opacity-0 transition-all group-hover:bg-black/35 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
+                          >
+                            <ZoomIn className='size-4 drop-shadow-sm' />
+                          </button>
+                        )}
                       </div>
                     </div>
 
-                    {/* 底库对标照片 */}
+                    {/* 底库对标照片（默认显示命中底库照，点选下方候选人时切换为对应候选人底库照） */}
                     <div className='flex flex-col items-center space-y-2'>
-                      <span className='text-[11px] font-medium text-muted-foreground'>
-                        {t('detail.gallery')}
-                      </span>
-                      <div className='size-24 overflow-hidden rounded-md border border-border bg-muted/40 shadow-xs'>
+                      <div className='flex min-h-4 items-center gap-1.5'>
+                        <span className='max-w-28 truncate text-[11px] font-medium text-muted-foreground'>
+                          {activeCandidate && selectedCandidateIdx !== null
+                            ? `${t('detail.candidatePreview', { rank: selectedCandidateIdx + 1 })} · ${activeCandidate.personName || activeCandidate.personId || `#${selectedCandidateIdx + 1}`}`
+                            : t('detail.gallery')}
+                        </span>
+                        {activeCandidate && (
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            size='sm'
+                            className='h-4 px-1 text-[10px] text-primary hover:text-primary'
+                            onClick={() => setSelectedCandidateIdx(null)}
+                          >
+                            {t('detail.resetComparison')}
+                          </Button>
+                        )}
+                      </div>
+                      <div
+                        className={cn(
+                          'group relative size-24 overflow-hidden rounded-md border bg-muted/40 shadow-xs transition-colors',
+                          activeCandidate
+                            ? 'border-primary/70 ring-1 ring-primary/30'
+                            : 'border-border'
+                        )}
+                      >
                         <MediaImage
-                          src={getGalleryImageUrl(
-                            rec.personId,
-                            rec.matchedFaceId
-                          )}
-                          alt={t('detail.gallery')}
+                          src={activeGalleryUrl}
+                          alt={
+                            activeCandidate && selectedCandidateIdx !== null
+                              ? activeCandidate.personName ||
+                                activeCandidate.personId ||
+                                t('detail.candidatePreview', {
+                                  rank: selectedCandidateIdx + 1,
+                                })
+                              : t('detail.gallery')
+                          }
                           className='size-full'
                           imageClassName='object-contain'
                           fallbackText={t('detail.noGallery')}
                         />
+                        {activeGalleryUrl && (
+                          <button
+                            type='button'
+                            onClick={openActiveGalleryPreview}
+                            aria-label={t('detail.previewImageLabel', {
+                              name:
+                                activeCandidate && selectedCandidateIdx !== null
+                                  ? activeCandidate.personName ||
+                                    activeCandidate.personId ||
+                                    t('detail.candidatePreview', {
+                                      rank: selectedCandidateIdx + 1,
+                                    })
+                                  : t('detail.gallery'),
+                            })}
+                            className='absolute inset-0 flex cursor-zoom-in items-center justify-center bg-black/0 text-white opacity-0 transition-all group-hover:bg-black/35 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
+                          >
+                            <ZoomIn className='size-4 drop-shadow-sm' />
+                          </button>
+                        )}
                       </div>
+                      {activeCandidate && (
+                        <Badge
+                          variant='secondary'
+                          className='font-mono text-[10px]'
+                        >
+                          {Math.round(activeCandidate.similarity * 100)}%
+                        </Badge>
+                      )}
                     </div>
                   </div>
 
@@ -581,45 +799,132 @@ export function RecordDetailDialog({
                   {/* Top-N 候选人列表 */}
                   {rec.candidates && rec.candidates.length > 0 && (
                     <div className='space-y-2 pt-1'>
-                      <div className='flex items-center justify-between text-xs font-medium text-muted-foreground'>
+                      <div className='flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground'>
                         <span>{t('detail.candidates')}</span>
                         <span className='font-mono text-[11px]'>
                           ({rec.candidates.length})
                         </span>
                       </div>
+                      <p className='text-[11px] text-muted-foreground/80'>
+                        {t('detail.candidatesHint')}
+                      </p>
                       <div className='grid grid-cols-1 gap-2'>
                         {rec.candidates.map((cand, idx) => {
-                          const candSim = Math.round(cand.similarity * 100)
+                          const candSim = Math.max(
+                            0,
+                            Math.min(100, Math.round(cand.similarity * 100))
+                          )
+                          const isSelected = selectedCandidateIdx === idx
+                          const isMatchedItem =
+                            rec.matched &&
+                            Boolean(cand.faceId) &&
+                            cand.faceId === rec.matchedFaceId
+                          const candName =
+                            cand.personName ||
+                            cand.personId ||
+                            t('detail.candidatePreview', { rank: idx + 1 })
+                          const candSubId =
+                            cand.personId && cand.faceId
+                              ? `${cand.personId} · ${cand.faceId}`
+                              : cand.faceId || cand.personId
+                          const candPhotoUrl = getGalleryImageUrl(
+                            cand.personRowId,
+                            cand.faceId
+                          )
                           return (
                             <div
                               key={`cand-${cand.faceId || cand.personId || idx}`}
-                              className='relative overflow-hidden rounded-md border border-border/80 bg-muted/30 p-2.5 text-xs transition-colors hover:bg-muted/50'
+                              className={cn(
+                                'relative flex w-full items-center gap-3 overflow-hidden rounded-md border p-2 text-xs transition-colors',
+                                isSelected
+                                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                                  : 'border-border/80 bg-muted/30 hover:bg-muted/50'
+                              )}
                             >
-                              <div className='flex items-center justify-between gap-2'>
-                                <div className='min-w-0 flex-1 space-y-0.5'>
-                                  <div className='truncate font-semibold text-foreground'>
-                                    {cand.personName ||
-                                      cand.personId ||
-                                      `Candidate #${idx + 1}`}
+                              <div className='group relative size-12 shrink-0 overflow-hidden rounded-md border border-border bg-muted/40 shadow-xs'>
+                                <MediaImage
+                                  src={candPhotoUrl}
+                                  alt={candName}
+                                  className='size-full'
+                                  imageClassName='object-cover'
+                                  fallbackText=''
+                                />
+                                {candPhotoUrl && (
+                                  <button
+                                    type='button'
+                                    onClick={() =>
+                                      openPreviewById(`cand-${idx}`)
+                                    }
+                                    aria-label={t('detail.previewImageLabel', {
+                                      name: candName,
+                                    })}
+                                    className='absolute inset-0 flex cursor-zoom-in items-center justify-center bg-black/0 text-white opacity-0 transition-all group-hover:bg-black/40 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
+                                  >
+                                    <ZoomIn className='size-3.5 drop-shadow-sm' />
+                                  </button>
+                                )}
+                              </div>
+
+                              <button
+                                type='button'
+                                aria-pressed={isSelected}
+                                onClick={() =>
+                                  setSelectedCandidateIdx(
+                                    isSelected ? null : idx
+                                  )
+                                }
+                                className='min-w-0 flex-1 space-y-1 text-start focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
+                              >
+                                <div className='flex items-center justify-between gap-2'>
+                                  <div className='flex min-w-0 items-center gap-1.5'>
+                                    <span className='shrink-0 font-mono text-[10px] font-semibold text-muted-foreground'>
+                                      #{idx + 1}
+                                    </span>
+                                    <span className='truncate font-semibold text-foreground'>
+                                      {candName}
+                                    </span>
+                                    {isMatchedItem && (
+                                      <Badge
+                                        variant='outline'
+                                        className={cn(
+                                          'shrink-0 px-1.5 py-0 text-[10px]',
+                                          statusLevelClass('active')
+                                        )}
+                                      >
+                                        {t('detail.matchedCandidate')}
+                                      </Badge>
+                                    )}
                                   </div>
-                                  <div className='truncate font-mono text-[10px] text-muted-foreground'>
-                                    {cand.faceId || cand.personId}
+                                  <div className='flex shrink-0 items-center gap-1'>
+                                    {isSelected && (
+                                      <Badge
+                                        variant='default'
+                                        className='px-1.5 py-0 text-[10px]'
+                                      >
+                                        {t('detail.comparing')}
+                                      </Badge>
+                                    )}
+                                    <Badge
+                                      variant='secondary'
+                                      className='font-mono text-[11px] font-semibold'
+                                    >
+                                      {candSim}%
+                                    </Badge>
                                   </div>
                                 </div>
-                                <Badge
-                                  variant='secondary'
-                                  className='font-mono text-[11px] font-semibold'
-                                >
-                                  {candSim}%
-                                </Badge>
-                              </div>
-                              {/* 相似度比例进度条 */}
-                              <div className='mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted'>
-                                <div
-                                  className='h-full rounded-full bg-primary/70 transition-all'
-                                  style={{ width: `${candSim}%` }}
-                                />
-                              </div>
+
+                                <div className='truncate font-mono text-[10px] text-muted-foreground'>
+                                  {candSubId}
+                                </div>
+
+                                {/* 相似度比例进度条 */}
+                                <div className='h-1 w-full overflow-hidden rounded-full bg-muted'>
+                                  <div
+                                    className='h-full rounded-full bg-primary/70 transition-all'
+                                    style={{ width: `${candSim}%` }}
+                                  />
+                                </div>
+                              </button>
                             </div>
                           )
                         })}
@@ -645,13 +950,23 @@ export function RecordDetailDialog({
                       </Badge>
                     )}
                   </div>
-                  <div className='flex h-36 w-full items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 p-2'>
+                  <div className='group relative flex h-36 w-full items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 p-2'>
                     <MediaImage
                       path={alm.cropPath}
                       alt={alm.alarmType}
                       className='size-full'
                       imageClassName='object-contain'
                     />
+                    <button
+                      type='button'
+                      onClick={() => openPreviewById('alarm-crop')}
+                      aria-label={t('detail.previewImageLabel', {
+                        name: t('detail.snapshot'),
+                      })}
+                      className='absolute inset-0 flex cursor-zoom-in items-center justify-center bg-black/0 text-white opacity-0 transition-all group-hover:bg-black/25 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
+                    >
+                      <ZoomIn className='size-5 drop-shadow-sm' />
+                    </button>
                   </div>
                 </div>
               )}
@@ -672,13 +987,23 @@ export function RecordDetailDialog({
                       </Badge>
                     )}
                   </div>
-                  <div className='flex h-36 w-full items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 p-2'>
+                  <div className='group relative flex h-36 w-full items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 p-2'>
                     <MediaImage
                       path={cap.cropPath}
                       alt={formatTargetType(t, cap.targetType)}
                       className='size-full'
                       imageClassName='object-contain'
                     />
+                    <button
+                      type='button'
+                      onClick={() => openPreviewById('capture-crop')}
+                      aria-label={t('detail.previewImageLabel', {
+                        name: t('detail.snapshot'),
+                      })}
+                      className='absolute inset-0 flex cursor-zoom-in items-center justify-center bg-black/0 text-white opacity-0 transition-all group-hover:bg-black/25 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
+                    >
+                      <ZoomIn className='size-5 drop-shadow-sm' />
+                    </button>
                   </div>
                 </div>
               )}
@@ -782,6 +1107,12 @@ export function RecordDetailDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <RecordImagePreviewDialog
+        images={previewImages}
+        activeIndex={open ? previewIndex : null}
+        onActiveIndexChange={setPreviewIndex}
+      />
     </Dialog>
   )
 }

@@ -1885,6 +1885,19 @@ definitions:
       trackId:
         type: integer
     type: object
+  record.RecognitionCandidateInfo:
+    properties:
+      face_id:
+        type: string
+      person_id:
+        type: string
+      person_name:
+        type: string
+      personRowId:
+        type: string
+      similarity:
+        type: number
+    type: object
   record.RecognitionResponse:
     properties:
       algorithmId:
@@ -1911,7 +1924,7 @@ definitions:
         type: string
       candidates:
         items:
-          $ref: '#/definitions/aitypes.FaceCandidate'
+          $ref: '#/definitions/record.RecognitionCandidateInfo'
         type: array
       capturedAt:
         type: string

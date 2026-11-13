@@ -18,6 +18,7 @@ describe('Records Schemas', () => {
     it('parses snake_case fields correctly', () => {
       const raw = {
         person_id: 'p-1',
+        person_row_id: 'row-1',
         person_name: 'Alice',
         face_id: 'f-1',
         similarity: 0.92,
@@ -25,6 +26,7 @@ describe('Records Schemas', () => {
       const parsed = faceCandidateSchema.parse(raw)
       expect(parsed).toEqual({
         personId: 'p-1',
+        personRowId: 'row-1',
         personName: 'Alice',
         faceId: 'f-1',
         similarity: 0.92,
@@ -34,6 +36,7 @@ describe('Records Schemas', () => {
     it('parses camelCase fields correctly', () => {
       const raw = {
         personId: 'p-2',
+        personRowId: 'row-2',
         personName: 'Bob',
         faceId: 'f-2',
         similarity: 0.88,
@@ -41,6 +44,7 @@ describe('Records Schemas', () => {
       const parsed = faceCandidateSchema.parse(raw)
       expect(parsed).toEqual({
         personId: 'p-2',
+        personRowId: 'row-2',
         personName: 'Bob',
         faceId: 'f-2',
         similarity: 0.88,

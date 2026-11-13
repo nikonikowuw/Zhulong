@@ -20,6 +20,7 @@ const mockRecognition: Recognition = {
   candidates: [
     {
       personId: 'p-888',
+      personRowId: 'p-888',
       personName: 'Alice Zhang',
       faceId: 'f-1',
       similarity: 0.94,
@@ -305,5 +306,152 @@ describe('RecordDetailDialog', () => {
     const structBtn = getByRole('button', { name: '结构化视图' })
     await userEvent.click(structBtn)
     await expect.element(getByText('plate_number')).toBeInTheDocument()
+  })
+
+  it('renders candidate thumbnails via personRowId and switches comparison preview on click', async () => {
+    const recWithCandidates: Recognition = {
+      ...mockRecognition,
+      matched: false,
+      personId: null,
+      personExternalId: '',
+      personName: '',
+      matchedFaceId: '',
+      similarity: 0,
+      candidates: [
+        {
+          personId: '',
+          personRowId: 'row-alice',
+          personName: 'Alice',
+          faceId: 'face-1',
+          similarity: 0.78,
+        },
+        {
+          personId: 'EMP-002',
+          personRowId: 'row-bob',
+          personName: 'Bob',
+          faceId: 'face-2',
+          similarity: 0.71,
+        },
+        {
+          personId: 'EMP-GONE',
+          personRowId: '',
+          personName: 'Ghost',
+          faceId: 'face-gone',
+          similarity: 0.62,
+        },
+      ],
+    }
+
+    const seenSrcs: string[] = []
+    const originalCreateElement = document.createElement.bind(document)
+    const spy = vi.spyOn(document, 'createElement').mockImplementation(((
+      tag: string,
+      options?: ElementCreationOptions
+    ) => {
+      const el = originalCreateElement(tag, options)
+      if (tag === 'img') {
+        const setAttribute = el.setAttribute.bind(el)
+        el.setAttribute = (name: string, value: string) => {
+          if (name === 'src') seenSrcs.push(value)
+          setAttribute(name, value)
+        }
+      }
+      return el
+    }) as typeof document.createElement)
+
+    const { getByRole, getByText } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        record={recWithCandidates}
+        tab='recognitions'
+      />
+    )
+
+    expect(seenSrcs).toContain('/api/v1/persons/row-alice/faces/face-1/image')
+    expect(seenSrcs).toContain('/api/v1/persons/row-bob/faces/face-2/image')
+    // 绝不能拿外部工号 (EMP-002 / EMP-GONE) 去拼取图地址。
+    expect(seenSrcs.some((s) => s.includes('EMP-002'))).toBe(false)
+    expect(seenSrcs.some((s) => s.includes('EMP-GONE'))).toBe(false)
+
+    const bobButton = getByRole('button', { name: /#2\s*Bob/ })
+    expect(bobButton.element().getAttribute('aria-pressed')).toBe('false')
+    await userEvent.click(bobButton)
+    spy.mockRestore()
+
+    expect(bobButton.element().getAttribute('aria-pressed')).toBe('true')
+    await expect.element(getByText('对比中')).toBeInTheDocument()
+    await expect.element(getByText(/候选 #2 · Bob/)).toBeInTheDocument()
+
+    const resetBtn = getByRole('button', { name: '恢复默认' })
+    await userEvent.click(resetBtn)
+    expect(bobButton.element().getAttribute('aria-pressed')).toBe('false')
+    await expect
+      .element(getByText('底库照片', { exact: true }))
+      .toBeInTheDocument()
+  })
+
+  it('opens fullscreen image preview for candidate thumbnails and supports zoom & navigation', async () => {
+    const recWithTwoCandidates: Recognition = {
+      ...mockRecognition,
+      candidates: [
+        {
+          personId: 'EMP-888',
+          personRowId: 'p-888',
+          personName: 'Alice Zhang',
+          faceId: 'f-1',
+          similarity: 0.94,
+        },
+        {
+          personId: 'EMP-002',
+          personRowId: 'row-bob',
+          personName: 'Bob Li',
+          faceId: 'face-2',
+          similarity: 0.72,
+        },
+      ],
+    }
+
+    const handleOpenChange = vi.fn()
+    const { getByRole, getByText } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={handleOpenChange}
+        record={recWithTwoCandidates}
+        tab='recognitions'
+      />
+    )
+
+    // 点击第 2 位候选人缩略图上的全屏查看按钮
+    const bobZoomBtn = getByRole('button', { name: '全屏查看 Bob Li' })
+    await userEvent.click(bobZoomBtn)
+
+    // 全屏预览层打开，显示候选人标题、百分比计数与总页数（全景 + 切片 + 2位候选人 = 4）
+    await expect.element(getByText('4 / 4')).toBeInTheDocument()
+    await expect.element(getByText('100%')).toBeInTheDocument()
+
+    // 放大与重置缩放
+    await userEvent.click(getByRole('button', { name: '放大' }))
+    await expect.element(getByText('125%')).toBeInTheDocument()
+    await userEvent.click(getByRole('button', { name: '重置缩放' }))
+    await expect.element(getByText('100%')).toBeInTheDocument()
+
+    // 上一张切换到候选 #1
+    await userEvent.click(getByRole('button', { name: '上一张' }))
+    await expect.element(getByText('3 / 4')).toBeInTheDocument()
+
+    // 关闭全屏预览，外层研判详情弹窗保持打开
+    const previewCloseBtns = getByRole('button', { name: '关闭' }).elements()
+    await userEvent.click(previewCloseBtns[previewCloseBtns.length - 1])
+    expect(handleOpenChange).not.toHaveBeenCalledWith(false)
+    await expect
+      .element(getByRole('heading', { name: /人脸识别研判详情/ }))
+      .toBeInTheDocument()
+
+    // 点击全景原图全屏按钮也可打开全屏预览（第 1 / 4 张）
+    await userEvent.click(
+      getByRole('button', { name: '全屏查看', exact: true })
+    )
+    await expect.element(getByText('1 / 4')).toBeInTheDocument()
   })
 })

@@ -9508,6 +9508,26 @@ const docTemplate = `{
                 }
             }
         },
+        "record.RecognitionCandidateInfo": {
+            "type": "object",
+            "properties": {
+                "face_id": {
+                    "type": "string"
+                },
+                "personRowId": {
+                    "type": "string"
+                },
+                "person_id": {
+                    "type": "string"
+                },
+                "person_name": {
+                    "type": "string"
+                },
+                "similarity": {
+                    "type": "number"
+                }
+            }
+        },
         "record.RecognitionResponse": {
             "type": "object",
             "properties": {
@@ -9543,7 +9563,7 @@ const docTemplate = `{
                 "candidates": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/aitypes.FaceCandidate"
+                        "$ref": "#/definitions/record.RecognitionCandidateInfo"
                     }
                 },
                 "capturedAt": {

@@ -3,9 +3,20 @@ package record
 import (
 	"encoding/json"
 	"time"
-
-	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 )
+
+// RecognitionCandidateInfo represents one Top-N face match candidate in a recognition response.
+//
+// PersonID carries the external business key emitted by the runner (may be empty if
+// the person had none), whereas PersonRowID is resolved from the local person_faces
+// table at query time so the UI can fetch /persons/{personRowId}/faces/{faceId}/image.
+type RecognitionCandidateInfo struct {
+	PersonID    string  `json:"person_id"`
+	PersonRowID string  `json:"personRowId"`
+	PersonName  string  `json:"person_name"`
+	FaceID      string  `json:"face_id"`
+	Similarity  float64 `json:"similarity"`
+}
 
 // RecognitionResponse represents the public API representation of a Recognition.
 type RecognitionResponse struct {
@@ -21,20 +32,20 @@ type RecognitionResponse struct {
 	PersonID         *string `json:"personId"`
 	// PersonExternalID 是上报业务系统用的身份：写入时快照的 persons.person_id。
 	// 空串表示该人员当时尚未绑定业务键 —— 该条记录不可上报，不要回退成 personId。
-	PersonExternalID string                  `json:"personExternalId"`
-	PersonName       string                  `json:"personName"`
-	MatchedFaceID    string                  `json:"matchedFaceId"`
-	Matched          bool                    `json:"matched"`
-	Similarity       float64                 `json:"similarity"`
-	Candidates       []aitypes.FaceCandidate `json:"candidates"`
-	FaceImagePath    string                  `json:"faceImagePath"`
-	GalleryImagePath string                  `json:"galleryImagePath"`
-	ImagePath        string                  `json:"imagePath"`
-	Box              [4]float64              `json:"box"`
-	BodyBox          [4]float64              `json:"bodyBox"`
-	Attributes       map[string]any          `json:"attributes"`
-	CapturedAt       time.Time               `json:"capturedAt"`
-	CreatedAt        time.Time               `json:"createdAt"`
+	PersonExternalID string                     `json:"personExternalId"`
+	PersonName       string                     `json:"personName"`
+	MatchedFaceID    string                     `json:"matchedFaceId"`
+	Matched          bool                       `json:"matched"`
+	Similarity       float64                    `json:"similarity"`
+	Candidates       []RecognitionCandidateInfo `json:"candidates"`
+	FaceImagePath    string                     `json:"faceImagePath"`
+	GalleryImagePath string                     `json:"galleryImagePath"`
+	ImagePath        string                     `json:"imagePath"`
+	Box              [4]float64                 `json:"box"`
+	BodyBox          [4]float64                 `json:"bodyBox"`
+	Attributes       map[string]any             `json:"attributes"`
+	CapturedAt       time.Time                  `json:"capturedAt"`
+	CreatedAt        time.Time                  `json:"createdAt"`
 }
 
 // derefString 把可空列转换成对外 API 的空串表示。
@@ -100,7 +111,7 @@ func (r *Recognition) ToResponse() RecognitionResponse {
 		MatchedFaceID:    r.MatchedFaceID,
 		Matched:          r.Matched,
 		Similarity:       r.Similarity,
-		Candidates:       unmarshalSliceOrDefault[aitypes.FaceCandidate](r.CandidatesJSON),
+		Candidates:       unmarshalSliceOrDefault[RecognitionCandidateInfo](r.CandidatesJSON),
 		FaceImagePath:    r.FaceImagePath,
 		GalleryImagePath: r.GalleryImagePath,
 		ImagePath:        r.ImagePath,
