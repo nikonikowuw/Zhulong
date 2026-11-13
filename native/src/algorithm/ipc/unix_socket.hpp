@@ -30,7 +30,17 @@ namespace zhulong::ipc {
  */
 struct ClientChannel {
     std::atomic<int> fd{-1};     /**< 客户端已连接的 socket 文件描述符（-1 表示已断开） */
+    int owned_fd{-1};            /**< 底层独占描述符，仅在最后一个 shared_ptr 析构时 ::close */
     std::mutex send_mutex;       /**< 写操作互斥锁，保证整条 IPC 报文（Header + Payload）连续原子发送 */
+
+    ClientChannel() = default;
+    explicit ClientChannel(int f) noexcept : fd(f), owned_fd(f) {}
+    ~ClientChannel();
+
+    ClientChannel(const ClientChannel&) = delete;
+    ClientChannel& operator=(const ClientChannel&) = delete;
+    ClientChannel(ClientChannel&&) = delete;
+    ClientChannel& operator=(ClientChannel&&) = delete;
 };
 
 /**
@@ -48,6 +58,7 @@ struct ServerWorkerSync {
     mutable std::mutex clients_mutex;
     std::unordered_map<uint32_t, std::shared_ptr<ClientChannel>> client_channels;
 
+    std::function<void(uint32_t)> on_connect;
     std::function<void(uint32_t, const IpcHeader&, const uint8_t*)> on_message;
     std::function<void(uint32_t)> on_disconnect;
 };

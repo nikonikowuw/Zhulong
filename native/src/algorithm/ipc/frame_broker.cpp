@@ -197,23 +197,34 @@ bool FrameBroker::start(uint64_t stream_id, const std::string& base_dir,
 
     if (!server_.start(socket_path_, error_msg)) {
         shm_pool_.close();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            slots_.clear();
+            clients_.clear();
+            task_config_payloads_.clear();
+        }
+        dma_slots_.clear();
+        has_dma_slots_ = false;
         return false;
     }
 
-    running_.store(true);
+    {
+        std::lock_guard<std::mutex> lk(publish_mutex_);
+        running_.store(true, std::memory_order_release);
+    }
     return true;
 }
 
 void FrameBroker::stop() {
-    if (!running_.exchange(false, std::memory_order_acq_rel)) {
-        return;
-    }
-
-    // 等待所有在途的 publish_frame 完成，杜绝与 shm_pool_.close() 的 munmap 发生竞态
+    // 在 publish_mutex_ 下原子切换 running_ 并等待在途 publish_frame 全部退出，
+    // 消除无锁双原子变量在弱序内存模型下的 Dekker 竞态，杜绝与 shm_pool_.close() 并发。
     {
         std::unique_lock<std::mutex> lk(publish_mutex_);
+        if (!running_.exchange(false, std::memory_order_acq_rel)) {
+            return;
+        }
         publish_cv_.wait_for(lk, std::chrono::seconds(2), [this] {
-            return publishing_count_.load(std::memory_order_acquire) == 0;
+            return publishing_count_.load(std::memory_order_relaxed) == 0;
         });
     }
 
@@ -279,21 +290,28 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInf
 bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& view,
                                 const FrameMotionInfo& motion, const CropCopyFn& crop,
                                 int64_t capture_time_ms) {
-    if (!running_.load(std::memory_order_acquire)) return false;
-
     struct PublishGuard {
         std::atomic<uint32_t>& count;
         std::mutex& mtx;
         std::condition_variable& cv;
+        bool active{false};
         ~PublishGuard() {
-            count.fetch_sub(1, std::memory_order_release);
-            std::lock_guard<std::mutex> lk(mtx);
-            cv.notify_all();
+            if (active) {
+                std::lock_guard<std::mutex> lk(mtx);
+                count.fetch_sub(1, std::memory_order_relaxed);
+                cv.notify_all();
+            }
         }
     } guard{publishing_count_, publish_mutex_, publish_cv_};
 
-    publishing_count_.fetch_add(1, std::memory_order_acquire);
-    if (!running_.load(std::memory_order_acquire)) return false;
+    {
+        std::lock_guard<std::mutex> lk(publish_mutex_);
+        if (!running_.load(std::memory_order_relaxed)) {
+            return false;
+        }
+        publishing_count_.fetch_add(1, std::memory_order_relaxed);
+        guard.active = true;
+    }
 
     int slot_idx = -1;
     uint64_t generation = 0;
@@ -346,10 +364,15 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
         // 全幅零拷贝直通：复用源帧 fd，绕过拷贝与槽位 CPU 映射。
         dma_fd_to_send = frame.dma_fd;
     } else if (windowed) {
-        // 窗口物化：只写一个目标，绝不“先写 shm 再抄 dma”。
+        // 窗口物化：只写一个目标，绝不“先写 shm 再抄 dma”；若 DMA 槽位未映射则回退 SHM。
         if (has_dma_slots_) {
-            dma_slot_data = static_cast<uint8_t*>(dma_slots_[slot_idx]->mmap_addr());
-            dma_fd_to_send = dma_slots_[slot_idx]->fd();
+            void* mapped = dma_slots_[slot_idx]->mmap_addr();
+            if (mapped != nullptr) {
+                dma_slot_data = static_cast<uint8_t*>(mapped);
+                dma_fd_to_send = dma_slots_[slot_idx]->fd();
+            } else {
+                slot_data = shm_pool_.slot_write_ptr(slot_idx);
+            }
         } else {
             slot_data = shm_pool_.slot_write_ptr(slot_idx);
         }
@@ -381,13 +404,25 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
         if (!layout.valid || layout.bytes == 0 || layout.bytes > options_.slot_size) {
             return fail_publish(slot_idx, target_clients);
         }
+        if (dma_slot_data != nullptr && dma_slots_[slot_idx]->size() < layout.bytes) {
+            dma_slot_data = nullptr;
+            dma_fd_to_send = -1;
+            slot_data = shm_pool_.slot_write_ptr(slot_idx);
+            if (!slot_data) {
+                return fail_publish(slot_idx, target_clients);
+            }
+        }
         // 防御性边界校验：几何已按帧尺寸计算，这里覆盖元数据/帧尺寸的瞬时不一致。
         if (view.x < 0 || view.y < 0 ||
             static_cast<uint64_t>(view.x) + static_cast<uint64_t>(view.w) > frame.width ||
             static_cast<uint64_t>(view.y) + static_cast<uint64_t>(view.h) > frame.height) {
             return fail_publish(slot_idx, target_clients);
         }
-    } else if (!is_zero_copy_frame) {
+    } else if (is_zero_copy_frame) {
+        if (frame.width == 0 || frame.height == 0 || frame.stride < frame.width) {
+            return fail_publish(slot_idx, target_clients);
+        }
+    } else {
         payload_bytes = frame_payload_bytes(frame);
         if (payload_bytes == 0 || payload_bytes > options_.slot_size ||
             payload_bytes > std::numeric_limits<uint32_t>::max()) {
@@ -440,10 +475,12 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
 
     FrameDispatchMsg msg{};
     if (windowed) {
-        msg.input_view[0] = static_cast<float>(view.x) / frame.width;
-        msg.input_view[1] = static_cast<float>(view.y) / frame.height;
-        msg.input_view[2] = static_cast<float>(view.x + view.w) / frame.width;
-        msg.input_view[3] = static_cast<float>(view.y + view.h) / frame.height;
+        const ViewRect actual = window_to_view_rect(
+            view, static_cast<int>(frame.width), static_cast<int>(frame.height));
+        msg.input_view[0] = actual.x1;
+        msg.input_view[1] = actual.y1;
+        msg.input_view[2] = actual.x2;
+        msg.input_view[3] = actual.y2;
     }
     msg.stream_id = stream_id_;
     msg.frame_id = frame_seq_.fetch_add(1);
@@ -609,10 +646,11 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
         }
     }
 
-    // 切换槽位状态为 LEASED
+    // 切换槽位状态为 LEASED（若所有目标客户端在写入期间均已断连，则直接回 FREE）
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        slots_[slot_idx].state = SlotState::LEASED;
+        slots_[slot_idx].state =
+            slots_[slot_idx].active_leases.empty() ? SlotState::FREE : SlotState::LEASED;
     }
 
     // 向各合格客户端下发帧通知 (若发送失败立即清算租约)

@@ -2086,6 +2086,71 @@ void test_frame_broker_invalid_source_rejected() {
     std::cout << "[PASS] test_frame_broker_invalid_source_rejected" << std::endl;
 }
 
+void test_shm_pool_move_resets_source_and_broker_publish_stop_race() {
+    // 1. ShmPool 移动后源对象元数据必须清零
+    ShmPool src_pool;
+    assert(src_pool.init("/zhulong_test_shm_move", ShmMode::CREATE_READ_WRITE, 2, 4096));
+    ShmPool dst_pool(std::move(src_pool));
+    assert(!src_pool.is_valid());
+    assert(src_pool.slot_count() == 0);
+    assert(src_pool.slot_size() == 0);
+    assert(src_pool.total_size() == 0);
+    assert(dst_pool.is_valid());
+    assert(dst_pool.slot_count() == 2);
+    dst_pool.close();
+
+    // 2. 全幅零拷贝无效尺寸必须被拒绝，且并发 publish_frame + stop() 安全收口
+    const uint64_t stream_id = 1903;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 2;
+    opt.slot_size = 1024 * 1024;
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    UnixSocketClient client_zc;
+    assert(client_zc.connect(broker.socket_path()));
+    HandshakeReq req_zc{};
+    req_zc.api_version = 1;
+    std::strncpy(req_zc.client_name, "zc_guard_client", sizeof(req_zc.client_name) - 1);
+    assert(client_zc.send_msg(MSG_HANDSHAKE_REQ, &req_zc, sizeof(req_zc)));
+    IpcHeader resp_hdr_zc{};
+    std::vector<uint8_t> resp_payload_zc;
+    assert(client_zc.recv_msg(resp_hdr_zc, resp_payload_zc, 1000));
+    for (int i = 0; i < 50 && broker.client_count() == 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    assert(broker.client_count() == 1);
+
+    HardwareFrame bad_zc{};
+    bad_zc.dma_fd = 999;
+    bad_zc.width = 0;
+    bad_zc.height = 0;
+    bad_zc.stride = 0;
+    bad_zc.format = FRAME_FORMAT_NV12;
+    assert(!broker.publish_frame(bad_zc));
+    client_zc.disconnect();
+
+    std::vector<uint8_t> buf(64 * 64 * 3, 1);
+    HardwareFrame ok_frame{};
+    ok_frame.width = 64;
+    ok_frame.height = 64;
+    ok_frame.stride = 64 * 3;
+    ok_frame.format = FRAME_FORMAT_UNKNOWN;
+    ok_frame.host_ptr = buf.data();
+
+    std::atomic<bool> stop_flag{false};
+    std::thread pub_thread([&]() {
+        while (!stop_flag.load(std::memory_order_relaxed)) {
+            broker.publish_frame(ok_frame);
+        }
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    broker.stop();
+    stop_flag.store(true, std::memory_order_relaxed);
+    pub_thread.join();
+    std::cout << "[PASS] test_shm_pool_move_resets_source_and_broker_publish_stop_race" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     // 子进程是「包形态」的桩算法可执行文件：自带算法类，argv 只有 broker 相关参数。
     const char* consumer_bin = (argc > 1) ? argv[1] : nullptr;
@@ -2114,6 +2179,7 @@ int main(int argc, char* argv[]) {
     test_frame_broker_nv12_vstride_normalization();
     test_frame_broker_windowed_publish();
     test_frame_broker_invalid_source_rejected();
+    test_shm_pool_move_resets_source_and_broker_publish_stop_race();
     if (consumer_bin) {
         test_consumer_subprocess_e2e(consumer_bin);
         test_consumer_multi_broker_e2e(consumer_bin);

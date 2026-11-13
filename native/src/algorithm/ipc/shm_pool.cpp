@@ -29,6 +29,9 @@ ShmPool::ShmPool(ShmPool&& other) noexcept
       is_owner_(other.is_owner_) {
     other.fd_ = -1;
     other.mapped_ptr_ = nullptr;
+    other.total_size_ = 0;
+    other.slot_count_ = 0;
+    other.slot_size_ = 0;
     other.is_owner_ = false;
 }
 
@@ -46,6 +49,9 @@ ShmPool& ShmPool::operator=(ShmPool&& other) noexcept {
 
         other.fd_ = -1;
         other.mapped_ptr_ = nullptr;
+        other.total_size_ = 0;
+        other.slot_count_ = 0;
+        other.slot_size_ = 0;
         other.is_owner_ = false;
     }
     return *this;

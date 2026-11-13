@@ -225,6 +225,27 @@ int main() {
         ::unlink(tail_sock.c_str());
     }
 
+    // 10. on_connect 回调与并发 stop() 安全性
+    {
+        std::string cb_sock = "/tmp/zhulong_test_on_connect_stop.sock";
+        ::unlink(cb_sock.c_str());
+
+        UnixSocketServer server_cb;
+        int connected_count = 0;
+        server_cb.set_on_connect([&connected_count](uint32_t) { ++connected_count; });
+        assert(server_cb.start(cb_sock));
+
+        UnixSocketClient client_cb;
+        assert(client_cb.connect(cb_sock));
+        for (int i = 0; i < 50 && server_cb.client_count() == 0; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        assert(connected_count == 1);
+        server_cb.stop();
+        client_cb.disconnect();
+        ::unlink(cb_sock.c_str());
+    }
+
     std::cout << "[Test] ZhulongIpcSocketFdTests PASSED" << std::endl;
     return 0;
 }

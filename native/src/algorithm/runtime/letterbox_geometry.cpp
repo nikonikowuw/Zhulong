@@ -10,7 +10,7 @@
 
 namespace zhulong {
 
-LetterboxGeometry compute_letterbox_geometry(int src_w, int src_h, int target_w, int target_h) {
+LetterboxGeometry compute_letterbox_geometry(int src_w, int src_h, int target_w, int target_h) noexcept {
     // ⚠️ 本函数体是从 CpuVisionBackend::letterbox 逐行提取的，**算术必须保持逐位一致**：
     // 提取前的 CPU 输出已被既有测试（algo_runtime_test.cpp 的 letterbox 断言）固化，
     // 任何精度/舍入改变都会让那些断言失败。

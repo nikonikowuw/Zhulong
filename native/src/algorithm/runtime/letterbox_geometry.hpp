@@ -26,7 +26,7 @@ struct LetterboxGeometry {
 //
 // ⚠️ 本函数**假定**输入已通过参数校验（正尺寸），与 CpuVisionBackend::letterbox
 // 在调用前的校验保持一致；它不做错误返回，避免在两个后端里各写一遍校验分支。
-LetterboxGeometry compute_letterbox_geometry(int src_w, int src_h, int target_w, int target_h);
+LetterboxGeometry compute_letterbox_geometry(int src_w, int src_h, int target_w, int target_h) noexcept;
 
 } // namespace zhulong
 

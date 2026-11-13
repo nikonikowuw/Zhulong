@@ -349,9 +349,10 @@ int main() {
         }
     }
 
-    // 4.2 NaN iou_threshold 返回空，相同置信度稳定保序
+    // 4.2 NaN / 负 iou_threshold 返回空，相同置信度稳定保序
     {
         assert(zhulong::nms(boxes, std::numeric_limits<float>::quiet_NaN()).empty());
+        assert(zhulong::nms(boxes, -0.1f).empty());
         std::vector<zhulong_bbox> tied(2);
         tied[0].box[0] = 0.0f; tied[0].box[1] = 0.0f; tied[0].box[2] = 0.2f; tied[0].box[3] = 0.2f;
         tied[0].confidence = 0.8f; tied[0].class_id = 1;

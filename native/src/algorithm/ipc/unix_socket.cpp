@@ -219,6 +219,14 @@ ReadStatus read_all(int fd, void* data, size_t size, int timeout_ms) {
 
 } // namespace
 
+ClientChannel::~ClientChannel() {
+    fd.store(-1);
+    if (owned_fd >= 0) {
+        ::close(owned_fd);
+        owned_fd = -1;
+    }
+}
+
 ClientFdHandle::~ClientFdHandle() {
     int v = fd.exchange(-1);
     if (v >= 0) {
@@ -277,6 +285,7 @@ bool UnixSocketServer::start(const std::string& socket_path, std::string* error_
     }
 
     auto sync = std::make_shared<ServerWorkerSync>();
+    sync->on_connect = on_connect_;
     sync->on_message = on_message_;
     sync->on_disconnect = on_disconnect_;
     sync->server_alive.store(true);
@@ -315,25 +324,33 @@ void UnixSocketServer::stop() {
     int lfd = listen_fd_.exchange(-1);
     if (lfd >= 0) {
         ::shutdown(lfd, SHUT_RDWR);
-        ::close(lfd);
     }
 
     if (accept_thread_.joinable()) {
         accept_thread_.join();
     }
 
-    // 唤醒所有客户端读取线程：仅发送 shutdown，不提前 close，防止与工作线程的 recv() 产生竞态
+    // 必须等 listen_loop() 彻底退出后再 ::close(lfd)，杜绝 poll/accept 与 fd 复用竞态
+    if (lfd >= 0) {
+        ::close(lfd);
+    }
+
+    // 唤醒所有客户端读取线程：仅发送 shutdown，由最后一个持有 ClientChannel 的线程析构关闭 fd
     std::vector<std::shared_ptr<ClientChannel>> to_close;
     if (sync) {
         std::lock_guard<std::mutex> lock(sync->clients_mutex);
+        to_close.reserve(sync->client_channels.size());
         for (auto& [cid, ch] : sync->client_channels) {
-            int cfd = ch->fd.load();
-            if (cfd >= 0) {
-                ::shutdown(cfd, SHUT_RDWR);
-            }
             to_close.push_back(ch);
         }
         sync->client_channels.clear();
+    }
+    for (auto& ch : to_close) {
+        std::lock_guard<std::mutex> send_lock(ch->send_mutex);
+        int old_fd = ch->fd.exchange(-1);
+        if (old_fd >= 0) {
+            ::shutdown(old_fd, SHUT_RDWR);
+        }
     }
 
     // 等待所有读取工作线程完全退出（有界等待最多 2000ms，防死锁；若当前线程即 worker 则不自等）
@@ -344,14 +361,7 @@ void UnixSocketServer::stop() {
         });
     }
 
-    // 此时所有工作线程均已安全退出，安全关闭剩余套接字
-    for (auto& ch : to_close) {
-        std::lock_guard<std::mutex> send_lock(ch->send_mutex);
-        int old_fd = ch->fd.exchange(-1);
-        if (old_fd >= 0) {
-            ::close(old_fd);
-        }
-    }
+    to_close.clear();
 
     if (!socket_path_.empty()) {
         ::unlink(socket_path_.c_str());
@@ -399,16 +409,15 @@ void UnixSocketServer::listen_loop() {
             setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 
             uint32_t cid = next_client_id_.fetch_add(1);
-            auto channel = std::make_shared<ClientChannel>();
-            channel->fd = client_fd;
+            auto channel = std::make_shared<ClientChannel>(client_fd);
 
             if (sync) {
                 std::lock_guard<std::mutex> lock(sync->clients_mutex);
                 sync->client_channels[cid] = channel;
             }
 
-            if (on_connect_) {
-                on_connect_(cid);
+            if (sync && sync->on_connect) {
+                sync->on_connect(cid);
             }
 
             // ⚠️ 在 spawn 之前预先递增活跃计数，防止 detached 线程首行尚未执行时 stop() 误判为 0
@@ -519,7 +528,6 @@ void UnixSocketServer::remove_client(const std::shared_ptr<ServerWorkerSync>& sy
             int old_fd = channel->fd.exchange(-1);
             if (old_fd >= 0) {
                 ::shutdown(old_fd, SHUT_RDWR);
-                ::close(old_fd);
             }
         }
 
@@ -699,7 +707,15 @@ bool UnixSocketClient::send_msg_with_fd(uint16_t msg_type, const void* payload, 
     header.sequence = next_sequence_.fetch_add(1, std::memory_order_relaxed);
 
     bool partial_write = false;
-    return write_msg_with_fd(sock, header, payload, payload_size, fd_to_send, partial_write);
+    if (!write_msg_with_fd(sock, header, payload, payload_size, fd_to_send, partial_write)) {
+        if (partial_write) {
+            // 报文已局部写出，流边界已损坏；立即 shutdown 并标记失效，避免后续帧错位
+            ::shutdown(sock, SHUT_RDWR);
+            mark_peer_closed();
+        }
+        return false;
+    }
+    return true;
 }
 
 bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8_t>& out_payload, int& out_fd, int timeout_ms) {
