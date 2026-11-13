@@ -58,7 +58,7 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
 3. **5 点相似变换对齐、eDifFIQA(T) 质量评估与可选图像门禁（`src/alignment/` + `src/quality/` + `src/common/face_image_quality.hpp`）**
    - Umeyama 最小二乘求解相似变换矩阵，双线性采样输出 112×112 RGB24 对齐脸块。
    - **流式图像质量门禁（`enable_face_image_gate`，默认关闭）**：跳过对齐块 1px 外边框后，在 `110×110` 内部像素上计算 BT.601 亮度 4 邻域拉普拉斯方差（`< 112px` 小脸按 `|det(affine)|` 补偿），同时统计暗部欠曝比例（`Y < 32`）与亮部过曝比例（`Y > 224`）。门限参数非法时放行，对齐块本身非法时拒绝。
-   - **eDifFIQA(T) 深度学习人脸质量评估（`src/quality/quality_assessor.*`）**：与 FaceLiVTv2-L 共用同一 `112×112` RGB24 对齐脸块（ONNX 侧归一化为 `(x - 127.5) / 127.5`，RKNN 侧均值/方差已内置于 `.rknn`），输出 `[0.0, 1.0]` 质量分并受 `min_face_quality` 门控（默认 `0.40`）。
+   - **eDifFIQA(T) 深度学习人脸质量评估（`src/quality/quality_assessor.*`）**：与 FaceLiVTv2-L 共用同一 `112×112` RGB24 对齐脸块（ONNX 侧归一化为 `(x - 127.5) / 127.5`，RKNN 侧均值/方差已内置于 `.rknn`），输出 `[0.0, 1.0]` 质量分并受 `min_face_quality` 门控（默认 `0.28`）。
      - **流式识别**：低于 `min_face_quality` 在特征提取前直接拦截，节省 512 维特征抽取算力；通过后得分写入 `FaceItem.quality` 并作为跨帧特征融合权重。
      - **底库登记（`--extract-feature`）**：同步接入 `eDifFIQA(T)` 质量门禁，低于 `min_face_quality` 时以帧级 `NO_FACE_DETECTED` 拒绝低质登记照（热进程不退出）。
      - 注：`rk3568` 档位当前打包 `ediffiqa_t.rknn`（INT8 量化，1.9 MB；相比 ONNX/FP16 分值存在约 `0.01~0.02` 系统下偏，板端耗时待实测）。
@@ -96,7 +96,7 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
 
 | 键名 | 对应环境变量 | 默认值 | 区间 | 说明 |
 | :--- | :--- | ---: | :--- | :--- |
-| `min_face_quality` | `ZHULONG_MIN_FACE_QUALITY` | 0.40 | 0.0 – 1.0 | `eDifFIQA(T)` 模型质量分门槛（`0.0` 仅关闭质量分阈值，几何/拓扑硬拒仍生效） |
+| `min_face_quality` | `ZHULONG_MIN_FACE_QUALITY` | 0.28 | 0.0 – 1.0 | `eDifFIQA(T)` 模型质量分门槛（`0.0` 仅关闭质量分阈值，几何/拓扑硬拒仍生效） |
 | `fusion_similarity_threshold` | `ZHULONG_FUSION_SIMILARITY_THRESHOLD` | 0.62 | 0.45 – 0.95 | 跨帧判定同人并允许融合的最小余弦相似度（同时校验当前融合向量与最高质量锚点） |
 | `fusion_ttl_seconds` | `ZHULONG_FUSION_TTL_SECONDS` | 3.0 | 0.5 – 30.0 | 单路特征状态池未再次观测到同人时的过期淘汰秒数 |
 | `min_match_margin` | `ZHULONG_MIN_MATCH_MARGIN` | 0.00 | 0.0 – 1.0 | 第一与第二不同身份的最小相似度分差（`0.0` 表示关闭；开启前须按底库规模与现场样本标定） |

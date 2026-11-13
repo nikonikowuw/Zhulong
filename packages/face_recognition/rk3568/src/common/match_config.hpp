@@ -52,8 +52,8 @@ inline constexpr int kDefaultMinFaceSize = 32;
 inline constexpr int kMinFaceSizeBound = 16;
 inline constexpr int kMaxFaceSizeBound = 512;
 
-/** @brief 纯数据逻辑人脸质量综合阈值默认值 */
-inline constexpr float kDefaultMinFaceQuality = 0.40f;
+/** @brief eDifFIQA(T) 人脸质量评估综合阈值默认值 */
+inline constexpr float kDefaultMinFaceQuality = 0.28f;
 inline constexpr float kMinFaceQualityBound = 0.00f;
 inline constexpr float kMaxFaceQualityBound = 1.00f;
 

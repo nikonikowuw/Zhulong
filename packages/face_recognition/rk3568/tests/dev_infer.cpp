@@ -283,7 +283,7 @@ bool run_regression_checks(zhulong::face::FaceRecognitionPlugin& plugin,
         DEV_CHECK(p.body_box[1] >= 0.0f && p.body_box[3] <= 1.0f && p.body_box[1] < p.body_box[3], "valid body y");
     }
     for (const auto& f : scene.faces) {
-        DEV_CHECK(f.quality >= 0.40f && f.quality <= 1.0f, "face quality must pass default eDifFIQA(T) gate");
+        DEV_CHECK(f.quality >= 0.28f && f.quality <= 1.0f, "face quality must pass default eDifFIQA(T) gate");
         DEV_CHECK(check_unit_norm(f.features), "face feature must be 512-d L2 normalized");
     }
 
