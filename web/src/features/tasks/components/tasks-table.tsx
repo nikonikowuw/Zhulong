@@ -5,9 +5,6 @@ import {
   type VisibilityState,
   getCoreRowModel,
   getExpandedRowModel,
-  getFacetedRowModel,
-  getFacetedUniqueValues,
-  getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
@@ -211,6 +208,10 @@ export function TasksTable({
       expanded,
     },
     enableRowSelection: false,
+    // 筛选逻辑已在上方 channelGroups 中完成（按 cameraId / algorithmId / 组合状态 / 多字段关键字），
+    // 必须开启 manualFiltering，否则 TanStack Table 会用列 accessorFn（如 camera.name / items.length）
+    // 做二次过滤把结果误删。
+    manualFiltering: true,
     onSortingChange: setSorting,
     onColumnFiltersChange,
     onColumnVisibilityChange: setColumnVisibility,
@@ -218,11 +219,8 @@ export function TasksTable({
     onGlobalFilterChange,
     onExpandedChange: setExpanded,
     getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getFacetedRowModel: getFacetedRowModel(),
-    getFacetedUniqueValues: getFacetedUniqueValues(),
     getRowCanExpand: (row) => (row.original?.items?.length ?? 0) > 0,
     getExpandedRowModel: getExpandedRowModel(),
     getRowId: (row) => row.camera.id,

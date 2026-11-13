@@ -1,5 +1,10 @@
 import { type Algorithm } from '@/features/algorithms/contract'
-import { getDefaultConfigJson } from './algo-config-schema'
+import {
+  buildConfigFormSchema,
+  getDefaultConfigJson,
+  isZeroConfig,
+  parseSchema,
+} from './algo-config-schema'
 import { type Task } from './schema'
 
 export const EMPTY_CONFIG_JSON = '{}'
@@ -92,4 +97,58 @@ export function pickNextActiveAfterUncheck(
     ([id, draft]) => id !== excludedAlgoId && draft.selected
   )
   return remaining ? remaining[0] : null
+}
+
+export type DraftValidationIssue =
+  | { kind: 'invalid-json'; algoId: string; algoName: string }
+  | {
+      kind: 'schema-violation'
+      algoId: string
+      algoName: string
+      fieldPath?: string
+      message?: string
+    }
+
+/**
+ * 校验已选算法的 JSON 语法与 `config.schema.json` 约束，
+ * 在提交后端前拦截 400 并定位到首个出错算法。
+ */
+export function validateSelectedAlgoDrafts(
+  drafts: Record<string, AlgoDraftItem>,
+  algoMap: Map<string, Algorithm>
+): DraftValidationIssue | null {
+  for (const [algoId, draft] of Object.entries(drafts)) {
+    if (!draft.selected) continue
+    const rawJson = draft.configJson?.trim() || EMPTY_CONFIG_JSON
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(rawJson)
+    } catch {
+      return {
+        kind: 'invalid-json',
+        algoId,
+        algoName: algoMap.get(algoId)?.name || algoId,
+      }
+    }
+
+    const algo = algoMap.get(algoId)
+    if (algo?.configSchemaJson) {
+      const parsedSchema = parseSchema(algo.configSchemaJson)
+      if (parsedSchema && !isZeroConfig(parsedSchema)) {
+        const validator = buildConfigFormSchema(parsedSchema)
+        const result = validator.safeParse(parsed)
+        if (!result.success) {
+          const firstIssue = result.error.issues[0]
+          return {
+            kind: 'schema-violation',
+            algoId,
+            algoName: algo.name || algoId,
+            fieldPath: firstIssue?.path?.join('.') || undefined,
+            message: firstIssue?.message || undefined,
+          }
+        }
+      }
+    }
+  }
+  return null
 }

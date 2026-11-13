@@ -263,14 +263,45 @@ export function ChannelPointsCell({ row }: { row: Row<ChannelTaskGroup> }) {
   )
 }
 
+const dateTimeFormatCache = new Map<string, Intl.DateTimeFormat>()
+
+function getDateTimeFormatter(language: string): Intl.DateTimeFormat {
+  const key = language || 'zh-Hans'
+  let formatter = dateTimeFormatCache.get(key)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(key, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+    dateTimeFormatCache.set(key, formatter)
+  }
+  return formatter
+}
+
 /** 更新时间单元格 */
 export function ChannelUpdatedAtCell({ row }: { row: Row<ChannelTaskGroup> }) {
+  const { i18n } = useTranslation('tasks')
   const raw = row.original.task?.updatedAt
   if (!raw) return <span className='text-xs text-muted-foreground'>-</span>
 
+  let formatted = raw
+  try {
+    const parsed = new Date(raw)
+    if (!Number.isNaN(parsed.getTime())) {
+      formatted = getDateTimeFormatter(i18n.language).format(parsed)
+    }
+  } catch {
+    // 保留原始文本兜底
+  }
+
   return (
     <span className='font-mono text-xs whitespace-nowrap text-muted-foreground'>
-      {new Date(raw).toLocaleString()}
+      {formatted}
     </span>
   )
 }

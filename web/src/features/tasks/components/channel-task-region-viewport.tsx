@@ -1,6 +1,7 @@
 import { Lock, ShieldAlert, Sparkles, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { STATUS_DOT_CLASS } from '@/lib/status-palette'
+import { categoryTextClass } from '@/lib/category-palette'
+import { STATUS_DOT_CLASS, STATUS_TEXT_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { CameraFrameSurface, type FrameSurfaceState } from '@/features/live'
 import { emptyDraft } from '../data/region-config'
@@ -144,7 +145,9 @@ export function ChannelTaskRegionViewport({
 
         {showEditor && canEditRegion && (
           <div className='pointer-events-none absolute start-3 bottom-3 flex items-center gap-2 rounded-md bg-black/80 px-2.5 py-1 text-xs text-white shadow-md backdrop-blur-sm'>
-            <Sparkles className='size-3.5 text-emerald-400' />
+            <Sparkles
+              className={cn('size-3.5', categoryTextClass('emerald'))}
+            />
             <span>
               {t(
                 'dialog.regionDrawingHint',
@@ -162,7 +165,9 @@ export function ChannelTaskRegionViewport({
         {!showEditor && (
           <div className='pointer-events-none absolute inset-x-0 top-3 flex justify-center p-1'>
             <div className='flex items-center gap-1.5 rounded-md bg-black/80 px-3 py-1.5 text-xs text-white shadow-md backdrop-blur-sm'>
-              <ShieldAlert className='size-3.5 text-amber-400' />
+              <ShieldAlert
+                className={cn('size-3.5', STATUS_TEXT_CLASS.warning)}
+              />
               <span>
                 {t(
                   'dialog.selectAlgoToConfigure',

@@ -1,20 +1,11 @@
 import { useMemo, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
-import {
-  ALGORITHMS_QUERY_KEY,
-  algorithmsApi,
-  type Algorithm,
-} from '@/features/algorithms/contract'
+import { type Algorithm } from '@/features/algorithms/contract'
 import { type Camera as CameraSchema } from '@/features/cameras/contract'
 import { type FrameSurfaceState } from '@/features/live'
-import {
-  buildConfigFormSchema,
-  isZeroConfig,
-  parseSchema,
-} from '../data/algo-config-schema'
+import { validateSelectedAlgoDrafts } from '../data/algo-draft'
 import {
   calculatePeakCompute,
   isScheduleActiveAt,
@@ -59,7 +50,6 @@ function ChannelTaskDialogContent({
   onClose,
 }: ChannelTaskDialogContentProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
-  const queryClient = useQueryClient()
 
   const defaultCamId =
     initialCameraId || (cameras.length > 0 ? cameras[0].id : '')
@@ -111,6 +101,28 @@ function ChannelTaskDialogContent({
   const canEditCrop = Boolean(cameraId) && surfaceState === 'live'
   const hasCrop = regionEditor.crop !== null
 
+  const otherCameraCompute = useMemo(() => {
+    const items: SchedulableItem[] = []
+    let current = 0
+    for (const task of allTasks) {
+      if (task.cameraId === cameraId || !task.enabled) continue
+      for (const sub of task.algorithms ?? []) {
+        if (!sub.enabled) continue
+        const cost =
+          algoMap.get(sub.algorithmId)?.computeCost ?? DEFAULT_COMPUTE_COST
+        const pts = cost * sub.sampleFps
+        items.push({
+          points: pts,
+          schedule: sub.scheduleJson,
+        })
+        if (isScheduleActiveAt(sub.scheduleJson)) {
+          current += pts
+        }
+      }
+    }
+    return { items, current }
+  }, [allTasks, cameraId, algoMap])
+
   const points = useMemo(() => {
     const thisCameraItems: SchedulableItem[] = []
     let thisCameraCurrent = 0
@@ -127,24 +139,11 @@ function ChannelTaskDialogContent({
       }
     }
 
-    const allItems: SchedulableItem[] = [...thisCameraItems]
-    let projectedCurrent = thisCameraCurrent
-    for (const task of allTasks) {
-      if (task.cameraId === cameraId || !task.enabled) continue
-      for (const sub of task.algorithms ?? []) {
-        if (!sub.enabled) continue
-        const cost =
-          algoMap.get(sub.algorithmId)?.computeCost ?? DEFAULT_COMPUTE_COST
-        const pts = cost * sub.sampleFps
-        allItems.push({
-          points: pts,
-          schedule: sub.scheduleJson,
-        })
-        if (isScheduleActiveAt(sub.scheduleJson)) {
-          projectedCurrent += pts
-        }
-      }
-    }
+    const allItems: SchedulableItem[] = [
+      ...thisCameraItems,
+      ...otherCameraCompute.items,
+    ]
+    const projectedCurrent = thisCameraCurrent + otherCameraCompute.current
 
     const thisCamera = calculatePeakCompute(thisCameraItems)
     const projected = calculatePeakCompute(allItems)
@@ -154,7 +153,7 @@ function ChannelTaskDialogContent({
       thisCameraCurrent,
       projectedCurrent,
     }
-  }, [allTasks, cameraId, drafts, algoMap])
+  }, [drafts, algoMap, otherCameraCompute])
 
   const isOverBudget = points.projected > MAX_COMPUTE_POINTS
   const selectedDisabledAlgos = useMemo(
@@ -188,60 +187,38 @@ function ChannelTaskDialogContent({
       return
     }
 
-    for (const [algoId, draft] of Object.entries(drafts)) {
-      if (!draft.selected) continue
-      const rawJson = draft.configJson?.trim() || '{}'
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(rawJson)
-      } catch {
-        const algoName = algoMap.get(algoId)?.name || algoId
+    const issue = validateSelectedAlgoDrafts(drafts, algoMap)
+    if (issue) {
+      if (issue.kind === 'invalid-json') {
         toast.error(
           t('dialog.invalidJsonError', {
-            name: algoName,
-            defaultValue: `算法「${algoName}」的高级参数不是合法的 JSON 格式，请修正后再保存`,
+            name: issue.algoName,
+            defaultValue: `算法「${issue.algoName}」的高级参数不是合法的 JSON 格式，请修正后再保存`,
           })
         )
-        selectActiveAlgo(algoId)
-        return
+      } else {
+        const issueMsg =
+          issue.message || t('dialog.validationFailed', '参数校验失败')
+        const detailMsg = issue.fieldPath
+          ? t('dialog.invalidConfigFieldDetail', {
+              field: issue.fieldPath,
+              message: issueMsg,
+              defaultValue: `（字段「${issue.fieldPath}」：${issueMsg}）`,
+            })
+          : t('dialog.invalidConfigGeneralDetail', {
+              message: issueMsg,
+              defaultValue: `（${issueMsg}）`,
+            })
+        toast.error(
+          t('dialog.invalidConfigError', {
+            name: issue.algoName,
+            detail: detailMsg,
+            defaultValue: `算法「${issue.algoName}」的参数配置不合规${detailMsg}，请检查修正后再保存`,
+          })
+        )
       }
-
-      // 算法包若定义了 config.schema.json，在前端做预校验阻断，避免后端 400 失败
-      const algo = algoMap.get(algoId)
-      if (algo?.configSchemaJson) {
-        const parsedSchema = parseSchema(algo.configSchemaJson)
-        if (parsedSchema && !isZeroConfig(parsedSchema)) {
-          const validator = buildConfigFormSchema(parsedSchema)
-          const result = validator.safeParse(parsed)
-          if (!result.success) {
-            const algoName = algo.name || algoId
-            const firstIssue = result.error.issues[0]
-            const fieldPath = firstIssue?.path?.join('.')
-            const issueMsg =
-              firstIssue?.message ||
-              t('dialog.validationFailed', '参数校验失败')
-            const detailMsg = fieldPath
-              ? t('dialog.invalidConfigFieldDetail', {
-                  field: fieldPath,
-                  message: issueMsg,
-                  defaultValue: `（字段「${fieldPath}」：${issueMsg}）`,
-                })
-              : t('dialog.invalidConfigGeneralDetail', {
-                  message: issueMsg,
-                  defaultValue: `（${issueMsg}）`,
-                })
-            toast.error(
-              t('dialog.invalidConfigError', {
-                name: algoName,
-                detail: detailMsg,
-                defaultValue: `算法「${algoName}」的参数配置不合规${detailMsg}，请检查修正后再保存`,
-              })
-            )
-            selectActiveAlgo(algoId)
-            return
-          }
-        }
-      }
+      selectActiveAlgo(issue.algoId)
+      return
     }
 
     // 画面未就绪时 regionEditable=false：沿用已保存的区域，绝不提交编辑缓冲。
@@ -272,6 +249,11 @@ function ChannelTaskDialogContent({
       return
     }
 
+    const autoEnableAlgorithmIds =
+      autoEnableDisabled && selectedDisabledAlgos.length > 0
+        ? selectedDisabledAlgos
+        : undefined
+
     syncMutation.mutate(
       {
         cameraId,
@@ -280,36 +262,24 @@ function ChannelTaskDialogContent({
         crop: regionEditor.serializeCrop(),
         drafts: payloadDrafts,
         existingTasks: allTasks.filter((task) => task.cameraId === cameraId),
+        autoEnableAlgorithmIds,
       },
       {
-        onSuccess: async () => {
-          if (autoEnableDisabled && selectedDisabledAlgos.length > 0) {
-            try {
-              await Promise.all(
-                selectedDisabledAlgos.map((algoId) =>
-                  algorithmsApi.enableAlgorithm(algoId)
-                )
+        onSuccess: (result) => {
+          if (result?.enableFailed) {
+            toast.warning(
+              t(
+                'dialog.saveSuccessEnableFailed',
+                '通道算法调度已更新，但部分算法自动激活失败，请在算法管理中手动启用'
               )
-              void queryClient.invalidateQueries({
-                queryKey: ALGORITHMS_QUERY_KEY,
-              })
-              toast.success(
-                t(
-                  'dialog.saveSuccessWithEnable',
-                  '通道算法调度已成功更新，已自动激活相关算法'
-                )
+            )
+          } else if ((result?.enabledCount ?? 0) > 0) {
+            toast.success(
+              t(
+                'dialog.saveSuccessWithEnable',
+                '通道算法调度已成功更新，已自动激活相关算法'
               )
-            } catch {
-              void queryClient.invalidateQueries({
-                queryKey: ALGORITHMS_QUERY_KEY,
-              })
-              toast.warning(
-                t(
-                  'dialog.saveSuccessEnableFailed',
-                  '通道算法调度已更新，但部分算法自动激活失败，请在算法管理中手动启用'
-                )
-              )
-            }
+            )
           } else {
             toast.success(t('dialog.saveSuccess', '通道算法调度已成功更新'))
           }

@@ -14,7 +14,6 @@ import {
   channelTaskDraftReducer,
   type ChannelTaskDraftState,
 } from '../data/channel-task-draft-state'
-import { fromDraft, serializeRegionConfig } from '../data/region-config'
 import { type AlgorithmConfigDraft, type Task } from '../data/schema'
 import {
   useRegionEditor,
@@ -79,12 +78,14 @@ function createInitialState(
     initialAlgorithmId && drafts[initialAlgorithmId]
       ? initialAlgorithmId
       : pickActiveAlgo(drafts, algorithms)
+  const initialTask = allTasks.find((task) => task.cameraId === initialCameraId)
   return {
     cameraId: initialCameraId,
     enabledByCamera: {
-      [initialCameraId]:
-        allTasks.find((task) => task.cameraId === initialCameraId)?.enabled ??
-        true,
+      [initialCameraId]: initialTask?.enabled ?? true,
+    },
+    cropByCamera: {
+      [initialCameraId]: initialTask?.crop ?? null,
     },
     draftsByCamera: { [initialCameraId]: drafts },
     activeAlgoId,
@@ -141,11 +142,12 @@ export function useChannelTaskDrafts({
   // crop 属于任务（= 相机），与当前选中算法无关：切算法不重载，切相机才重载。
   const initialCrop = tasksByCameraId.get(initialCameraId)?.crop ?? null
   const regionEditor = useRegionEditor(initialRegionJson, initialCrop)
-
-  const currentRegionJson = useCallback(
-    () => serializeRegionConfig(fromDraft(regionEditor.draft)),
-    [regionEditor.draft]
-  )
+  const {
+    reset: resetRegion,
+    resetCrop,
+    serialize: serializeCurrentRegion,
+    serializeCrop: serializeCurrentCrop,
+  } = regionEditor
 
   const regionJsonFor = useCallback(
     (algoId: string | null) =>
@@ -161,11 +163,11 @@ export function useChannelTaskDrafts({
       dispatch({
         type: 'select-active',
         algoId,
-        currentRegionJson: currentRegionJson(),
+        currentRegionJson: serializeCurrentRegion(),
       })
-      regionEditor.reset(regionJsonFor(algoId))
+      resetRegion(regionJsonFor(algoId))
     },
-    [state.activeAlgoId, currentRegionJson, regionJsonFor, regionEditor]
+    [state.activeAlgoId, serializeCurrentRegion, regionJsonFor, resetRegion]
   )
 
   const toggleAlgo = useCallback(
@@ -184,21 +186,21 @@ export function useChannelTaskDrafts({
           algorithmsById.get(algoId),
           drafts[algoId]?.configJson
         ),
-        currentRegionJson: currentRegionJson(),
+        currentRegionJson: serializeCurrentRegion(),
         nextActiveAlgoId,
       })
 
       if (nextActiveAlgoId !== state.activeAlgoId) {
-        regionEditor.reset(regionJsonFor(nextActiveAlgoId))
+        resetRegion(regionJsonFor(nextActiveAlgoId))
       }
     },
     [
       algorithmsById,
       drafts,
       state.activeAlgoId,
-      currentRegionJson,
+      serializeCurrentRegion,
       regionJsonFor,
-      regionEditor,
+      resetRegion,
     ]
   )
 
@@ -210,33 +212,45 @@ export function useChannelTaskDrafts({
         computeInitialDrafts(cameraId, allTasks, algorithms)
       const activeAlgoId = pickActiveAlgo(draftsForCamera, algorithms)
       const cameraTask = tasksByCameraId.get(cameraId)
+      const hasCachedCrop = Object.prototype.hasOwnProperty.call(
+        state.cropByCamera,
+        cameraId
+      )
+      const nextCrop = hasCachedCrop
+        ? state.cropByCamera[cameraId]
+        : (cameraTask?.crop ?? null)
 
       dispatch({
         type: 'change-camera',
         cameraId,
         drafts: draftsForCamera,
         activeAlgoId,
-        currentRegionJson: currentRegionJson(),
+        currentRegionJson: serializeCurrentRegion(),
+        currentCrop: serializeCurrentCrop(),
+        nextCrop,
         channelEnabled:
           state.enabledByCamera[cameraId] ?? cameraTask?.enabled ?? true,
       })
-      regionEditor.reset(
+      resetRegion(
         activeAlgoId
           ? (draftsForCamera[activeAlgoId]?.regionConfigJson ??
               EMPTY_CONFIG_JSON)
           : EMPTY_CONFIG_JSON
       )
-      regionEditor.resetCrop(cameraTask?.crop ?? null)
+      resetCrop(nextCrop)
     },
     [
       state.cameraId,
       state.draftsByCamera,
       state.enabledByCamera,
+      state.cropByCamera,
       allTasks,
       algorithms,
       tasksByCameraId,
-      currentRegionJson,
-      regionEditor,
+      serializeCurrentRegion,
+      serializeCurrentCrop,
+      resetRegion,
+      resetCrop,
     ]
   )
 
@@ -268,7 +282,7 @@ export function useChannelTaskDrafts({
 
   const toPayloadDrafts = useCallback(
     ({ regionEditable }: { regionEditable: boolean }) => {
-      const editedRegion = regionEditable ? currentRegionJson() : null
+      const editedRegion = regionEditable ? serializeCurrentRegion() : null
       return Object.entries(drafts)
         .filter(([, draft]) => draft.selected)
         .map<AlgorithmConfigDraft>(([algoId, draft]) => ({
@@ -287,25 +301,42 @@ export function useChannelTaskDrafts({
             : EMPTY_CONFIG_JSON,
         }))
     },
-    [drafts, state.activeAlgoId, currentRegionJson]
+    [drafts, state.activeAlgoId, serializeCurrentRegion]
   )
 
   const activeAlgoId = state.activeAlgoId
 
-  return {
-    cameraId: state.cameraId,
-    channelEnabled: state.enabledByCamera[state.cameraId] ?? true,
-    setChannelEnabled,
-    drafts,
-    activeAlgoId,
-    activeDraft: activeAlgoId ? (drafts[activeAlgoId] ?? null) : null,
-    regionEditor,
-    changeCamera,
-    toggleAlgo,
-    selectActiveAlgo,
-    updateFps,
-    updateConfigJson,
-    updateScheduleJson,
-    toPayloadDrafts,
-  }
+  return useMemo(
+    () => ({
+      cameraId: state.cameraId,
+      channelEnabled: state.enabledByCamera[state.cameraId] ?? true,
+      setChannelEnabled,
+      drafts,
+      activeAlgoId,
+      activeDraft: activeAlgoId ? (drafts[activeAlgoId] ?? null) : null,
+      regionEditor,
+      changeCamera,
+      toggleAlgo,
+      selectActiveAlgo,
+      updateFps,
+      updateConfigJson,
+      updateScheduleJson,
+      toPayloadDrafts,
+    }),
+    [
+      state.cameraId,
+      state.enabledByCamera,
+      setChannelEnabled,
+      drafts,
+      activeAlgoId,
+      regionEditor,
+      changeCamera,
+      toggleAlgo,
+      selectActiveAlgo,
+      updateFps,
+      updateConfigJson,
+      updateScheduleJson,
+      toPayloadDrafts,
+    ]
+  )
 }

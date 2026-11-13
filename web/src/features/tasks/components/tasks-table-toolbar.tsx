@@ -43,16 +43,19 @@ export function TasksTableToolbar({
               columnId: 'camera',
               title: t('table.columns.camera', '关联摄像头'),
               options: cameraOptions,
+              showFacets: false,
             },
             {
               columnId: 'algorithm',
               title: t('table.columns.algorithm', '绑定算法包'),
               options: algorithmOptions,
+              showFacets: false,
             },
             {
               columnId: 'status',
               title: t('table.columns.status', '运行状态'),
               options: statusOptions,
+              showFacets: false,
             },
           ]}
           columnLabels={{

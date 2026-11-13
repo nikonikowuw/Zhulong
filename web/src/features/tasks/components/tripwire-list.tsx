@@ -1,4 +1,4 @@
-import { useForm } from 'react-hook-form'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -34,27 +34,37 @@ function TripwireRow({
   onDelete: () => void
 }) {
   const { t } = useTranslation('tasks')
-  const form = useForm({ values: { name: line.name } })
+  const [nameDraft, setNameDraft] = useState(line.name)
+  const [prevName, setPrevName] = useState(line.name)
+  const [nameInvalid, setNameInvalid] = useState(false)
+
+  if (line.name !== prevName) {
+    setPrevName(line.name)
+    setNameDraft(line.name)
+    setNameInvalid(false)
+  }
+
   return (
     <div className='space-y-2 rounded-md border border-border p-2'>
       <Input
         aria-label={t('region.tripwireName')}
         disabled={disabled}
-        {...form.register('name', {
-          required: true,
-          validate: (value) =>
-            value.trim().length > 0 && [...value.trim()].length <= 64,
-        })}
+        value={nameDraft}
+        onChange={(event) => {
+          setNameDraft(event.target.value)
+          if (nameInvalid) setNameInvalid(false)
+        }}
         onBlur={() => {
-          const name = form.getValues('name').trim()
+          const name = nameDraft.trim()
           if (name && [...name].length <= 64) {
+            setNameInvalid(false)
             if (name !== line.name) onUpdate({ ...line, name })
           } else {
-            form.setError('name', { type: 'validate' })
+            setNameInvalid(true)
           }
         }}
       />
-      {form.formState.errors.name && (
+      {nameInvalid && (
         <p role='alert' className='text-xs text-destructive'>
           {t('region.tripwireNameInvalid')}
         </p>

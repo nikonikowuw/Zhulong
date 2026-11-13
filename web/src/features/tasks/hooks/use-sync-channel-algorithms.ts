@@ -1,4 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  ALGORITHMS_QUERY_KEY,
+  algorithmsApi,
+} from '@/features/algorithms/contract'
 import { tasksApi } from '../api/tasks-api'
 import { type Rect } from '../data/region-config'
 import { type AlgorithmConfigDraft, type Task } from '../data/schema'
@@ -11,6 +15,13 @@ export interface SyncChannelAlgorithmsParams {
   crop?: Rect | null
   drafts: AlgorithmConfigDraft[]
   existingTasks?: Task[]
+  /** 保存成功后一并激活的已禁用算法 ID，保持全流程共享同一个 pending 状态。 */
+  autoEnableAlgorithmIds?: string[]
+}
+
+export interface SyncChannelAlgorithmsResult {
+  enabledCount: number
+  enableFailed: boolean
 }
 
 /**
@@ -25,7 +36,8 @@ export function useSyncChannelAlgorithms() {
       enabled = true,
       crop = null,
       drafts,
-    }: SyncChannelAlgorithmsParams) => {
+      autoEnableAlgorithmIds,
+    }: SyncChannelAlgorithmsParams): Promise<SyncChannelAlgorithmsResult> => {
       await tasksApi.saveChannelTask({
         cameraId,
         enabled,
@@ -39,9 +51,30 @@ export function useSyncChannelAlgorithms() {
           scheduleJson: d.scheduleJson,
         })),
       })
+
+      if (!autoEnableAlgorithmIds || autoEnableAlgorithmIds.length === 0) {
+        return { enabledCount: 0, enableFailed: false }
+      }
+
+      try {
+        await Promise.all(
+          autoEnableAlgorithmIds.map((algoId) =>
+            algorithmsApi.enableAlgorithm(algoId)
+          )
+        )
+        return {
+          enabledCount: autoEnableAlgorithmIds.length,
+          enableFailed: false,
+        }
+      } catch {
+        return { enabledCount: 0, enableFailed: true }
+      }
     },
-    onSettled: () => {
+    onSettled: (_data, _error, variables) => {
       void queryClient.invalidateQueries({ queryKey: TASKS_QUERY_KEY })
+      if (variables.autoEnableAlgorithmIds?.length) {
+        void queryClient.invalidateQueries({ queryKey: ALGORITHMS_QUERY_KEY })
+      }
     },
   })
 }

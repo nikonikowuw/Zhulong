@@ -152,7 +152,7 @@ export function ScheduleDailyView({
             <div className='flex flex-col gap-1.5 pt-0.5'>
               {ranges.map((r, idx) => (
                 <div
-                  key={`${r.start}-${r.end}`}
+                  key={`range-${idx}`}
                   className='flex items-center justify-between rounded border border-border/40 bg-muted/20 px-2 py-1 text-xs'
                 >
                   <div className='flex items-center gap-1.5'>

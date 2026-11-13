@@ -69,7 +69,7 @@ export function RegionEditorToolbar({
 }: RegionEditorToolbarProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
 
-  const requestTool = (next: Exclude<RegionTool, 'select'>) => {
+  const requestTool = (next: 'roi' | 'mask' | 'tripwire') => {
     if (!isEditable) return
     if (next === 'roi' && counts.roi >= MAX_RECTS_PER_CATEGORY) {
       toast.warning(t('region.maxRoiReached', 'ROI 关注区已达上限 (最多 8 个)'))
@@ -81,19 +81,30 @@ export function RegionEditorToolbar({
       )
       return
     }
+    if (next === 'tripwire' && (counts.tripwires ?? 0) >= MAX_TRIPWIRES) {
+      toast.warning(
+        t('region.maxTripwiresReached', '绊线数量已达上限 (最多 8 条)')
+      )
+      return
+    }
     onToolChange(next)
   }
 
-  const getDisabledReason = (category: 'roi' | 'mask') => {
+  const getDisabledReason = (kind: 'roi' | 'mask' | 'tripwire') => {
     if (!isStreamReady) {
       return t('region.streamNotLive', '画面未就绪（等待视频首帧）')
     }
     if (!isEditable) {
       return t('dialog.selectAlgoToConfigure', '在右侧勾选算法以开始配置')
     }
-    const count = category === 'roi' ? counts.roi : counts.mask
-    if (count >= MAX_RECTS_PER_CATEGORY) {
-      return t('region.maxRoiReached', '已达上限 (最多 8 个)')
+    if (kind === 'roi' && counts.roi >= MAX_RECTS_PER_CATEGORY) {
+      return t('region.maxRoiReached', 'ROI 关注区已达上限 (最多 8 个)')
+    }
+    if (kind === 'mask' && counts.mask >= MAX_RECTS_PER_CATEGORY) {
+      return t('region.maxMaskReached', 'MASK 屏蔽区已达上限 (最多 8 个)')
+    }
+    if (kind === 'tripwire' && (counts.tripwires ?? 0) >= MAX_TRIPWIRES) {
+      return t('region.maxTripwiresReached', '绊线数量已达上限 (最多 8 条)')
     }
     return null
   }
@@ -153,6 +164,55 @@ export function RegionEditorToolbar({
     return button
   }
 
+  const renderTripwireButton = () => {
+    const count = counts.tripwires ?? 0
+    const isMax = count >= MAX_TRIPWIRES
+    const isDisabled = !isEditable || isMax
+    const disabledReason = isDisabled ? getDisabledReason('tripwire') : null
+    const isActive = tool === 'tripwire'
+
+    const button = (
+      <Button
+        type='button'
+        variant='ghost'
+        size='sm'
+        disabled={isDisabled}
+        className={cn(
+          'h-7.5 gap-1.5 text-xs font-medium transition-all',
+          isActive
+            ? cn(categoryBadgeClass('blue'), 'border font-semibold shadow-xs')
+            : 'text-muted-foreground hover:text-foreground'
+        )}
+        onClick={() => requestTool('tripwire')}
+      >
+        <MoveUpRight
+          className={cn(
+            'size-3.5',
+            isActive ? categoryTextClass('blue') : 'text-muted-foreground'
+          )}
+        />
+        <span>
+          {t('region.toolTripwire', '+ 绊线')} ({count}/{MAX_TRIPWIRES})
+        </span>
+      </Button>
+    )
+
+    if (disabledReason) {
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className='inline-flex'>{button}</span>
+          </TooltipTrigger>
+          <TooltipContent side='bottom' className='text-xs'>
+            {disabledReason}
+          </TooltipContent>
+        </Tooltip>
+      )
+    }
+
+    return button
+  }
+
   return (
     <div className='flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-5 py-2'>
       <div className='flex items-center rounded-lg border border-border bg-background p-0.5 shadow-xs'>
@@ -174,16 +234,7 @@ export function RegionEditorToolbar({
 
         {renderToolButton('roi')}
         {renderToolButton('mask')}
-        <Button
-          type='button'
-          variant={tool === 'tripwire' ? 'secondary' : 'ghost'}
-          size='sm'
-          disabled={!isEditable || (counts.tripwires ?? 0) >= MAX_TRIPWIRES}
-          onClick={() => onToolChange('tripwire')}
-        >
-          <MoveUpRight className='size-3.5' />
-          {t('region.toolTripwire')} ({counts.tripwires ?? 0}/{MAX_TRIPWIRES})
-        </Button>
+        {renderTripwireButton()}
 
         <Button
           type='button'
@@ -236,7 +287,7 @@ export function RegionEditorToolbar({
           type='button'
           variant='outline'
           size='sm'
-          disabled={!isEditable}
+          disabled={!isStreamReady}
           className={cn(
             'h-8 gap-1.5 text-xs',
             isPaused && STATUS_LEVEL_CLASS.warning

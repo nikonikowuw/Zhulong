@@ -1,6 +1,8 @@
 import React from 'react'
 import { Check, Moon, RotateCcw, SunMedium } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { categoryTextClass } from '@/lib/category-palette'
+import { STATUS_TEXT_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
@@ -49,7 +51,7 @@ export function SchedulePresetToolbar({
           disabled={disabled}
           onClick={onPresetWorkdays}
         >
-          <SunMedium className='size-3 text-amber-500' />
+          <SunMedium className={cn('size-3', STATUS_TEXT_CLASS.warning)} />
           {t('schedule.presetWorkdays', '工作日 (08:00-18:00)')}
         </Button>
         <Button
@@ -60,7 +62,7 @@ export function SchedulePresetToolbar({
           disabled={disabled}
           onClick={onPresetNights}
         >
-          <Moon className='size-3 text-indigo-400' />
+          <Moon className={cn('size-3', categoryTextClass('blue'))} />
           {t('schedule.presetNights', '夜间布防 (20:00-06:00)')}
         </Button>
         <Button

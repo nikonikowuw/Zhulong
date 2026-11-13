@@ -159,9 +159,10 @@ export function RegionCanvas({
             {RESIZE_HANDLES.map((handle) => (
               <div
                 key={handle}
-                className={`absolute size-3 rounded-full border-2 border-primary bg-white shadow-md transition-transform hover:scale-125 ${
+                className={cn(
+                  'absolute size-3 rounded-full border-2 border-primary bg-background shadow-md transition-transform hover:scale-125',
                   HANDLE_POSITION_CLASS[handle]
-                }`}
+                )}
                 onMouseDown={startResize(category, idx, handle, item.rect)}
               />
             ))}
@@ -184,8 +185,9 @@ export function RegionCanvas({
         className={cn(
           'absolute border-2 transition-shadow',
           categoryRegionClass('cyan'),
+          categoryTextClass('cyan'),
           cropEditable
-            ? 'cursor-move shadow-lg ring-2 ring-cyan-400/60'
+            ? 'cursor-move shadow-lg ring-2 ring-current/50'
             : 'pointer-events-none'
         )}
         onMouseDown={startCropMove(rect)}
@@ -204,9 +206,11 @@ export function RegionCanvas({
             {RESIZE_HANDLES.map((handle) => (
               <div
                 key={handle}
-                className={`absolute size-3 rounded-full border-2 border-cyan-400 bg-white shadow-md transition-transform hover:scale-125 ${
+                className={cn(
+                  'absolute size-3 rounded-full border-2 border-current bg-background shadow-md transition-transform hover:scale-125',
+                  categoryTextClass('cyan'),
                   HANDLE_POSITION_CLASS[handle]
-                }`}
+                )}
                 onMouseDown={startCropResize(handle, rect)}
               />
             ))}

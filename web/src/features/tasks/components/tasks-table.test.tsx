@@ -299,4 +299,46 @@ describe('TasksTable', () => {
       )
       .toBeInTheDocument()
   })
+
+  it('keeps rows matched by task id, algorithm name, or column filters without double-filtering', async () => {
+    // 回归：此前未设 manualFiltering: true，导致按 taskId / algorithm.name 搜索
+    // 或按 camera / algorithm ID 筛选时会被 TanStack Table 内置过滤误删。
+    const makeNode = (search: Record<string, unknown>) => (
+      <TasksProvider>
+        <TasksTable
+          tasks={mockTasks}
+          cameras={mockCameras}
+          algorithms={mockAlgorithms}
+          isLoading={false}
+          isError={false}
+          onRetry={vi.fn()}
+          search={search}
+          navigate={vi.fn()}
+          defaultExpanded={true}
+        />
+      </TasksProvider>
+    )
+
+    const { getByRole, rerender } = await render(
+      makeNode({ search: mockTasks[0].id })
+    )
+    await expect
+      .element(getByRole('cell', { name: /南门枪机/ }))
+      .toBeInTheDocument()
+
+    await rerender(makeNode({ search: '烟火检测算法' }))
+    await expect
+      .element(getByRole('cell', { name: /南门枪机/ }))
+      .toBeInTheDocument()
+
+    await rerender(makeNode({ algorithm: ['algo-fire'] }))
+    await expect
+      .element(getByRole('cell', { name: /南门枪机/ }))
+      .toBeInTheDocument()
+
+    await rerender(makeNode({ camera: ['cam-01'] }))
+    await expect
+      .element(getByRole('cell', { name: /南门枪机/ }))
+      .toBeInTheDocument()
+  })
 })

@@ -437,4 +437,15 @@ describe('ChannelTaskDialog region editing', () => {
 
     await expect.element(smoke).toBeChecked()
   })
+
+  it('keeps freeze button enabled when stream is live even with no algorithm selected', async () => {
+    streamState = 'live'
+    const { getByRole } = await renderDialog({
+      allTasks: [],
+    })
+
+    await expect
+      .element(getByRole('button', { name: '冻结画面' }))
+      .not.toBeDisabled()
+  })
 })

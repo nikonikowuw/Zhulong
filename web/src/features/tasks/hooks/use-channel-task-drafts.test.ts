@@ -131,20 +131,24 @@ describe('useChannelTaskDrafts', () => {
     ).toBe('a_to_b')
   })
 
-  it('keeps unsaved region edits when switching camera away and back', async () => {
+  it('keeps unsaved region and crop edits when switching camera away and back', async () => {
     const { result, act } = await renderDrafts()
 
-    act(() =>
+    act(() => {
       result.current.regionEditor.createRect('roi', [0.2, 0.2, 0.6, 0.6])
-    )
+      result.current.regionEditor.setCrop([0.1, 0.1, 0.7, 0.7])
+    })
     expect(result.current.regionEditor.draft.roi).toHaveLength(2)
+    expect(result.current.regionEditor.crop).toEqual([0.1, 0.1, 0.7, 0.7])
 
     act(() => result.current.changeCamera('cam-02'))
     expect(result.current.cameraId).toBe('cam-02')
     expect(result.current.regionEditor.draft.roi).toHaveLength(0)
+    expect(result.current.regionEditor.crop).toBeNull()
 
     act(() => result.current.changeCamera('cam-01'))
     expect(result.current.regionEditor.draft.roi).toHaveLength(2)
+    expect(result.current.regionEditor.crop).toEqual([0.1, 0.1, 0.7, 0.7])
   })
 
   it('never submits the editing buffer when the region is not editable', async () => {

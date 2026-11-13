@@ -23,6 +23,15 @@ interface Drag {
   points: Tripwire['points']
 }
 
+function pointsEqual(a: Tripwire['points'], b: Tripwire['points']): boolean {
+  return (
+    a[0][0] === b[0][0] &&
+    a[0][1] === b[0][1] &&
+    a[1][0] === b[1][0] &&
+    a[1][1] === b[1][1]
+  )
+}
+
 function TripwireGraphic({
   line,
   preview = false,
@@ -55,7 +64,7 @@ function TripwireGraphic({
   const mx = (a[0] + b[0]) / 2,
     my = (a[1] + b[1]) / 2
   return (
-    <g key={line.id}>
+    <g>
       <line
         x1={a[0] * width}
         y1={a[1] * height}
@@ -169,8 +178,11 @@ export function TripwireCanvas({
     return () => observer.disconnect()
   }, [])
   const lines = draft.tripwires ?? []
-  const point = (event: React.PointerEvent<SVGElement>): Point => {
-    const rect = svgRef.current!.getBoundingClientRect()
+  const point = (event: React.PointerEvent<SVGElement>): Point | null => {
+    const svg = svgRef.current
+    if (!svg) return null
+    const rect = svg.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return null
     return [
       Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
       Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
@@ -210,13 +222,16 @@ export function TripwireCanvas({
       onPointerDown={(event) => {
         if (drawing && lines.length < MAX_TRIPWIRES) {
           const p = point(event)
+          if (!p) return
           begin(event, { id: null, endpoint: 1, points: [p, p] })
         }
       }}
       onPointerMove={(event) => {
         if (drag) {
+          const p = point(event)
+          if (!p) return
           const points: Tripwire['points'] = [...drag.points]
-          points[drag.endpoint] = point(event)
+          points[drag.endpoint] = p
           setDrag({ ...drag, points })
         }
       }}
@@ -227,18 +242,23 @@ export function TripwireCanvas({
           setDrag(null)
           return
         }
+        const p = point(event)
+        if (!p) {
+          setDrag(null)
+          return
+        }
         const points: Tripwire['points'] = [...drag.points]
-        points[drag.endpoint] = point(event)
+        points[drag.endpoint] = p
+        const existing = drag.id
+          ? lines.find((line) => line.id === drag.id)?.points
+          : undefined
         if (
           Math.hypot(
             points[1][0] - points[0][0],
             points[1][1] - points[0][1]
           ) >=
             MIN_LINE_LENGTH - 1e-9 &&
-          JSON.stringify(points) !==
-            JSON.stringify(
-              drag.id ? lines.find((line) => line.id === drag.id)?.points : null
-            )
+          (!existing || !pointsEqual(points, existing))
         ) {
           onBeforeChange?.()
           onChange({

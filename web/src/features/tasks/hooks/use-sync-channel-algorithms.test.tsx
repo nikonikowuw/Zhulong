@@ -2,6 +2,10 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook } from 'vitest-browser-react'
+import {
+  ALGORITHMS_QUERY_KEY,
+  algorithmsApi,
+} from '@/features/algorithms/contract'
 import { tasksApi } from '../api/tasks-api'
 import { useSyncChannelAlgorithms } from './use-sync-channel-algorithms'
 import { TASKS_QUERY_KEY } from './use-tasks'
@@ -9,6 +13,13 @@ import { TASKS_QUERY_KEY } from './use-tasks'
 vi.mock('../api/tasks-api', () => ({
   tasksApi: {
     saveChannelTask: vi.fn(),
+  },
+}))
+
+vi.mock('@/features/algorithms/contract', () => ({
+  ALGORITHMS_QUERY_KEY: ['algorithms'],
+  algorithmsApi: {
+    enableAlgorithm: vi.fn(),
   },
 }))
 
@@ -195,5 +206,37 @@ describe('useSyncChannelAlgorithms', () => {
     ).rejects.toThrow('Database lock error')
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: TASKS_QUERY_KEY })
+  })
+
+  it('auto-enables disabled algorithms within the same mutation and invalidates algorithms cache', async () => {
+    vi.mocked(tasksApi.saveChannelTask).mockResolvedValue({
+      id: 'task-1',
+      cameraId: 'cam-01',
+      name: '',
+      enabled: true,
+      crop: null,
+      algorithms: [],
+      createdAt: '',
+      updatedAt: '',
+    })
+    vi.mocked(algorithmsApi.enableAlgorithm).mockResolvedValue('ACTIVE')
+
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = await renderHook(() => useSyncChannelAlgorithms(), {
+      wrapper: createWrapper(),
+    })
+
+    const res = await result.current.mutateAsync({
+      cameraId: 'cam-01',
+      drafts: [],
+      autoEnableAlgorithmIds: ['algo-fire'],
+    })
+
+    expect(res).toEqual({ enabledCount: 1, enableFailed: false })
+    expect(algorithmsApi.enableAlgorithm).toHaveBeenCalledWith('algo-fire')
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ALGORITHMS_QUERY_KEY,
+    })
   })
 })

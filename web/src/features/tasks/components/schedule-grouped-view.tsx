@@ -100,7 +100,7 @@ function GroupCard({
       <div className='flex flex-col gap-1.5 pt-1'>
         {ranges.map((r, idx) => (
           <div
-            key={`${r.start}-${r.end}`}
+            key={`range-${idx}`}
             className='flex items-center justify-between rounded-md border border-border/50 bg-muted/30 px-2 py-1 text-xs'
           >
             <div className='flex items-center gap-1.5'>

@@ -211,6 +211,7 @@
     "deleteRect": "Delete Region",
     "maxRoiReached": "ROI limit reached (maximum 8)",
     "maxMaskReached": "MASK limit reached (maximum 8)",
+    "maxTripwiresReached": "Tripwire limit reached (maximum 8)",
     "cannotSaveWithoutStream": "Video stream is not live, cannot update region policy",
     "bottomCenterAnchor": "Bottom-center decision anchor",
     "undo": "Undo",

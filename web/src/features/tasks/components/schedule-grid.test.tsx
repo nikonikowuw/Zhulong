@@ -152,7 +152,7 @@ describe('ScheduleGrid', () => {
     expect(parsed.days?.friday).toEqual([{ start: '08:00', end: '18:00' }])
   })
 
-  it('updates precise minute in time input and commits changes', async () => {
+  it('updates precise minute in time input and keeps end input focused on Tab', async () => {
     const handleChange = vi.fn()
     const activeValue = JSON.stringify({
       enabled: true,
@@ -167,12 +167,14 @@ describe('ScheduleGrid', () => {
     const startInput = getByPlaceholder('08:00').first()
     await userEvent.clear(startInput)
     await userEvent.type(startInput, '08:45')
-    const endInput = getByPlaceholder('08:00').nth(1)
-    await userEvent.click(endInput)
+    await userEvent.tab()
 
     expect(handleChange).toHaveBeenCalled()
     const emitted = handleChange.mock.calls[0][0]
     const parsed = parseSchedule(emitted)
     expect(parsed.days?.monday).toEqual([{ start: '08:45', end: '18:00' }])
+    // 回归：此前 key 用 `${r.start}-${r.end}` 导致改完 start 后整行卸载，end 输入框丢焦点。
+    const endInput = getByPlaceholder('08:00').nth(1).element()
+    expect(document.activeElement).toBe(endInput)
   })
 })

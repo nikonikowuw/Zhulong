@@ -1,9 +1,11 @@
 import { createDraftItem, type AlgoDraftItem } from './algo-draft'
+import { type Rect } from './region-config'
 
 /** 通道任务弹窗的草稿状态。按相机分组，切回相机时未保存的编辑仍在。 */
 export interface ChannelTaskDraftState {
   cameraId: string
   enabledByCamera: Record<string, boolean>
+  cropByCamera: Record<string, Rect | null>
   draftsByCamera: Record<string, Record<string, AlgoDraftItem>>
   activeAlgoId: string | null
 }
@@ -35,6 +37,8 @@ export type ChannelTaskDraftAction =
       drafts: Record<string, AlgoDraftItem>
       activeAlgoId: string | null
       currentRegionJson: string
+      currentCrop: Rect | null
+      nextCrop: Rect | null
       channelEnabled: boolean
     }
   | { type: 'update-fps'; algoId: string; sampleFps: number }
@@ -122,6 +126,11 @@ export function channelTaskDraftReducer(
         enabledByCamera: {
           ...state.enabledByCamera,
           [action.cameraId]: action.channelEnabled,
+        },
+        cropByCamera: {
+          ...state.cropByCamera,
+          [state.cameraId]: action.currentCrop,
+          [action.cameraId]: action.nextCrop,
         },
         draftsByCamera: {
           ...state.draftsByCamera,

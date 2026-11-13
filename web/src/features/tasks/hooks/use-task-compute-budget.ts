@@ -32,19 +32,18 @@ export function useTaskComputeBudget(
   algorithms: Algorithm[],
   refreshIntervalMs = 60_000
 ): TaskComputeBudget {
-  const [tick, setTick] = useState(0)
+  const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
     if (refreshIntervalMs <= 0) return
     const timer = setInterval(() => {
-      setTick((prev) => (prev + 1) % 1_000_000)
+      setNowMs(Date.now())
     }, refreshIntervalMs)
     return () => clearInterval(timer)
   }, [refreshIntervalMs])
 
   return useMemo(() => {
-    // 引用 tick 使得定时器触发时能重新评估 isScheduleActiveAt
-    void tick
+    const now = new Date(nowMs)
     const algoMap = new Map(algorithms.map((a) => [a.id, a]))
 
     let enabledCount = 0
@@ -64,7 +63,7 @@ export function useTaskComputeBudget(
             points,
             schedule: sub.scheduleJson,
           })
-          if (isScheduleActiveAt(sub.scheduleJson)) {
+          if (isScheduleActiveAt(sub.scheduleJson, now)) {
             currentUsedPoints += points
           }
         }
@@ -91,5 +90,5 @@ export function useTaskComputeBudget(
       enabledCount,
       totalCount: totalAlgoCount,
     }
-  }, [tasks, algorithms, tick])
+  }, [tasks, algorithms, nowMs])
 }
