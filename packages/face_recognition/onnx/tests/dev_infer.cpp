@@ -22,6 +22,7 @@
 #include <zhulong/plugin.h>
 #include <zhulong/runtime/gallery_registry.hpp>
 
+#include "common/face_enroll_enhance.hpp"
 #include "pipeline/face_recognition.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -322,6 +323,81 @@ bool run_regression_checks(zhulong::face::FaceRecognitionPlugin& plugin,
         sample_rgb, width, height, width * 3,
         ZHULONG_PIXEL_FORMAT_RGB24, bad_feat.data(), &bad_dim);
     DEV_CHECK(multi_rc == ZHULONG_PLUGIN_ERR_AMBIGUOUS, "multi-face photo must return AMBIGUOUS");
+
+    auto cosine_sim = [](const std::vector<float>& a, const std::vector<float>& b) {
+        double dot = 0.0;
+        for (size_t i = 0; i < a.size() && i < b.size(); ++i) {
+            dot += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+        }
+        return static_cast<float>(dot);
+    };
+
+    // 4d. 无 EXIF 侧躺（90° CW）单人录入照自动转正并提取高一致特征
+    {
+        std::vector<uint8_t> rot_rgb;
+        int rot_w = 0, rot_h = 0;
+        DEV_CHECK(zhulong::face::rotate_rgb24(photo_a.rgb.data(), photo_a.width, photo_a.height,
+                                              photo_a.width * 3, 90, rot_rgb, rot_w, rot_h),
+                  "rotate_rgb24 90 deg must succeed");
+        std::vector<float> rot_feat(512, 0.0f);
+        uint32_t rot_dim = 512;
+        const zhulong_status_t rot_rc = zhulong_face_extract_feature(
+            rot_rgb.data(), rot_w, rot_h, rot_w * 3,
+            ZHULONG_PIXEL_FORMAT_RGB24, rot_feat.data(), &rot_dim);
+        DEV_CHECK(rot_rc == ZHULONG_PLUGIN_OK && rot_dim == 512,
+                  "90-deg rotated single-face photo should succeed via orientation fallback");
+        DEV_CHECK(check_unit_norm(rot_feat), "rotated photo feature must have unit L2 norm");
+        const float rot_sim = cosine_sim(enroll_feat, rot_feat);
+        std::printf("  [check] 90-deg fallback cosine_sim=%.4f\n", rot_sim);
+        DEV_CHECK(rot_sim >= 0.80f,
+                  "rotated photo feature must strongly match upright enrollment feature");
+    }
+
+    // 4e. 暗光欠曝单人录入照自适应提亮并保持特征一致性
+    {
+        std::vector<uint8_t> dark_rgb;
+        DEV_CHECK(zhulong::face::apply_gamma_rgb24(photo_a.rgb.data(), photo_a.width, photo_a.height,
+                                                   photo_a.width * 3, 2.4f, dark_rgb),
+                  "apply_gamma_rgb24 darkening must succeed");
+        std::vector<float> dark_feat(512, 0.0f);
+        uint32_t dark_dim = 512;
+        const zhulong_status_t dark_rc = zhulong_face_extract_feature(
+            dark_rgb.data(), photo_a.width, photo_a.height, photo_a.width * 3,
+            ZHULONG_PIXEL_FORMAT_RGB24, dark_feat.data(), &dark_dim);
+        DEV_CHECK(dark_rc == ZHULONG_PLUGIN_OK && dark_dim == 512,
+                  "darkened single-face photo should succeed via adaptive gamma enhancement");
+        DEV_CHECK(check_unit_norm(dark_feat), "darkened photo feature must have unit L2 norm");
+        const float dark_sim = cosine_sim(enroll_feat, dark_feat);
+        std::printf("  [check] dark gamma cosine_sim=%.4f\n", dark_sim);
+        DEV_CHECK(dark_sim >= 0.70f,
+                  "darkened photo feature must remain consistent with normal enrollment feature");
+    }
+
+    // 4f. 极小人脸（< 32px）在录入端必须被最小像素门禁拒绝
+    {
+        constexpr int tiny_canvas = 320;
+        constexpr int tiny_patch = 28;
+        std::vector<uint8_t> tiny_rgb(tiny_canvas * tiny_canvas * 3, 128);
+        const int off = (tiny_canvas - tiny_patch) / 2;
+        for (int y = 0; y < tiny_patch; ++y) {
+            const int sy = std::min(photo_a.height - 1, y * photo_a.height / tiny_patch);
+            for (int x = 0; x < tiny_patch; ++x) {
+                const int sx = std::min(photo_a.width - 1, x * photo_a.width / tiny_patch);
+                for (int c = 0; c < 3; ++c) {
+                    tiny_rgb[((off + y) * tiny_canvas + (off + x)) * 3 + c] =
+                        photo_a.rgb[(sy * photo_a.width + sx) * 3 + c];
+                }
+            }
+        }
+        std::vector<float> tiny_feat(512, 0.0f);
+        uint32_t tiny_dim = 512;
+        const zhulong_status_t tiny_rc = zhulong_face_extract_feature(
+            tiny_rgb.data(), tiny_canvas, tiny_canvas, tiny_canvas * 3,
+            ZHULONG_PIXEL_FORMAT_RGB24, tiny_feat.data(), &tiny_dim);
+        DEV_CHECK(tiny_rc == ZHULONG_PLUGIN_ERR_NOT_FOUND,
+                  "tiny (<32px) face must be rejected by enrollment size gate");
+    }
+
     zhulong_face_extract_release();
 
     // 4b. 跨帧特征融合与陌生人隔离
