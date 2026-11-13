@@ -26,7 +26,7 @@ vi.mock('@/features/algorithms/api/algorithms-api', () => ({
 
 vi.mock('@/features/cameras/api/cameras-api', () => ({
   camerasApi: {
-    getCameras: vi.fn().mockResolvedValue({
+    getAll: vi.fn().mockResolvedValue({
       items: [
         { id: 'cam-1', name: 'Gate Camera' },
         { id: 'cam-2', name: 'Lobby Camera' },
@@ -228,6 +228,83 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
 
     await expect
       .element(getByText(/传输协议类型创建后固定/i))
+      .toBeInTheDocument()
+
+    const radios = getByRole('radio').all()
+    expect(radios).toHaveLength(2)
+    await expect.element(radios[0]).toBeDisabled()
+    await expect.element(radios[1]).toBeDisabled()
+  })
+
+  it('sends undefined for untouched headers and empty object {} when clearing all headers in edit mode', async () => {
+    const queryClient = new QueryClient()
+    const onSuccess = vi.fn()
+    const { getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={mockDestination}
+          onOpenChange={vi.fn()}
+          onSuccess={onSuccess}
+        />
+      </QueryClientProvider>
+    )
+
+    // 1. Submit immediately without touching headers -> secret.headers must be undefined (retain on server)
+    await userEvent.click(getByRole('button', { name: /保存目标/i }))
+
+    await vi.waitFor(() => {
+      expect(alertPushApi.update).toHaveBeenCalledTimes(1)
+    })
+    expect(alertPushApi.update).toHaveBeenLastCalledWith(
+      'dest-100',
+      expect.objectContaining({
+        secret: expect.objectContaining({ headers: undefined }),
+      })
+    )
+
+    // 2. Remove existing header -> secret.headers must be {} (clear on server)
+    await userEvent.click(getByRole('button', { name: '移除标头' }))
+    await userEvent.click(getByRole('button', { name: /保存目标/i }))
+
+    await vi.waitFor(() => {
+      expect(alertPushApi.update).toHaveBeenCalledTimes(2)
+    })
+    expect(alertPushApi.update).toHaveBeenLastCalledWith(
+      'dest-100',
+      expect.objectContaining({
+        secret: expect.objectContaining({ headers: {} }),
+      })
+    )
+  })
+
+  it('renders error banner when submit throws non-Axios error', async () => {
+    vi.mocked(alertPushApi.create).mockRejectedValueOnce(
+      new Error('Unexpected response schema')
+    )
+    const queryClient = new QueryClient()
+    const { getByRole, getByPlaceholder, getByText } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await userEvent.type(
+      getByRole('textbox', { name: /通道名称/i }),
+      'New Webhook'
+    )
+    await userEvent.type(
+      getByPlaceholder(/https:\/\/api.example.com\/alerts\/webhook/i),
+      'https://api.example.com/hook'
+    )
+    await userEvent.click(getByRole('button', { name: /保存目标/i }))
+
+    await expect
+      .element(getByText('Unexpected response schema'))
       .toBeInTheDocument()
   })
 

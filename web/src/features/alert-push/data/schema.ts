@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { type TFunction } from 'i18next'
+import type { AuthType } from '../types'
 
 export const RESERVED_HEADERS = [
   'authorization',
@@ -14,6 +15,18 @@ export const RESERVED_HEADERS = [
 export interface HeaderEntry {
   key: string
   value: string
+}
+
+export function areHeadersUntouched(
+  headers: HeaderEntry[],
+  originalHeaderNames: string[]
+): boolean {
+  if (headers.length !== originalHeaderNames.length) {
+    return false
+  }
+  return headers.every(
+    (h, index) => h.key.trim() === originalHeaderNames[index] && h.value === ''
+  )
 }
 
 function isValidHttpUrlWithoutUserinfo(raw: string): boolean {
@@ -57,7 +70,9 @@ export function isSameHttpOrigin(rawA: string, rawB: string): boolean {
 export function createAlertDestinationFormSchema(
   t?: TFunction,
   isEdit = false,
-  secretRetained = false
+  secretRetained = false,
+  originalAuthType?: AuthType,
+  originalHeaderNames: string[] = []
 ) {
   const msg = {
     nameRequired: t ? t('validation.nameRequired') : '请输入通道名称',
@@ -68,6 +83,12 @@ export function createAlertDestinationFormSchema(
     heartbeatIntervalRange: t
       ? t('validation.heartbeatIntervalRange')
       : '上报间隔必须在 15 到 3600 秒之间',
+    timeoutRange: t
+      ? t('validation.timeoutRange')
+      : '超时时间必须在 1 到 30 秒之间',
+    keepAliveRange: t
+      ? t('validation.keepAliveRange')
+      : '保活间隔必须在 5 到 300 秒之间',
     heartbeatCrossOrigin: t
       ? t('validation.heartbeatCrossOrigin')
       : '配置了鉴权凭据或自定义标头时，独立存活 URL 必须与主 Webhook URL 同源',
@@ -95,6 +116,13 @@ export function createAlertDestinationFormSchema(
     clientIdMax: t
       ? t('validation.clientIdMax')
       : 'Client ID 长度不能超过 23 个字符',
+    headerKeyRequired: t ? t('validation.headerKeyRequired') : '请输入标头名称',
+    headerValueRequired: t
+      ? t('validation.headerValueRequired')
+      : '请输入标头值',
+    headerValueReenterRequired: t
+      ? t('validation.headerValueReenterRequired')
+      : '修改或新增标头时，请重新填写此标头值，或将其移除',
     reservedHeader: (header: string) =>
       t
         ? t('validation.reservedHeader', { key: header })
@@ -113,16 +141,12 @@ export function createAlertDestinationFormSchema(
       eventsEnabled: z.boolean(),
       heartbeatEnabled: z.boolean(),
       imageMode: z.enum(['url', 'multipart', 'base64']),
-      heartbeatIntervalSeconds: z
-        .number({ error: msg.heartbeatIntervalRange })
-        .int(msg.heartbeatIntervalRange)
-        .min(15, msg.heartbeatIntervalRange)
-        .max(3600, msg.heartbeatIntervalRange),
+      heartbeatIntervalSeconds: z.number({ error: msg.heartbeatIntervalRange }),
       // Webhook
       url: z.string(),
       heartbeatUrl: z.string(),
       authType: z.enum(['none', 'bearer', 'basic']),
-      timeoutSeconds: z.number().min(1).max(30),
+      timeoutSeconds: z.number({ error: msg.timeoutRange }),
       token: z.string(),
       basicUser: z.string(),
       basicPass: z.string(),
@@ -134,7 +158,7 @@ export function createAlertDestinationFormSchema(
       lwtEnabled: z.boolean(),
       clientId: z.string().max(23, msg.clientIdMax),
       qos: z.number().min(0).max(2),
-      keepAliveSeconds: z.number().min(5).max(300),
+      keepAliveSeconds: z.number({ error: msg.keepAliveRange }),
       mqttUser: z.string(),
       mqttPass: z.string(),
       tlsSkipVerify: z.boolean(),
@@ -153,8 +177,33 @@ export function createAlertDestinationFormSchema(
         })
       }
 
+      if (
+        data.heartbeatEnabled &&
+        (!Number.isInteger(data.heartbeatIntervalSeconds) ||
+          data.heartbeatIntervalSeconds < 15 ||
+          data.heartbeatIntervalSeconds > 3600)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['heartbeatIntervalSeconds'],
+          message: msg.heartbeatIntervalRange,
+        })
+      }
+
       // 1. Webhook 协议校验
       if (data.channelType === 'webhook') {
+        if (
+          !Number.isFinite(data.timeoutSeconds) ||
+          data.timeoutSeconds < 1 ||
+          data.timeoutSeconds > 30
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['timeoutSeconds'],
+            message: msg.timeoutRange,
+          })
+        }
+
         const trimmedUrl = data.url.trim()
         const mainUrlValid = isValidHttpUrlWithoutUserinfo(trimmedUrl)
         if (!trimmedUrl) {
@@ -198,8 +247,11 @@ export function createAlertDestinationFormSchema(
           }
         }
 
-        // Webhook Auth
-        const hasExistingSecret = isEdit && secretRetained
+        // Webhook Auth：仅在编辑态且未切换鉴权类型时，允许沿用已保存密钥
+        const hasExistingSecret =
+          isEdit &&
+          secretRetained &&
+          (!originalAuthType || data.authType === originalAuthType)
         if (data.authType === 'bearer') {
           if (!hasExistingSecret && !data.token.trim()) {
             ctx.addIssue({
@@ -226,11 +278,22 @@ export function createAlertDestinationFormSchema(
         }
 
         // Webhook Headers
+        const headersUntouched =
+          isEdit && areHeadersUntouched(data.headers, originalHeaderNames)
+
         data.headers.forEach((h, idx) => {
-          const k = h.key.trim().toLowerCase()
-          if (
-            k &&
-            RESERVED_HEADERS.includes(k as (typeof RESERVED_HEADERS)[number])
+          const trimmedKey = h.key.trim()
+          const lowerKey = trimmedKey.toLowerCase()
+          if (!trimmedKey) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['headers', idx, 'key'],
+              message: msg.headerKeyRequired,
+            })
+          } else if (
+            RESERVED_HEADERS.includes(
+              lowerKey as (typeof RESERVED_HEADERS)[number]
+            )
           ) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -238,11 +301,35 @@ export function createAlertDestinationFormSchema(
               message: msg.reservedHeader(h.key),
             })
           }
+
+          if (!headersUntouched && !h.value) {
+            const isRetained =
+              isEdit && originalHeaderNames.includes(trimmedKey)
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['headers', idx, 'value'],
+              message: isRetained
+                ? msg.headerValueReenterRequired
+                : msg.headerValueRequired,
+            })
+          }
         })
       }
 
       // 2. MQTT 协议校验
       if (data.channelType === 'mqtt') {
+        if (
+          !Number.isFinite(data.keepAliveSeconds) ||
+          data.keepAliveSeconds < 5 ||
+          data.keepAliveSeconds > 300
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['keepAliveSeconds'],
+            message: msg.keepAliveRange,
+          })
+        }
+
         const trimmedBroker = data.broker.trim()
         if (!trimmedBroker) {
           ctx.addIssue({

@@ -200,4 +200,122 @@ describe('createAlertDestinationFormSchema', () => {
       isSameHttpOrigin('https://example.com:8443/a', 'https://example.com/b')
     ).toBe(false)
   })
+
+  it('requires new credentials in edit mode when switching authType away from originalAuthType', () => {
+    const schema = createAlertDestinationFormSchema(
+      undefined,
+      true,
+      true,
+      'bearer'
+    )
+
+    // Keeping originalAuthType ('bearer') allows blank token
+    const keepBearer = schema.safeParse(
+      makeBaseWebhookValues({ authType: 'bearer', token: '' })
+    )
+    expect(keepBearer.success).toBe(true)
+
+    // Switching from 'bearer' to 'basic' must require basicUser & basicPass
+    const switchToBasic = schema.safeParse(
+      makeBaseWebhookValues({
+        authType: 'basic',
+        basicUser: '',
+        basicPass: '',
+      })
+    )
+    expect(switchToBasic.success).toBe(false)
+    if (!switchToBasic.success) {
+      expect(
+        switchToBasic.error.issues.some((i) => i.path.includes('basicUser'))
+      ).toBe(true)
+      expect(
+        switchToBasic.error.issues.some((i) => i.path.includes('basicPass'))
+      ).toBe(true)
+    }
+  })
+
+  it('handles retained custom headers vs modified/empty headers in edit and create modes', () => {
+    const editSchema = createAlertDestinationFormSchema(
+      undefined,
+      true,
+      true,
+      'none',
+      ['X-A', 'X-B']
+    )
+
+    // Untouched retained headers with empty values -> allowed
+    expect(
+      editSchema.safeParse(
+        makeBaseWebhookValues({
+          headers: [
+            { key: 'X-A', value: '' },
+            { key: 'X-B', value: '' },
+          ],
+        })
+      ).success
+    ).toBe(true)
+
+    // Clearing all headers -> allowed (submit will send {})
+    expect(
+      editSchema.safeParse(makeBaseWebhookValues({ headers: [] })).success
+    ).toBe(true)
+
+    // Updating X-B while leaving X-A blank -> rejected so X-A is not silently dropped
+    const partialReenter = editSchema.safeParse(
+      makeBaseWebhookValues({
+        headers: [
+          { key: 'X-A', value: '' },
+          { key: 'X-B', value: 'new-secret' },
+        ],
+      })
+    )
+    expect(partialReenter.success).toBe(false)
+    if (!partialReenter.success) {
+      expect(
+        partialReenter.error.issues.some(
+          (i) => i.path.join('.') === 'headers.0.value'
+        )
+      ).toBe(true)
+    }
+
+    // Create mode rejects blank header key or value
+    const createSchema = createAlertDestinationFormSchema()
+    const emptyCreateHeader = createSchema.safeParse(
+      makeBaseWebhookValues({
+        headers: [{ key: 'X-New', value: '' }],
+      })
+    )
+    expect(emptyCreateHeader.success).toBe(false)
+  })
+
+  it('rejects NaN or out-of-range timeoutSeconds and keepAliveSeconds', () => {
+    const schema = createAlertDestinationFormSchema()
+
+    const badTimeout = schema.safeParse(
+      makeBaseWebhookValues({ timeoutSeconds: Number.NaN })
+    )
+    expect(badTimeout.success).toBe(false)
+    if (!badTimeout.success) {
+      expect(
+        badTimeout.error.issues.some((i) => i.path.includes('timeoutSeconds'))
+      ).toBe(true)
+    }
+
+    const badKeepAlive = schema.safeParse(
+      makeBaseWebhookValues({
+        channelType: 'mqtt',
+        broker: 'tcp://10.0.0.1:1883',
+        topic: 'zhulong/alarms',
+        keepAliveSeconds: 2,
+      })
+    )
+    expect(badKeepAlive.success).toBe(false)
+    if (!badKeepAlive.success) {
+      expect(
+        badKeepAlive.error.issues.some((i) =>
+          i.path.includes('keepAliveSeconds')
+        )
+      ).toBe(true)
+    }
+  })
 })

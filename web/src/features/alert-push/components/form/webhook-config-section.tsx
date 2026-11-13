@@ -31,6 +31,7 @@ interface WebhookConfigSectionProps {
   control: Control<AlertDestinationFormValues>
   isEdit: boolean
   secretSet?: boolean
+  originalHeaderNames?: string[]
   initialAdvancedOpen?: boolean
 }
 
@@ -69,6 +70,7 @@ export function WebhookConfigSection({
   control,
   isEdit,
   secretSet,
+  originalHeaderNames,
   initialAdvancedOpen = false,
 }: WebhookConfigSectionProps) {
   const { t } = useTranslation('alertPush')
@@ -248,7 +250,9 @@ export function WebhookConfigSection({
                   advancedOpen ? 'rotate-180' : ''
                 }`}
               />
-              <span className='sr-only'>Toggle Advanced Webhook</span>
+              <span className='sr-only'>
+                {t('actions.toggleAdvancedWebhook')}
+              </span>
             </Button>
           </CollapsibleTrigger>
         </div>
@@ -268,8 +272,11 @@ export function WebhookConfigSection({
                     type='number'
                     min={1}
                     max={30}
-                    value={field.value}
-                    onChange={(e) => field.onChange(Number(e.target.value))}
+                    value={Number.isNaN(field.value) ? '' : field.value}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      field.onChange(raw === '' ? Number.NaN : Number(raw))
+                    }}
                     className='bg-background font-mono text-xs'
                   />
                 </FormControl>
@@ -279,7 +286,11 @@ export function WebhookConfigSection({
           />
 
           {/* 自定义标头 */}
-          <DestinationHeadersField control={control} />
+          <DestinationHeadersField
+            control={control}
+            isEdit={isEdit}
+            originalHeaderNames={originalHeaderNames}
+          />
         </CollapsibleContent>
       </Collapsible>
     </div>

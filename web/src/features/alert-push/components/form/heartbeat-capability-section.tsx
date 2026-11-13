@@ -84,8 +84,11 @@ export function HeartbeatCapabilitySection({
                     type='number'
                     min={15}
                     max={3600}
-                    value={field.value}
-                    onChange={(e) => field.onChange(Number(e.target.value))}
+                    value={Number.isNaN(field.value) ? '' : field.value}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      field.onChange(raw === '' ? Number.NaN : Number(raw))
+                    }}
                     className='bg-background font-mono text-xs'
                   />
                 </FormControl>
@@ -152,7 +155,7 @@ export function HeartbeatCapabilitySection({
                 name='lwtEnabled'
                 render={({ field }) => (
                   <FormItem className='flex flex-row items-center justify-between rounded-lg border border-border/60 bg-muted/20 p-3'>
-                    <div className='space-y-0.5 pr-3'>
+                    <div className='space-y-0.5 pe-3'>
                       <FormLabel className='cursor-pointer text-xs font-medium'>
                         {t('fields.lwtEnabled')}
                       </FormLabel>

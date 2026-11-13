@@ -19,6 +19,7 @@ interface ChannelTypeCardsProps {
   control: Control<AlertDestinationFormValues>
   setValue: UseFormSetValue<AlertDestinationFormValues>
   isEdit: boolean
+  disabled?: boolean
   onResetTestResult?: () => void
 }
 
@@ -26,9 +27,11 @@ export function ChannelTypeCards({
   control,
   setValue,
   isEdit,
+  disabled = false,
   onResetTestResult,
 }: ChannelTypeCardsProps) {
   const { t } = useTranslation('alertPush')
+  const channelLocked = isEdit || disabled
 
   const channelType = useWatch({
     control,
@@ -41,7 +44,7 @@ export function ChannelTypeCards({
   })
 
   const handleProtocolChange = (nextChannel: ChannelType) => {
-    if (isEdit) return
+    if (channelLocked) return
     setValue('channelType', nextChannel)
     if (nextChannel === 'webhook' && imageMode === 'base64') {
       setValue('imageMode', 'multipart')
@@ -92,7 +95,7 @@ export function ChannelTypeCards({
         <RadioGroup
           value={channelType}
           onValueChange={(val) => handleProtocolChange(val as ChannelType)}
-          disabled={isEdit}
+          disabled={channelLocked}
           className='grid grid-cols-1 gap-3 sm:grid-cols-2'
         >
           {/* Webhook Card */}
@@ -103,7 +106,7 @@ export function ChannelTypeCards({
               channelType === 'webhook'
                 ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
                 : 'border-border/80 bg-card/60 hover:border-border hover:bg-muted/30',
-              isEdit && 'cursor-default opacity-85'
+              channelLocked && 'cursor-default opacity-85'
             )}
           >
             <div className='flex items-start justify-between gap-2'>
@@ -114,7 +117,7 @@ export function ChannelTypeCards({
                 value='webhook'
                 id='protocol-webhook'
                 className='mt-0.5'
-                disabled={isEdit}
+                disabled={channelLocked}
               />
             </div>
             <div className='mt-2.5 space-y-1'>
@@ -135,7 +138,7 @@ export function ChannelTypeCards({
               channelType === 'mqtt'
                 ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
                 : 'border-border/80 bg-card/60 hover:border-border hover:bg-muted/30',
-              isEdit && 'cursor-default opacity-85'
+              channelLocked && 'cursor-default opacity-85'
             )}
           >
             <div className='flex items-start justify-between gap-2'>
@@ -146,7 +149,7 @@ export function ChannelTypeCards({
                 value='mqtt'
                 id='protocol-mqtt'
                 className='mt-0.5'
-                disabled={isEdit}
+                disabled={channelLocked}
               />
             </div>
             <div className='mt-2.5 space-y-1'>

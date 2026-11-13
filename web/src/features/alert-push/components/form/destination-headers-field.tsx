@@ -1,8 +1,15 @@
+import { useMemo } from 'react'
 import { useFieldArray, type Control } from 'react-hook-form'
 import { Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import {
+  FormControl,
+  FormField,
+  FormItem,
+  FormMessage,
+} from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -12,16 +19,25 @@ import {
 
 interface DestinationHeadersFieldProps {
   control: Control<AlertDestinationFormValues>
+  isEdit?: boolean
+  originalHeaderNames?: string[]
 }
 
 export function DestinationHeadersField({
   control,
+  isEdit = false,
+  originalHeaderNames = [],
 }: DestinationHeadersFieldProps) {
   const { t } = useTranslation('alertPush')
-  const { fields, append, remove, update } = useFieldArray({
+  const { fields, append, remove } = useFieldArray({
     control,
     name: 'headers',
   })
+
+  const retainedKeySet = useMemo(
+    () => new Set(originalHeaderNames),
+    [originalHeaderNames]
+  )
 
   return (
     <div className='space-y-2.5 border-t border-border/50 pt-1'>
@@ -48,58 +64,74 @@ export function DestinationHeadersField({
       ) : (
         <div className='space-y-2'>
           {fields.map((fieldItem, index) => {
-            const isReserved = RESERVED_HEADERS.includes(
-              fieldItem.key
-                .trim()
-                .toLowerCase() as (typeof RESERVED_HEADERS)[number]
-            )
+            const isRetainedKey =
+              isEdit && retainedKeySet.has(fieldItem.key.trim())
 
             return (
-              <div key={fieldItem.id} className='space-y-1'>
-                <div className='flex items-center gap-2'>
-                  <Input
-                    placeholder={t('fields.headerKeyPlaceholder')}
-                    value={fieldItem.key}
-                    onChange={(e) =>
-                      update(index, {
-                        ...fieldItem,
-                        key: e.target.value,
-                      })
-                    }
-                    className={cn(
-                      'h-8 bg-background font-mono text-xs',
-                      isReserved &&
-                        'border-destructive focus-visible:ring-destructive/30'
-                    )}
-                  />
-                  <Input
-                    placeholder={t('fields.headerValuePlaceholder')}
-                    value={fieldItem.value}
-                    type='password'
-                    onChange={(e) =>
-                      update(index, {
-                        ...fieldItem,
-                        value: e.target.value,
-                      })
-                    }
-                    className='h-8 bg-background font-mono text-xs'
-                  />
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='icon'
-                    onClick={() => remove(index)}
-                    className='size-8 shrink-0 text-muted-foreground hover:text-destructive'
-                  >
-                    <Trash2 className='size-3.5' />
-                    <span className='sr-only'>Remove Header</span>
-                  </Button>
-                </div>
-                {isReserved ? (
-                  <p className='text-[11px] text-destructive'>
-                    {t('fields.reservedHeaderWarning')}
-                  </p>
-                ) : null}
+              <div key={fieldItem.id} className='flex items-start gap-2'>
+                <FormField
+                  control={control}
+                  name={`headers.${index}.key`}
+                  render={({ field }) => {
+                    const isReserved = RESERVED_HEADERS.includes(
+                      field.value
+                        .trim()
+                        .toLowerCase() as (typeof RESERVED_HEADERS)[number]
+                    )
+
+                    return (
+                      <FormItem className='flex-1 space-y-1'>
+                        <FormControl>
+                          <Input
+                            {...field}
+                            placeholder={t('fields.headerKeyPlaceholder')}
+                            autoComplete='off'
+                            className={cn(
+                              'h-8 bg-background font-mono text-xs',
+                              isReserved &&
+                                'border-destructive focus-visible:ring-destructive/30'
+                            )}
+                          />
+                        </FormControl>
+                        <FormMessage className='text-[11px]' />
+                      </FormItem>
+                    )
+                  }}
+                />
+
+                <FormField
+                  control={control}
+                  name={`headers.${index}.value`}
+                  render={({ field }) => (
+                    <FormItem className='flex-1 space-y-1'>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type='password'
+                          autoComplete='off'
+                          placeholder={
+                            isRetainedKey
+                              ? t('fields.secretRetained')
+                              : t('fields.headerValuePlaceholder')
+                          }
+                          className='h-8 bg-background font-mono text-xs'
+                        />
+                      </FormControl>
+                      <FormMessage className='text-[11px]' />
+                    </FormItem>
+                  )}
+                />
+
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon'
+                  onClick={() => remove(index)}
+                  className='size-8 shrink-0 text-muted-foreground hover:text-destructive'
+                >
+                  <Trash2 className='size-3.5' />
+                  <span className='sr-only'>{t('actions.removeHeader')}</span>
+                </Button>
               </div>
             )
           })}

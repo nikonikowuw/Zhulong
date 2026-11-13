@@ -42,7 +42,7 @@ export function AlertDestinationsTable({
             <TableHead className='w-[160px]'>
               {t('fields.lastAttempt')}
             </TableHead>
-            <TableHead className='w-[80px] text-right'>
+            <TableHead className='w-[80px] text-end'>
               {t('fields.actions')}
             </TableHead>
           </TableRow>

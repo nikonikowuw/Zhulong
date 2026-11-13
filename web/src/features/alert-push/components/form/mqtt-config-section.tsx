@@ -54,7 +54,7 @@ function MqttAdvancedSummary({
       {t('advanced.mqttSummary', {
         qos,
         keepAlive: keepAliveSeconds,
-        clientId: clientId || 'Auto ClientID',
+        clientId: clientId || t('fields.mqttClientIdAuto'),
       })}
       )
     </span>
@@ -198,7 +198,7 @@ export function MqttConfigSection({
                   advancedOpen ? 'rotate-180' : ''
                 }`}
               />
-              <span className='sr-only'>Toggle Advanced MQTT</span>
+              <span className='sr-only'>{t('actions.toggleAdvancedMqtt')}</span>
             </Button>
           </CollapsibleTrigger>
         </div>
@@ -245,9 +245,9 @@ export function MqttConfigSection({
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value='0'>0 (At most once)</SelectItem>
-                      <SelectItem value='1'>1 (At least once)</SelectItem>
-                      <SelectItem value='2'>2 (Exactly once)</SelectItem>
+                      <SelectItem value='0'>{t('fields.mqttQoS0')}</SelectItem>
+                      <SelectItem value='1'>{t('fields.mqttQoS1')}</SelectItem>
+                      <SelectItem value='2'>{t('fields.mqttQoS2')}</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage className='text-xs' />
@@ -269,8 +269,11 @@ export function MqttConfigSection({
                       type='number'
                       min={5}
                       max={300}
-                      value={field.value}
-                      onChange={(e) => field.onChange(Number(e.target.value))}
+                      value={Number.isNaN(field.value) ? '' : field.value}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        field.onChange(raw === '' ? Number.NaN : Number(raw))
+                      }}
                       className='bg-background font-mono text-xs'
                     />
                   </FormControl>

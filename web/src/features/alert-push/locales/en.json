@@ -99,6 +99,7 @@
     "mqttBrokerPlaceholder": "tcp://192.168.1.100:1883",
     "mqttClientId": "Client ID",
     "mqttClientIdPlaceholder": "Auto-derived if blank (e.g. z...)",
+    "mqttClientIdAuto": "Auto ClientID",
     "mqttUsername": "MQTT Username",
     "mqttUsernamePlaceholder": "Optional username for Broker auth",
     "mqttPassword": "MQTT Password",
@@ -107,6 +108,9 @@
     "mqttTopicPlaceholder": "zhulong/alarms",
     "mqttTopicHint": "Target MQTT topic. Wildcards (+ or #) are not allowed",
     "mqttQoS": "QoS Level",
+    "mqttQoS0": "0 (At most once)",
+    "mqttQoS1": "1 (At least once)",
+    "mqttQoS2": "2 (Exactly once)",
     "mqttKeepAlive": "MQTT KeepAlive",
     "mqttKeepAliveUnit": "s",
     "tlsSkipVerify": "Skip TLS Certificate Verification",
@@ -173,14 +177,30 @@
     "topicRequired": "Publish topic is required",
     "topicNoWildcards": "Publish topic must not contain wildcards (+ or #)",
     "clientIdMax": "Client ID must not exceed 23 characters",
-    "reservedHeader": "Header \"{{key}}\" is reserved by the system"
+    "reservedHeader": "Header \"{{key}}\" is reserved by the system",
+    "timeoutRange": "Timeout must be between 1 and 30 seconds",
+    "keepAliveRange": "KeepAlive must be between 5 and 300 seconds",
+    "headerKeyRequired": "Header name is required",
+    "headerValueRequired": "Header value is required",
+    "headerValueReenterRequired": "Re-enter header value when modifying custom headers, or remove this header",
+    "conflictFallback": "Destination configuration conflicts with an existing entry. Please review and try again."
+  },
+  "toast": {
+    "created": "Alert destination created",
+    "updated": "Alert destination updated"
   },
   "actions": {
     "cancel": "Cancel",
+    "close": "Close",
+    "retry": "Retry",
     "save": "Save Destination",
     "saving": "Saving...",
     "testConnection": "Test Connection",
-    "testing": "Testing..."
+    "testing": "Testing...",
+    "toggleAdvancedWebhook": "Toggle advanced webhook settings",
+    "toggleAdvancedMqtt": "Toggle advanced MQTT settings",
+    "toggleFilters": "Toggle filters",
+    "removeHeader": "Remove header"
   },
   "states": {
     "idle": "Idle",

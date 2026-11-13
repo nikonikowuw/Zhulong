@@ -99,6 +99,7 @@
     "mqttBrokerPlaceholder": "tcp://192.168.1.100:1883",
     "mqttClientId": "Client ID",
     "mqttClientIdPlaceholder": "留空自动派生 (例如：z...)",
+    "mqttClientIdAuto": "自动派生 ClientID",
     "mqttUsername": "MQTT 用户名",
     "mqttUsernamePlaceholder": "可选，用于 Broker 鉴权",
     "mqttPassword": "MQTT 密码",
@@ -107,6 +108,9 @@
     "mqttTopicPlaceholder": "zhulong/alarms",
     "mqttTopicHint": "发布目标 Topic，禁止使用通配符（+ 或 #）",
     "mqttQoS": "QoS 质量等级",
+    "mqttQoS0": "0（最多一次）",
+    "mqttQoS1": "1（至少一次）",
+    "mqttQoS2": "2（恰好一次）",
     "mqttKeepAlive": "MQTT 保活间隔",
     "mqttKeepAliveUnit": "秒",
     "tlsSkipVerify": "跳过 TLS 证书校验",
@@ -173,14 +177,30 @@
     "topicRequired": "请输入发布 Topic",
     "topicNoWildcards": "发布主题不能包含通配符（+ 或 #）",
     "clientIdMax": "Client ID 长度不能超过 23 个字符",
-    "reservedHeader": "标头 \"{{key}}\" 为系统保留标头，禁止自定义"
+    "reservedHeader": "标头 \"{{key}}\" 为系统保留标头，禁止自定义",
+    "timeoutRange": "超时时间必须在 1 到 30 秒之间",
+    "keepAliveRange": "保活间隔必须在 5 到 300 秒之间",
+    "headerKeyRequired": "请输入标头名称",
+    "headerValueRequired": "请输入标头值",
+    "headerValueReenterRequired": "修改或新增标头时，请重新填写此标头值，或将其移除",
+    "conflictFallback": "目标配置发生冲突，请核对后重试"
+  },
+  "toast": {
+    "created": "推送目标已创建",
+    "updated": "推送目标已更新"
   },
   "actions": {
     "cancel": "取消",
+    "close": "关闭",
+    "retry": "重试",
     "save": "保存目标",
     "saving": "保存中...",
     "testConnection": "测试连通性",
-    "testing": "探测中..."
+    "testing": "探测中...",
+    "toggleAdvancedWebhook": "展开或收起 Webhook 高级设置",
+    "toggleAdvancedMqtt": "展开或收起 MQTT 高级设置",
+    "toggleFilters": "展开或收起过滤规则",
+    "removeHeader": "移除标头"
   },
   "states": {
     "idle": "就绪空闲",

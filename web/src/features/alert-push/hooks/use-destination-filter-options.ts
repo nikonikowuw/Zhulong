@@ -17,7 +17,7 @@ export function useDestinationFilterOptions() {
 
   const camerasQuery = useQuery({
     queryKey: ['cameras', 'filter-options'],
-    queryFn: () => camerasApi.getCameras({ pageSize: 100 }),
+    queryFn: () => camerasApi.getAll(),
     staleTime: 5 * 60 * 1000,
   })
 

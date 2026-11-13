@@ -1,8 +1,6 @@
 import React from 'react'
 import {
-  AlertTriangle,
   BellRing,
-  CheckCircle2,
   Clock,
   Globe,
   HeartPulse,
@@ -12,9 +10,15 @@ import {
   Play,
   Radio,
   Trash2,
-  XCircle,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { categoryTextClass } from '@/lib/category-palette'
+import {
+  statusDotClass,
+  statusLevelClass,
+  type StatusLevel,
+} from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -41,16 +45,63 @@ interface DestinationTableRowProps {
   onTest: (dest: AlertDestination) => void
 }
 
-function formatSafeTime(dateStr?: string): string {
-  if (!dateStr) return '-'
-  const d = new Date(dateStr)
-  return isNaN(d.getTime()) ? '-' : d.toLocaleTimeString()
+const timeFormatters = new Map<string, Intl.DateTimeFormat>()
+const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>()
+
+function getTimeFormatter(language: string): Intl.DateTimeFormat {
+  const key = language || 'default'
+  let formatter = timeFormatters.get(key)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(language || undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    timeFormatters.set(key, formatter)
+  }
+  return formatter
 }
 
-function formatSafeDateTime(dateStr?: string): string {
+function getDateTimeFormatter(language: string): Intl.DateTimeFormat {
+  const key = language || 'default'
+  let formatter = dateTimeFormatters.get(key)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(language || undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    dateTimeFormatters.set(key, formatter)
+  }
+  return formatter
+}
+
+function formatSafeTime(dateStr: string | undefined, language: string): string {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
-  return isNaN(d.getTime()) ? '-' : d.toLocaleString()
+  return isNaN(d.getTime()) ? '-' : getTimeFormatter(language).format(d)
+}
+
+function formatSafeDateTime(
+  dateStr: string | undefined,
+  language: string
+): string {
+  if (!dateStr) return '-'
+  const d = new Date(dateStr)
+  return isNaN(d.getTime()) ? '-' : getDateTimeFormatter(language).format(d)
+}
+
+const DESTINATION_STATUS_LEVEL: Record<
+  DestinationStatus['state'],
+  StatusLevel
+> = {
+  running: 'active',
+  degraded: 'destructive',
+  idle: 'inactive',
+  disabled: 'inactive',
 }
 
 export function DestinationStatusBadge({
@@ -60,71 +111,99 @@ export function DestinationStatusBadge({
   status: DestinationStatus
   enabled: boolean
 }) {
-  const { t } = useTranslation('alertPush')
+  const { t, i18n } = useTranslation('alertPush')
 
-  if (!enabled) {
+  if (!enabled || status.state === 'disabled') {
     return (
-      <Badge variant='secondary' className='gap-1 opacity-70'>
-        <XCircle className='size-3' />
+      <Badge
+        variant='outline'
+        className={cn(
+          'gap-1.5 text-xs font-normal opacity-80',
+          statusLevelClass('inactive')
+        )}
+      >
+        <span
+          className={cn('size-1.5 rounded-full', statusDotClass('inactive'))}
+        />
         {t('states.disabled')}
       </Badge>
     )
   }
 
-  switch (status.state) {
-    case 'running':
-      return (
-        <Badge
-          variant='outline'
-          className='gap-1 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-        >
-          <span className='relative flex size-2'>
-            <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75' />
-            <span className='relative inline-flex size-2 rounded-full bg-emerald-500' />
-          </span>
-          {t('states.running')}
-        </Badge>
-      )
-    case 'degraded':
-      return (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge variant='destructive' className='cursor-help gap-1'>
-              <AlertTriangle className='size-3' />
-              {t('states.degraded')}
-              {status.consecutiveFailures > 0
-                ? ` (${status.consecutiveFailures})`
-                : ''}
-            </Badge>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p className='text-xs'>
-              {status.lastFailureReason
-                ? t(`failureReasons.${status.lastFailureReason}`, {
-                    defaultValue: status.lastFailureReason,
-                  })
-                : ''}
-            </p>
-            {status.lastFailureAt ? (
-              <p className='text-xs opacity-75'>
-                {formatSafeDateTime(status.lastFailureAt)}
-              </p>
-            ) : null}
-          </TooltipContent>
-        </Tooltip>
-      )
-    case 'idle':
-    default:
-      return (
-        <Badge
-          variant='outline'
-          className='gap-1 border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400'
-        >
-          <CheckCircle2 className='size-3' />
-          {t('states.idle')}
-        </Badge>
-      )
+  const level = DESTINATION_STATUS_LEVEL[status.state]
+
+  if (status.state === 'running') {
+    return (
+      <Badge
+        variant='outline'
+        className={cn('gap-1.5 text-xs font-normal', statusLevelClass(level))}
+      >
+        <span className='relative flex size-1.5'>
+          <span
+            className={cn(
+              'absolute inline-flex h-full w-full animate-ping rounded-full opacity-75',
+              statusDotClass(level)
+            )}
+          />
+          <span
+            className={cn(
+              'relative inline-flex size-1.5 rounded-full',
+              statusDotClass(level)
+            )}
+          />
+        </span>
+        {t('states.running')}
+      </Badge>
+    )
   }
+
+  if (status.state === 'degraded') {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant='outline'
+            className={cn(
+              'cursor-help gap-1.5 text-xs font-normal',
+              statusLevelClass(level)
+            )}
+          >
+            <span
+              className={cn('size-1.5 rounded-full', statusDotClass(level))}
+            />
+            {t('states.degraded')}
+            {status.consecutiveFailures > 0
+              ? ` (${status.consecutiveFailures})`
+              : ''}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p className='text-xs'>
+            {status.lastFailureReason
+              ? t(`failureReasons.${status.lastFailureReason}`, {
+                  defaultValue: status.lastFailureReason,
+                })
+              : ''}
+          </p>
+          {status.lastFailureAt ? (
+            <p className='text-xs opacity-75'>
+              {formatSafeDateTime(status.lastFailureAt, i18n.language)}
+            </p>
+          ) : null}
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return (
+    <Badge
+      variant='outline'
+      className={cn('gap-1.5 text-xs font-normal', statusLevelClass(level))}
+    >
+      <span className={cn('size-1.5 rounded-full', statusDotClass(level))} />
+      {t('states.idle')}
+    </Badge>
+  )
 }
 
 export function DestinationImageModeBadge({ mode }: { mode: string }) {
@@ -148,7 +227,7 @@ export const AlertDestinationTableRow = React.memo(
     onToggle,
     onTest,
   }: DestinationTableRowProps) {
-    const { t } = useTranslation('alertPush')
+    const { t, i18n } = useTranslation('alertPush')
     const hbInterval = dest.config.heartbeatIntervalSeconds ?? 60
 
     return (
@@ -171,7 +250,7 @@ export const AlertDestinationTableRow = React.memo(
                   variant='outline'
                   className='h-5 gap-1 px-1.5 text-[10px] font-normal'
                 >
-                  <HeartPulse className='size-2.5 text-emerald-500' />
+                  <HeartPulse className='size-2.5 text-primary' />
                   {t('capabilities.heartbeatBadge', { interval: hbInterval })}
                 </Badge>
               ) : null}
@@ -205,9 +284,9 @@ export const AlertDestinationTableRow = React.memo(
         <TableCell>
           <div className='flex items-center gap-1.5 text-sm'>
             {dest.channelType === 'webhook' ? (
-              <Globe className='size-4 text-sky-500' />
+              <Globe className={cn('size-4', categoryTextClass('blue'))} />
             ) : (
-              <Radio className='size-4 text-violet-500' />
+              <Radio className={cn('size-4', categoryTextClass('violet'))} />
             )}
             <span>{t(`channelTypes.${dest.channelType}`)}</span>
           </div>
@@ -225,6 +304,7 @@ export const AlertDestinationTableRow = React.memo(
           <Switch
             checked={dest.enabled}
             onCheckedChange={(checked) => onToggle(dest, checked)}
+            aria-label={dest.name}
           />
         </TableCell>
 
@@ -248,11 +328,13 @@ export const AlertDestinationTableRow = React.memo(
         <TableCell>
           <div className='flex items-center gap-1 text-xs text-muted-foreground'>
             <Clock className='size-3.5' />
-            <span>{formatSafeTime(dest.status.lastAttemptAt)}</span>
+            <span>
+              {formatSafeTime(dest.status.lastAttemptAt, i18n.language)}
+            </span>
           </div>
         </TableCell>
 
-        <TableCell className='text-right'>
+        <TableCell className='text-end'>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant='ghost' size='icon' className='size-8'>

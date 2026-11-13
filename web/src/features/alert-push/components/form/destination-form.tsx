@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { AlertCircle, CheckCircle2, Loader2, Play } from 'lucide-react'
@@ -18,8 +18,10 @@ import {
 } from '@/components/ui/tooltip'
 import { alertPushApi } from '../../api/alert-push-api'
 import {
+  areHeadersUntouched,
   createAlertDestinationFormSchema,
   type AlertDestinationFormValues,
+  type HeaderEntry,
 } from '../../data/schema'
 import type {
   AlertDestination,
@@ -39,6 +41,35 @@ interface DestinationFormProps {
   onSuccess: () => void
 }
 
+function buildWebhookHeadersSecret(
+  headers: HeaderEntry[],
+  isEdit: boolean,
+  originalHeaderNames: string[]
+): Record<string, string> | undefined {
+  if (isEdit && areHeadersUntouched(headers, originalHeaderNames)) {
+    return undefined
+  }
+
+  const hdrsObj: Record<string, string> = {}
+  for (const h of headers) {
+    const key = h.key.trim()
+    if (key && h.value) {
+      hdrsObj[key] = h.value
+    }
+  }
+
+  if (Object.keys(hdrsObj).length > 0) {
+    return hdrsObj
+  }
+
+  // 编辑态下主动清空全部已有标头时，必须显式传空对象 {} 覆盖服务端 map
+  if (isEdit && originalHeaderNames.length > 0) {
+    return {}
+  }
+
+  return undefined
+}
+
 export function DestinationForm({
   destination,
   onCancel,
@@ -56,11 +87,19 @@ export function DestinationForm({
   const [testResult, setTestResult] = useState<TestDestinationResult | null>(
     null
   )
+  const testSeqRef = useRef(0)
+
+  const originalAuthType =
+    destination?.channelType === 'webhook'
+      ? destination.config.authType
+      : undefined
+  const originalHeaderNames = useMemo(
+    () => destination?.headerNames ?? [],
+    [destination?.headerNames]
+  )
 
   // 初始折叠展开判定：若编辑已有配置且存在自定义标头/过滤器，自动展开
-  const hasCustomHeaders = Boolean(
-    destination?.headerNames && destination.headerNames.length > 0
-  )
+  const hasCustomHeaders = originalHeaderNames.length > 0
   const hasCustomFilters = Boolean(
     (destination?.filter?.eventTypes &&
       destination.filter.eventTypes.length > 0) ||
@@ -74,10 +113,14 @@ export function DestinationForm({
       createAlertDestinationFormSchema(
         t,
         isEdit,
-        Boolean(destination?.secretSet)
+        Boolean(destination?.secretSet),
+        originalAuthType,
+        originalHeaderNames
       ),
-    [t, isEdit, destination?.secretSet]
+    [t, isEdit, destination?.secretSet, originalAuthType, originalHeaderNames]
   )
+
+  const resolver = useMemo(() => zodResolver(schema), [schema])
 
   const defaultValues: AlertDestinationFormValues = useMemo(() => {
     const isWebhook = destination?.channelType === 'webhook'
@@ -101,7 +144,7 @@ export function DestinationForm({
       token: '',
       basicUser: '',
       basicPass: '',
-      headers: (destination?.headerNames || []).map((k) => ({
+      headers: originalHeaderNames.map((k) => ({
         key: k,
         value: '',
       })),
@@ -124,10 +167,10 @@ export function DestinationForm({
       algorithmIds: destination?.filter?.algorithmIds || [],
       cameraIds: destination?.filter?.cameraIds || [],
     }
-  }, [destination])
+  }, [destination, originalHeaderNames])
 
   const form = useForm<AlertDestinationFormValues>({
-    resolver: zodResolver(schema),
+    resolver,
     defaultValues,
   })
 
@@ -170,13 +213,13 @@ export function DestinationForm({
 
   // 连通性测试
   const handleRunTest = async () => {
+    const seq = ++testSeqRef.current
     const values = form.getValues()
-    const hdrsObj: Record<string, string> = {}
-    for (const h of values.headers || []) {
-      if (h.key.trim() && h.value) {
-        hdrsObj[h.key.trim()] = h.value
-      }
-    }
+    const headersPayload = buildWebhookHeadersSecret(
+      values.headers || [],
+      isEdit,
+      originalHeaderNames
+    )
 
     setTesting(true)
     setTestResult(null)
@@ -197,18 +240,24 @@ export function DestinationForm({
                 token: values.token ? values.token : undefined,
                 username: values.basicUser ? values.basicUser : undefined,
                 password: values.basicPass ? values.basicPass : undefined,
-                headers: Object.keys(hdrsObj).length > 0 ? hdrsObj : undefined,
+                headers: headersPayload,
               }
             : {
                 password: values.mqttPass ? values.mqttPass : undefined,
               },
       })
-      setTestResult(res)
+      if (seq === testSeqRef.current) {
+        setTestResult(res)
+      }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      setTestResult({ ok: false, latencyMs: 0, reason: msg })
+      if (seq === testSeqRef.current) {
+        const msg = err instanceof Error ? err.message : String(err)
+        setTestResult({ ok: false, latencyMs: 0, reason: msg })
+      }
     } finally {
-      setTesting(false)
+      if (seq === testSeqRef.current) {
+        setTesting(false)
+      }
     }
   }
 
@@ -217,12 +266,11 @@ export function DestinationForm({
     setConflictError(null)
     setUnhandledError(null)
 
-    const hdrsObj: Record<string, string> = {}
-    for (const h of values.headers || []) {
-      if (h.key.trim() && h.value) {
-        hdrsObj[h.key.trim()] = h.value
-      }
-    }
+    const headersPayload = buildWebhookHeadersSecret(
+      values.headers || [],
+      isEdit,
+      originalHeaderNames
+    )
 
     try {
       if (isEdit && destination) {
@@ -243,15 +291,14 @@ export function DestinationForm({
                   token: values.token ? values.token : undefined,
                   username: values.basicUser ? values.basicUser : undefined,
                   password: values.basicPass ? values.basicPass : undefined,
-                  headers:
-                    Object.keys(hdrsObj).length > 0 ? hdrsObj : undefined,
+                  headers: headersPayload,
                 }
               : {
                   password: values.mqttPass ? values.mqttPass : undefined,
                 },
         }
         await alertPushApi.update(destination.id, updatePayload)
-        toast.success(t('testSuccess', { latency: 0 }))
+        toast.success(t('toast.updated'))
       } else {
         const createPayload: CreateAlertDestinationInput = {
           name: values.name.trim(),
@@ -271,19 +318,18 @@ export function DestinationForm({
                   token: values.token ? values.token : undefined,
                   username: values.basicUser ? values.basicUser : undefined,
                   password: values.basicPass ? values.basicPass : undefined,
-                  headers:
-                    Object.keys(hdrsObj).length > 0 ? hdrsObj : undefined,
+                  headers: headersPayload,
                 }
               : {
                   password: values.mqttPass ? values.mqttPass : undefined,
                 },
         }
         await alertPushApi.create(createPayload)
-        toast.success(t('dialog.createTitle'))
+        toast.success(t('toast.created'))
       }
       onSuccess()
     } catch (err: unknown) {
-      handleFormError(form, err, {
+      const result = handleFormError(form, err, {
         fieldMap: {
           'config.url': 'url',
           'config.heartbeatUrl': 'heartbeatUrl',
@@ -293,12 +339,15 @@ export function DestinationForm({
           'config.clientId': 'clientId',
         },
         onConflict: (_err, message) => {
-          setConflictError(message || '目标配置发生冲突，请核对后重试')
+          setConflictError(message || t('validation.conflictFallback'))
         },
         onUnhandled: (message) => {
           setUnhandledError(message)
         },
       })
+      if (!result.isAxiosError) {
+        setUnhandledError(result.serverMessage)
+      }
     }
   }
 
@@ -313,14 +362,24 @@ export function DestinationForm({
       >
         {/* 全局冲突或未捕获错误横幅 */}
         {conflictError ? (
-          <div className='flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-600 dark:text-amber-400'>
+          <div
+            className={cn(
+              'flex items-start gap-2.5 rounded-xl border p-3 text-xs',
+              statusLevelClass('warning')
+            )}
+          >
             <AlertCircle className='mt-0.5 size-4 shrink-0' />
             <div className='flex-1 leading-relaxed'>{conflictError}</div>
           </div>
         ) : null}
 
         {unhandledError ? (
-          <div className='flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive'>
+          <div
+            className={cn(
+              'flex items-start gap-2.5 rounded-xl border p-3 text-xs',
+              statusLevelClass('destructive')
+            )}
+          >
             <AlertCircle className='mt-0.5 size-4 shrink-0' />
             <div className='flex-1 leading-relaxed'>{unhandledError}</div>
           </div>
@@ -331,7 +390,11 @@ export function DestinationForm({
           control={form.control}
           setValue={form.setValue}
           isEdit={isEdit}
-          onResetTestResult={() => setTestResult(null)}
+          disabled={testing || isSubmitting}
+          onResetTestResult={() => {
+            testSeqRef.current += 1
+            setTestResult(null)
+          }}
         />
 
         {channelType === 'webhook' ? (
@@ -339,6 +402,7 @@ export function DestinationForm({
             control={form.control}
             isEdit={isEdit}
             secretSet={destination?.secretSet}
+            originalHeaderNames={originalHeaderNames}
             initialAdvancedOpen={hasCustomHeaders}
           />
         ) : (

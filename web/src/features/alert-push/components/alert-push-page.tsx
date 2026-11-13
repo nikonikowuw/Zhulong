@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -10,6 +10,8 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusDotClass, statusLevelClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,6 +33,22 @@ const MAX_DESTINATIONS = 32
 export function AlertPushPage() {
   const { t } = useTranslation('alertPush')
   const queryClient = useQueryClient()
+
+  // Dialog State
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editingDest, setEditingDest] = useState<AlertDestination | null>(null)
+  const [deletingDest, setDeletingDest] = useState<AlertDestination | null>(
+    null
+  )
+
+  // Quick Test Dialog
+  const [testModalDest, setTestModalDest] = useState<AlertDestination | null>(
+    null
+  )
+  const [testingQuick, setTestingQuick] = useState(false)
+  const [quickTestResult, setQuickTestResult] =
+    useState<TestDestinationResult | null>(null)
+  const quickTestSeqRef = useRef(0)
 
   // Queries
   const {
@@ -66,61 +84,70 @@ export function AlertPushPage() {
     },
   })
 
-  // Dialog State
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingDest, setEditingDest] = useState<AlertDestination | null>(null)
-  const [deletingDest, setDeletingDest] = useState<AlertDestination | null>(
-    null
-  )
+  const { mutate: enableDest } = enableMutation
+  const { mutate: disableDest } = disableMutation
 
-  // Quick Test Dialog
-  const [testModalDest, setTestModalDest] = useState<AlertDestination | null>(
-    null
-  )
-  const [testingQuick, setTestingQuick] = useState(false)
-  const [quickTestResult, setQuickTestResult] =
-    useState<TestDestinationResult | null>(null)
-
-  const handleCreate = () => {
+  const handleCreate = useCallback(() => {
     setEditingDest(null)
     setDialogOpen(true)
-  }
+  }, [])
 
-  const handleEdit = (dest: AlertDestination) => {
+  const handleEdit = useCallback((dest: AlertDestination) => {
     setEditingDest(dest)
     setDialogOpen(true)
-  }
+  }, [])
 
-  const handleDeletePrompt = (dest: AlertDestination) => {
+  const handleDeletePrompt = useCallback((dest: AlertDestination) => {
     setDeletingDest(dest)
-  }
+  }, [])
 
-  const handleToggle = (dest: AlertDestination, enabled: boolean) => {
-    if (enabled) {
-      enableMutation.mutate(dest.id)
-    } else {
-      disableMutation.mutate(dest.id)
-    }
-  }
+  const handleToggle = useCallback(
+    (dest: AlertDestination, enabled: boolean) => {
+      if (enabled) {
+        enableDest(dest.id)
+      } else {
+        disableDest(dest.id)
+      }
+    },
+    [enableDest, disableDest]
+  )
 
-  const handleQuickTest = async (dest: AlertDestination) => {
-    setTestModalDest(dest)
-    setTestingQuick(true)
-    setQuickTestResult(null)
+  const handleQuickTest = useCallback(
+    async (dest: AlertDestination) => {
+      const seq = ++quickTestSeqRef.current
+      setTestModalDest(dest)
+      setTestingQuick(true)
+      setQuickTestResult(null)
 
-    try {
-      const res = await alertPushApi.test({ id: dest.id })
-      setQuickTestResult(res)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      setQuickTestResult({ ok: false, latencyMs: 0, reason: msg })
-    } finally {
-      setTestingQuick(false)
-      void queryClient.invalidateQueries({ queryKey: ['alert-destinations'] })
-    }
-  }
+      try {
+        const res = await alertPushApi.test({ id: dest.id })
+        if (seq === quickTestSeqRef.current) {
+          setQuickTestResult(res)
+        }
+      } catch (err: unknown) {
+        if (seq === quickTestSeqRef.current) {
+          const msg = err instanceof Error ? err.message : String(err)
+          setQuickTestResult({ ok: false, latencyMs: 0, reason: msg })
+        }
+      } finally {
+        if (seq === quickTestSeqRef.current) {
+          setTestingQuick(false)
+          void queryClient.invalidateQueries({
+            queryKey: ['alert-destinations'],
+          })
+        }
+      }
+    },
+    [queryClient]
+  )
+
+  const handleDialogSuccess = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['alert-destinations'] })
+  }, [queryClient])
 
   const isLimitReached = destinations.length >= MAX_DESTINATIONS
+  const quotaLevel = isLimitReached ? 'destructive' : 'active'
+  const errorMessage = error instanceof Error ? error.message : String(error)
 
   return (
     <ContentSection
@@ -134,23 +161,22 @@ export function AlertPushPage() {
           <div className='flex flex-wrap items-center gap-2'>
             <Badge
               variant='outline'
-              className={`h-6 gap-1.5 px-2 text-xs font-normal ${
-                isLimitReached
-                  ? 'border-destructive/30 bg-destructive/10 text-destructive'
-                  : 'border-border/60 bg-muted/40 text-muted-foreground'
-              }`}
+              className={cn(
+                'h-6 gap-1.5 px-2 text-xs font-normal',
+                statusLevelClass(quotaLevel)
+              )}
             >
               <span
-                className={`size-1.5 rounded-full ${
-                  isLimitReached ? 'bg-destructive' : 'bg-emerald-500'
-                }`}
+                className={cn(
+                  'size-1.5 rounded-full',
+                  statusDotClass(quotaLevel)
+                )}
               />
               {isLimitReached
                 ? t('maxLimitReached')
                 : t('limitUsage', {
                     count: destinations.length,
                     max: MAX_DESTINATIONS,
-                    defaultValue: `已配置 ${destinations.length}/${MAX_DESTINATIONS} 个推送目标`,
                   })}
             </Badge>
           </div>
@@ -159,7 +185,7 @@ export function AlertPushPage() {
             <Button
               variant='outline'
               size='sm'
-              onClick={() => refetch()}
+              onClick={() => void refetch()}
               disabled={isLoading || isRefetching}
               className='h-8 gap-1.5 rounded-lg border-border/80 shadow-2xs'
             >
@@ -181,19 +207,55 @@ export function AlertPushPage() {
           </div>
         </div>
 
-        {error ? (
-          <div className='flex items-center gap-2 rounded-xl border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive'>
-            <AlertCircle className='size-5 shrink-0' />
-            <span>
-              {error instanceof Error ? error.message : String(error)}
-            </span>
+        {/* 后台刷新失败且已有缓存数据时，顶部提示错误但不遮盖现有列表 */}
+        {error && destinations.length > 0 ? (
+          <div
+            className={cn(
+              'flex items-center justify-between gap-3 rounded-xl border p-4 text-sm',
+              statusLevelClass('destructive')
+            )}
+          >
+            <div className='flex items-center gap-2'>
+              <AlertCircle className='size-5 shrink-0' />
+              <span>{errorMessage}</span>
+            </div>
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() => void refetch()}
+              disabled={isRefetching}
+            >
+              {t('actions.retry')}
+            </Button>
           </div>
         ) : null}
 
-        {/* Main Content */}
+        {/* Main Content：Loading / Error / Empty / Table 四态互斥 */}
         {isLoading ? (
           <div className='flex h-64 items-center justify-center'>
             <Loader2 className='size-8 animate-spin text-muted-foreground' />
+          </div>
+        ) : error && destinations.length === 0 ? (
+          <div
+            className={cn(
+              'flex min-h-[300px] flex-col items-center justify-center gap-4 rounded-lg border p-8 text-center',
+              statusLevelClass('destructive')
+            )}
+          >
+            <AlertCircle className='size-8 shrink-0' />
+            <p className='max-w-md text-sm'>{errorMessage}</p>
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() => void refetch()}
+              disabled={isRefetching}
+              className='gap-1.5'
+            >
+              <RefreshCw
+                className={`size-3.5 ${isRefetching ? 'animate-spin' : ''}`}
+              />
+              <span>{t('actions.retry')}</span>
+            </Button>
           </div>
         ) : destinations.length === 0 ? (
           <div className='flex min-h-[360px] animate-in flex-col items-center justify-center rounded-lg border border-dashed p-8 text-center fade-in-50'>
@@ -224,9 +286,7 @@ export function AlertPushPage() {
           open={dialogOpen}
           destination={editingDest}
           onOpenChange={setDialogOpen}
-          onSuccess={() => {
-            queryClient.invalidateQueries({ queryKey: ['alert-destinations'] })
-          }}
+          onSuccess={handleDialogSuccess}
         />
 
         {/* Delete Confirmation Dialog */}
@@ -252,7 +312,7 @@ export function AlertPushPage() {
                 onClick={() => setDeletingDest(null)}
                 disabled={deleteMutation.isPending}
               >
-                Cancel
+                {t('actions.cancel')}
               </Button>
               <Button
                 variant='destructive'
@@ -264,7 +324,7 @@ export function AlertPushPage() {
                 disabled={deleteMutation.isPending}
               >
                 {deleteMutation.isPending ? (
-                  <Loader2 className='mr-1.5 size-4 animate-spin' />
+                  <Loader2 className='me-1.5 size-4 animate-spin' />
                 ) : null}
                 {t('delete')}
               </Button>
@@ -275,9 +335,16 @@ export function AlertPushPage() {
         {/* Quick Test Feedback Dialog */}
         <Dialog
           open={Boolean(testModalDest)}
-          onOpenChange={(open) => (!open ? setTestModalDest(null) : undefined)}
+          onOpenChange={(open) => {
+            if (!open) {
+              quickTestSeqRef.current += 1
+              setTestingQuick(false)
+              setQuickTestResult(null)
+              setTestModalDest(null)
+            }
+          }}
         >
-          <DialogContent className='sm:max-w-md'>
+          <DialogContent className='sm:max-w-md' aria-describedby={undefined}>
             <DialogHeader>
               <DialogTitle className='flex items-center gap-2'>
                 <Play className='size-4 text-primary' />
@@ -295,11 +362,12 @@ export function AlertPushPage() {
                 </div>
               ) : quickTestResult ? (
                 <div
-                  className={`flex items-center gap-3 rounded-lg p-4 text-sm ${
-                    quickTestResult.ok
-                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-destructive/15 text-destructive'
-                  }`}
+                  className={cn(
+                    'flex items-center gap-3 rounded-lg border p-4 text-sm',
+                    statusLevelClass(
+                      quickTestResult.ok ? 'active' : 'destructive'
+                    )
+                  )}
                 >
                   {quickTestResult.ok ? (
                     <CheckCircle2 className='size-6 shrink-0' />
@@ -326,7 +394,16 @@ export function AlertPushPage() {
             </div>
 
             <DialogFooter>
-              <Button onClick={() => setTestModalDest(null)}>Close</Button>
+              <Button
+                onClick={() => {
+                  quickTestSeqRef.current += 1
+                  setTestingQuick(false)
+                  setQuickTestResult(null)
+                  setTestModalDest(null)
+                }}
+              >
+                {t('actions.close')}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

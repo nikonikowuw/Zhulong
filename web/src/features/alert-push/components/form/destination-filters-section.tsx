@@ -52,6 +52,27 @@ const IMAGE_MODE_DESC_KEYS: Record<string, string> = {
   base64: 'imageModes.base64Desc',
 }
 
+const EVENT_TYPE_OPTIONS = [
+  {
+    type: 'alarm',
+    icon: ShieldAlert,
+    labelKey: 'eventTypes.alarm',
+    descKey: 'eventTypes.alarmDesc',
+  },
+  {
+    type: 'face_recognition',
+    icon: UserCheck,
+    labelKey: 'eventTypes.face_recognition',
+    descKey: 'eventTypes.face_recognitionDesc',
+  },
+  {
+    type: 'plate_recognition',
+    icon: Car,
+    labelKey: 'eventTypes.plate_recognition',
+    descKey: 'eventTypes.plate_recognitionDesc',
+  },
+] as const
+
 interface DestinationFiltersSectionProps {
   control: Control<AlertDestinationFormValues>
   setValue: UseFormSetValue<AlertDestinationFormValues>
@@ -319,7 +340,7 @@ export function DestinationFiltersSection({
                       filtersOpen ? 'rotate-180' : ''
                     }`}
                   />
-                  <span className='sr-only'>Toggle Filters</span>
+                  <span className='sr-only'>{t('actions.toggleFilters')}</span>
                 </Button>
               </CollapsibleTrigger>
             </div>
@@ -341,69 +362,52 @@ export function DestinationFiltersSection({
                 </div>
 
                 <div className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
-                  {[
-                    {
-                      type: 'alarm',
-                      icon: ShieldAlert,
-                      label: t('eventTypes.alarm'),
-                      desc: t('eventTypes.alarmDesc'),
-                    },
-                    {
-                      type: 'face_recognition',
-                      icon: UserCheck,
-                      label: t('eventTypes.face_recognition'),
-                      desc: t('eventTypes.face_recognitionDesc'),
-                    },
-                    {
-                      type: 'plate_recognition',
-                      icon: Car,
-                      label: t('eventTypes.plate_recognition'),
-                      desc: t('eventTypes.plate_recognitionDesc'),
-                    },
-                  ].map(({ type, icon: Icon, label, desc }) => {
-                    const selected = selectedEventTypes.includes(type)
-                    return (
-                      <button
-                        key={type}
-                        type='button'
-                        onClick={() => toggleEventType(type)}
-                        className={cn(
-                          'flex flex-col justify-between rounded-lg border p-2.5 text-start shadow-2xs transition-all',
-                          selected
-                            ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
-                            : 'border-border/70 bg-background hover:border-border hover:bg-muted/30'
-                        )}
-                      >
-                        <div className='flex items-center justify-between'>
-                          <div
-                            className={cn(
-                              'flex size-6 items-center justify-center rounded-md border text-xs',
-                              selected
-                                ? 'border-primary/40 bg-primary/10 text-primary'
-                                : 'border-border/60 bg-muted/40 text-muted-foreground'
-                            )}
-                          >
-                            <Icon className='size-3' />
-                          </div>
-                          {selected ? (
-                            <div className='flex size-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground'>
-                              <Check className='size-2.5 stroke-[3]' />
-                            </div>
-                          ) : (
-                            <div className='size-3.5 rounded-full border border-muted-foreground/30' />
+                  {EVENT_TYPE_OPTIONS.map(
+                    ({ type, icon: Icon, labelKey, descKey }) => {
+                      const selected = selectedEventTypes.includes(type)
+                      return (
+                        <button
+                          key={type}
+                          type='button'
+                          onClick={() => toggleEventType(type)}
+                          className={cn(
+                            'flex flex-col justify-between rounded-lg border p-2.5 text-start shadow-2xs transition-all',
+                            selected
+                              ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                              : 'border-border/70 bg-background hover:border-border hover:bg-muted/30'
                           )}
-                        </div>
-                        <div className='mt-2 space-y-0.5'>
-                          <span className='text-xs font-semibold text-foreground'>
-                            {label}
-                          </span>
-                          <p className='line-clamp-2 text-[10px] leading-relaxed text-muted-foreground'>
-                            {desc}
-                          </p>
-                        </div>
-                      </button>
-                    )
-                  })}
+                        >
+                          <div className='flex items-center justify-between'>
+                            <div
+                              className={cn(
+                                'flex size-6 items-center justify-center rounded-md border text-xs',
+                                selected
+                                  ? 'border-primary/40 bg-primary/10 text-primary'
+                                  : 'border-border/60 bg-muted/40 text-muted-foreground'
+                              )}
+                            >
+                              <Icon className='size-3' />
+                            </div>
+                            {selected ? (
+                              <div className='flex size-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground'>
+                                <Check className='size-2.5 stroke-[3]' />
+                              </div>
+                            ) : (
+                              <div className='size-3.5 rounded-full border border-muted-foreground/30' />
+                            )}
+                          </div>
+                          <div className='mt-2 space-y-0.5'>
+                            <span className='text-xs font-semibold text-foreground'>
+                              {t(labelKey)}
+                            </span>
+                            <p className='line-clamp-2 text-[10px] leading-relaxed text-muted-foreground'>
+                              {t(descKey)}
+                            </p>
+                          </div>
+                        </button>
+                      )
+                    }
+                  )}
                 </div>
               </div>
 
@@ -499,6 +503,8 @@ function FilterOptionsSelector({
   selectAllText,
   clearAllText,
 }: FilterOptionsSelectorProps) {
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+
   return (
     <div className='space-y-2.5 rounded-lg border border-border/60 bg-background/60 p-3.5'>
       <div className='flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-2'>
@@ -539,7 +545,7 @@ function FilterOptionsSelector({
 
       {options.length > 6 ? (
         <div className='relative'>
-          <Search className='absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground' />
+          <Search className='absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
           <Input
             placeholder={searchPlaceholder}
             value={searchValue}
@@ -560,7 +566,7 @@ function FilterOptionsSelector({
           </div>
         ) : (
           filteredOptions.map((opt) => {
-            const selected = selectedIds.includes(opt.id)
+            const selected = selectedIdSet.has(opt.id)
             return (
               <Badge
                 key={opt.id}
