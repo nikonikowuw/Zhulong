@@ -21,10 +21,13 @@
   `TaskSavedListener` + `RefreshTaskCrop`（`applyMu` 串行）、`CropFor` 读库 fail-safe。
 - [x] 阶段 5：crop schema、crop 工具（绘制/替换/清除）、窗口外压暗、
   共享撤销栈、保存门禁（画面 live + 至少一个算法）。
-- [x] 门禁（宿主侧）：`native-test` 33/33、`go-check`、tasks 前端 173 用例、
-  `format:check` / `lint` / `tsc` / `pnpm build`、`api-docs`、`webui-dist-check`。
-- [ ] 阶段 0 / 6.5：板端 spike（`codecpar` vs 解码帧尺寸、旧包 e2e、RGA 一致性、性能基线）。
-- [ ] RGA 第二刀：`rga_host_loader.{hpp,cpp}` + 板端验证（AC11 在此时生效）。
+- [x] 门禁（宿主侧）：`native-test`、`go-check`、tasks 前端用例、
+  `format:check` / `lint` / `tsc` / `pnpm build`、`api-docs`、`webui-dist-check`、`make check` 全绿。
+- [x] 板端实测（RK3568 现网 CPU-only 第一刀验证，2026-11-13）：
+  - `1920×1080` @ 20fps（`tentcoo out` + `face_recognition` 1.0.0）CPU `WindowCrop` 实测 `zhulong` 仅占 **6.7% CPU / ~69 MB RSS**，整机空闲 **86.9%**；
+  - `PUT /tasks/:id` 三态、`[0.1,0.1,0.12,0.12]` float32 边界、`INVALID_CROP_CONFIG`（HTTP 422 三语）、`[0.123,0.108,0.724,0.924]` / `[0.2,0.2,0.8,0.8]` / `null` 热切换均不重启 `face_recognition`（PID `2121005` 全程存活），`1920×1080` 全幅抓拍与外向取偶逆映射边界零越界；
+  - 规范文档（native 4 份 + backend 3 份 + frontend 1 份）已全部同步至 `.trellis/spec/`。
+- [ ] RGA 第二刀（已延后拆出本期范围）：`rga_host_loader.{hpp,cpp}` + `AC11` 板端一致性质检（CPU 路径已足够，留待后续需要时单开优化任务）。
 
 ---
 
