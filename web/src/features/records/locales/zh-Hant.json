@@ -217,6 +217,36 @@
     "emptySelection": "尚未勾選任何記錄",
     "hardCapHint": "取消限額時仍受單次 {{limit}} 張上限保護",
     "progressLabel": "匯出進度",
-    "resumeHint": "續傳沿用上次任務的報表與圖片清單，目前篩選條件不參與"
+    "resumeHint": "續傳沿用上次任務的報表與圖片清單，目前篩選條件不參與",
+    "csv": {
+      "id": "ID",
+      "capturedAtLocal": "抓拍時間 (本地)",
+      "capturedAtUtc": "抓拍時間 (UTC ISO8601)",
+      "cameraName": "攝影機名稱",
+      "cameraId": "攝影機 ID",
+      "algorithmName": "演算法名稱",
+      "algorithmVersion": "演算法版本",
+      "matched": "是否命中",
+      "similarity": "比對相似度",
+      "personName": "人員姓名",
+      "externalPersonId": "外部人員 ID",
+      "internalPersonId": "內部人員 ID",
+      "trackId": "追蹤 ID",
+      "pts": "PTS 幀時間戳",
+      "boundingBox": "目標框",
+      "bodyBox": "人體框",
+      "imagePath": "全景大圖路徑",
+      "faceImagePath": "人臉特寫路徑",
+      "galleryImagePath": "底庫圖片路徑",
+      "alarmType": "告警類型",
+      "score": "告警得分",
+      "cropPath": "特寫摳圖路徑",
+      "extra": "擴展資訊",
+      "targetType": "目標類型",
+      "confidenceScore": "置信度得分",
+      "attributes": "屬性資訊",
+      "yes": "是",
+      "no": "否"
+    }
   }
 }

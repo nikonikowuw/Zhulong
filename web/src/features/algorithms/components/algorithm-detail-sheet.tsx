@@ -15,6 +15,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { copyToClipboard } from '@/lib/clipboard'
+import { getIntlLocale } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -41,7 +42,7 @@ interface AlgorithmDetailSheetProps {
 const formatDateTime = (dateStr?: string): string => {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
-  return isNaN(d.getTime()) ? dateStr : d.toLocaleString()
+  return isNaN(d.getTime()) ? dateStr : d.toLocaleString(getIntlLocale())
 }
 
 export function AlgorithmDetailSheet({

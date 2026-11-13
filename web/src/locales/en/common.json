@@ -1,4 +1,9 @@
 {
+  "app": {
+    "name": "Zhulong Edge",
+    "plan": "Edge Intelligence Host",
+    "metaTitle": "Zhulong · Edge Intelligence Operations Host"
+  },
   "language": "English",
   "languages": {
     "zh-Hans": "简体中文",
@@ -36,6 +41,7 @@
     "Live View": "Live View",
     "Records": "Perception Records",
     "Visual Search": "Visual Search",
+    "E-Map": "Spatial E-Map",
     "Tasks": "Tasks",
     "Apps": "Apps",
     "Chats": "Chats",
@@ -62,6 +68,7 @@
     "Display": "Display",
     "Network": "Network",
     "Time": "Time & Clock",
+    "Storage": "Storage & Lifecycle",
     "System": "System Status",
     "Hardware": "System Status",
     "GB28181": "GB28181 Ingress",
@@ -116,5 +123,129 @@
     "previewTitle": "Typographic Preview",
     "submit": "Save Preferences",
     "saveSuccess": "Appearance preferences updated successfully"
+  },
+  "errors": {
+    "goBack": "Go Back",
+    "backToHome": "Back to Home",
+    "tryAgain": "Try Again",
+    "learnMore": "Learn more",
+    "devTrace": "[Development Mode Error Trace]",
+    "401": {
+      "title": "Unauthorized Access",
+      "description": "Please log in with the appropriate credentials to access this resource."
+    },
+    "403": {
+      "title": "Access Forbidden",
+      "description": "You don't have necessary permission to view this resource."
+    },
+    "404": {
+      "title": "Oops! Page Not Found!",
+      "description": "It seems like the page you're looking for does not exist or might have been removed."
+    },
+    "500": {
+      "title": "Oops! Something went wrong :')",
+      "description": "We apologize for the inconvenience. Please try again later."
+    },
+    "503": {
+      "title": "Website is under maintenance!",
+      "description": "The site is not available at the moment. We'll be back online shortly."
+    }
+  },
+  "components": {
+    "skipToMain": "Skip to Main",
+    "search": {
+      "placeholder": "Search",
+      "toggleNav": "Toggle navigation menu"
+    },
+    "comingSoon": {
+      "title": "Coming Soon!",
+      "description": "This page has not been created yet. Stay tuned though!"
+    },
+    "confirmDialog": {
+      "cancel": "Cancel",
+      "continue": "Continue"
+    },
+    "datePicker": {
+      "placeholder": "Pick a date"
+    },
+    "selectDropdown": {
+      "placeholder": "Select",
+      "loading": "Loading..."
+    },
+    "passwordInput": {
+      "show": "Show password",
+      "hide": "Hide password"
+    },
+    "columnHeader": {
+      "asc": "Asc",
+      "desc": "Desc",
+      "hide": "Hide"
+    },
+    "commandMenu": {
+      "placeholder": "Type a command or search...",
+      "empty": "No results found.",
+      "themeGroup": "Theme"
+    },
+    "themeSwitch": {
+      "toggleAria": "Toggle theme"
+    },
+    "appTitle": {
+      "toggleSidebar": "Toggle Sidebar"
+    },
+    "teamSwitcher": {
+      "teams": "Teams",
+      "addTeam": "Add team"
+    },
+    "configDrawer": {
+      "openAria": "Open theme settings",
+      "title": "Theme Settings",
+      "description": "Adjust the appearance and layout to suit your preferences.",
+      "resetAll": "Reset",
+      "resetAllAria": "Reset all settings to default values",
+      "selectOption": "Select {{label}}",
+      "optionPreview": "{{label}} option preview",
+      "theme": {
+        "title": "Theme",
+        "resetAria": "Reset theme preference to default",
+        "selectAria": "Select theme preference",
+        "srDesc": "Choose between system preference, light mode, or dark mode",
+        "system": "System",
+        "light": "Light",
+        "dark": "Dark"
+      },
+      "sidebar": {
+        "title": "Sidebar",
+        "resetAria": "Reset sidebar style to default",
+        "selectAria": "Select sidebar style",
+        "srDesc": "Choose between inset, floating, or standard sidebar layout",
+        "inset": "Inset",
+        "floating": "Floating",
+        "sidebar": "Sidebar"
+      },
+      "layout": {
+        "title": "Layout",
+        "resetAria": "Reset layout options to default",
+        "selectAria": "Select layout style",
+        "srDesc": "Choose between default expanded, compact icon-only, or full layout mode",
+        "default": "Default",
+        "compact": "Compact",
+        "full": "Full layout"
+      },
+      "direction": {
+        "title": "Direction",
+        "resetAria": "Reset text direction to default",
+        "selectAria": "Select site direction",
+        "srDesc": "Choose between left-to-right or right-to-left site direction",
+        "ltr": "Left to Right",
+        "rtl": "Right to Left"
+      }
+    }
+  },
+  "serverError": {
+    "generic": "Something went wrong!",
+    "noContent": "No content.",
+    "notModified": "Content not modified!",
+    "sessionExpired": "Session expired, please sign in again.",
+    "internalError": "Internal Server Error!"
   }
 }

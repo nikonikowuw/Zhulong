@@ -15,8 +15,7 @@ import { installGlobalErrorHandlers, log } from '@/lib/logger'
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
 import { ThemeProvider } from './context/theme-provider'
-// i18n
-import './lib/i18n'
+import i18n from './lib/i18n'
 // Generated Routes
 import { routeTree } from './routeTree.gen'
 // Styles
@@ -64,7 +63,7 @@ const queryClient = new QueryClient({
     onError: (error) => {
       if (error instanceof AxiosError) {
         if (error.response?.status === 401) {
-          toast.error('会话已失效，请重新登录')
+          toast.error(i18n.t('serverError.sessionExpired'))
           useAuthStore.getState().auth.reset()
           const currentPath = router.history.location.pathname
           const isRoot = currentPath === '/' || currentPath === ''
@@ -74,7 +73,7 @@ const queryClient = new QueryClient({
           })
         }
         if (error.response?.status === 500) {
-          toast.error('Internal Server Error!')
+          toast.error(i18n.t('serverError.internalError'))
           // Only navigate to error page in production to avoid disrupting HMR in development
           if (import.meta.env.PROD) {
             router.navigate({ to: '/500' })

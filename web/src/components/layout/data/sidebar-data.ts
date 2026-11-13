@@ -26,7 +26,7 @@ export const sidebarData: SidebarData = {
     {
       name: 'Zhulong Edge',
       logo: ZhulongLogo,
-      plan: '边缘智能宿主',
+      plan: 'app.plan',
     },
   ],
   navGroups: [

@@ -126,5 +126,6 @@
   "previousVersionLabel": "上一稳定版本",
   "nonePreviousVersion": "无（首发版本）",
   "viewDetails": "查看详情",
-  "openTrialFromDetail": "前往效果试跑"
+  "openTrialFromDetail": "前往效果试跑",
+  "stepSuffix": " (步长 {{step}})"
 }

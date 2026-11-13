@@ -34,6 +34,7 @@
     "media_directory": "Media Root Directory Path",
     "media_directory_desc": "Root path for video streams, snapshots, and exports. When changed, new recordings write to the new location while historical recordings remain playable.",
     "btn_test_path": "Test Path",
+    "testing_path": "Testing path permissions...",
     "empty_path": "Please specify a directory path first",
     "test_success": "Path validation passed with full read/write capabilities!",
     "test_failed": "Directory does not exist or lacks write permissions",

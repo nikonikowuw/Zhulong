@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { ChevronsUpDown, Plus } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,9 +27,12 @@ type TeamSwitcherProps = {
 
 export function TeamSwitcher({ teams }: TeamSwitcherProps) {
   const { isMobile } = useSidebar()
+  const { t } = useTranslation()
   const [activeTeam, setActiveTeam] = React.useState(teams[0])
 
   if (!activeTeam) return null
+
+  const activePlan = t(activeTeam.plan, { defaultValue: activeTeam.plan })
 
   if (teams.length <= 1) {
     return (
@@ -44,7 +48,7 @@ export function TeamSwitcher({ teams }: TeamSwitcherProps) {
             <div className='grid flex-1 text-start text-sm leading-tight'>
               <span className='truncate font-semibold'>{activeTeam.name}</span>
               <span className='truncate text-xs text-muted-foreground'>
-                {activeTeam.plan}
+                {activePlan}
               </span>
             </div>
           </SidebarMenuButton>
@@ -69,7 +73,7 @@ export function TeamSwitcher({ teams }: TeamSwitcherProps) {
                 <span className='truncate font-semibold'>
                   {activeTeam.name}
                 </span>
-                <span className='truncate text-xs'>{activeTeam.plan}</span>
+                <span className='truncate text-xs'>{activePlan}</span>
               </div>
               <ChevronsUpDown className='ms-auto' />
             </SidebarMenuButton>
@@ -81,7 +85,7 @@ export function TeamSwitcher({ teams }: TeamSwitcherProps) {
             sideOffset={4}
           >
             <DropdownMenuLabel className='text-xs text-muted-foreground'>
-              Teams
+              {t('components.teamSwitcher.teams')}
             </DropdownMenuLabel>
             {teams.map((team, index) => (
               <DropdownMenuItem
@@ -101,7 +105,9 @@ export function TeamSwitcher({ teams }: TeamSwitcherProps) {
               <div className='flex size-6 items-center justify-center rounded-md border bg-background'>
                 <Plus className='size-4' />
               </div>
-              <div className='font-medium text-muted-foreground'>Add team</div>
+              <div className='font-medium text-muted-foreground'>
+                {t('components.teamSwitcher.addTeam')}
+              </div>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

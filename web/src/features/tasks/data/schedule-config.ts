@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import i18n from '@/lib/i18n'
 
 export const MINUTES_PER_DAY = 1440
 export const MINUTES_PER_WEEK = 7 * MINUTES_PER_DAY
@@ -455,7 +456,7 @@ export function calculatePeakCompute(items: SchedulableItem[]): number {
 export function formatDuration(
   start: string,
   end: string,
-  crossDayLabel = '跨天'
+  crossDayLabel = i18n.t('tasks:schedule.crossDay')
 ): string {
   const s = timeStringToMinutes(start)
   const e = timeStringToMinutes(end)

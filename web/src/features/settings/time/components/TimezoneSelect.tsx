@@ -33,7 +33,7 @@ export function TimezoneSelect({
           <SelectLabel>{t('timezone.groupAsia')}</SelectLabel>
           {POPULAR_TIMEZONES.slice(0, 7).map((tz) => (
             <SelectItem key={tz.value} value={tz.value}>
-              {tz.label}
+              {t(`timezone.items.${tz.value}`, { defaultValue: tz.label })}
             </SelectItem>
           ))}
         </SelectGroup>
@@ -41,7 +41,7 @@ export function TimezoneSelect({
           <SelectLabel>{t('timezone.groupIntl')}</SelectLabel>
           {POPULAR_TIMEZONES.slice(7).map((tz) => (
             <SelectItem key={tz.value} value={tz.value}>
-              {tz.label}
+              {t(`timezone.items.${tz.value}`, { defaultValue: tz.label })}
             </SelectItem>
           ))}
         </SelectGroup>

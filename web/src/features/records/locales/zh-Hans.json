@@ -217,6 +217,36 @@
     "emptySelection": "尚未勾选任何记录",
     "hardCapHint": "取消限额时仍受单次 {{limit}} 张上限保护",
     "progressLabel": "导出进度",
-    "resumeHint": "续传沿用上次任务的报表与图片清单，当前筛选条件不参与"
+    "resumeHint": "续传沿用上次任务的报表与图片清单，当前筛选条件不参与",
+    "csv": {
+      "id": "ID",
+      "capturedAtLocal": "抓拍时间 (本地)",
+      "capturedAtUtc": "抓拍时间 (UTC ISO8601)",
+      "cameraName": "摄像机名称",
+      "cameraId": "摄像机 ID",
+      "algorithmName": "算法名称",
+      "algorithmVersion": "算法版本",
+      "matched": "是否命中",
+      "similarity": "比对相似度",
+      "personName": "人员姓名",
+      "externalPersonId": "外部人员 ID",
+      "internalPersonId": "内部人员 ID",
+      "trackId": "跟踪 ID",
+      "pts": "PTS 帧时间戳",
+      "boundingBox": "目标框",
+      "bodyBox": "人体框",
+      "imagePath": "全景大图路径",
+      "faceImagePath": "人脸特写路径",
+      "galleryImagePath": "底库图片路径",
+      "alarmType": "告警类型",
+      "score": "告警得分",
+      "cropPath": "特写抠图路径",
+      "extra": "扩展信息",
+      "targetType": "目标类型",
+      "confidenceScore": "置信度得分",
+      "attributes": "属性信息",
+      "yes": "是",
+      "no": "否"
+    }
   }
 }

@@ -313,5 +313,14 @@
       "saturday": "Sat",
       "sunday": "Sun"
     }
+  },
+  "validation": {
+    "cameraRequired": "Please select a camera",
+    "algorithmRequired": "Please select an algorithm package",
+    "fpsMin": "Sample FPS must be at least 1",
+    "fpsMax": "Recommended sample FPS should not exceed 30 FPS",
+    "invalidJson": "Configuration parameters must be valid JSON",
+    "rectMinSide": "Minimum rectangle side length must be at least 0.01 and x1 < x2, y1 < y2",
+    "cropMinSide": "Minimum crop window side length must be at least 0.02"
   }
 }

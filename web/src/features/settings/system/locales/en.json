@@ -71,7 +71,13 @@
     "thermalHot": "Hot",
     "tagRoot": "ROOT",
     "tagData": "DATA",
-    "tagExternal": "EXTERNAL"
+    "tagExternal": "EXTERNAL",
+    "storageSummary": "{{count}} mount(s)",
+    "storageEmpty": "No filesystem mounts found",
+    "networkSummary": "{{upCount}} up / {{total}} interface(s)",
+    "networkEmpty": "No network interfaces found",
+    "thermalCount": "{{count}} sensor(s)",
+    "thermalEmpty": "No thermal sensors detected"
   },
   "identity": {
     "title": "Device Identity",

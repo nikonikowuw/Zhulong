@@ -1,4 +1,5 @@
 import { formatLocalDateTime, toCsv } from '@/lib/csv'
+import i18n from '@/lib/i18n'
 import { cameraLabel, type CameraNameLookup } from '../data/camera-label'
 import {
   type Alarm,
@@ -38,10 +39,13 @@ function timeCells(isoStr?: string): [string, string] {
   return [formatLocalTime(isoStr), formatUtcTime(isoStr)]
 }
 
-const TIME_HEADERS = [
-  '抓拍时间 (Captured At, Local)',
-  '抓拍时间 (Captured At, UTC ISO8601)',
-]
+function csvHeader(key: string): string {
+  return i18n.t(`records:export.csv.${key}`)
+}
+
+function timeHeaders(): [string, string] {
+  return [csvHeader('capturedAtLocal'), csvHeader('capturedAtUtc')]
+}
 
 /**
  * 导出识别记录 CSV
@@ -51,24 +55,24 @@ export function exportRecognitionsCsv(
   resolveCameraName?: CameraNameResolver
 ): string {
   const headers = [
-    'ID',
-    ...TIME_HEADERS,
-    '摄像机名称 (Camera Name)',
-    '摄像机 ID (Camera ID)',
-    '算法名称 (Algorithm Name)',
-    '算法版本 (Algorithm Version)',
-    '是否命中 (Matched)',
-    '比对相似度 (Similarity)',
-    '人员姓名 (Person Name)',
-    '外部人员 ID (External Person ID)',
-    '内部人员 ID (Internal Person ID)',
-    '跟踪 ID (Track ID)',
-    'PTS 帧时间戳',
-    '目标框 (Bounding Box)',
-    '人体框 (Body Box)',
-    '全景大图路径 (Image Path)',
-    '人脸特写路径 (Face Image Path)',
-    '底库图片路径 (Gallery Image Path)',
+    csvHeader('id'),
+    ...timeHeaders(),
+    csvHeader('cameraName'),
+    csvHeader('cameraId'),
+    csvHeader('algorithmName'),
+    csvHeader('algorithmVersion'),
+    csvHeader('matched'),
+    csvHeader('similarity'),
+    csvHeader('personName'),
+    csvHeader('externalPersonId'),
+    csvHeader('internalPersonId'),
+    csvHeader('trackId'),
+    csvHeader('pts'),
+    csvHeader('boundingBox'),
+    csvHeader('bodyBox'),
+    csvHeader('imagePath'),
+    csvHeader('faceImagePath'),
+    csvHeader('galleryImagePath'),
   ]
 
   const rows = items.map((r) => [
@@ -78,7 +82,7 @@ export function exportRecognitionsCsv(
     r.cameraId,
     r.algorithmName || r.algorithmId || '',
     r.algorithmVersion || '',
-    r.matched ? '是' : '否',
+    r.matched ? csvHeader('yes') : csvHeader('no'),
     r.similarity != null ? Number(r.similarity).toFixed(4) : '',
     r.personName || '',
     r.personExternalId || '',
@@ -103,19 +107,19 @@ export function exportAlarmsCsv(
   resolveCameraName?: CameraNameResolver
 ): string {
   const headers = [
-    'ID',
-    ...TIME_HEADERS,
-    '摄像机名称 (Camera Name)',
-    '摄像机 ID (Camera ID)',
-    '算法名称 (Algorithm Name)',
-    '算法版本 (Algorithm Version)',
-    '告警类型 (Alarm Type)',
-    '告警得分 (Score)',
-    'PTS 帧时间戳',
-    '目标框 (Bounding Box)',
-    '全景大图路径 (Image Path)',
-    '特写抠图路径 (Crop Path)',
-    '扩展信息 (Extra)',
+    csvHeader('id'),
+    ...timeHeaders(),
+    csvHeader('cameraName'),
+    csvHeader('cameraId'),
+    csvHeader('algorithmName'),
+    csvHeader('algorithmVersion'),
+    csvHeader('alarmType'),
+    csvHeader('score'),
+    csvHeader('pts'),
+    csvHeader('boundingBox'),
+    csvHeader('imagePath'),
+    csvHeader('cropPath'),
+    csvHeader('extra'),
   ]
 
   const rows = items.map((a) => [
@@ -145,20 +149,20 @@ export function exportCapturesCsv(
   resolveCameraName?: CameraNameResolver
 ): string {
   const headers = [
-    'ID',
-    ...TIME_HEADERS,
-    '摄像机名称 (Camera Name)',
-    '摄像机 ID (Camera ID)',
-    '算法名称 (Algorithm Name)',
-    '算法版本 (Algorithm Version)',
-    '目标类型 (Target Type)',
-    '置信度得分 (Score)',
-    '跟踪 ID (Track ID)',
-    'PTS 帧时间戳',
-    '目标框 (Bounding Box)',
-    '全景大图路径 (Image Path)',
-    '特写抠图路径 (Crop Path)',
-    '属性信息 (Attributes)',
+    csvHeader('id'),
+    ...timeHeaders(),
+    csvHeader('cameraName'),
+    csvHeader('cameraId'),
+    csvHeader('algorithmName'),
+    csvHeader('algorithmVersion'),
+    csvHeader('targetType'),
+    csvHeader('confidenceScore'),
+    csvHeader('trackId'),
+    csvHeader('pts'),
+    csvHeader('boundingBox'),
+    csvHeader('imagePath'),
+    csvHeader('cropPath'),
+    csvHeader('attributes'),
   ]
 
   const rows = items.map((c) => [

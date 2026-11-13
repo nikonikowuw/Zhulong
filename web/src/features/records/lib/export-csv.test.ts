@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { UTF8_BOM } from '@/lib/csv'
+import i18n from '@/lib/i18n'
 import { type Alarm, type Capture, type Recognition } from '../data/schema'
 import {
   exportAlarmsCsv,
@@ -60,10 +61,22 @@ describe('export-csv', () => {
       const pad = (n: number) => String(n).padStart(2, '0')
       const expectedLocal = `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`
 
-      expect(csv).toContain('Captured At, Local')
-      expect(csv).toContain('UTC ISO8601')
+      expect(csv).toContain(i18n.t('records:export.csv.capturedAtLocal'))
+      expect(csv).toContain(i18n.t('records:export.csv.capturedAtUtc'))
       expect(csv).toContain(capturedAt)
       expect(csv).toContain(expectedLocal)
+    })
+
+    it('localizes CSV headers and boolean values when switching language', async () => {
+      await i18n.changeLanguage('en')
+      const enCsv = exportRecognitionsCsv([mockRecognition])
+      expect(enCsv).toContain('Captured At (Local)')
+      expect(enCsv).toContain(',Yes,')
+
+      await i18n.changeLanguage('zh-Hant')
+      const hantCsv = exportRecognitionsCsv([mockRecognition])
+      expect(hantCsv).toContain('抓拍時間 (本地)')
+      expect(hantCsv).toContain(',是,')
     })
   })
 
@@ -141,7 +154,7 @@ describe('export-csv', () => {
           createdAt: '',
         },
       ])
-      expect(csv).toContain('Target Type')
+      expect(csv).toContain(i18n.t('records:export.csv.targetType'))
     })
   })
 })

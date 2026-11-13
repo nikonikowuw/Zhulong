@@ -1,3 +1,4 @@
+import i18n from '@/lib/i18n'
 import { getCameraStreamWsUrl } from '../api/live-camera-api'
 import {
   type ManagedStream,
@@ -209,7 +210,7 @@ export class StreamConnectionPool {
       }
 
       ws.onerror = () => {
-        this.updateStatus(stream, 'error', '网络连接发生异常')
+        this.updateStatus(stream, 'error', i18n.t('live:stream.networkError'))
       }
 
       ws.onclose = () => {
@@ -221,7 +222,7 @@ export class StreamConnectionPool {
         }
       }
     } catch {
-      this.updateStatus(stream, 'error', 'WebSocket 实例创建失败')
+      this.updateStatus(stream, 'error', i18n.t('live:stream.wsCreateFailed'))
       this.scheduleReconnect(stream)
     }
   }
@@ -241,8 +242,12 @@ export class StreamConnectionPool {
     // 永不放弃：只在文案上区分「还在正常重试」与「已经重试很多次了」
     const message =
       stream.reconnectAttempts > this.reconnectNoticeAfter
-        ? `持续重连中（第 ${stream.reconnectAttempts} 次），请检查设备与网络`
-        : `连接已断开，正在重连（第 ${stream.reconnectAttempts} 次）...`
+        ? i18n.t('live:stream.reconnectingNotice', {
+            attempt: stream.reconnectAttempts,
+          })
+        : i18n.t('live:stream.reconnecting', {
+            attempt: stream.reconnectAttempts,
+          })
 
     this.updateStatus(stream, 'reconnecting', message)
 

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import i18n from '@/lib/i18n'
 
 /**
  * 字段 Schema 原始属性定义
@@ -103,7 +104,9 @@ export function parseConfigSchema(
     let range: string | undefined
     if (data.minimum !== undefined && data.maximum !== undefined) {
       range = `${data.minimum} ~ ${data.maximum}`
-      if (data.step !== undefined) range += ` (步长 ${data.step})`
+      if (data.step !== undefined) {
+        range += i18n.t('algorithms:stepSuffix', { step: data.step })
+      }
     } else if (data.minimum !== undefined) {
       range = `≥ ${data.minimum}`
     } else if (data.maximum !== undefined) {

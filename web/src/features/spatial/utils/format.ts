@@ -1,3 +1,4 @@
+import { getIntlLocale } from '@/lib/i18n'
 import { type TimeRangePreset } from '../data/schema'
 
 /**
@@ -13,7 +14,7 @@ export function formatClock(value?: string): string {
   if (Number.isNaN(parsed.getTime())) {
     return ''
   }
-  return parsed.toLocaleTimeString([], {
+  return parsed.toLocaleTimeString(getIntlLocale(), {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',

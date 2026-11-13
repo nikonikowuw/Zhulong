@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { type CategoryHue } from '@/lib/category-palette'
+import i18n from '@/lib/i18n'
 
 /**
  * 矩形契约：[x1, y1, x2, y2]，严格归一化坐标 ∈ [0.0, 1.0]
@@ -14,7 +15,7 @@ export const rectSchema = z
   .refine(
     ([x1, y1, x2, y2]) => x2 - x1 >= 0.01 - 1e-9 && y2 - y1 >= 0.01 - 1e-9,
     {
-      message: '矩形最小边长不得小于 0.01 且 x1 < x2, y1 < y2',
+      error: () => i18n.t('tasks:validation.rectMinSide'),
     }
   )
 
@@ -44,7 +45,7 @@ export const FULL_FRAME_CROP: Rect = [0, 0, 1, 1]
 export const cropRectSchema = rectSchema.refine(
   ([x1, y1, x2, y2]) =>
     x2 - x1 >= MIN_CROP_SIDE - 1e-9 && y2 - y1 >= MIN_CROP_SIDE - 1e-9,
-  { message: '裁剪窗口最小边长不得小于 0.02' }
+  { error: () => i18n.t('tasks:validation.cropMinSide') }
 )
 
 /** 比较两个窗口是否等价（整帧与 null 视为等价）。 */

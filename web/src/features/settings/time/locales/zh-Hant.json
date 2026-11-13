@@ -14,7 +14,9 @@
     "stateUnsynced": "未同步",
     "rtcNormal": "RTC 就緒",
     "rtcMissing": "未偵測到 RTC",
-    "rtcError": "RTC 異常"
+    "rtcError": "RTC 異常",
+    "source": "來源",
+    "offset": "偏差"
   },
   "form": {
     "mode": {
@@ -44,6 +46,7 @@
     "minServersWarning": "至少保留 1 個 NTP 伺服器",
     "noServersError": "請填寫至少一個有效的 NTP 伺服器地址",
     "saveSuccess": "NTP 對時配置已更新",
+    "syncing": "正在向上游 NTP 伺服器請求高精時間校對...",
     "syncSuccess": "已成功向上游 NTP 伺服器同步時間"
   },
   "manual": {
@@ -56,8 +59,10 @@
     "customTimeLabel": "手動輸入指定日期時間",
     "applyCustomBtn": "應用指定時間",
     "browserSyncSuccess": "已成功將設備時間與當前瀏覽器時間精準對齊並寫入 RTC！",
+    "syncingBrowser": "正在將瀏覽器本地基準寫入設備 RTC...",
     "emptyTimeWarning": "請先選擇需要設定的目標時間",
     "invalidTimeFormat": "時間格式無效",
+    "applyingCustom": "正在寫入指定時間並固化至 RTC...",
     "applySuccess": "手動時鐘設定成功，已固化至板載 RTC"
   },
   "interval": {
@@ -71,7 +76,25 @@
   "timezone": {
     "placeholder": "選擇時區",
     "groupAsia": "亞洲及常用時區",
-    "groupIntl": "國際標準與歐美時區"
+    "groupIntl": "國際標準與歐美時區",
+    "items": {
+      "Asia/Shanghai": "Asia/Shanghai (中國標準時間 UTC+8)",
+      "Asia/Hong_Kong": "Asia/Hong_Kong (香港時間 UTC+8)",
+      "Asia/Taipei": "Asia/Taipei (台北時間 UTC+8)",
+      "Asia/Tokyo": "Asia/Tokyo (日本標準時間 UTC+9)",
+      "Asia/Seoul": "Asia/Seoul (首爾時間 UTC+9)",
+      "Asia/Singapore": "Asia/Singapore (新加坡時間 UTC+8)",
+      "Asia/Bangkok": "Asia/Bangkok (中南半島時間 UTC+7)",
+      "UTC": "UTC (協調世界時 UTC+0)",
+      "Europe/London": "Europe/London (格林威治/倫敦 UTC+0/+1)",
+      "Europe/Berlin": "Europe/Berlin (柏林/中歐時間 UTC+1/+2)",
+      "Europe/Paris": "Europe/Paris (巴黎時間 UTC+1/+2)",
+      "America/New_York": "America/New_York (美東時間 UTC-5/-4)",
+      "America/Chicago": "America/Chicago (美中時間 UTC-6/-5)",
+      "America/Denver": "America/Denver (山地時間 UTC-7/-6)",
+      "America/Los_Angeles": "America/Los_Angeles (太平洋時間 UTC-8/-7)",
+      "Australia/Sydney": "Australia/Sydney (雪梨時間 UTC+10/+11)"
+    }
   },
   "validation": {
     "timezoneRequired": "請選擇時區",

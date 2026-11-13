@@ -1,4 +1,9 @@
 {
+  "app": {
+    "name": "Zhulong Edge",
+    "plan": "邊緣智慧宿主",
+    "metaTitle": "燭龍 · Zhulong | 邊緣智慧維運宿主"
+  },
   "language": "繁體中文",
   "languages": {
     "zh-Hans": "简体中文",
@@ -36,6 +41,7 @@
     "Live View": "即時預覽",
     "Records": "感知記錄",
     "Visual Search": "以圖搜圖",
+    "E-Map": "電子地圖",
     "Tasks": "任務管理",
     "Apps": "應用市場",
     "Chats": "訊息會話",
@@ -62,6 +68,7 @@
     "Display": "顯示設定",
     "Network": "網路配置",
     "Time": "系統對時",
+    "Storage": "儲存與生命週期",
     "System": "系統狀態",
     "Hardware": "系統狀態",
     "GB28181": "GB28181 接入",
@@ -116,5 +123,129 @@
     "previewTitle": "即時排版效果預覽",
     "submit": "儲存外觀偏好",
     "saveSuccess": "外觀偏好設定已更新並生效"
+  },
+  "errors": {
+    "goBack": "返回上一頁",
+    "backToHome": "返回首頁",
+    "tryAgain": "重試",
+    "learnMore": "了解更多",
+    "devTrace": "[開發模式異常堆疊]",
+    "401": {
+      "title": "未授權存取",
+      "description": "請使用有效的憑證登入後再存取該資源。"
+    },
+    "403": {
+      "title": "禁止存取",
+      "description": "您沒有檢視此資源所需的存取權限。"
+    },
+    "404": {
+      "title": "找不到頁面",
+      "description": "您存取的頁面不存在或已被移除。"
+    },
+    "500": {
+      "title": "系統發生異常",
+      "description": "非常抱歉造成不便，請稍後重試。"
+    },
+    "503": {
+      "title": "系統正在維護中",
+      "description": "目前服務暫時無法使用，我們將在維護完成後儘快恢復。"
+    }
+  },
+  "components": {
+    "skipToMain": "跳轉到主要內容",
+    "search": {
+      "placeholder": "搜尋",
+      "toggleNav": "切換導覽選單"
+    },
+    "comingSoon": {
+      "title": "敬請期待",
+      "description": "該頁面尚未建置完成，敬請關注後續版本。"
+    },
+    "confirmDialog": {
+      "cancel": "取消",
+      "continue": "繼續"
+    },
+    "datePicker": {
+      "placeholder": "選擇日期"
+    },
+    "selectDropdown": {
+      "placeholder": "請選擇",
+      "loading": "載入中..."
+    },
+    "passwordInput": {
+      "show": "顯示密碼",
+      "hide": "隱藏密碼"
+    },
+    "columnHeader": {
+      "asc": "升冪",
+      "desc": "降冪",
+      "hide": "隱藏欄位"
+    },
+    "commandMenu": {
+      "placeholder": "輸入指令或搜尋頁面...",
+      "empty": "找不到符合的結果",
+      "themeGroup": "外觀主題"
+    },
+    "themeSwitch": {
+      "toggleAria": "切換主題"
+    },
+    "appTitle": {
+      "toggleSidebar": "切換側邊欄"
+    },
+    "teamSwitcher": {
+      "teams": "工作區",
+      "addTeam": "新建工作區"
+    },
+    "configDrawer": {
+      "openAria": "開啟外觀與版面設定",
+      "title": "外觀與版面設定",
+      "description": "依個人習慣調整介面主題、側邊欄樣式與排版方向。",
+      "resetAll": "恢復預設",
+      "resetAllAria": "將全部設定恢復為預設值",
+      "selectOption": "選擇{{label}}",
+      "optionPreview": "{{label}}選項預覽",
+      "theme": {
+        "title": "主題模式",
+        "resetAria": "重設主題偏好為預設值",
+        "selectAria": "選擇主題模式",
+        "srDesc": "在跟隨系統、淺色模式或深色模式之間切換",
+        "system": "跟隨系統",
+        "light": "淺色",
+        "dark": "深色"
+      },
+      "sidebar": {
+        "title": "側邊欄樣式",
+        "resetAria": "重設側邊欄樣式為預設值",
+        "selectAria": "選擇側邊欄樣式",
+        "srDesc": "在內嵌、懸浮或標準側邊欄樣式之間切換",
+        "inset": "內嵌",
+        "floating": "懸浮",
+        "sidebar": "標準"
+      },
+      "layout": {
+        "title": "版面模式",
+        "resetAria": "重設版面選項為預設值",
+        "selectAria": "選擇版面模式",
+        "srDesc": "在預設展開、圖示摺疊或全寬版面之間切換",
+        "default": "預設展開",
+        "compact": "精簡圖示",
+        "full": "全寬隱藏"
+      },
+      "direction": {
+        "title": "文字方向",
+        "resetAria": "重設文字方向為預設值",
+        "selectAria": "選擇頁面排版方向",
+        "srDesc": "在由左至右或由右至左的排版方向之間切換",
+        "ltr": "由左至右 (LTR)",
+        "rtl": "由右至左 (RTL)"
+      }
+    }
+  },
+  "serverError": {
+    "generic": "請求處理失敗，請稍後重試",
+    "noContent": "無回傳內容",
+    "notModified": "內容未變更",
+    "sessionExpired": "工作階段已失效，請重新登入",
+    "internalError": "伺服器內部錯誤"
   }
 }

@@ -1,4 +1,9 @@
 {
+  "app": {
+    "name": "Zhulong Edge",
+    "plan": "边缘智能宿主",
+    "metaTitle": "烛龙 · Zhulong | 边缘智能运维宿主"
+  },
   "language": "简体中文",
   "languages": {
     "zh-Hans": "简体中文",
@@ -36,6 +41,7 @@
     "Live View": "实时预览",
     "Records": "感知记录",
     "Visual Search": "以图搜图",
+    "E-Map": "电子地图",
     "Tasks": "任务管理",
     "Apps": "应用市场",
     "Chats": "消息会话",
@@ -62,6 +68,7 @@
     "Display": "显示设置",
     "Network": "网络配置",
     "Time": "系统对时",
+    "Storage": "存储与生命周期",
     "System": "系统状态",
     "Hardware": "系统状态",
     "GB28181": "GB28181 接入",
@@ -116,5 +123,129 @@
     "previewTitle": "即时排版效果预览",
     "submit": "保存外观偏好",
     "saveSuccess": "外观偏好设置已更新并生效"
+  },
+  "errors": {
+    "goBack": "返回上一页",
+    "backToHome": "返回首页",
+    "tryAgain": "重试",
+    "learnMore": "了解更多",
+    "devTrace": "[开发模式异常堆栈]",
+    "401": {
+      "title": "未授权访问",
+      "description": "请使用有效的凭据登录后再访问该资源。"
+    },
+    "403": {
+      "title": "禁止访问",
+      "description": "您没有查看此资源所需的访问权限。"
+    },
+    "404": {
+      "title": "页面未找到",
+      "description": "您访问的页面不存在或已被移除。"
+    },
+    "500": {
+      "title": "系统发生异常",
+      "description": "非常抱歉带来不便，请稍后重试。"
+    },
+    "503": {
+      "title": "系统正在维护中",
+      "description": "当前服务暂不可用，我们将在维护完成后尽快恢复。"
+    }
+  },
+  "components": {
+    "skipToMain": "跳转到主要内容",
+    "search": {
+      "placeholder": "搜索",
+      "toggleNav": "切换导航菜单"
+    },
+    "comingSoon": {
+      "title": "敬请期待",
+      "description": "该页面尚未建设完成，敬请关注后续版本。"
+    },
+    "confirmDialog": {
+      "cancel": "取消",
+      "continue": "继续"
+    },
+    "datePicker": {
+      "placeholder": "选择日期"
+    },
+    "selectDropdown": {
+      "placeholder": "请选择",
+      "loading": "加载中..."
+    },
+    "passwordInput": {
+      "show": "显示密码",
+      "hide": "隐藏密码"
+    },
+    "columnHeader": {
+      "asc": "升序",
+      "desc": "降序",
+      "hide": "隐藏列"
+    },
+    "commandMenu": {
+      "placeholder": "输入命令或搜索页面...",
+      "empty": "未找到匹配结果",
+      "themeGroup": "外观主题"
+    },
+    "themeSwitch": {
+      "toggleAria": "切换主题"
+    },
+    "appTitle": {
+      "toggleSidebar": "切换侧边栏"
+    },
+    "teamSwitcher": {
+      "teams": "工作区",
+      "addTeam": "新建工作区"
+    },
+    "configDrawer": {
+      "openAria": "打开外观与布局设置",
+      "title": "外观与布局设置",
+      "description": "按个人习惯调整界面主题、侧边栏形态与排版方向。",
+      "resetAll": "恢复默认",
+      "resetAllAria": "将全部设置恢复为默认值",
+      "selectOption": "选择{{label}}",
+      "optionPreview": "{{label}}选项预览",
+      "theme": {
+        "title": "主题模式",
+        "resetAria": "重置主题偏好为默认值",
+        "selectAria": "选择主题模式",
+        "srDesc": "在跟随系统、浅色模式或深色模式之间切换",
+        "system": "跟随系统",
+        "light": "浅色",
+        "dark": "深色"
+      },
+      "sidebar": {
+        "title": "侧边栏样式",
+        "resetAria": "重置侧边栏样式为默认值",
+        "selectAria": "选择侧边栏样式",
+        "srDesc": "在内嵌、悬浮或标准侧边栏样式之间切换",
+        "inset": "内嵌",
+        "floating": "悬浮",
+        "sidebar": "标准"
+      },
+      "layout": {
+        "title": "布局模式",
+        "resetAria": "重置布局选项为默认值",
+        "selectAria": "选择布局模式",
+        "srDesc": "在默认展开、图标折叠或全宽布局之间切换",
+        "default": "默认展开",
+        "compact": "紧凑图标",
+        "full": "全宽隐藏"
+      },
+      "direction": {
+        "title": "文字方向",
+        "resetAria": "重置文字方向为默认值",
+        "selectAria": "选择页面排版方向",
+        "srDesc": "在从左到右或从右到左的排版方向之间切换",
+        "ltr": "从左到右 (LTR)",
+        "rtl": "从右到左 (RTL)"
+      }
+    }
+  },
+  "serverError": {
+    "generic": "请求处理失败，请稍后重试",
+    "noContent": "无返回内容",
+    "notModified": "内容未变更",
+    "sessionExpired": "会话已失效，请重新登录",
+    "internalError": "服务器内部错误"
   }
 }

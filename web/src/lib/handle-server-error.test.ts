@@ -1,6 +1,7 @@
 import { AxiosError } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleServerError } from './handle-server-error'
+import i18n from './i18n'
 import { __testing } from './logger'
 
 const toastError = vi.hoisted(() => vi.fn())
@@ -11,7 +12,8 @@ vi.mock('sonner', () => ({
   },
 }))
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage('en')
   vi.mocked(toastError).mockClear()
 })
 
@@ -104,6 +106,19 @@ describe('handleServerError', () => {
     expect(entry.fields).toEqual({ status: 503, code: 'SERVICE_UNAVAILABLE' })
     expect(JSON.stringify(entry)).not.toContain('internal detail here')
     __testing.reset()
+  })
+
+  it('uses localized messages when language is zh-Hans', async () => {
+    await i18n.changeLanguage('zh-Hans')
+    handleServerError(new Error('network'))
+    expect(toastError).toHaveBeenCalledWith('请求处理失败，请稍后重试', {
+      id: '请求处理失败，请稍后重试',
+    })
+
+    handleServerError({ status: 204 })
+    expect(toastError).toHaveBeenCalledWith('无返回内容', {
+      id: '无返回内容',
+    })
   })
 
   it('does not queue anything in development', () => {

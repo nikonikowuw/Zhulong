@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import i18n from '@/lib/i18n'
 import { type Algorithm } from '@/features/algorithms/contract'
 import { type Camera } from '@/features/cameras/contract'
 import { cropRectSchema, type RegionConfig } from './region-config'
@@ -49,13 +50,17 @@ export type TaskListResponse = z.infer<typeof taskListResponseSchema>
  * 单任务创建/更新表单契约
  */
 export const taskFormSchema = z.object({
-  cameraId: z.string().min(1, '请选择关联摄像头'),
-  algorithmId: z.string().min(1, '请选择绑定算法包'),
+  cameraId: z.string().min(1, {
+    error: () => i18n.t('tasks:validation.cameraRequired'),
+  }),
+  algorithmId: z.string().min(1, {
+    error: () => i18n.t('tasks:validation.algorithmRequired'),
+  }),
   sampleFps: z
     .number()
     .int()
-    .min(1, '采样帧率最小为 1')
-    .max(30, '建议采样帧率不超过 30 FPS')
+    .min(1, { error: () => i18n.t('tasks:validation.fpsMin') })
+    .max(30, { error: () => i18n.t('tasks:validation.fpsMax') })
     .default(5),
   enabled: z.boolean().default(true),
   configJson: z
@@ -70,7 +75,7 @@ export const taskFormSchema = z.object({
           return false
         }
       },
-      { message: '配置参数必须是合法的 JSON 格式' }
+      { error: () => i18n.t('tasks:validation.invalidJson') }
     )
     .default('{}'),
 })

@@ -62,7 +62,10 @@ export function StorageTable({ storage }: StorageTableProps) {
             variant='outline'
             className='h-5 shrink-0 border-border/60 bg-muted/30 px-1.5 py-0 font-mono text-[10px] text-muted-foreground'
           >
-            {storage.length} 个挂载卷
+            {t('details.storageSummary', {
+              count: storage.length,
+              defaultValue: `${storage.length} 个挂载卷`,
+            })}
           </Badge>
         )}
       </CardHeader>
@@ -102,7 +105,9 @@ export function StorageTable({ storage }: StorageTableProps) {
                     colSpan={7}
                     className='py-8 text-center text-xs text-muted-foreground'
                   >
-                    暂无挂载卷信息
+                    {t('details.storageEmpty', {
+                      defaultValue: '暂无挂载卷信息',
+                    })}
                   </TableCell>
                 </TableRow>
               ) : (

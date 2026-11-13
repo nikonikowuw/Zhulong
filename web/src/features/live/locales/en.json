@@ -68,7 +68,15 @@
     "unsupportedBrowserDesc": "Please use a modern Chromium / Safari browser in localhost or a secure HTTPS context.",
     "streamUnavailable": "Unable to connect to the video stream",
     "retry": "Reconnect",
-    "noCamera": "No camera selected"
+    "noCamera": "No camera selected",
+    "decodeError": "WebCodecs decoding error",
+    "captureFailed": "Failed to capture video frame"
+  },
+  "stream": {
+    "networkError": "Network connection error",
+    "wsCreateFailed": "Failed to create WebSocket connection",
+    "reconnecting": "Connection lost, reconnecting (attempt {{attempt}})...",
+    "reconnectingNotice": "Still reconnecting (attempt {{attempt}}), please check device and network"
   },
   "targetHost": "Target host",
   "resolution": "Resolution"

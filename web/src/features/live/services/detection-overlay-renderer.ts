@@ -1,3 +1,4 @@
+import i18n from '@/lib/i18n'
 import { type DetectionItem } from '../types/ai-result'
 
 export interface DrawDetectionOverlayOptions {
@@ -19,7 +20,7 @@ export function drawDetectionOverlay({
   width,
   height,
   detections,
-  fallbackLabel = '目标',
+  fallbackLabel = i18n.t('live:detectionLabel'),
   clear = true,
 }: DrawDetectionOverlayOptions): void {
   if (clear) {

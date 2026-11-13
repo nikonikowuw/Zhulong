@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, type RenderResult } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import { getCookie, setCookie } from '@/lib/cookies'
+import i18n from '@/lib/i18n'
 import { DirectionProvider } from '@/context/direction-provider'
 import { LayoutProvider } from '@/context/layout-provider'
 import { ThemeProvider } from '@/context/theme-provider'
@@ -37,13 +38,37 @@ async function openDrawer(screen: RenderResult) {
 }
 
 describe('ConfigDrawer (integration)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
     vi.clearAllMocks()
 
     clearCookies()
 
     document.documentElement.classList.remove('light', 'dark')
     document.documentElement.removeAttribute('dir')
+  })
+
+  it('translates drawer labels for zh-Hans', async () => {
+    await i18n.changeLanguage('zh-Hans')
+    const screen = await renderConfigDrawer()
+
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: i18n.t('components.configDrawer.openAria'),
+      })
+    )
+    const drawer = screen.getByRole('dialog', {
+      name: i18n.t('components.configDrawer.title'),
+    })
+    await expect.element(drawer).toBeInTheDocument()
+    await expect
+      .element(drawer.getByText(i18n.t('components.configDrawer.theme.title')))
+      .toBeInTheDocument()
+    await expect
+      .element(
+        drawer.getByText(i18n.t('components.configDrawer.direction.title'))
+      )
+      .toBeInTheDocument()
   })
 
   it('opens the drawer and renders the sections', async () => {

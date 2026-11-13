@@ -71,7 +71,13 @@
     "thermalHot": "过热",
     "tagRoot": "根分区",
     "tagData": "数据盘",
-    "tagExternal": "外接盘"
+    "tagExternal": "外接盘",
+    "storageSummary": "{{count}} 个挂载卷",
+    "storageEmpty": "暂无挂载卷信息",
+    "networkSummary": "{{upCount}} 在线 / {{total}} 接口",
+    "networkEmpty": "暂无网络接口",
+    "thermalCount": "{{count}} 测温点位",
+    "thermalEmpty": "未检出测温传感器"
   },
   "identity": {
     "title": "设备标识",

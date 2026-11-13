@@ -7,6 +7,7 @@ import {
   useCallback,
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import i18n from '@/lib/i18n'
 import {
   useLiveAudio,
   type LivePlayerAudioStatus,
@@ -236,7 +237,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       onFrameDrawn: handleFrameDrawn,
       onDecodeError: (error: unknown) => {
         onErrorRef.current?.(
-          error instanceof Error ? error.message : 'WebCodecs 解码异常'
+          error instanceof Error ? error.message : t('frame.decodeError')
         )
       },
       onFirstFrame,
@@ -349,7 +350,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
             a.click()
             document.body.removeChild(a)
           } catch {
-            onErrorRef.current?.('画面抓拍截图失败')
+            onErrorRef.current?.(i18n.t('live:frame.captureFailed'))
           }
         },
         setMute: (next: boolean) => {

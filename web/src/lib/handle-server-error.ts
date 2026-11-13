@@ -1,5 +1,6 @@
 import { AxiosError } from 'axios'
 import { toast } from 'sonner'
+import i18n from './i18n'
 import { log } from './logger'
 
 export function handleServerError(error: unknown): void {
@@ -18,7 +19,9 @@ export function handleServerError(error: unknown): void {
     log('error', 'server.error')
   }
 
-  let errMsg = 'Something went wrong!'
+  let errMsg = i18n.t('serverError.generic', {
+    defaultValue: 'Something went wrong!',
+  })
 
   if (
     error &&
@@ -26,12 +29,16 @@ export function handleServerError(error: unknown): void {
     'status' in error &&
     Number(error.status) === 204
   ) {
-    errMsg = 'No content.'
+    errMsg = i18n.t('serverError.noContent', {
+      defaultValue: 'No content.',
+    })
   }
 
   if (error instanceof AxiosError) {
     if (error.response?.status === 304) {
-      errMsg = 'Content not modified!'
+      errMsg = i18n.t('serverError.notModified', {
+        defaultValue: 'Content not modified!',
+      })
     } else {
       const message = error.response?.data?.message
       const title = error.response?.data?.title
@@ -75,11 +82,17 @@ export function errorMessageOf(error: unknown): string {
     if (!error.response && error.message.trim().length > 0) {
       return error.message
     }
-    return 'Something went wrong!'
+    return i18n.t('serverError.generic', {
+      defaultValue: 'Something went wrong!',
+    })
   }
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message
   }
   const raw = String(error)
-  return raw.trim().length > 0 ? raw : 'Something went wrong!'
+  return raw.trim().length > 0
+    ? raw
+    : i18n.t('serverError.generic', {
+        defaultValue: 'Something went wrong!',
+      })
 }

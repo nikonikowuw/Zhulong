@@ -53,14 +53,19 @@ export function ThermalList({ thermals }: ThermalListProps) {
             variant='outline'
             className='h-5 shrink-0 border-border/60 bg-muted/30 px-1.5 py-0 font-mono text-[10px] text-muted-foreground'
           >
-            {thermals.length} 测温点位
+            {t('details.thermalCount', {
+              count: thermals.length,
+              defaultValue: `${thermals.length} 测温点位`,
+            })}
           </Badge>
         )}
       </CardHeader>
       <CardContent className='p-0 pt-3'>
         {thermals.length === 0 ? (
           <div className='py-6 text-center text-xs text-muted-foreground'>
-            未检出测温传感器
+            {t('details.thermalEmpty', {
+              defaultValue: '未检出测温传感器',
+            })}
           </div>
         ) : (
           <div className='grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6'>

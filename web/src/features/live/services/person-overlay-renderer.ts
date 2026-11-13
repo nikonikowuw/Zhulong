@@ -1,4 +1,5 @@
 import { boxesCoincide } from '@/lib/box-geometry'
+import i18n from '@/lib/i18n'
 import { type PersonItem } from '../types/ai-result'
 
 export interface DrawPersonOverlayOptions {
@@ -37,7 +38,7 @@ export function drawPersonOverlay({
   width,
   height,
   persons,
-  personLabel = '人体',
+  personLabel = i18n.t('live:personLabel'),
   clear = true,
 }: DrawPersonOverlayOptions): void {
   if (clear) {

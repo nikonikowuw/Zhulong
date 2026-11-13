@@ -14,7 +14,9 @@
     "stateUnsynced": "Unsynced",
     "rtcNormal": "RTC Ready",
     "rtcMissing": "No RTC Detected",
-    "rtcError": "RTC Error"
+    "rtcError": "RTC Error",
+    "source": "Source",
+    "offset": "Offset"
   },
   "form": {
     "mode": {
@@ -44,6 +46,7 @@
     "minServersWarning": "At least 1 NTP server is required",
     "noServersError": "Please provide at least one valid NTP server",
     "saveSuccess": "NTP time configuration saved successfully",
+    "syncing": "Requesting high-precision sync from upstream NTP server...",
     "syncSuccess": "Successfully synchronized clock with upstream NTP server"
   },
   "manual": {
@@ -56,8 +59,10 @@
     "customTimeLabel": "Manual Date & Time",
     "applyCustomBtn": "Apply Custom Time",
     "browserSyncSuccess": "System time aligned with browser time and committed to hardware RTC!",
+    "syncingBrowser": "Writing browser reference time to device RTC...",
     "emptyTimeWarning": "Please select a target time first",
     "invalidTimeFormat": "Invalid date/time format",
+    "applyingCustom": "Applying custom time and committing to RTC...",
     "applySuccess": "Manual time set successfully and committed to hardware RTC"
   },
   "interval": {
@@ -71,7 +76,25 @@
   "timezone": {
     "placeholder": "Select timezone",
     "groupAsia": "Asia & common timezones",
-    "groupIntl": "International & Western timezones"
+    "groupIntl": "International & Western timezones",
+    "items": {
+      "Asia/Shanghai": "Asia/Shanghai (China Standard Time UTC+8)",
+      "Asia/Hong_Kong": "Asia/Hong_Kong (Hong Kong Time UTC+8)",
+      "Asia/Taipei": "Asia/Taipei (Taipei Time UTC+8)",
+      "Asia/Tokyo": "Asia/Tokyo (Japan Standard Time UTC+9)",
+      "Asia/Seoul": "Asia/Seoul (Korea Standard Time UTC+9)",
+      "Asia/Singapore": "Asia/Singapore (Singapore Time UTC+8)",
+      "Asia/Bangkok": "Asia/Bangkok (Indochina Time UTC+7)",
+      "UTC": "UTC (Coordinated Universal Time UTC+0)",
+      "Europe/London": "Europe/London (GMT/London UTC+0/+1)",
+      "Europe/Berlin": "Europe/Berlin (Central European Time UTC+1/+2)",
+      "Europe/Paris": "Europe/Paris (Paris Time UTC+1/+2)",
+      "America/New_York": "America/New_York (Eastern Time UTC-5/-4)",
+      "America/Chicago": "America/Chicago (Central Time UTC-6/-5)",
+      "America/Denver": "America/Denver (Mountain Time UTC-7/-6)",
+      "America/Los_Angeles": "America/Los_Angeles (Pacific Time UTC-8/-7)",
+      "Australia/Sydney": "Australia/Sydney (Sydney Time UTC+10/+11)"
+    }
   },
   "validation": {
     "timezoneRequired": "Please select a timezone",

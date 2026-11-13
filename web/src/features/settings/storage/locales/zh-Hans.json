@@ -34,6 +34,7 @@
     "media_directory": "媒体根目录绝对路径",
     "media_directory_desc": "录像、抓拍与临时导出文件的落盘根路径。若修改路径，新文件立即写入新目录，旧目录历史视频仍可点播并优先淘汰。",
     "btn_test_path": "检测路径",
+    "testing_path": "正在检测路径读写权限...",
     "empty_path": "请先输入目录路径",
     "test_success": "路径检测通过，具备读写权能！",
     "test_failed": "该目录不存在或无写权限",

@@ -68,7 +68,15 @@
     "unsupportedBrowserDesc": "請使用 Chromium / Safari 現代瀏覽器，並在 localhost 或 HTTPS 安全上下文下存取。",
     "streamUnavailable": "視訊串流無法連線",
     "retry": "重試連線",
-    "noCamera": "未指定攝影機"
+    "noCamera": "未指定攝影機",
+    "decodeError": "WebCodecs 解碼異常",
+    "captureFailed": "畫面抓拍截圖失敗"
+  },
+  "stream": {
+    "networkError": "網路連線發生異常",
+    "wsCreateFailed": "WebSocket 執行個體建立失敗",
+    "reconnecting": "連線已中斷，正在重連（第 {{attempt}} 次）...",
+    "reconnectingNotice": "持續重連中（第 {{attempt}} 次），請檢查設備與網路"
   },
   "targetHost": "目標位址",
   "resolution": "解析度"

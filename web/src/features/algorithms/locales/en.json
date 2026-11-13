@@ -126,5 +126,6 @@
   "previousVersionLabel": "Previous Version",
   "nonePreviousVersion": "None (Initial Release)",
   "viewDetails": "View Details",
-  "openTrialFromDetail": "Open Trial"
+  "openTrialFromDetail": "Open Trial",
+  "stepSuffix": " (step {{step}})"
 }

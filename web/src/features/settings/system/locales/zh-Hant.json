@@ -71,7 +71,13 @@
     "thermalHot": "過熱",
     "tagRoot": "根分割區",
     "tagData": "資料碟",
-    "tagExternal": "外接碟"
+    "tagExternal": "外接碟",
+    "storageSummary": "{{count}} 個掛載卷",
+    "storageEmpty": "暫無掛載卷資訊",
+    "networkSummary": "{{upCount}} 線上 / {{total}} 介面",
+    "networkEmpty": "暫無網路介面",
+    "thermalCount": "{{count}} 測溫點位",
+    "thermalEmpty": "未檢出測溫感測器"
   },
   "identity": {
     "title": "裝置標識",

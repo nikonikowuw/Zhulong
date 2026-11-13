@@ -2,6 +2,7 @@ import type { SubmitEvent } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import i18n from '@/lib/i18n'
 import { ConfirmDialog } from './confirm-dialog'
 
 describe('ConfirmDialog', () => {
@@ -23,10 +24,16 @@ describe('ConfirmDialog', () => {
       .element(getByText('This action cannot be undone.'))
       .toBeInTheDocument()
     await expect
-      .element(getByRole('button', { name: 'Cancel' }))
+      .element(
+        getByRole('button', { name: i18n.t('components.confirmDialog.cancel') })
+      )
       .toBeInTheDocument()
     await expect
-      .element(getByRole('button', { name: 'Continue' }))
+      .element(
+        getByRole('button', {
+          name: i18n.t('components.confirmDialog.continue'),
+        })
+      )
       .toBeInTheDocument()
   })
 
@@ -60,7 +67,9 @@ describe('ConfirmDialog', () => {
       />
     )
 
-    const confirm = getByRole('button', { name: 'Continue' })
+    const confirm = getByRole('button', {
+      name: i18n.t('components.confirmDialog.continue'),
+    })
     await expect.element(confirm).toBeDisabled()
     expect(handleConfirm).not.toHaveBeenCalled()
   })
@@ -78,9 +87,17 @@ describe('ConfirmDialog', () => {
       />
     )
 
-    await expect.element(getByRole('button', { name: 'Cancel' })).toBeDisabled()
     await expect
-      .element(getByRole('button', { name: 'Continue' }))
+      .element(
+        getByRole('button', { name: i18n.t('components.confirmDialog.cancel') })
+      )
+      .toBeDisabled()
+    await expect
+      .element(
+        getByRole('button', {
+          name: i18n.t('components.confirmDialog.continue'),
+        })
+      )
       .toBeDisabled()
   })
 

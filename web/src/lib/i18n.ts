@@ -1,6 +1,7 @@
 import commonEn from '@/locales/en/common.json'
 import commonZhHans from '@/locales/zh-Hans/common.json'
 import commonZhHant from '@/locales/zh-Hant/common.json'
+import { type Locale, enUS, zhCN, zhTW } from 'date-fns/locale'
 import i18n from 'i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
 import { initReactI18next } from 'react-i18next'
@@ -158,5 +159,37 @@ void i18n
       },
     },
   })
+
+function syncDocumentLanguage(lng: string) {
+  if (typeof document === 'undefined') return
+  const htmlLang =
+    lng === 'zh-Hant' ? 'zh-Hant' : lng === 'en' ? 'en' : 'zh-Hans'
+  document.documentElement.lang = htmlLang
+  const title = i18n.t('app.metaTitle', {
+    defaultValue: '烛龙 · Zhulong | 边缘智能运维宿主',
+  })
+  if (title) {
+    document.title = title
+  }
+}
+
+syncDocumentLanguage(i18n.resolvedLanguage || i18n.language || 'zh-Hans')
+i18n.on('languageChanged', syncDocumentLanguage)
+
+export function getDateFnsLocale(
+  lng = i18n.resolvedLanguage || i18n.language
+): Locale {
+  if (lng === 'zh-Hant') return zhTW
+  if (lng === 'en') return enUS
+  return zhCN
+}
+
+export function getIntlLocale(
+  lng = i18n.resolvedLanguage || i18n.language
+): string {
+  if (lng === 'zh-Hant') return 'zh-Hant'
+  if (lng === 'en') return 'en'
+  return 'zh-Hans'
+}
 
 export default i18n

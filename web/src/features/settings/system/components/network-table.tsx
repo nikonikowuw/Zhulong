@@ -77,7 +77,11 @@ export function NetworkTable({ network }: NetworkTableProps) {
             <span
               className={cn('size-1.5 rounded-full', STATUS_DOT_CLASS.active)}
             />
-            {upCount} 在线 / {network.length} 接口
+            {t('details.networkSummary', {
+              upCount,
+              total: network.length,
+              defaultValue: `${upCount} 在线 / ${network.length} 接口`,
+            })}
           </Badge>
         )}
       </CardHeader>
@@ -122,7 +126,9 @@ export function NetworkTable({ network }: NetworkTableProps) {
                     colSpan={6}
                     className='py-8 text-center text-xs text-muted-foreground'
                   >
-                    暂无网络接口
+                    {t('details.networkEmpty', {
+                      defaultValue: '暂无网络接口',
+                    })}
                   </TableCell>
                 </TableRow>
               ) : (

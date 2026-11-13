@@ -4,6 +4,7 @@ import { type ColumnFiltersState } from '@tanstack/react-table'
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import i18n from '@/lib/i18n'
 import { type Camera } from '../data/schema'
 import { CamerasProvider } from './cameras-provider'
 import { CamerasTable } from './cameras-table'
@@ -123,7 +124,9 @@ describe('CamerasTable', () => {
 
     // Sort by camera name descending (Front Gate Camera moves down)
     await userEvent.click(getByRole('button', { name: '摄像机名称' }))
-    await userEvent.click(getByRole('menuitem', { name: 'Desc' }))
+    await userEvent.click(
+      getByRole('menuitem', { name: i18n.t('components.columnHeader.desc') })
+    )
 
     await expect
       .element(getByRole('checkbox', { name: '选择摄像机 Front Gate Camera' }))

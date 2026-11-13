@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { getIntlLocale } from '@/lib/i18n'
 
 interface LiveClockOptions {
   serverTimeStr?: string
@@ -16,6 +18,8 @@ export function useLiveClock({
   serverTimeStr,
   timezone,
 }: LiveClockOptions): LiveClockResult {
+  const { i18n } = useTranslation()
+  const locale = getIntlLocale(i18n.resolvedLanguage || i18n.language)
   const [prevServerTimeStr, setPrevServerTimeStr] = useState(serverTimeStr)
   const [ticks, setTicks] = useState(0)
 
@@ -39,19 +43,19 @@ export function useLiveClock({
     try {
       const opts = { timeZone: tz, hour12: false }
       return {
-        date: new Intl.DateTimeFormat('zh-Hans-CN', {
+        date: new Intl.DateTimeFormat(locale, {
           ...opts,
           year: 'numeric',
           month: '2-digit',
           day: '2-digit',
         }),
-        time: new Intl.DateTimeFormat('zh-Hans-CN', {
+        time: new Intl.DateTimeFormat(locale, {
           ...opts,
           hour: '2-digit',
           minute: '2-digit',
           second: '2-digit',
         }),
-        full: new Intl.DateTimeFormat('zh-Hans-CN', {
+        full: new Intl.DateTimeFormat(locale, {
           ...opts,
           year: 'numeric',
           month: '2-digit',
@@ -64,7 +68,7 @@ export function useLiveClock({
     } catch {
       return null
     }
-  }, [tz])
+  }, [tz, locale])
 
   return useMemo(() => {
     const baseServerMs = serverTimeStr ? new Date(serverTimeStr).getTime() : NaN
@@ -84,10 +88,10 @@ export function useLiveClock({
     }
 
     return {
-      dateString: date.toLocaleDateString(),
-      timeString: date.toLocaleTimeString(),
-      fullFormatted: date.toLocaleString(),
+      dateString: date.toLocaleDateString(locale),
+      timeString: date.toLocaleTimeString(locale),
+      fullFormatted: date.toLocaleString(locale),
       virtualDate: date,
     }
-  }, [serverTimeStr, ticks, formatters])
+  }, [serverTimeStr, ticks, formatters, locale])
 }

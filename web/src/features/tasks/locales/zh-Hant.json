@@ -313,5 +313,14 @@
       "saturday": "週六",
       "sunday": "週日"
     }
+  },
+  "validation": {
+    "cameraRequired": "請選擇關聯攝影機",
+    "algorithmRequired": "請選擇綁定演算法包",
+    "fpsMin": "採樣影格率最小為 1",
+    "fpsMax": "建議採樣影格率不超過 30 FPS",
+    "invalidJson": "配置參數必須是合法的 JSON 格式",
+    "rectMinSide": "矩形最小邊長不得小於 0.01 且 x1 < x2, y1 < y2",
+    "cropMinSide": "裁剪視窗最小邊長不得小於 0.02"
   }
 }

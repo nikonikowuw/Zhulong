@@ -262,10 +262,14 @@ export function TimeStatusBanner({
         {/* 详细指标 */}
         {status?.syncStatus?.lastSyncTime && (
           <div className='flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/40 pt-2 font-mono text-[11px] text-muted-foreground'>
-            <span>源: {status.syncStatus.lastSyncServer || '-'}</span>
+            <span>
+              {t('statusBanner.source', { defaultValue: '源' })}:{' '}
+              {status.syncStatus.lastSyncServer || '-'}
+            </span>
             <span>RTT: {status.syncStatus.rttMs.toFixed(1)}ms</span>
             <span>
-              偏差: {status.syncStatus.offsetMs > 0 ? '+' : ''}
+              {t('statusBanner.offset', { defaultValue: '偏差' })}:{' '}
+              {status.syncStatus.offsetMs > 0 ? '+' : ''}
               {status.syncStatus.offsetMs.toFixed(1)}ms
             </span>
           </div>

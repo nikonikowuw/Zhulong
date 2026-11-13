@@ -71,6 +71,7 @@ export function PingDialog({
         success: (res) =>
           res.reachable
             ? t('ping.successMsg', {
+                rtt: res.rttMs?.toFixed(1) ?? '-',
                 defaultValue: `网络连通正常 (RTT: ${res.rttMs?.toFixed(1) ?? '-'}ms)`,
               })
             : t('ping.unreachableMsg', {

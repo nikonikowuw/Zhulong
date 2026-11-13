@@ -68,7 +68,15 @@
     "unsupportedBrowserDesc": "请使用 Chromium / Safari 现代浏览器，并在 localhost 或 HTTPS 安全上下文下访问。",
     "streamUnavailable": "视频流无法连接",
     "retry": "重试连接",
-    "noCamera": "未指定摄像机"
+    "noCamera": "未指定摄像机",
+    "decodeError": "WebCodecs 解码异常",
+    "captureFailed": "画面抓拍截图失败"
+  },
+  "stream": {
+    "networkError": "网络连接发生异常",
+    "wsCreateFailed": "WebSocket 实例创建失败",
+    "reconnecting": "连接已断开，正在重连（第 {{attempt}} 次）...",
+    "reconnectingNotice": "持续重连中（第 {{attempt}} 次），请检查设备与网络"
   },
   "targetHost": "目标地址",
   "resolution": "分辨率"

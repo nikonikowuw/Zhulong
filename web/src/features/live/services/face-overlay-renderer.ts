@@ -1,3 +1,4 @@
+import i18n from '@/lib/i18n'
 import { type FaceSubItem } from '../types/ai-result'
 
 export interface DrawFaceOverlayOptions {
@@ -18,7 +19,7 @@ export function drawFaceOverlay({
   width,
   height,
   faces,
-  unrecognizedLabel = '未识别',
+  unrecognizedLabel = i18n.t('live:unrecognizedFace'),
   clear = true,
 }: DrawFaceOverlayOptions): void {
   if (clear) {

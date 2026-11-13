@@ -217,6 +217,36 @@
     "emptySelection": "No records selected yet",
     "hardCapHint": "Even without a quota, a single export is capped at {{limit}} images",
     "progressLabel": "Export progress",
-    "resumeHint": "Resume uses the previous task's report and image list; current filters are ignored"
+    "resumeHint": "Resume uses the previous task's report and image list; current filters are ignored",
+    "csv": {
+      "id": "ID",
+      "capturedAtLocal": "Captured At (Local)",
+      "capturedAtUtc": "Captured At (UTC ISO8601)",
+      "cameraName": "Camera Name",
+      "cameraId": "Camera ID",
+      "algorithmName": "Algorithm Name",
+      "algorithmVersion": "Algorithm Version",
+      "matched": "Matched",
+      "similarity": "Similarity",
+      "personName": "Person Name",
+      "externalPersonId": "External Person ID",
+      "internalPersonId": "Internal Person ID",
+      "trackId": "Track ID",
+      "pts": "PTS Timestamp",
+      "boundingBox": "Bounding Box",
+      "bodyBox": "Body Box",
+      "imagePath": "Image Path",
+      "faceImagePath": "Face Image Path",
+      "galleryImagePath": "Gallery Image Path",
+      "alarmType": "Alarm Type",
+      "score": "Score",
+      "cropPath": "Crop Path",
+      "extra": "Extra",
+      "targetType": "Target Type",
+      "confidenceScore": "Score",
+      "attributes": "Attributes",
+      "yes": "Yes",
+      "no": "No"
+    }
   }
 }

@@ -1,3 +1,4 @@
+import i18n from '@/lib/i18n'
 import { type VehicleItem } from '../types/ai-result'
 
 export interface DrawVehicleOverlayOptions {
@@ -85,7 +86,7 @@ export function drawVehicleOverlay({
   width,
   height,
   vehicles,
-  unrecognizedLabel = '未识别车牌',
+  unrecognizedLabel = i18n.t('live:unrecognizedPlate'),
   clear = true,
 }: DrawVehicleOverlayOptions): void {
   if (clear) {
