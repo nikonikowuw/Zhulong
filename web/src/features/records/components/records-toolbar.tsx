@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Cross2Icon } from '@radix-ui/react-icons'
 import {
   Download,
@@ -28,6 +28,55 @@ import { useAlarmTypes } from '../hooks/use-alarm-types'
 import { useCaptureTargetTypes } from '../hooks/use-capture-target-types'
 import { RecordsDateRangePicker } from './records-date-range-picker'
 
+const PERSON_ID_DEBOUNCE_MS = 300
+
+function PersonIdSearchInput({
+  value,
+  placeholder,
+  onCommit,
+}: {
+  value: string
+  placeholder: string
+  onCommit: (next?: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  const [syncedValue, setSyncedValue] = useState(value)
+  const onCommitRef = useRef(onCommit)
+
+  useEffect(() => {
+    onCommitRef.current = onCommit
+  }, [onCommit])
+
+  if (value !== syncedValue) {
+    setSyncedValue(value)
+    setDraft(value)
+  }
+
+  useEffect(() => {
+    const normalizedDraft = draft.trim()
+    const normalizedValue = value.trim()
+    if (normalizedDraft === normalizedValue) return
+    const timer = setTimeout(() => {
+      onCommitRef.current(normalizedDraft || undefined)
+    }, PERSON_ID_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [draft, value])
+
+  return (
+    <Input
+      placeholder={placeholder}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          onCommitRef.current(draft.trim() || undefined)
+        }
+      }}
+      className='h-8 w-37.5 text-xs lg:w-62.5'
+    />
+  )
+}
+
 export interface RecordsToolbarProps {
   tab: RecordsTab
   view: 'grid' | 'table'
@@ -38,7 +87,6 @@ export interface RecordsToolbarProps {
   personId?: string
   alarmType?: string
   targetType?: string
-  onTabChange: (tab: RecordsTab) => void
   onViewChange: (view: 'grid' | 'table') => void
   onCameraChange: (cameraId?: string) => void
   onDateRangeChange: (range: RecordsDateRange) => void
@@ -77,8 +125,12 @@ export function RecordsToolbar({
   const { data: cameraData } = useAllCameras()
   const cameras = cameraData?.items ?? []
 
-  const { data: rawAlarmTypes = [] } = useAlarmTypes()
-  const { data: rawTargetTypes = [] } = useCaptureTargetTypes()
+  const { data: rawAlarmTypes = [] } = useAlarmTypes({
+    enabled: tab === 'alarms',
+  })
+  const { data: rawTargetTypes = [] } = useCaptureTargetTypes({
+    enabled: tab === 'captures',
+  })
 
   const alarmTypes = useMemo(() => {
     if (alarmType && !rawAlarmTypes.includes(alarmType)) {
@@ -109,13 +161,10 @@ export function RecordsToolbar({
       <div className='flex flex-1 flex-wrap items-center gap-2'>
         {/* 1. 首位过滤控件：识别记录使用人员搜索框，告警和抓拍使用动态类型下拉选择 */}
         {tab === 'recognitions' && (
-          <Input
-            placeholder={t('filters.personIdPlaceholder')}
+          <PersonIdSearchInput
             value={personId ?? ''}
-            onChange={(e) =>
-              onPersonIdChange?.(e.target.value.trim() || undefined)
-            }
-            className='h-8 w-37.5 text-xs lg:w-62.5'
+            placeholder={t('filters.personIdPlaceholder')}
+            onCommit={(next) => onPersonIdChange?.(next)}
           />
         )}
 
@@ -237,7 +286,7 @@ export function RecordsToolbar({
             className='h-8 gap-1.5 text-xs'
           >
             <Download className='size-3.5' />
-            <span>{t('export.button', { defaultValue: '批量导出' })}</span>
+            <span>{t('export.button')}</span>
           </Button>
         )}
 

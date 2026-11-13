@@ -25,7 +25,7 @@ export function RecordsPrimaryButtons({
         onClick={onExport}
       >
         <Download className='size-3.5' />
-        <span>{t('export.button', { defaultValue: '批量导出' })}</span>
+        <span>{t('export.button')}</span>
       </Button>
 
       <Button
@@ -36,7 +36,7 @@ export function RecordsPrimaryButtons({
         disabled={isRefreshing}
       >
         <RefreshCw className={cn('size-3.5', isRefreshing && 'animate-spin')} />
-        <span>{t('filters.refresh', { defaultValue: '刷新' })}</span>
+        <span>{t('filters.refresh')}</span>
       </Button>
     </div>
   )

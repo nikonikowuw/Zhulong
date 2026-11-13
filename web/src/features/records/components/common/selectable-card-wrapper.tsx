@@ -1,20 +1,22 @@
-import React from 'react'
+import { memo, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 
-export interface SelectableCardWrapperProps {
+export interface SelectableCardWrapperProps<T> {
+  item: T
   selected: boolean
-  onToggle: () => void
-  children: React.ReactNode
+  onToggle?: (item: T) => void
+  children: ReactNode
   className?: string
 }
 
-export function SelectableCardWrapper({
+function SelectableCardWrapperInner<T>({
+  item,
   selected,
   onToggle,
   children,
   className,
-}: SelectableCardWrapperProps) {
+}: SelectableCardWrapperProps<T>) {
   return (
     <div
       className={cn(
@@ -34,12 +36,12 @@ export function SelectableCardWrapper({
         onClick={(e) => {
           e.stopPropagation()
           e.preventDefault()
-          onToggle()
+          onToggle?.(item)
         }}
       >
         <Checkbox
           checked={selected}
-          onCheckedChange={() => onToggle()}
+          onCheckedChange={() => onToggle?.(item)}
           className='size-4 bg-background/90 data-[state=checked]:bg-primary'
         />
       </div>
@@ -48,3 +50,7 @@ export function SelectableCardWrapper({
     </div>
   )
 }
+
+export const SelectableCardWrapper = memo(
+  SelectableCardWrapperInner
+) as typeof SelectableCardWrapperInner

@@ -1,6 +1,4 @@
-import { useMemo, useState } from 'react'
-import { getRouteApi } from '@tanstack/react-router'
-import { CarFront, AlertTriangle, Camera, UserCheck } from 'lucide-react'
+import { AlertTriangle, Camera, CarFront, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -18,181 +16,46 @@ import { RecordsToolbar } from './components/records-toolbar'
 import { AlarmsView } from './components/views/alarms-view'
 import { CapturesView } from './components/views/captures-view'
 import { RecognitionsView } from './components/views/recognitions-view'
-import {
-  type RecordItem,
-  type RecordsSearchParams,
-  type RecordsTab,
-} from './data/schema'
-import {
-  type RecordsDateRange,
-  resolveRecordsWindow,
-} from './data/time-presets'
-import { useAlarms } from './hooks/use-alarms'
-import { useCameraNames } from './hooks/use-camera-names'
-import { useCaptures } from './hooks/use-captures'
-import { useRecognitions } from './hooks/use-recognitions'
-import { useRecordsSelection } from './hooks/use-records-selection'
-
-const route = getRouteApi('/_authenticated/records/')
+import { type RecordsTab } from './data/schema'
+import { useRecordsPage } from './hooks/use-records-page'
 
 export function Records() {
   const { t } = useTranslation('records')
-  const search = route.useSearch()
-  const navigate = route.useNavigate()
-
-  // 状态机解析 (从强类型 URL 状态派生，默认模式为 table)
-  const tab = search.tab ?? 'recognitions'
-  const view = search.view ?? 'table'
-  const page = search.page ?? 1
-  const pageSize = search.pageSize ?? 20
-  const cameraId = search.cameraId
-  const preset = search.preset
-  const startTime = search.startTime
-  const endTime = search.endTime
-
-  // 生效中的时间窗口：URL 只记意图（预设）或自定义绝对时间，缺省时落到「今日全天」。
-  // memo 必须存在：相对预设内部取 now()，每次渲染重算会让 react-query 的 key 抖动。
-  const activeRange = useMemo(
-    () => resolveRecordsWindow({ preset, startTime, endTime }),
-    [preset, startTime, endTime]
-  )
-
-  // 细项过滤
-  const matched = search.matched
-  const personId = search.personId
-  const alarmType = search.alarmType
-  const targetType = search.targetType
-
-  // 详情弹窗状态
-  const [detailOpen, setDetailOpen] = useState(false)
-  const [selectedRecord, setSelectedRecord] = useState<RecordItem | null>(null)
-  // 打开详情时的 Tab。记录可能来自抓拍/告警 Tab，而 `tab` 跟着 URL 走：
-  // 浏览器前进/后退会让两者错位，届时无法判断该按哪种版式渲染这条记录。
-  const [selectedTab, setSelectedTab] = useState<RecordsTab>('recognitions')
-
-  // 导出弹窗状态
-  const [exportDialogOpen, setExportDialogOpen] = useState(false)
-  const [exportDialogMode, setExportDialogMode] = useState<
-    'selection' | 'batch'
-  >('batch')
-
-  // 记录行只存 cameraId，展示时必须解析成摄像机名称
-  const cameraName = useCameraNames()
-
-  // 状态驱动的路由跳转辅助
-  const updateSearch = (updater: Partial<RecordsSearchParams>) => {
-    void navigate({
-      search: (prev) => {
-        const next = { ...prev, ...updater }
-        // 清理 undefined 属性保持 URL 整洁
-        for (const [key, val] of Object.entries(next)) {
-          if (val === undefined || val === '') {
-            delete (next as Record<string, unknown>)[key]
-          }
-        }
-        return next
-      },
-    })
-  }
-
-  // 识别记录 Query
-  const recognitionsQuery = useRecognitions(
-    tab === 'recognitions'
-      ? {
-          page,
-          pageSize,
-          cameraId,
-          personId,
-          matched:
-            matched === 'true' ? true : matched === 'false' ? false : undefined,
-          startTime: activeRange.startTime,
-          endTime: activeRange.endTime,
-        }
-      : undefined
-  )
-
-  // 告警记录 Query
-  const alarmsQuery = useAlarms(
-    tab === 'alarms'
-      ? {
-          page,
-          pageSize,
-          cameraId,
-          alarmType,
-          startTime: activeRange.startTime,
-          endTime: activeRange.endTime,
-        }
-      : undefined
-  )
-
-  // 抓拍记录 Query
-  const capturesQuery = useCaptures(
-    tab === 'captures' || tab === 'vehicles'
-      ? {
-          page,
-          pageSize,
-          cameraId,
-          targetType: tab === 'vehicles' ? 'vehicle' : targetType,
-          startTime: activeRange.startTime,
-          endTime: activeRange.endTime,
-        }
-      : undefined
-  )
-
-  const handleTabChange = (nextTab: RecordsTab) => {
-    updateSearch({
-      tab: nextTab,
-      page: 1,
-      // 切换 Tab 时重置细项专属参数
-      matched: undefined,
-      personId: undefined,
-      alarmType: undefined,
-      targetType: undefined,
-    })
-  }
-
-  const handleRefresh = () => {
-    if (tab === 'recognitions') void recognitionsQuery.refetch()
-    else if (tab === 'alarms') void alarmsQuery.refetch()
-    else void capturesQuery.refetch()
-  }
-
-  const handleOpenDetail = (item: RecordItem) => {
-    setSelectedRecord(item)
-    setSelectedTab(tab)
-    setDetailOpen(true)
-  }
-
-  const isFetching =
-    recognitionsQuery.isFetching ||
-    alarmsQuery.isFetching ||
-    capturesQuery.isFetching
-
-  // 当前列表行与总条数计算
-  const currentItems = useMemo<RecordItem[]>(() => {
-    if (tab === 'recognitions') return recognitionsQuery.data?.items ?? []
-    if (tab === 'alarms') return alarmsQuery.data?.items ?? []
-    return capturesQuery.data?.items ?? []
-  }, [
+  const {
     tab,
-    recognitionsQuery.data?.items,
-    alarmsQuery.data?.items,
-    capturesQuery.data?.items,
-  ])
-
-  const currentTotal = useMemo<number>(() => {
-    if (tab === 'recognitions') return recognitionsQuery.data?.total ?? 0
-    if (tab === 'alarms') return alarmsQuery.data?.total ?? 0
-    return capturesQuery.data?.total ?? 0
-  }, [
-    tab,
-    recognitionsQuery.data?.total,
-    alarmsQuery.data?.total,
-    capturesQuery.data?.total,
-  ])
-
-  // 单 Tab 隔离多选状态
-  const selection = useRecordsSelection(tab, currentItems)
+    view,
+    page,
+    pageSize,
+    cameraId,
+    activeRange,
+    matched,
+    personId,
+    alarmType,
+    targetType,
+    cameraName,
+    isFetching,
+    currentTotal,
+    selection,
+    recognitionsQuery,
+    alarmsQuery,
+    capturesQuery,
+    detailOpen,
+    setDetailOpen,
+    selectedRecord,
+    selectedTab,
+    exportDialogOpen,
+    setExportDialogOpen,
+    exportDialogMode,
+    exportQueryParams,
+    updateSearch,
+    handleTabChange,
+    handleRefresh,
+    handleOpenDetail,
+    handleOpenBatchExport,
+    handleOpenSelectionExport,
+    handleDateRangeChange,
+    handleResetFilters,
+  } = useRecordsPage()
 
   return (
     <>
@@ -205,24 +68,21 @@ export function Records() {
       </Header>
 
       <Main className='flex flex-1 flex-col gap-4 sm:gap-6'>
-        {/* 页面标题与主操作区（100% 对齐 Cameras / Audit 标题行基线与按钮规范） */}
         <div className='flex flex-wrap items-end justify-between gap-2'>
-          <div>
+          <div className='min-w-0 flex-1'>
             <h2 className='text-2xl font-bold tracking-tight'>{t('title')}</h2>
-            <p className='text-sm text-muted-foreground'>{t('description')}</p>
+            <p className='max-w-3xl text-sm text-muted-foreground'>
+              {t('description')}
+            </p>
           </div>
 
           <RecordsPrimaryButtons
             onRefresh={handleRefresh}
             isRefreshing={isFetching}
-            onExport={() => {
-              setExportDialogMode('batch')
-              setExportDialogOpen(true)
-            }}
+            onExport={handleOpenBatchExport}
           />
         </div>
 
-        {/* 核心 Tab 切换与数据表格工作区 */}
         <Tabs
           value={tab}
           onValueChange={(val) => handleTabChange(val as RecordsTab)}
@@ -248,7 +108,6 @@ export function Records() {
           </TabsList>
 
           <div className='space-y-4'>
-            {/* 综合过滤工具栏 */}
             <RecordsToolbar
               tab={tab}
               view={view}
@@ -258,19 +117,11 @@ export function Records() {
               personId={personId}
               alarmType={alarmType}
               targetType={targetType}
-              onTabChange={handleTabChange}
               onViewChange={(nextView) => updateSearch({ view: nextView })}
               onCameraChange={(nextCam) =>
                 updateSearch({ cameraId: nextCam, page: 1 })
               }
-              onDateRangeChange={(range: RecordsDateRange) =>
-                updateSearch({
-                  preset: range.preset,
-                  startTime: range.startTime,
-                  endTime: range.endTime,
-                  page: 1,
-                })
-              }
+              onDateRangeChange={handleDateRangeChange}
               onMatchedChange={(nextMatched) =>
                 updateSearch({ matched: nextMatched, page: 1 })
               }
@@ -283,26 +134,9 @@ export function Records() {
               onTargetTypeChange={(nextTt) =>
                 updateSearch({ targetType: nextTt, page: 1 })
               }
-              onExport={() => {
-                setExportDialogMode('batch')
-                setExportDialogOpen(true)
-              }}
-              onResetFilters={() =>
-                updateSearch({
-                  cameraId: undefined,
-                  preset: undefined,
-                  startTime: undefined,
-                  endTime: undefined,
-                  matched: undefined,
-                  personId: undefined,
-                  alarmType: undefined,
-                  targetType: undefined,
-                  page: 1,
-                })
-              }
+              onResetFilters={handleResetFilters}
             />
 
-            {/* 视图内容区 */}
             {tab === 'recognitions' && (
               <RecognitionsView
                 items={recognitionsQuery.data?.items ?? []}
@@ -379,7 +213,6 @@ export function Records() {
         </Tabs>
       </Main>
 
-      {/* 研判详情弹窗 */}
       <RecordDetailDialog
         tab={selectedTab}
         record={selectedRecord}
@@ -388,36 +221,19 @@ export function Records() {
         onOpenChange={setDetailOpen}
       />
 
-      {/* 底部多选浮动操作条 */}
       <RecordsSelectionBar
         selectedCount={selection.selectedCount}
-        onExportSelected={() => {
-          setExportDialogMode('selection')
-          setExportDialogOpen(true)
-        }}
+        onExportSelected={handleOpenSelectionExport}
         onClearSelection={selection.clearSelection}
       />
 
-      {/* 导出配置与进度弹窗 */}
       <RecordsExportDialog
         open={exportDialogOpen}
         onOpenChange={setExportDialogOpen}
         activeTab={tab}
         mode={exportDialogMode}
         selectedItems={selection.selectedItems}
-        queryParams={{
-          cameraId,
-          startTime: activeRange.startTime,
-          endTime: activeRange.endTime,
-          matched:
-            matched === 'true' ? true : matched === 'false' ? false : undefined,
-          personId,
-          alarmType,
-          // 只传用户显式选择的目标类型；`vehicles` 维度的 Tab 语义由
-          // export pipeline 统一决定，否则从车辆 Tab 打开批量导出时
-          // 抓拍维度会被悄悄过滤成车辆。
-          targetType,
-        }}
+        queryParams={exportQueryParams}
         estimatedTotal={currentTotal}
         cameraName={cameraName}
       />

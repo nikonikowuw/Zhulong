@@ -14,6 +14,7 @@ export function useRecognitions(
   return useQuery({
     queryKey: [...RECOGNITIONS_QUERY_KEY, params],
     queryFn: () => recordsApi.getRecognitions(params),
+    enabled: params !== undefined,
     placeholderData: (previousData) => previousData,
   })
 }

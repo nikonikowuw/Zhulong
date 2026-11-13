@@ -214,7 +214,7 @@ export function BoundingBoxCanvas({
                   }}
                 >
                   {secondaryLabel && (
-                    <div className='absolute -top-5 left-0 rounded bg-violet-600/90 px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap text-white shadow-sm'>
+                    <div className='absolute start-0 -top-5 rounded bg-violet-600/90 px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap text-white shadow-sm'>
                       {secondaryLabel}
                     </div>
                   )}
@@ -242,7 +242,7 @@ export function BoundingBoxCanvas({
                   }}
                 >
                   {primaryLabel && (
-                    <div className='absolute -top-6 left-0 flex items-center gap-1 rounded bg-emerald-600 px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap text-white shadow-md'>
+                    <div className='absolute start-0 -top-6 flex items-center gap-1 rounded bg-emerald-600 px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap text-white shadow-md'>
                       <span className='size-1.5 animate-pulse rounded-full bg-white' />
                       {primaryLabel}
                     </div>

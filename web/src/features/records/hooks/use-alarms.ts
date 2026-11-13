@@ -14,6 +14,7 @@ export function useAlarms(
   return useQuery({
     queryKey: [...ALARMS_QUERY_KEY, params],
     queryFn: () => recordsApi.getAlarms(params),
+    enabled: params !== undefined,
     placeholderData: (previousData) => previousData,
   })
 }

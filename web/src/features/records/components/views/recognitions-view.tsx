@@ -1,18 +1,13 @@
 import { useMemo } from 'react'
-import { format } from 'date-fns'
 import {
-  type ColumnDef,
+  flexRender,
   getCoreRowModel,
   useReactTable,
-  flexRender,
 } from '@tanstack/react-table'
-import { AlertCircle, RefreshCw, UserCheck, UserX } from 'lucide-react'
+import { AlertCircle, RefreshCw, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -22,14 +17,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { DataTablePagination } from '@/components/data-table/pagination'
-import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
+import { type CameraNameLookup } from '../../data/camera-label'
 import { type Recognition } from '../../data/schema'
-import { MediaImage } from '../common/media-image'
 import { SelectableCardWrapper } from '../common/selectable-card-wrapper'
 import { RecognitionCard } from '../recognitions/recognition-card'
 import { createPaginationChangeHandler } from './pagination'
+import { buildRecognitionColumns } from './recognitions-columns'
+import { TableSelectionProvider } from './selection-column'
 
 export interface RecognitionsViewProps {
   items: Recognition[]
@@ -77,158 +72,9 @@ export function RecognitionsView({
   // 骨架数量对齐真实行数：加载态与结算态高度一致，切 Tab 时页面不再上下跳
   const placeholderCount = Math.max(1, Math.min(pageSize, total || pageSize))
 
-  const columns = useMemo<ColumnDef<Recognition>[]>(
-    () => [
-      {
-        id: 'select',
-        header: () => (
-          <div className='flex items-center justify-center px-1'>
-            <Checkbox
-              checked={
-                isAllPageSelected
-                  ? true
-                  : isPartiallySelected
-                    ? 'indeterminate'
-                    : false
-              }
-              onCheckedChange={() => onToggleSelectAll?.()}
-              aria-label='Select all'
-              className='size-4'
-            />
-          </div>
-        ),
-        cell: ({ row }) => (
-          <div
-            className='flex items-center justify-center px-1'
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Checkbox
-              checked={isSelected?.(row.original.id) ?? false}
-              onCheckedChange={() => onToggleSelect?.(row.original)}
-              aria-label={`Select row ${row.original.id}`}
-              className='size-4'
-            />
-          </div>
-        ),
-        size: 40,
-        enableSorting: false,
-      },
-      {
-        accessorKey: 'faceImagePath',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.thumbnail')} />
-        ),
-        size: 90,
-        enableSorting: false,
-        cell: ({ row }) => (
-          <div className='size-10 overflow-hidden rounded-md border border-border bg-muted/40'>
-            <MediaImage
-              path={row.original.faceImagePath || row.original.imagePath}
-              alt={row.original.personName || 'Face'}
-              className='size-full'
-              fallbackText='Face'
-            />
-          </div>
-        ),
-      },
-      {
-        accessorKey: 'capturedAt',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.time')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => {
-          const val = row.original.capturedAt
-          return (
-            <span className='font-mono text-xs'>
-              {val ? format(new Date(val), 'yyyy-MM-dd HH:mm:ss') : '-'}
-            </span>
-          )
-        },
-      },
-      {
-        accessorKey: 'cameraId',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.camera')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => (
-          <span className='text-xs font-medium'>
-            {cameraLabel(row.original.cameraId, cameraName)}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'personName',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.target')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => {
-          const { matched, personName, personId } = row.original
-          return (
-            <div className='flex items-center gap-2'>
-              {matched ? (
-                <Badge
-                  variant='outline'
-                  className={cn('font-medium', statusLevelClass('active'))}
-                >
-                  <UserCheck className='me-1 size-3' />
-                  {personName || personId || t('card.matched')}
-                </Badge>
-              ) : (
-                <Badge
-                  variant='outline'
-                  className={cn('font-medium', statusLevelClass('warning'))}
-                >
-                  <UserX className='me-1 size-3' />
-                  {t('card.stranger')}
-                </Badge>
-              )}
-            </div>
-          )
-        },
-      },
-      {
-        accessorKey: 'similarity',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.score')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => {
-          const sim = row.original.similarity
-          if (!row.original.matched || sim <= 0) {
-            return <span className='text-xs text-muted-foreground'>-</span>
-          }
-          return (
-            <span className='font-mono text-xs font-semibold'>
-              {Math.round(sim * 100)}%
-            </span>
-          )
-        },
-      },
-      {
-        accessorKey: 'trackId',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.trackId')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => (
-          <span className='font-mono text-xs text-muted-foreground'>
-            {row.original.trackId > 0 ? `#${row.original.trackId}` : '-'}
-          </span>
-        ),
-      },
-    ],
-    [
-      t,
-      cameraName,
-      isSelected,
-      onToggleSelect,
-      isAllPageSelected,
-      isPartiallySelected,
-      onToggleSelectAll,
-    ]
+  const columns = useMemo(
+    () => buildRecognitionColumns(t, cameraName),
+    [t, cameraName]
   )
 
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -271,7 +117,7 @@ export function RecognitionsView({
               </div>
             ))}
           </div>
-          <DataTablePagination table={table} />
+          {total > 0 && <DataTablePagination table={table} />}
         </div>
       )
     }
@@ -312,8 +158,9 @@ export function RecognitionsView({
           {items.map((item) => (
             <SelectableCardWrapper
               key={item.id}
+              item={item}
               selected={isSelected?.(item.id) ?? false}
-              onToggle={() => onToggleSelect?.(item)}
+              onToggle={onToggleSelect}
             >
               <RecognitionCard
                 item={item}
@@ -323,116 +170,126 @@ export function RecognitionsView({
             </SelectableCardWrapper>
           ))}
         </div>
-        <DataTablePagination table={table} />
+        {total > 0 && <DataTablePagination table={table} />}
       </div>
     )
   }
 
   // 2. Table 紧凑表格视图（表头始终完整呈现，对齐 AuditTable / CamerasTable 规范）
   return (
-    <div className='space-y-4'>
-      <div className='rounded-md border border-border bg-card'>
-        <Table className='border-separate border-spacing-0'>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead
-                    key={header.id}
-                    colSpan={header.colSpan}
-                    className={header.column.columnDef.meta?.className}
-                  >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              Array.from({ length: placeholderCount }).map((_, rIdx) => (
-                <TableRow key={`rec-table-skel-${rIdx}`}>
-                  {columns.map((_, cIdx) => (
-                    <TableCell key={`rec-table-skel-c-${cIdx}`}>
-                      {cIdx === 0 ? (
-                        <Skeleton className='size-10 rounded-md' />
-                      ) : (
-                        <Skeleton className='h-4 w-24' />
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : isError ? (
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-48 text-center'
-                >
-                  <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
-                    <AlertCircle className='size-8' />
-                    <p className='text-sm font-medium'>{t('table.error')}</p>
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      onClick={onRetry}
-                      className='mt-2'
+    <TableSelectionProvider
+      isSelected={isSelected}
+      onToggleSelect={onToggleSelect}
+      isAllPageSelected={isAllPageSelected}
+      isPartiallySelected={isPartiallySelected}
+      onToggleSelectAll={onToggleSelectAll}
+    >
+      <div className='space-y-4'>
+        <div className='rounded-md border border-border bg-card'>
+          <Table className='border-separate border-spacing-0'>
+            <TableHeader>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHead
+                      key={header.id}
+                      colSpan={header.colSpan}
+                      className={header.column.columnDef.meta?.className}
                     >
-                      <RefreshCw className='me-1.5 size-3.5' />
-                      {t('table.retry')}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.original.id}
-                  data-state={
-                    isSelected?.(row.original.id) ? 'selected' : undefined
-                  }
-                  className={cn(
-                    'cursor-pointer hover:bg-muted/50',
-                    isSelected?.(row.original.id) && 'bg-muted/60'
-                  )}
-                  onClick={() => onSelect(row.original)}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </TableCell>
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(
+                            header.column.columnDef.header,
+                            header.getContext()
+                          )}
+                    </TableHead>
                   ))}
                 </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-48 text-center'
-                >
-                  <div className='flex flex-col items-center justify-center gap-2'>
-                    <UserCheck className='size-8 text-muted-foreground' />
-                    <p className='text-sm font-medium'>{t('table.empty')}</p>
-                    <p className='text-xs text-muted-foreground'>
-                      {t('table.emptyDesc')}
-                    </p>
-                  </div>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                Array.from({ length: placeholderCount }).map((_, rIdx) => (
+                  <TableRow key={`rec-table-skel-${rIdx}`}>
+                    {columns.map((_, cIdx) => (
+                      <TableCell key={`rec-table-skel-c-${cIdx}`}>
+                        {cIdx === 0 ? (
+                          <Skeleton className='mx-auto size-4 rounded' />
+                        ) : cIdx === 1 ? (
+                          <Skeleton className='size-10 rounded-md' />
+                        ) : (
+                          <Skeleton className='h-4 w-24' />
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : isError ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={columns.length}
+                    className='h-48 text-center'
+                  >
+                    <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
+                      <AlertCircle className='size-8' />
+                      <p className='text-sm font-medium'>{t('table.error')}</p>
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        onClick={onRetry}
+                        className='mt-2'
+                      >
+                        <RefreshCw className='me-1.5 size-3.5' />
+                        {t('table.retry')}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : table.getRowModel().rows?.length ? (
+                table.getRowModel().rows.map((row) => (
+                  <TableRow
+                    key={row.original.id}
+                    data-state={
+                      isSelected?.(row.original.id) ? 'selected' : undefined
+                    }
+                    className={cn(
+                      'cursor-pointer hover:bg-muted/50',
+                      isSelected?.(row.original.id) && 'bg-muted/60'
+                    )}
+                    onClick={() => onSelect(row.original)}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext()
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell
+                    colSpan={columns.length}
+                    className='h-48 text-center'
+                  >
+                    <div className='flex flex-col items-center justify-center gap-2'>
+                      <UserCheck className='size-8 text-muted-foreground' />
+                      <p className='text-sm font-medium'>{t('table.empty')}</p>
+                      <p className='text-xs text-muted-foreground'>
+                        {t('table.emptyDesc')}
+                      </p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
 
-      <DataTablePagination table={table} />
-    </div>
+        {!isError && total > 0 && <DataTablePagination table={table} />}
+      </div>
+    </TableSelectionProvider>
   )
 }

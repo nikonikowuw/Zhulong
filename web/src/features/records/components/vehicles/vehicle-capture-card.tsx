@@ -1,8 +1,10 @@
-import { type KeyboardEvent } from 'react'
-import { format } from 'date-fns'
+import { memo, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { categoryBadgeClass } from '@/lib/category-palette'
+import { cn } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
+import { formatRecordTime } from '../../data/format-time'
 import { type Capture } from '../../data/schema'
 import { VehicleEvidence } from './vehicle-evidence'
 
@@ -12,15 +14,13 @@ interface VehicleCaptureCardProps {
   onSelect: (item: Capture) => void
 }
 
-export function VehicleCaptureCard({
+export const VehicleCaptureCard = memo(function VehicleCaptureCard({
   item,
   cameraName,
   onSelect,
 }: VehicleCaptureCardProps) {
   const { t } = useTranslation('records')
-  const formattedTime = item.capturedAt
-    ? format(new Date(item.capturedAt), 'MM-dd HH:mm:ss')
-    : '-'
+  const formattedTime = formatRecordTime(item.capturedAt, 'MM-dd HH:mm:ss')
   const score = item.score > 0 ? `${Math.round(item.score * 100)}%` : '-'
 
   const attrs = item.attributes as Record<string, unknown> | undefined
@@ -58,7 +58,12 @@ export function VehicleCaptureCard({
 
         {plateNo && (
           <div className='flex items-center justify-between gap-2'>
-            <span className='inline-flex items-center rounded border border-blue-600/30 bg-blue-600/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-blue-600 dark:text-blue-400'>
+            <span
+              className={cn(
+                'inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-xs font-semibold',
+                categoryBadgeClass('blue')
+              )}
+            >
               {plateNo}
             </span>
             {plateColor && (
@@ -80,4 +85,4 @@ export function VehicleCaptureCard({
       </CardContent>
     </Card>
   )
-}
+})

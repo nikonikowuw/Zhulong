@@ -454,4 +454,27 @@ describe('RecordDetailDialog', () => {
     )
     await expect.element(getByText('1 / 4')).toBeInTheDocument()
   })
+
+  it('resets fullscreen preview state when dialog closes and reopens on the same record', async () => {
+    const props = {
+      onOpenChange: vi.fn(),
+      record: mockRecognition,
+      tab: 'recognitions' as const,
+    }
+    const { getByRole, getByText, rerender } = await render(
+      <RecordDetailDialog open={true} {...props} />
+    )
+
+    await userEvent.click(
+      getByRole('button', { name: '全屏查看', exact: true })
+    )
+    await expect.element(getByText('1 / 3')).toBeInTheDocument()
+
+    // 关闭外层详情弹窗，再以同一条记录重新打开
+    await rerender(<RecordDetailDialog open={false} {...props} />)
+    await rerender(<RecordDetailDialog open={true} {...props} />)
+
+    // 全屏预览层不应被自动再次拉起
+    expect(getByText('1 / 3').query()).toBeNull()
+  })
 })

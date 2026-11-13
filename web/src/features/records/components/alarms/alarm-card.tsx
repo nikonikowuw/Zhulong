@@ -1,9 +1,12 @@
-import { format } from 'date-fns'
+import { memo } from 'react'
 import { AlertTriangle, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusDotClass, statusLevelClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
+import { formatRecordTime } from '../../data/format-time'
 import { type Alarm } from '../../data/schema'
 import { MediaImage } from '../common/media-image'
 
@@ -13,12 +16,13 @@ interface AlarmCardProps {
   onSelect: (item: Alarm) => void
 }
 
-export function AlarmCard({ item, cameraName, onSelect }: AlarmCardProps) {
+export const AlarmCard = memo(function AlarmCard({
+  item,
+  cameraName,
+  onSelect,
+}: AlarmCardProps) {
   const { t } = useTranslation('records')
-  const formattedTime = item.capturedAt
-    ? format(new Date(item.capturedAt), 'MM-dd HH:mm:ss')
-    : '-'
-
+  const formattedTime = formatRecordTime(item.capturedAt, 'MM-dd HH:mm:ss')
   const scorePercent = Math.round((item.score || 0) * 100)
 
   return (
@@ -34,12 +38,21 @@ export function AlarmCard({ item, cameraName, onSelect }: AlarmCardProps) {
           fallbackText='Alarm Snapshot'
         />
 
-        {/* 顶部告警类型 Badge */}
+        {/* 顶部告警类型 Badge（遵循 §1.3.2 Dot-Indicator Outline 规范） */}
         <div className='absolute start-2 top-2'>
           <Badge
-            variant='destructive'
-            className='text-destructive-foreground flex items-center gap-1 bg-destructive/90 font-medium shadow-sm'
+            variant='outline'
+            className={cn(
+              'gap-1.5 bg-background/85 font-medium shadow-sm backdrop-blur-xs',
+              statusLevelClass('destructive')
+            )}
           >
+            <span
+              className={cn(
+                'size-1.5 rounded-full',
+                statusDotClass('destructive')
+              )}
+            />
             <AlertTriangle className='size-3' />
             {item.alarmType}
           </Badge>
@@ -83,4 +96,4 @@ export function AlarmCard({ item, cameraName, onSelect }: AlarmCardProps) {
       </CardContent>
     </Card>
   )
-}
+})

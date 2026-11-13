@@ -14,6 +14,7 @@ export function useCaptures(
   return useQuery({
     queryKey: [...CAPTURES_QUERY_KEY, params],
     queryFn: () => recordsApi.getCaptures(params),
+    enabled: params !== undefined,
     placeholderData: (previousData, previousQuery) => {
       const previousParams = previousQuery?.queryKey[2]
       const previousTargetType =

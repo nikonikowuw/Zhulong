@@ -1,17 +1,13 @@
 import { useMemo } from 'react'
-import { format } from 'date-fns'
 import {
-  type ColumnDef,
+  flexRender,
   getCoreRowModel,
   useReactTable,
-  flexRender,
 } from '@tanstack/react-table'
 import { AlertCircle, Camera, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -21,17 +17,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { DataTablePagination } from '@/components/data-table/pagination'
-import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
-import { algorithmLabel, type Capture } from '../../data/schema'
-import { formatTargetType, targetTypeBadgeClass } from '../../data/target-type'
+import { type CameraNameLookup } from '../../data/camera-label'
+import { type Capture } from '../../data/schema'
 import { CaptureCard } from '../captures/capture-card'
-import { MediaImage } from '../common/media-image'
 import { SelectableCardWrapper } from '../common/selectable-card-wrapper'
 import { VehicleCaptureCard } from '../vehicles/vehicle-capture-card'
-import { VehicleEvidence } from '../vehicles/vehicle-evidence'
+import { buildCaptureColumns } from './captures-columns'
 import { createPaginationChangeHandler } from './pagination'
+import { TableSelectionProvider } from './selection-column'
 
 export interface CapturesViewProps {
   items: Capture[]
@@ -81,215 +75,10 @@ export function CapturesView({
   // 骨架数量对齐真实行数：加载态与结算态高度一致，切 Tab 时页面不再上下跳
   const placeholderCount = Math.max(1, Math.min(pageSize, total || pageSize))
 
-  const columns = useMemo<ColumnDef<Capture>[]>(() => {
-    const cols: ColumnDef<Capture>[] = [
-      {
-        id: 'select',
-        header: () => (
-          <div className='flex items-center justify-center px-1'>
-            <Checkbox
-              checked={
-                isAllPageSelected
-                  ? true
-                  : isPartiallySelected
-                    ? 'indeterminate'
-                    : false
-              }
-              onCheckedChange={() => onToggleSelectAll?.()}
-              aria-label='Select all'
-              className='size-4'
-            />
-          </div>
-        ),
-        cell: ({ row }) => (
-          <div
-            className='flex items-center justify-center px-1'
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Checkbox
-              checked={isSelected?.(row.original.id) ?? false}
-              onCheckedChange={() => onToggleSelect?.(row.original)}
-              aria-label={`Select row ${row.original.id}`}
-              className='size-4'
-            />
-          </div>
-        ),
-        size: 40,
-        enableSorting: false,
-      },
-      {
-        accessorKey: 'cropPath',
-        header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={
-              mode === 'vehicles' ? t('table.evidence') : t('table.thumbnail')
-            }
-          />
-        ),
-        size: mode === 'vehicles' ? 220 : 90,
-        enableSorting: false,
-        cell: ({ row }) =>
-          mode === 'vehicles' ? (
-            <VehicleEvidence capture={row.original} layout='table' />
-          ) : (
-            <div className='h-10 w-16 overflow-hidden rounded-md border border-border bg-muted/40'>
-              <MediaImage
-                path={row.original.cropPath || row.original.imagePath}
-                alt={formatTargetType(t, row.original.targetType)}
-                className='size-full'
-                imageClassName='object-contain p-0.5'
-                fallbackText='Capture'
-              />
-            </div>
-          ),
-      },
-      {
-        accessorKey: 'capturedAt',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.time')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => {
-          const val = row.original.capturedAt
-          return (
-            <span className='font-mono text-xs'>
-              {val ? format(new Date(val), 'yyyy-MM-dd HH:mm:ss') : '-'}
-            </span>
-          )
-        },
-      },
-      {
-        accessorKey: 'cameraId',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.camera')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => (
-          <span className='text-xs font-medium'>
-            {cameraLabel(row.original.cameraId, cameraName)}
-          </span>
-        ),
-      },
-    ]
-
-    if (mode === 'vehicles') {
-      cols.push({
-        id: 'plate',
-        header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('table.plate', '车牌号码')}
-          />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => {
-          const attrs = row.original.attributes as
-            | Record<string, unknown>
-            | undefined
-          const plateNo =
-            typeof attrs?.plate_number === 'string' ? attrs.plate_number : ''
-          const plateColor =
-            typeof attrs?.plate_color === 'string' ? attrs.plate_color : ''
-          if (!plateNo) {
-            return <span className='text-xs text-muted-foreground'>-</span>
-          }
-          return (
-            <div className='flex items-center gap-1.5'>
-              <span className='inline-flex items-center rounded border border-blue-600/30 bg-blue-600/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-blue-600 dark:text-blue-400'>
-                {plateNo}
-              </span>
-              {plateColor && (
-                <span className='text-[10px] text-muted-foreground'>
-                  {plateColor}
-                </span>
-              )}
-            </div>
-          )
-        },
-      })
-    }
-
-    if (mode === 'captures') {
-      cols.push({
-        accessorKey: 'targetType',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.type')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => (
-          <Badge
-            variant='outline'
-            className={cn(
-              'font-medium',
-              targetTypeBadgeClass(row.original.targetType)
-            )}
-          >
-            <Camera className='me-1 size-3' />
-            {formatTargetType(t, row.original.targetType)}
-          </Badge>
-        ),
-      })
-    }
-
-    cols.push(
-      {
-        accessorKey: 'score',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.score')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => {
-          const score = row.original.score
-          return (
-            <span className='font-mono text-xs font-semibold'>
-              {score > 0 ? `${Math.round(score * 100)}%` : '-'}
-            </span>
-          )
-        },
-      },
-      {
-        accessorKey: 'trackId',
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.trackId')} />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => (
-          <span className='font-mono text-xs text-muted-foreground'>
-            {row.original.trackId > 0 ? `#${row.original.trackId}` : '-'}
-          </span>
-        ),
-      },
-      {
-        // 展示 algorithmLabel 而不是裸 algorithmId：算法被卸载后 ID 会变空，
-        // 只有写入时快照的名称/版本还能回答「这张抓拍是谁产生的」。
-        accessorKey: 'algorithmId',
-        header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('table.algorithmId')}
-          />
-        ),
-        enableSorting: false,
-        cell: ({ row }) => (
-          <span className='font-mono text-xs text-muted-foreground'>
-            {algorithmLabel(row.original) || '-'}
-          </span>
-        ),
-      }
-    )
-
-    return cols
-  }, [
-    mode,
-    t,
-    cameraName,
-    isSelected,
-    onToggleSelect,
-    isAllPageSelected,
-    isPartiallySelected,
-    onToggleSelectAll,
-  ])
+  const columns = useMemo(
+    () => buildCaptureColumns(mode, t, cameraName),
+    [mode, t, cameraName]
+  )
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
@@ -336,7 +125,7 @@ export function CapturesView({
               </div>
             ))}
           </div>
-          <DataTablePagination table={table} />
+          {total > 0 && <DataTablePagination table={table} />}
         </div>
       )
     }
@@ -383,8 +172,9 @@ export function CapturesView({
           {items.map((item) => (
             <SelectableCardWrapper
               key={item.id}
+              item={item}
               selected={isSelected?.(item.id) ?? false}
-              onToggle={() => onToggleSelect?.(item)}
+              onToggle={onToggleSelect}
             >
               {mode === 'vehicles' ? (
                 <VehicleCaptureCard
@@ -402,131 +192,141 @@ export function CapturesView({
             </SelectableCardWrapper>
           ))}
         </div>
-        <DataTablePagination table={table} />
+        {total > 0 && <DataTablePagination table={table} />}
       </div>
     )
   }
 
   // 2. Table 模式（表头常驻）
   return (
-    <div className='space-y-4'>
-      <div className='rounded-md border border-border bg-card'>
-        <Table className='border-separate border-spacing-0'>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead
-                    key={header.id}
-                    colSpan={header.colSpan}
-                    className={header.column.columnDef.meta?.className}
-                  >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              Array.from({ length: placeholderCount }).map((_, rIdx) => (
-                <TableRow key={`cap-table-skel-${rIdx}`}>
-                  {columns.map((_, cIdx) => (
-                    <TableCell key={`cap-table-skel-c-${cIdx}`}>
-                      {cIdx === 0 ? (
-                        <Skeleton
-                          className={cn(
-                            'rounded-md',
-                            mode === 'vehicles' ? 'h-14 w-40' : 'size-10'
-                          )}
-                        />
-                      ) : (
-                        <Skeleton className='h-4 w-24' />
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : isError ? (
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-48 text-center'
-                >
-                  <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
-                    <AlertCircle className='size-8' />
-                    <p className='text-sm font-medium'>{t('table.error')}</p>
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      onClick={onRetry}
-                      className='mt-2'
+    <TableSelectionProvider
+      isSelected={isSelected}
+      onToggleSelect={onToggleSelect}
+      isAllPageSelected={isAllPageSelected}
+      isPartiallySelected={isPartiallySelected}
+      onToggleSelectAll={onToggleSelectAll}
+    >
+      <div className='space-y-4'>
+        <div className='rounded-md border border-border bg-card'>
+          <Table className='border-separate border-spacing-0'>
+            <TableHeader>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHead
+                      key={header.id}
+                      colSpan={header.colSpan}
+                      className={header.column.columnDef.meta?.className}
                     >
-                      <RefreshCw className='me-1.5 size-3.5' />
-                      {t('table.retry')}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.original.id}
-                  data-state={
-                    isSelected?.(row.original.id) ? 'selected' : undefined
-                  }
-                  className={cn(
-                    'cursor-pointer hover:bg-muted/50',
-                    isSelected?.(row.original.id) && 'bg-muted/60'
-                  )}
-                  onClick={() => onSelect(row.original)}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </TableCell>
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(
+                            header.column.columnDef.header,
+                            header.getContext()
+                          )}
+                    </TableHead>
                   ))}
                 </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-48 text-center'
-                >
-                  <div className='flex flex-col items-center justify-center gap-2'>
-                    <Camera className='size-8 text-muted-foreground' />
-                    <p className='text-sm font-medium'>
-                      {t(
-                        mode === 'vehicles'
-                          ? 'table.emptyVehicles'
-                          : 'table.empty'
-                      )}
-                    </p>
-                    <p className='text-xs text-muted-foreground'>
-                      {t(
-                        mode === 'vehicles'
-                          ? 'table.emptyVehiclesDesc'
-                          : 'table.emptyDesc'
-                      )}
-                    </p>
-                  </div>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                Array.from({ length: placeholderCount }).map((_, rIdx) => (
+                  <TableRow key={`cap-table-skel-${rIdx}`}>
+                    {columns.map((_, cIdx) => (
+                      <TableCell key={`cap-table-skel-c-${cIdx}`}>
+                        {cIdx === 0 ? (
+                          <Skeleton className='mx-auto size-4 rounded' />
+                        ) : cIdx === 1 ? (
+                          <Skeleton
+                            className={cn(
+                              'rounded-md',
+                              mode === 'vehicles' ? 'h-14 w-40' : 'size-10'
+                            )}
+                          />
+                        ) : (
+                          <Skeleton className='h-4 w-24' />
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : isError ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={columns.length}
+                    className='h-48 text-center'
+                  >
+                    <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
+                      <AlertCircle className='size-8' />
+                      <p className='text-sm font-medium'>{t('table.error')}</p>
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        onClick={onRetry}
+                        className='mt-2'
+                      >
+                        <RefreshCw className='me-1.5 size-3.5' />
+                        {t('table.retry')}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : table.getRowModel().rows?.length ? (
+                table.getRowModel().rows.map((row) => (
+                  <TableRow
+                    key={row.original.id}
+                    data-state={
+                      isSelected?.(row.original.id) ? 'selected' : undefined
+                    }
+                    className={cn(
+                      'cursor-pointer hover:bg-muted/50',
+                      isSelected?.(row.original.id) && 'bg-muted/60'
+                    )}
+                    onClick={() => onSelect(row.original)}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext()
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell
+                    colSpan={columns.length}
+                    className='h-48 text-center'
+                  >
+                    <div className='flex flex-col items-center justify-center gap-2'>
+                      <Camera className='size-8 text-muted-foreground' />
+                      <p className='text-sm font-medium'>
+                        {t(
+                          mode === 'vehicles'
+                            ? 'table.emptyVehicles'
+                            : 'table.empty'
+                        )}
+                      </p>
+                      <p className='text-xs text-muted-foreground'>
+                        {t(
+                          mode === 'vehicles'
+                            ? 'table.emptyVehiclesDesc'
+                            : 'table.emptyDesc'
+                        )}
+                      </p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
 
-      <DataTablePagination table={table} />
-    </div>
+        {!isError && total > 0 && <DataTablePagination table={table} />}
+      </div>
+    </TableSelectionProvider>
   )
 }

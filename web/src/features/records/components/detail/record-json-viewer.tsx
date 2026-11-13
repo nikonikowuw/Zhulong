@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Code2, Copy, Table2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { copyToClipboard } from '@/lib/clipboard'
+import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -34,9 +35,7 @@ function renderValue(val: unknown): ReactNode {
         variant='outline'
         className={cn(
           'font-mono text-[11px]',
-          val
-            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:border-emerald-500/40 dark:bg-emerald-500/20 dark:text-emerald-400'
-            : 'border-neutral-300 bg-neutral-100 text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800'
+          statusLevelClass(val ? 'active' : 'inactive')
         )}
       >
         {String(val)}
@@ -75,6 +74,15 @@ export function RecordJsonViewer({
   const { t } = useTranslation('records')
   const [mode, setMode] = useState<'structured' | 'code'>(defaultMode)
   const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current)
+      }
+    }
+  }, [])
 
   const entries = Object.entries(data || {})
   const hasData = entries.length > 0
@@ -92,8 +100,14 @@ export function RecordJsonViewer({
   const handleCopy = async () => {
     const success = await copyToClipboard(jsonString)
     if (success) {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current)
+      }
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      timerRef.current = setTimeout(() => {
+        setCopied(false)
+        timerRef.current = null
+      }, 2000)
     }
   }
 

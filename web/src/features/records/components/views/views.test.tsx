@@ -181,11 +181,38 @@ describe('Records Views', () => {
         />
       )
 
-      // 表格与表头必须存在
+      // 表格与表头必须存在，且 0 条记录时不残留分页条
       await expect.element(getByRole('table')).toBeInTheDocument()
       await expect.element(getByTextTable('抓拍快照')).toBeInTheDocument()
       await expect.element(getByTextTable('抓拍时间')).toBeInTheDocument()
       await expect.element(getByTextTable('摄像机')).toBeInTheDocument()
+      expect(getByTextTable(/Page 1 of/).query()).toBeNull()
+    })
+
+    it('renders "-" safely when capturedAt is invalid', async () => {
+      const brokenRecord: Recognition = {
+        ...sampleRecognitions[0],
+        id: 'rec-invalid-time',
+        capturedAt: 'not-a-valid-date',
+      }
+      const { getByText } = await render(
+        <RecognitionsView
+          items={[brokenRecord]}
+          total={1}
+          page={1}
+          pageSize={20}
+          view='table'
+          isLoading={false}
+          isError={false}
+          onPageChange={vi.fn()}
+          onPageSizeChange={vi.fn()}
+          onSelect={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      )
+
+      await expect.element(getByText('Alice Zhang')).toBeInTheDocument()
+      expect(getByText('-').elements().length).toBeGreaterThanOrEqual(1)
     })
   })
 

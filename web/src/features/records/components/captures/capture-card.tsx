@@ -1,10 +1,12 @@
-import { format } from 'date-fns'
+import { memo } from 'react'
 import { Camera, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { categoryBadgeClass } from '@/lib/category-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
+import { formatRecordTime } from '../../data/format-time'
 import { type Capture } from '../../data/schema'
 import { formatTargetType, targetTypeBadgeClass } from '../../data/target-type'
 import { MediaImage } from '../common/media-image'
@@ -15,12 +17,13 @@ interface CaptureCardProps {
   onSelect: (item: Capture) => void
 }
 
-export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
+export const CaptureCard = memo(function CaptureCard({
+  item,
+  cameraName,
+  onSelect,
+}: CaptureCardProps) {
   const { t } = useTranslation('records')
-  const formattedTime = item.capturedAt
-    ? format(new Date(item.capturedAt), 'MM-dd HH:mm:ss')
-    : '-'
-
+  const formattedTime = formatRecordTime(item.capturedAt, 'MM-dd HH:mm:ss')
   const scorePercent = Math.round((item.score || 0) * 100)
 
   const attrs = item.attributes as Record<string, unknown> | undefined
@@ -30,7 +33,7 @@ export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
   return (
     <Card
       onClick={() => onSelect(item)}
-      className='group relative cursor-pointer overflow-hidden border-border bg-card transition-all hover:border-sky-500/50 hover:shadow-md'
+      className='group relative cursor-pointer overflow-hidden border-border bg-card transition-all hover:border-primary/40 hover:shadow-md'
     >
       <div className='relative aspect-square w-full overflow-hidden bg-muted/40'>
         <MediaImage
@@ -82,7 +85,12 @@ export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
 
         {plateNo && (
           <div className='flex items-center justify-between gap-2'>
-            <span className='inline-flex items-center rounded border border-blue-600/30 bg-blue-600/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-blue-600 dark:text-blue-400'>
+            <span
+              className={cn(
+                'inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-xs font-semibold',
+                categoryBadgeClass('blue')
+              )}
+            >
               {plateNo}
             </span>
           </div>
@@ -99,4 +107,4 @@ export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
       </CardContent>
     </Card>
   )
-}
+})

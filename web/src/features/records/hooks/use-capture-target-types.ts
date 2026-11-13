@@ -6,10 +6,11 @@ export const CAPTURE_TARGET_TYPES_QUERY_KEY = [
   'capture-target-types',
 ] as const
 
-export function useCaptureTargetTypes() {
+export function useCaptureTargetTypes(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: CAPTURE_TARGET_TYPES_QUERY_KEY,
     queryFn: () => recordsApi.getCaptureTargetTypes(),
+    enabled: options?.enabled ?? true,
     staleTime: 60_000,
   })
 }

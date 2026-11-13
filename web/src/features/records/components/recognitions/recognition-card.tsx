@@ -1,4 +1,4 @@
-import { format } from 'date-fns'
+import { memo } from 'react'
 import { Eye, UserCheck, UserX } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { statusLevelClass } from '@/lib/status-palette'
@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
+import { formatRecordTime } from '../../data/format-time'
 import { type Recognition } from '../../data/schema'
 import { MediaImage } from '../common/media-image'
 
@@ -15,16 +16,13 @@ interface RecognitionCardProps {
   onSelect: (item: Recognition) => void
 }
 
-export function RecognitionCard({
+export const RecognitionCard = memo(function RecognitionCard({
   item,
   cameraName,
   onSelect,
 }: RecognitionCardProps) {
   const { t } = useTranslation('records')
-  const formattedTime = item.capturedAt
-    ? format(new Date(item.capturedAt), 'MM-dd HH:mm:ss')
-    : '-'
-
+  const formattedTime = formatRecordTime(item.capturedAt, 'MM-dd HH:mm:ss')
   const simPercent = Math.round((item.similarity || 0) * 100)
 
   return (
@@ -99,4 +97,4 @@ export function RecognitionCard({
       </CardContent>
     </Card>
   )
-}
+})
