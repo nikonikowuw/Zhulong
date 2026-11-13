@@ -9,7 +9,7 @@
 ```text
 web/
   src/
-    assets/                           # 品牌图标、SVG 与插画资产
+    assets/                           # 品牌图标、自定义图标、SVG 与插画资产
     components/                       # 全局通用组件体系
       data-table/                     # TanStack Table 表格构件 (toolbar, pagination, column-header, bulk-actions 等)
       layout/                         # 控制台框架布局构件 (app-sidebar, header, main, nav-group, nav-user, top-nav 等)
@@ -21,29 +21,56 @@ web/
     config/                           # 字体与全局配置项 (fonts.ts 等)
     context/                          # 全局 UI 状态上下文 (theme-provider, layout-provider, font-provider, direction-provider, search-provider)
     features/                         # 业务领域切片 (Feature Slices)
-      <feature-name>/                 # 业务功能模块 (如 camera, live, playback, users, settings 等)
-        components/                   # 模块私有 UI 组件
-        data/                         # 模块 mock 数据、字段 schema 定义
-        hooks/                        # 模块专属 Hooks (封装 TanStack Query 与数据派生)
-        api/                          # 强类型 REST 请求函数与 Zod schema
-        types.ts                      # 模块私有类型定义
-        index.tsx                     # 模块主入口视图 / 公共门面组件
-      errors/                         # 401, 403, 404, 500, 503 等标准错误视图
-    hooks/                            # 通用自定义 Hooks (use-mobile, use-dialog-state, use-table-url-state)
-    lib/                              # 基础通用工具库 (utils.ts, cookies.ts, handle-server-error.ts 等)
+      alert-push/                     # 告警推送目标配置 (Webhook/MQTT)
+      algorithms/                     # 算法包管理、上传、卸载与诊断
+      api-tokens/                     # M2M OpenAPI Token 管理
+      audit/                          # 审计日志查询
+      auth/                           # 登录与认证布局
+      cameras/                        # 摄像机增删改查、状态与主子流配置
+      errors/                         # 401, 403, 404, 500, 503 标准错误视图
+      gb28181/                        # GB/T 28181 信令配置、设备与通道导入
+      image-search/                   # 以图搜图业务切片
+      live/                           # 多路实时监看、按需音频与音画同步服务
+      persons/                        # 人员与人脸底库管理
+      records/                        # 感知识别、告警与抓拍记录检索
+      settings/                       # 系统设置集合 (appearance, network, storage, system, time 等)
+      spatial/                        # 2D 空间画布、点位标定与人员轨迹
+      tasks/                          # 视频分析任务与区域/布防调度管理
+      # 典型切片内部结构：
+      #   api/                        # 强类型 REST 请求函数与 Zod schema
+      #   components/                 # 模块私有 UI 组件
+      #   data/                       # 静态配置、字段 schema 定义
+      #   hooks/                      # 模块专属 Hooks (封装 TanStack Query 与数据派生)
+      #   locales/                    # 模块级三语词条 (如适用)
+      #   contract.ts                 # 跨模块共享 hook/类型门面 (避免通过 index.tsx 重导出非组件破坏 HMR)
+      #   index.tsx                   # 模块页面主入口组件
+    hooks/                            # 通用自定义 Hooks (use-mobile, use-dialog-state, use-table-url-state, use-account-identity)
+    lib/                              # 基础通用工具库 (api-client.ts, i18n.ts, logger.ts, box-geometry.ts, media-url.ts, form-error.ts, utils.ts 等)
                                       #   设计令牌唯一来源：status-palette.ts (§1.3.3 四级状态色板)
                                       #                      category-palette.ts (§1.3.6 分类色板)
+    locales/                          # 全局共享三语词条 (en, zh-Hans, zh-Hant)
     routes/                           # TanStack Router 文件系统路由层
       __root.tsx                      # 根路由 (注入 QueryClient, Toaster, Devtools 等)
       _authenticated/                 # 鉴权路由组 (挂载 AuthenticatedLayout 框架)
         route.tsx                     # 鉴权布局注入点
         index.tsx                     # 控制台入口 (/)，重定向到实时监看
-        <feature>/                    # 业务路由入口 (如 cameras/index.tsx, persons/index.tsx, algorithms/index.tsx, live/index.tsx, audit/index.tsx, records/index.tsx, tasks/index.tsx)
-      (auth)/                         # 认证独立路由组 (sign-in.tsx, sign-up.tsx, otp.tsx 等)
-      (errors)/                       # 错误页面路由组 (401.tsx, 404.tsx, 500.tsx 等)
+        algorithms/                   # 独立业务页面路由：algorithms, audit, cameras, image-search,
+        audit/                        #   live, persons, records, spatial, tasks, errors/$error.tsx
+        cameras/
+        errors/
+        image-search/
+        live/
+        persons/
+        records/
+        settings/                     # 系统设置子路由组 (含 appearance, network, storage, system, time,
+                                      #   以及 gb28181.tsx, alert-push.tsx, api-tokens.tsx)
+        spatial/
+        tasks/
+      (auth)/                         # 认证独立路由组 (sign-in.tsx)
+      (errors)/                       # 错误页面路由组 (401.tsx, 403.tsx, 404.tsx, 500.tsx, 503.tsx)
     stores/                           # Zustand 客户端状态 (auth-store.ts 等)
     styles/                           # 样式定义 (index.css, theme.css - 基于 Tailwind CSS v4 & OKLCH)
-    test-utils/                       # 单元/组件测试通用工具库
+    test-utils/                       # Playwright 浏览器测试通用工具库 (测试与源码同目录共置，视觉对比截图位于各 __screenshots__/)
     routeTree.gen.ts                  # ⚠️ TanStack Router 自动生成的路由树定义 (严禁手动修改)
     main.tsx                          # 应用根挂载入口
 ```
@@ -59,20 +86,20 @@ web/
    - **严禁**在 `routes/` 文件中直接书写百行以上的复杂表单、接口请求或内联 UI 细节。
 
    ```typescript
-   // src/routes/_authenticated/camera/index.tsx
+   // src/routes/_authenticated/cameras/index.tsx
    import { createFileRoute } from '@tanstack/react-router'
    import { z } from 'zod'
-   import { CameraPage } from '@/features/camera'
+   import { CamerasPage } from '@/features/cameras'
 
-   const cameraSearchSchema = z.object({
+   const camerasSearchSchema = z.object({
      page: z.number().catch(1),
      pageSize: z.number().catch(10),
      search: z.string().optional(),
    })
 
-   export const Route = createFileRoute('/_authenticated/camera/')({
-     validateSearch: (search) => cameraSearchSchema.parse(search),
-     component: CameraPage,
+   export const Route = createFileRoute('/_authenticated/cameras/')({
+     validateSearch: (search) => camerasSearchSchema.parse(search),
+     component: CamerasPage,
    })
    ```
 
@@ -103,8 +130,8 @@ web/
 2. **跨模块公共导出边界**：
    - 跨业务特性引用必须通过对应特性的门面入口：
      ```typescript
-     import { CameraCard, type Camera } from '@/features/camera' // ✅ 正确
-     // ❌ 严禁穿透导入私有路径: '@/features/camera/components/CameraCard'
+     import { CameraCard, type Camera } from '@/features/cameras' // ✅ 正确
+     // ❌ 严禁穿透导入私有路径: '@/features/cameras/components/CameraCard'
      ```
 3. **禁止内部反向循环引用**：
-   - 特性内部文件相互引用时使用相对路径（如 `./components/CameraCard`），**严禁**在内部通过 `from './index'` 或 `from '@/features/camera'` 反向导入自身，防止打包时产生循环依赖（Circular Dependency）。
+   - 特性内部文件相互引用时使用相对路径（如 `./components/CameraCard`），**严禁**在内部通过 `from './index'` 或 `from '@/features/cameras'` 反向导入自身，防止打包时产生循环依赖（Circular Dependency）。

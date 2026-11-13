@@ -18,13 +18,19 @@
 | [边缘媒体存储与动态生命周期](./storage-guidelines.md) | 存储路径规范、statfs 水位感知、外挂盘防穿透（写侧熔断 + 读侧穿透）、双水位回差清理与熔断 |
 | [媒体文件服务（只读字节层）](./mediafile-guidelines.md) | 按相对路径取元信息与 Range 传输、`os.Root` 四层路径防护、无列表边界、裸字节端点与 HEAD/503 陷阱 |
 | [摄像机业务与生命周期](./camera-guidelines.md) | 主子流建模、AES-GCM 凭据加密、双流原子门禁、正交状态机与探活调度 |
+| [GB/T 28181 国标信令接入](./gb28181-guidelines.md) | SIP 信令分层、Digest 认证、AES 密文探针、可降级启动与未验证互操作边界 |
 | [感知记录与抓拍](./record-guidelines.md) | 推理结果过滤与 fan-out、记录归属快照、异步证据图和记录保留清理 |
+| [空间画布与轨迹分析](./spatial-guidelines.md) | 2D 底图目录生命周期、格式白名单、相机坐标归一化与驻留轨迹聚合 |
+| [告警多目标推送与签名媒体](./alertpush-guidelines.md) | Webhook / MQTT 多目标推送、布尔零值陷阱、HMAC-SHA256 签名媒体访问边界 |
+| [OpenAPI 与后台异步任务](./openapi-and-asyncjob-guidelines.md) | M2M Bearer 并发上传限流与 Swagger 契约对齐；`asyncjob` 单向状态机与重启恢复 |
 | [算法包开发与交付规范](./algorithm-guidelines.md) | 算法包物理拓扑、manifest 元数据、C ABI/SDK 契约、结果规范与验包门禁 |
 | [视频分析任务管理](./task-guidelines.md) | 视频流分析任务调度、算法与相机绑定、算力预算分配与 D5 联动契约 |
 | [宿主启动与构建合同](./host-runtime-contract.md) | CLI、health/SPA/API 路由隔离、迁移、CGO 静态链接与跨层验证合同 |
-| [错误处理与统一契约](./error-handling.md) | `AppError` 结构、必需三字段与可选字段级 `details`、后端 i18n 错误翻译、Zap 日志脱敏 |
-| [结构化日志规范](./logging-guidelines.md) | Uber Zap 规约、强类型字段、等级划分、敏感信息脱敏 |
+| [错误处理与统一契约](./error-handling.md) | `AppError` / `apperr` 结构、必需三字段与可选字段级 `details`、模块化 i18n 字典与日志脱敏 |
+| [结构化日志规范](./logging-guidelines.md) | Uber Zap 规约、`logctx` / `logsafe` / `nativelog` / `clientlog`、强类型字段与脱敏 |
 | [质量检查与测试门禁](./quality-guidelines.md) | 格式化、`-race` 竞态检测、审计测试接线与组件包构造期捕获约定 |
+
+> **基础工具包索引**：`internal/apperr` 见 [错误处理](./error-handling.md)；`internal/logctx`、`internal/logsafe`、`internal/nativelog`、`internal/clientlog` 见 [结构化日志](./logging-guidelines.md)；`internal/idutil` 见 [数据库规范](./database-guidelines.md)；`internal/apitoken` 见 [认证规范](./authentication-guidelines.md)；`internal/faceextract` 见 [CGO 与算法边界](../native/cgo-contract.md)。
 
 ---
 
@@ -42,7 +48,7 @@
 - [ ] **底层错误脱敏**：SQLite/CGO 底层真实错误是否封装在内部打日志，未裸抛给前端？
 - [ ] **严禁 AutoMigrate**：表变动是否以严格递增的 SQL 脚本置于 `migrations/`？是否**只改动尚未交付的迁移**——已应用的迁移必须追加新版本而非改正文（见 [database-guidelines.md](./database-guidelines.md)）？
 - [ ] **对外业务键契约**：新增的对外业务键是否满足**非空 + 唯一 + 不可变**，且与内部代理主键严格分离？
-- [ ] **文档与实现同步**：本次改动是否同步更新了 `prd.md` / `design.md` 里的建表语句、迁移编号与模块清单？
+- [ ] **文档与实现同步**：本次改动是否同步更新了适用规范，以及（若存在当前 `.trellis/tasks/<task>/` 任务目录）对应 `prd.md` / `design.md` 里的建表语句、迁移编号与模块清单？
 - [ ] **新增模块入 Swagger 白名单**：若新增了业务包且带端点，是否同步 `Makefile` 的 `api-docs --dir`？（`--dir` 是显式白名单，漏加会导致文档静默缺项）
 
 ---

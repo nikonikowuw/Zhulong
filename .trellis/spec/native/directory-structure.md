@@ -4,68 +4,64 @@
 
 ---
 
-## 1. 当前实现与规划目录
+## 1. 真实工程目录拓扑
 
-当前实现：
-- `src/abi/engine.cpp`：C ABI 异常与句柄边界转换；
-- `src/pipeline/`：流水线核心组件解耦
-  - `bounded_queue.hpp`：支持 BLOCK / DROP_OLDEST / DROP_NEWEST 策略的线程安全有界队列；
-  - `subscription.hpp / .cpp`：数据包订阅上下文与同步排空 (Drain)；
-  - `stream.hpp / .cpp`：物理流拓扑、拉流 Worker 与按需异步解码流水线；
-  - `engine.hpp / .cpp`：顶层流池管理、Reaper 清理线程与 Probe。
-- `src/nodes/capture/rtsp_input.*`：FFmpeg 所有权、URI 与时钟契约；
-- `src/nodes/decode/`：
-  - `decoder.hpp`：统一解码节点抽象契约 (`IDecodeNode`) 与统一返回码常量 (`decode_ok` / `decode_again` / `decode_backend_failure`)；
-  - `decoder_factory.cpp`：`IDecodeNode::create` 后端分流与透明回退，不寄生在任何具体后端里；
-  - `ffmpeg_decoder.hpp / .cpp`：单流确定性软解实现 (`FFmpegDecodeNode`)，产出带 RAII `release_fn` 的 `HardwareFrame`；
-  - `mpp_loader.hpp / .cpp`：Rockchip MPP 动态装载器与只读符号表 (`MppLoader::Api`)；
-  - `mpp_decoder.hpp / .cpp`：Rockchip MPP 硬解实现 (`MppDecodeNode`) 与外部缓冲组引用计数持有者 (`BufferGroup`)。
-- `src/common/mpp/mpp_api_types.hpp`：无编译期 SDK 依赖的 MPP 类型/枚举/函数表声明（含 `MppBufferInfo` 镜像）。
-  它是**跨节点共享契约**（`nodes/decode` 与 `nodes/snapshot` 都用），因此不放在任何一个节点目录里；
-  镜像与厂商头的一致性由 `native/tests/mpp_abi_conformance_test.cpp` 的编译期断言守护。
-- `scripts/build.py` 负责依赖、目标和最终 Go 链接；`tests/` 包含 Native、纯 C、真实 loopback RTSP、硬件帧生命周期与解码节点回归。当前基础构建与主机测试不要求厂商 SDK；可选硬件后端及其专有头文件由 `src/backends/` 隔离，并由对应 profile、SDK/BSP 和目标板环境单独启用与验证。
-
-以下仍是后续完整节点架构的规划，功能未开始前严禁创建空目录。
+当前 `native/` 已落地的目录与模块如下：
 
 ```text
 native/
-  include/
-    Zhulong/engine.h            # 唯一公开纯 C ABI 头文件 (提供给 Go/CGO 引用)
+  include/Zhulong/
+    engine.h                    # 唯一公开纯 C ABI 头文件 (提供给 Go/CGO 引用)
+    frame.hpp                   # 原生帧数据结构契约
   sdk/
-    include/zhulong/
-      plugin.h                # 插件纯 C ABI 导出规范 (v1)
-      algo.hpp                # 面向开发者的现代化 C++17 Header-only SDK
+    abi.json                    # 插件 ABI 元数据契约
+    include/zhulong/            # 插件纯 C ABI (plugin.h) 与现代 C++17 Header-only SDK (algo.hpp, algo_main.hpp, regions.hpp, platform/, runtime/)
+    src/                        # 算法包入口骨架 (algo_main.cpp) 与内部辅助组件 (gallery_*, motion_gate, result_serializer, stall_watch, task_regions, worker_guard)
+    tools/                      # 包工程脚手架 (new_package.py) 与黑盒验包探针 (algo_probe.py)
   src/
-    abi/engine.cpp            # C ABI 包装实现 (句柄转换、全异常拦截)
-    algorithm/                # 算法插件系统
-      runtime/                # 公共运行库 HAL (IInferenceBackend, IVisionBackend, CPU桩)
-      runner/                 # 独立算法 Runner 宿主与独立黑盒验包 CLI
-    pipeline/                 # 节点基类、流水线编排、中立契约与有界队列
-      node.hpp, pipeline.hpp, packet.hpp, frame.hpp, result.hpp, bounded_queue.hpp
-    nodes/                    # 具体处理节点 (单向通过有界队列传递)
-      capture/                # RTSP/V4L2 视频采集节点
-      decode/                 # 硬件/软件解码节点
-      preprocess/             # CSC、缩放、Padding 预处理节点
-      inference/              # NPU/GPU 推理执行节点
-    backends/                 # 厂商 SDK 适配层 (RKNN / CANN / TensorRT 等，隔离专有头文件)
-  tests/                      # ABI、流水线背压与节点逻辑测试 (支持脱机合成数据运行)
+    abi/                        # C ABI 包装实现 (engine.cpp, snapshot.cpp：句柄转换、全异常拦截)
+    algorithm/
+      ipc/                      # FrameBroker 共享内存池、Unix Socket 与二进制 IPC 协议
+      runtime/                  # 公共运行库 HAL (CPU 视觉桩、后处理、底库注册、Letterbox、运行时工厂)
+    backends/                   # 厂商 SDK 适配层，物理隔离专有头文件：
+      onnx/                     # ONNX Runtime 推理后端
+      rknn/                     # Rockchip RKNN NPU 推理后端
+      rga/                      # Rockchip RGA 硬件前处理后端
+    common/                     # 跨节点共享契约与工具 (log.*, mpp/mpp_api_types.hpp, path_utils.hpp, view_window.hpp)
+    nodes/                      # 媒体处理节点：
+      capture/                  # RTSP 采集与 FFmpeg 所有权管理
+      decode/                   # 统一解码节点契约 (IDecodeNode)、工厂、FFmpeg 软解与 MPP 动态装载硬解
+      preprocess/               # 分析窗口裁剪 (window_crop)
+      snapshot/                 # 抓拍 JPEG 编码器 (软编与 MPP 硬编)
+    pipeline/                   # 顶层引擎、物理流池、有界队列、订阅、音视频归一化、运动检测与帧发布器
+    platform/dmabuf/            # DMA-BUF 分配与同步原语
+  profiles/                     # 目标平台交叉编译配置 (rk3568-rknn.json, rk3568-rknn-rga.json, rk3568-stub.json 等)
+  scripts/                      # 构建包装脚本 (build.py)、依赖与包漂移校验 (check_package_drift.py)、板端验证脚本
+  tests/                        # C/C++ 单测、RTSP/RTP 回环集成测试、ABI 镜像一致性测试与 Go 桥接回归脚本
+  vendor/                       # 交叉编译所需的第三方头文件与运行库 (mpp, rga, rknpu2)
 ```
+
+> **核心约定**：
+> - `src/common/mpp/mpp_api_types.hpp` 为跨节点共享的 MPP 类型/枚举/函数表镜像，一致性由 `native/tests/mpp_abi_conformance_test.cpp` 编译期断言守护。
+> - 基础构建与主机测试不要求厂商 SDK；可选硬件后端及其专有头文件由 `src/backends/` 隔离，并由对应 profile、SDK/BSP 和目标板环境单独启用与验证。
+> - 新功能未开始前严禁预先创建空目录占位。
 
 ---
 
 ## 2. 单向流转与边界铁律
 
-当前已实现依赖：`include/Zhulong/engine.h ➔ src/abi ➔ src/pipeline/engine（编排） ➔ src/nodes/capture`，无反向依赖；采集层只依赖公开中立 C view/内部 FFmpeg。后续具体节点与中立 pipeline 数据契约分层时，保持节点只依赖契约、不互相窥探，厂商适配头仍隔离在 backends。
+当前依赖流向严格单向，无反向依赖：
 
 ```txt
-未来节点数据契约：src/nodes ➔ src/pipeline（中立契约/队列）
-厂商 SDK：只在 src/backends 内包含专有头文件
+include/Zhulong/engine.h ➔ src/abi ➔ src/pipeline ➔ src/nodes/{capture, decode, preprocess, snapshot}
+                                                  ➔ src/algorithm/ipc (FrameBroker)
+sdk/ (plugin.h / algo.hpp) ➔ src/algorithm/runtime ➔ src/backends/{onnx, rknn, rga}
 ```
 
 1. **唯一对外公开头文件**：`include/Zhulong/engine.h` 是 Go/CGO **唯一允许引入的原生头文件**，严禁引入 C++ 容器、模板或厂商 SDK 头文件。
 2. **ABI 异常防爆门**：`src/abi` 必须在最外层以 `try { ... } catch (...) { return Zhulong_ERR_INTERNAL; }` 包覆，严禁 C++ 异常穿越到 CGO。
-3. **节点解耦流转**：未来异步处理节点不得直接窥探其他节点状态，应通过有界队列传递不可变包/帧。当前只有采集层与同步包回调，没有解码队列；详见 [接入合同](./ingestion-contract.md)。
-4. **厂商 SDK 物理隔离**：特定 NPU/GPU 专有头文件只能在 `src/backends/` 内引用，严禁污染核心流水线契约。
+3. **节点解耦流转**：节点之间通过中立数据契约与有界队列传递不可变包/帧，不直接窥探其他节点内部状态；详见 [接入合同](./ingestion-contract.md) 与 [流水线规范](./pipeline-guidelines.md)。
+4. **厂商 SDK 物理隔离**：特定 NPU/GPU 专有头文件只能在 `src/backends/` 内引用，严禁污染核心流水线与公开头文件契约。
 
 ---
 
