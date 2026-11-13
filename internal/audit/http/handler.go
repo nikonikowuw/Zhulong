@@ -2,6 +2,7 @@ package audithttp
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -58,6 +59,8 @@ func bindQuery(c *gin.Context, target any) error {
 // @Param        startTime query string false "Start time (RFC3339)"
 // @Param        endTime query string false "End time (RFC3339)"
 // @Success      200 {object} httputil.Response{data=httputil.PaginatedData[AuditLogResponse]}
+// @Failure      422 {object} httputil.Response
+// @Failure      500 {object} httputil.Response "DATABASE_ERROR"
 // @Router       /audit/logs [get]
 func (h *Handler) ListLogs(c *gin.Context) {
 	var q ListLogsQuery
@@ -74,7 +77,7 @@ func (h *Handler) ListLogs(c *gin.Context) {
 
 	items, total, err := h.service.List(c.Request.Context(), filter)
 	if err != nil {
-		httputil.WriteError(c, err)
+		httputil.WriteError(c, apperr.Internal("DATABASE_ERROR", "Failed to list audit logs", err))
 		return
 	}
 
@@ -87,7 +90,9 @@ func (h *Handler) ListLogs(c *gin.Context) {
 // @Tags         audit
 // @Produce      json
 // @Param        before query string false "Clear logs older than this RFC3339 timestamp"
-// @Success      200 {object} httputil.Response{data=object}
+// @Success      200 {object} httputil.Response{data=ClearLogsResponse}
+// @Failure      422 {object} httputil.Response
+// @Failure      500 {object} httputil.Response "DATABASE_ERROR"
 // @Router       /audit/logs [delete]
 //
 // Clearing writes its own audit.clear record in the same transaction as the
@@ -109,9 +114,9 @@ func (h *Handler) ClearLogs(c *gin.Context) {
 
 	cleared, err := h.service.ClearWithAudit(c.Request.Context(), audit.TableName, before)
 	if err != nil {
-		httputil.WriteError(c, err)
+		httputil.WriteError(c, apperr.Internal("DATABASE_ERROR", "Failed to clear audit logs", err))
 		return
 	}
 
-	httputil.Success(c, gin.H{"cleared": cleared})
+	httputil.Success(c, ClearLogsResponse{Cleared: cleared})
 }

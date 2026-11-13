@@ -1105,6 +1105,18 @@ const docTemplate = `{
                                 }
                             ]
                         }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "DATABASE_ERROR",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
                     }
                 }
             },
@@ -1136,11 +1148,23 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/audithttp.ClearLogsResponse"
                                         }
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "DATABASE_ERROR",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
                         }
                     }
                 }
@@ -7551,6 +7575,14 @@ const docTemplate = `{
                 },
                 "username": {
                     "type": "string"
+                }
+            }
+        },
+        "audithttp.ClearLogsResponse": {
+            "type": "object",
+            "properties": {
+                "cleared": {
+                    "type": "integer"
                 }
             }
         },

@@ -20,6 +20,10 @@ const pruneAuditLogsSQL = "DELETE FROM audit_logs WHERE id IN (" +
 // drain does not build a single oversized statement.
 const batchInsertSize = 100
 
+// defaultListLimit caps queries that omit Limit, preventing unbounded full-table
+// reads and ensuring OFFSET is always paired with LIMIT in SQLite.
+const defaultListLimit = 100
+
 // Store provides persistence operations for audit logs.
 type Store struct {
 	dbProvider database.DBProvider
@@ -50,7 +54,7 @@ func (s *Store) Create(ctx context.Context, log *AuditLog) error {
 	if err != nil {
 		return err
 	}
-	log.CreatedAt = normalizeCreatedAt(log.CreatedAt, time.Now().UTC())
+	normalizeAuditLog(log, time.Now().UTC())
 	if err := gorm.G[AuditLog](db).Create(ctx, log); err != nil {
 		return fmt.Errorf("create audit log: %w", err)
 	}
@@ -67,13 +71,34 @@ func (s *Store) CreateBatch(ctx context.Context, logs []*AuditLog) error {
 		return err
 	}
 	now := time.Now().UTC()
+	validLogs := make([]*AuditLog, 0, len(logs))
 	for _, l := range logs {
-		l.CreatedAt = normalizeCreatedAt(l.CreatedAt, now)
+		if l == nil {
+			continue
+		}
+		normalizeAuditLog(l, now)
+		validLogs = append(validLogs, l)
 	}
-	if err := gorm.G[*AuditLog](db).CreateInBatches(ctx, &logs, batchInsertSize); err != nil {
+	if len(validLogs) == 0 {
+		return nil
+	}
+	// gorm.G uses T = *AuditLog here because CreateInBatches expects *[]T matching []*AuditLog.
+	if err := gorm.G[*AuditLog](db).CreateInBatches(ctx, &validLogs, batchInsertSize); err != nil {
 		return fmt.Errorf("create audit log batch: %w", err)
 	}
 	return nil
+}
+
+// normalizeAuditLog fills mandatory defaults on log so direct Store callers
+// never trigger the SQLite column default ("admin") or store a zero timestamp.
+func normalizeAuditLog(log *AuditLog, now time.Time) {
+	log.CreatedAt = normalizeCreatedAt(log.CreatedAt, now)
+	if log.Username == "" {
+		log.Username = UsernameUnknown
+	}
+	if log.Status == "" {
+		log.Status = StatusSuccess
+	}
 }
 
 // normalizeCreatedAt returns a UTC creation time, substituting now for a zero
@@ -101,10 +126,10 @@ func (s *Store) List(ctx context.Context, filter Filter) ([]AuditLog, int64, err
 	if filter.Status != "" {
 		g = g.Where("status = ?", filter.Status)
 	}
-	if filter.StartTime != nil {
+	if filter.StartTime != nil && !filter.StartTime.IsZero() {
 		g = g.Where("created_at >= ?", filter.StartTime.UTC())
 	}
-	if filter.EndTime != nil {
+	if filter.EndTime != nil && !filter.EndTime.IsZero() {
 		g = g.Where("created_at <= ?", filter.EndTime.UTC())
 	}
 
@@ -113,10 +138,11 @@ func (s *Store) List(ctx context.Context, filter Filter) ([]AuditLog, int64, err
 		return nil, 0, fmt.Errorf("count audit logs: %w", err)
 	}
 
-	g = g.Order("created_at DESC, id DESC")
-	if filter.Limit > 0 {
-		g = g.Limit(filter.Limit)
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultListLimit
 	}
+	g = g.Order("created_at DESC, id DESC").Limit(limit)
 	if filter.Offset > 0 {
 		g = g.Offset(filter.Offset)
 	}
@@ -206,7 +232,7 @@ func (s *Store) ClearWithAudit(ctx context.Context, entry *AuditLog, before *tim
 			return nil
 		}
 		entry.Detail = fmt.Sprintf("deleted=%d", cleared)
-		entry.CreatedAt = normalizeCreatedAt(entry.CreatedAt, time.Now().UTC())
+		normalizeAuditLog(entry, time.Now().UTC())
 		if err := gorm.G[AuditLog](tx).Create(ctx, entry); err != nil {
 			return fmt.Errorf("persist audit clear record: %w", err)
 		}

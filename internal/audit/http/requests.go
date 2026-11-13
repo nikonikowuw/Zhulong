@@ -22,9 +22,16 @@ type ListLogsQuery struct {
 func (q *ListLogsQuery) ToFilter() (audit.Filter, httputil.PageWindow, error) {
 	window := q.Normalize()
 
+	actions := make([]string, 0, len(q.Actions))
+	for _, action := range q.Actions {
+		if action != "" {
+			actions = append(actions, action)
+		}
+	}
+
 	filter := audit.Filter{
 		Action:  q.Action,
-		Actions: q.Actions,
+		Actions: actions,
 		Status:  q.Status,
 		Limit:   window.PageSize,
 		Offset:  window.Offset,

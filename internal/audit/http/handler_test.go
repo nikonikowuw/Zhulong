@@ -132,6 +132,16 @@ func TestHandlerListLogsFilterAndValidationError(t *testing.T) {
 		t.Fatalf("expected the camera.delete entry, got %q", precedence.Items[0].Action)
 	}
 
+	// Empty actions values are ignored so legacy single action still applies.
+	emptyActions := decodeLogsPage(t, getLogs(t, router, "?action=auth.login&actions=&status=failed"))
+	if emptyActions.Total != 1 || len(emptyActions.Items) != 1 {
+		t.Fatalf("expected empty actions param to fall back to action, got total=%d items=%d",
+			emptyActions.Total, len(emptyActions.Items))
+	}
+	if emptyActions.Items[0].Action != audit.ActionAuthLogin {
+		t.Fatalf("expected auth.login entry, got %q", emptyActions.Items[0].Action)
+	}
+
 	// Multiple actions use OR semantics before pagination; status stays ANDed.
 	multi := decodeLogsPage(t, getLogs(t, router,
 		"?actions=auth.login&actions=camera.delete&status=success&page=1&pageSize=1"))

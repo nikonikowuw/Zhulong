@@ -1,6 +1,8 @@
 package audithttp
 
 import (
+	"context"
+
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 )
@@ -48,5 +50,9 @@ func (o *panicObserver) OnPanic(c *gin.Context) {
 	// the only error text allowed to reach the record.
 	entry.errorMsg = failureSummary(c, "INTERNAL_ERROR")
 
-	recordResolved(o.service, entry, audit.ActorFromContext(c.Request.Context()))
+	ctx := context.Background()
+	if c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	recordResolved(o.service, entry, audit.ActorFromContext(ctx))
 }

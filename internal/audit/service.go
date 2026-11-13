@@ -161,21 +161,49 @@ func entryToLog(entry Entry) *AuditLog {
 // supplied operation description. When the context carries no Actor the event
 // is attributed to "unknown" with an empty IP; it is never promoted to a
 // system event. Recording is non-blocking.
-func (s *Service) RecordEvent(ctx context.Context, action, target, detail string, opErr error) {
-	s.Record(eventEntry(ctx, action, target, detail, opErr))
+func (s *Service) RecordEvent(
+	ctx context.Context,
+	action string,
+	target string,
+	detail string,
+	opErr error,
+) {
+	s.Record(eventEntry(
+		ctx,
+		action,
+		target,
+		detail,
+		opErr,
+	))
 }
 
 // RecordSystem queues an explicit system event. Background work has no client
 // origin, so the IP is left empty and the username is "system"; the source
 // address is never faked as a loopback address.
-func (s *Service) RecordSystem(action, target, detail string, opErr error) {
-	s.Record(systemEntry(action, target, detail, opErr))
+func (s *Service) RecordSystem(
+	action string,
+	target string,
+	detail string,
+	opErr error,
+) {
+	s.Record(systemEntry(
+		action,
+		target,
+		detail,
+		opErr,
+	))
 }
 
 // newEntry builds an Entry for actor and maps the operation outcome onto the
 // status fields. Every recorded event goes through it, so the success/failure
 // mapping cannot drift between the human and system paths.
-func newEntry(actor Actor, action, target, detail string, opErr error) Entry {
+func newEntry(
+	actor Actor,
+	action string,
+	target string,
+	detail string,
+	opErr error,
+) Entry {
 	entry := Entry{
 		IP:       actor.IP,
 		Username: actor.Username,
@@ -192,15 +220,38 @@ func newEntry(actor Actor, action, target, detail string, opErr error) Entry {
 }
 
 // eventEntry builds an Entry for a human-initiated operation from ctx.
-func eventEntry(ctx context.Context, action, target, detail string, opErr error) Entry {
-	return newEntry(ActorFromContext(ctx), action, target, detail, opErr)
+func eventEntry(
+	ctx context.Context,
+	action string,
+	target string,
+	detail string,
+	opErr error,
+) Entry {
+	return newEntry(
+		ActorFromContext(ctx),
+		action,
+		target,
+		detail,
+		opErr,
+	)
 }
 
 // systemEntry builds an Entry for an explicitly recorded system event. The actor
 // carries no IP: background work has no client origin, so the source address is
 // left empty rather than faked as a loopback address.
-func systemEntry(action, target, detail string, opErr error) Entry {
-	return newEntry(Actor{Username: UsernameSystem}, action, target, detail, opErr)
+func systemEntry(
+	action string,
+	target string,
+	detail string,
+	opErr error,
+) Entry {
+	return newEntry(
+		Actor{Username: UsernameSystem},
+		action,
+		target,
+		detail,
+		opErr,
+	)
 }
 
 // Record queues an audit entry asynchronously without blocking the caller.
@@ -274,14 +325,14 @@ func (s *Service) worker() {
 	ticker := time.NewTicker(s.cfg.FlushInterval)
 	defer ticker.Stop()
 
-	batch := []*AuditLog{}
+	batch := make([]*AuditLog, 0, s.cfg.BatchSize)
 
 	flush := func() {
 		if len(batch) == 0 {
 			return
 		}
 		toWrite := batch
-		batch = []*AuditLog{}
+		batch = make([]*AuditLog, 0, s.cfg.BatchSize)
 
 		ctx, cancel := context.WithTimeout(context.Background(), flushTimeout)
 		defer cancel()

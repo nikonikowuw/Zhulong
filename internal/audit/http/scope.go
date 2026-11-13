@@ -34,13 +34,6 @@ type scope struct {
 	domainMessage string
 }
 
-// middlewareAudit records the resolved outcome of a request that declared an
-// audit action.
-type middlewareAudit struct {
-	service *audit.Service
-	actor   audit.Actor
-}
-
 // Middleware returns the declarative audit middleware. It initializes the
 // request actor from the connection source, attaches it to the standard request
 // context, and writes a record when the request declared an audited action.
@@ -196,8 +189,17 @@ func updateScope(c *gin.Context, mutate func(*scope)) {
 
 // Tag declares the audited action for the current request. Handlers call it
 // before binding or side effects so that validation and business failures still
-// produce a record.
-func Tag(c *gin.Context, action, target, detail string) {
+// produce a record. An empty action is ignored so incomplete callers cannot
+// emit nameless audit rows.
+func Tag(
+	c *gin.Context,
+	action string,
+	target string,
+	detail string,
+) {
+	if action == "" {
+		return
+	}
 	updateScope(c, func(s *scope) {
 		s.declared = true
 		s.action = action
@@ -210,7 +212,12 @@ func Tag(c *gin.Context, action, target, detail string) {
 // the JSON body is bound. This is what makes a bind failure auditable.
 func TagMiddleware(action, target, detail string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		Tag(c, action, target, detail)
+		Tag(
+			c,
+			action,
+			target,
+			detail,
+		)
 		c.Next()
 	}
 }
@@ -219,6 +226,9 @@ func TagMiddleware(action, target, detail string) gin.HandlerFunc {
 // share one route but distinguish operations by the request body, such as
 // camera update versus toggle.
 func TagAction(c *gin.Context, action string) {
+	if action == "" {
+		return
+	}
 	updateScope(c, func(s *scope) {
 		s.declared = true
 		s.action = action
@@ -246,6 +256,9 @@ func TagDetail(c *gin.Context, detail string) {
 // from the request goroutine only. The scope fields below are mutex-guarded
 // because handlers may amend them concurrently.
 func TagActor(c *gin.Context, username string) {
+	if c == nil || c.Request == nil {
+		return
+	}
 	actor, ok := audit.FromContext(c.Request.Context())
 	if !ok {
 		actor = audit.Actor{IP: c.ClientIP(), Source: audit.SourceWeb}

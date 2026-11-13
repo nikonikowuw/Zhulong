@@ -277,3 +277,28 @@ func TestNewServiceAppliesConfigDefaults(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceLifecycleStartTwiceAndStopIdempotent(t *testing.T) {
+	store := setupTestStore(t)
+	svc := NewService(store, zap.NewNop(), Config{})
+	ctx := context.Background()
+
+	// Stopping before Start must be a safe no-op.
+	if err := svc.Stop(ctx); err != nil {
+		t.Fatalf("Stop before Start should succeed, got %v", err)
+	}
+
+	if err := svc.Start(ctx); err != nil {
+		t.Fatalf("first Start failed: %v", err)
+	}
+	if err := svc.Start(ctx); err == nil {
+		t.Fatal("expected second Start to return an error")
+	}
+
+	if err := svc.Stop(ctx); err != nil {
+		t.Fatalf("first Stop failed: %v", err)
+	}
+	if err := svc.Stop(ctx); err != nil {
+		t.Fatalf("second Stop should be idempotent, got %v", err)
+	}
+}

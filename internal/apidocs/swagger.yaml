@@ -569,6 +569,11 @@ definitions:
       username:
         type: string
     type: object
+  audithttp.ClearLogsResponse:
+    properties:
+      cleared:
+        type: integer
+    type: object
   auth.AuthStatusResponse:
     properties:
       initialized:
@@ -3353,8 +3358,16 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  type: object
+                  $ref: '#/definitions/audithttp.ClearLogsResponse'
               type: object
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: DATABASE_ERROR
+          schema:
+            $ref: '#/definitions/httputil.Response'
       summary: Clear audit logs
       tags:
       - audit
@@ -3403,6 +3416,14 @@ paths:
                 data:
                   $ref: '#/definitions/httputil.PaginatedData-audithttp_AuditLogResponse'
               type: object
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: DATABASE_ERROR
+          schema:
+            $ref: '#/definitions/httputil.Response'
       summary: List audit logs with filtering and pagination
       tags:
       - audit

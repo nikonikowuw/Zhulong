@@ -504,3 +504,71 @@ func TestChunkedBodyOverflowWithoutTagIsSkipped(t *testing.T) {
 		t.Fatalf("expected no records for an untagged request, got %d", len(records))
 	}
 }
+
+func TestTagEmptyActionIsIgnored(t *testing.T) {
+	h := newHarness(t, func(api *gin.RouterGroup, _ *audit.Service) {
+		api.POST("/empty-tag", func(c *gin.Context) {
+			Tag(c, "", "camera:1", "ignored")
+			TagAction(c, "")
+			httputil.Success(c, gin.H{"ok": true})
+		})
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/empty-tag", nil)
+	if w := do(h.router, req); w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	if records := h.records(t); len(records) != 0 {
+		t.Fatalf("expected empty actions not to emit records, got %d", len(records))
+	}
+}
+
+func TestPanicObserverHandlesNilRequestAndNilInputs(t *testing.T) {
+	store := database.New(t.TempDir(), zap.NewNop())
+	if err := store.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Logf("close test database: %v", err)
+		}
+	})
+
+	svc := audit.NewService(audit.NewStore(store), zap.NewNop(), audit.Config{
+		BufferSize:    10,
+		BatchSize:     5,
+		FlushInterval: 5 * time.Millisecond,
+		MaxEntries:    100,
+	})
+	if err := svc.Start(context.Background()); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	var nilObserver *panicObserver
+	nilObserver.OnPanic(nil)
+
+	observer := NewPanicObserver(svc)
+	observer.OnPanic(nil)
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set(scopeKey, &scope{declared: true, action: audit.ActionCameraCreate, target: "camera:nilreq"})
+	observer.OnPanic(c)
+
+	if err := svc.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	items, total, err := svc.List(context.Background(), audit.Filter{Limit: 10})
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected 1 failed audit record, got total=%d len=%d", total, len(items))
+	}
+	if items[0].Status != audit.StatusFailed || items[0].Username != audit.UsernameUnknown {
+		t.Fatalf("unexpected record on nil request panic: %+v", items[0])
+	}
+}

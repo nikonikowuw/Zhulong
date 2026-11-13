@@ -591,3 +591,69 @@ func TestClearWithAuditFailsWhenDatabaseUnavailable(t *testing.T) {
 		})
 	}
 }
+
+func TestStoreCreateNilAndCreateBatchSkipsNilAndNormalizesDefaults(t *testing.T) {
+	store := setupTestStore(t)
+	ctx := context.Background()
+
+	if err := store.Create(ctx, nil); err != nil {
+		t.Fatalf("Create(nil) should be a noop, got %v", err)
+	}
+
+	if err := store.CreateBatch(ctx, []*AuditLog{nil}); err != nil {
+		t.Fatalf("CreateBatch all-nil should be a noop, got %v", err)
+	}
+
+	err := store.CreateBatch(ctx, []*AuditLog{
+		nil,
+		{Action: ActionCameraCreate, Target: "camera:1"},
+		nil,
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch with mixed nil failed: %v", err)
+	}
+
+	items, total, err := store.List(ctx, Filter{})
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected 1 persisted item, got total=%d len=%d", total, len(items))
+	}
+	if items[0].Username != UsernameUnknown {
+		t.Fatalf("expected direct Store write to normalize empty username to %q, got %q", UsernameUnknown, items[0].Username)
+	}
+	if items[0].Status != StatusSuccess {
+		t.Fatalf("expected default status %q, got %q", StatusSuccess, items[0].Status)
+	}
+	if items[0].CreatedAt.IsZero() {
+		t.Fatal("expected CreatedAt to be populated")
+	}
+}
+
+func TestStoreListWithZeroLimitAndNonZeroOffset(t *testing.T) {
+	store := setupTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2025, 2, 1, 10, 0, 0, 0, time.UTC)
+
+	for i := 0; i < 4; i++ {
+		if err := store.Create(ctx, &AuditLog{
+			CreatedAt: base.Add(time.Duration(i) * time.Minute),
+			Action:    ActionCameraUpdate,
+			Target:    fmt.Sprintf("camera:%d", i),
+		}); err != nil {
+			t.Fatalf("seed %d failed: %v", i, err)
+		}
+	}
+
+	items, total, err := store.List(ctx, Filter{Offset: 2})
+	if err != nil {
+		t.Fatalf("List with Limit=0 and Offset=2 must not fail SQLite syntax: %v", err)
+	}
+	if total != 4 || len(items) != 2 {
+		t.Fatalf("expected total=4 len=2, got total=%d len=%d", total, len(items))
+	}
+	if items[0].Target != "camera:1" || items[1].Target != "camera:0" {
+		t.Fatalf("unexpected offset items: %+v", items)
+	}
+}

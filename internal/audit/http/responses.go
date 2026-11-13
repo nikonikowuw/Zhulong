@@ -19,6 +19,11 @@ type AuditLogResponse struct {
 	ErrorMsg  string    `json:"errorMsg"`
 }
 
+// ClearLogsResponse represents the response payload for clearing audit logs.
+type ClearLogsResponse struct {
+	Cleared int64 `json:"cleared"`
+}
+
 func toAuditLogResponse(l audit.AuditLog) AuditLogResponse {
 	return AuditLogResponse{
 		ID:        l.ID,
