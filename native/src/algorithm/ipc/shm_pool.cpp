@@ -60,14 +60,24 @@ bool ShmPool::init(const std::string& name, ShmMode mode,
 
     if (mode == ShmMode::CREATE_READ_WRITE) {
         // 主进程创建模式：独占拥有该段，预先 unlink 清理可能残留的同名旧段
-        if (slot_size > 0 && slot_count > (std::numeric_limits<size_t>::max() - sizeof(ShmHeader)) / slot_size) {
+        if (slot_count == 0 || slot_size == 0) {
+            if (error_msg) *error_msg = "slot_count and slot_size must be positive";
+            return false;
+        }
+        if (slot_count > std::numeric_limits<uint32_t>::max() ||
+            slot_size > std::numeric_limits<uint32_t>::max()) {
+            if (error_msg) *error_msg = "slot_count or slot_size exceeds uint32_t range";
+            return false;
+        }
+        if (slot_count > (std::numeric_limits<size_t>::max() - sizeof(ShmHeader)) / slot_size) {
             if (error_msg) *error_msg = "slot_count and slot_size exceed maximum addressable size";
             return false;
         }
-        is_owner_ = true;
-        slot_count_ = slot_count;
-        slot_size_ = slot_size;
-        total_size_ = sizeof(ShmHeader) + slot_count_ * slot_size_;
+        const size_t planned_total = sizeof(ShmHeader) + slot_count * slot_size;
+        if (planned_total > static_cast<size_t>(std::numeric_limits<off_t>::max())) {
+            if (error_msg) *error_msg = "total shm size exceeds off_t range";
+            return false;
+        }
 
         // 预防残留，先 unlink
         shm_unlink(name_.c_str());
@@ -77,6 +87,11 @@ bool ShmPool::init(const std::string& name, ShmMode mode,
             if (error_msg) *error_msg = std::string("shm_open create failed: ") + std::strerror(errno);
             return false;
         }
+
+        is_owner_ = true;
+        slot_count_ = slot_count;
+        slot_size_ = slot_size;
+        total_size_ = planned_total;
 
         // 截断文件为总尺寸（头部 + 全部槽位）
         if (ftruncate(fd_, static_cast<off_t>(total_size_)) != 0) {

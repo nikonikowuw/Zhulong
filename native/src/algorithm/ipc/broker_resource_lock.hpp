@@ -31,7 +31,12 @@ namespace zhulong::ipc {
  * 构造即加锁成功，析构自动解锁。不可拷贝，只能由 acquire() 产生。
  */
 class BrokerResourceLock {
+private:
+    struct PrivateTag {};
+
 public:
+    explicit BrokerResourceLock(PrivateTag) noexcept {}
+
     /**
      * @brief 对 dirs 中的目录取排他 flock
      *
@@ -67,8 +72,6 @@ public:
     static std::vector<std::string> resource_dirs(const std::string& base_dir);
 
 private:
-    BrokerResourceLock() = default;
-
     std::vector<int> fds_;
 };
 

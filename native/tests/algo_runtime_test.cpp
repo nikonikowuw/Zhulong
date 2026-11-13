@@ -349,6 +349,19 @@ int main() {
         }
     }
 
+    // 4.2 NaN iou_threshold 返回空，相同置信度稳定保序
+    {
+        assert(zhulong::nms(boxes, std::numeric_limits<float>::quiet_NaN()).empty());
+        std::vector<zhulong_bbox> tied(2);
+        tied[0].box[0] = 0.0f; tied[0].box[1] = 0.0f; tied[0].box[2] = 0.2f; tied[0].box[3] = 0.2f;
+        tied[0].confidence = 0.8f; tied[0].class_id = 1;
+        tied[1].box[0] = 0.5f; tied[1].box[1] = 0.5f; tied[1].box[2] = 0.7f; tied[1].box[3] = 0.7f;
+        tied[1].confidence = 0.8f; tied[1].class_id = 2;
+        const auto tied_kept = zhulong::nms(tied, 0.45f);
+        assert(tied_kept.size() == 2);
+        assert(tied_kept[0].class_id == 1 && tied_kept[1].class_id == 2);
+    }
+
     std::cout << "Algorithm runtime tests passed successfully!" << std::endl;
     return 0;
 }

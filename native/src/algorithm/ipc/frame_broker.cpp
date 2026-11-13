@@ -9,11 +9,28 @@
 #include <cstring>
 #include <cstdio>
 #include <cassert>
+#include <limits>
 #include "common/log.hpp"
 
 namespace zhulong::ipc {
 
 namespace {
+
+bool checked_mul(size_t a, size_t b, size_t& out) noexcept {
+    if (b != 0 && a > std::numeric_limits<size_t>::max() / b) {
+        return false;
+    }
+    out = a * b;
+    return true;
+}
+
+bool checked_add(size_t a, size_t b, size_t& out) noexcept {
+    if (a > std::numeric_limits<size_t>::max() - b) {
+        return false;
+    }
+    out = a + b;
+    return true;
+}
 
 /**
  * @brief 计算给定帧写入单个共享内存槽位所需的字节数。
@@ -26,22 +43,48 @@ namespace {
  * ⚠️ NV12 用 y_plane_size()（含垂直对齐跨度）而 YUV420P 用 stride × height，
  *    两者语义不同，**不可统一** —— 统一会改变既有测试固化的字节数。
  *
- * @return 所需字节数；0 表示尺寸无法表示（调用方必须据此拒绝发布）
+ * @return 所需字节数；0 表示尺寸无法表示或溢出（调用方必须据此拒绝发布）
  */
 size_t frame_payload_bytes(const HardwareFrame& frame) {
+    if (frame.width == 0 || frame.height == 0 || frame.stride == 0) {
+        return 0;
+    }
     switch (frame.format) {
         case FRAME_FORMAT_NV12: {
             const uint32_t eff_vstride = (frame.vstride > 0) ? std::max(frame.vstride, frame.height) : frame.height;
-            return static_cast<size_t>(frame.stride) * eff_vstride +
-                   static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
+            size_t y_bytes = 0;
+            size_t uv_bytes = 0;
+            size_t total = 0;
+            const size_t uv_rows = (static_cast<size_t>(frame.height) + 1) / 2;
+            if (!checked_mul(frame.stride, eff_vstride, y_bytes) ||
+                !checked_mul(frame.stride, uv_rows, uv_bytes) ||
+                !checked_add(y_bytes, uv_bytes, total)) {
+                return 0;
+            }
+            return total;
         }
         case FRAME_FORMAT_YUV420P: {
-            const size_t y_size = static_cast<size_t>(frame.stride) * frame.height;
             const size_t u_stride = (static_cast<size_t>(frame.stride) + 1) / 2;
-            return y_size + u_stride * ((frame.height + 1) / 2) * 2;
+            const size_t uv_rows = (static_cast<size_t>(frame.height) + 1) / 2;
+            size_t y_size = 0;
+            size_t u_size = 0;
+            size_t uv_total = 0;
+            size_t total = 0;
+            if (!checked_mul(frame.stride, frame.height, y_size) ||
+                !checked_mul(u_stride, uv_rows, u_size) ||
+                !checked_mul(u_size, 2, uv_total) ||
+                !checked_add(y_size, uv_total, total)) {
+                return 0;
+            }
+            return total;
         }
-        default:
-            return static_cast<size_t>(frame.stride) * frame.height;
+        default: {
+            size_t total = 0;
+            if (!checked_mul(frame.stride, frame.height, total)) {
+                return 0;
+            }
+            return total;
+        }
     }
 }
 
@@ -313,8 +356,11 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
     } else {
         slot_data = shm_pool_.slot_write_ptr(slot_idx);
         if (has_dma_slots_) {
-            dma_slot_data = static_cast<uint8_t*>(dma_slots_[slot_idx]->mmap_addr());
-            dma_fd_to_send = dma_slots_[slot_idx]->fd();
+            void* mapped = dma_slots_[slot_idx]->mmap_addr();
+            if (mapped != nullptr) {
+                dma_slot_data = static_cast<uint8_t*>(mapped);
+                dma_fd_to_send = dma_slots_[slot_idx]->fd();
+            }
         }
     }
 
@@ -323,9 +369,10 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
         return fail_publish(slot_idx, target_clients);
     }
 
-    // ⚠️ 容量前置门禁：必须在任何 memcpy 之前完成，杜绝「部分写入 + 静默发旧帧」。
+    // ⚠️ 容量与源数据前置门禁：必须在任何 memcpy 之前完成，杜绝「部分写入 + 静默发旧帧」。
     //    零拷贝帧（frame.dma_fd >= 0 且未窗口化）不占槽位、不拷贝，因此不受此门禁约束。
     PackedLayout layout{};
+    size_t payload_bytes = 0;
     if (windowed) {
         if (!crop) {
             return fail_publish(slot_idx, target_clients);
@@ -341,9 +388,53 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
             return fail_publish(slot_idx, target_clients);
         }
     } else if (!is_zero_copy_frame) {
-        const size_t required = frame_payload_bytes(frame);
-        if (required == 0 || required > options_.slot_size) {
+        payload_bytes = frame_payload_bytes(frame);
+        if (payload_bytes == 0 || payload_bytes > options_.slot_size ||
+            payload_bytes > std::numeric_limits<uint32_t>::max()) {
             return fail_publish(slot_idx, target_clients);
+        }
+
+        // 校验行跨度与源指针合法性，避免越界写槽位或发送未初始化的旧槽位字节
+        if (frame.format == FRAME_FORMAT_NV12) {
+            if (frame.stride < frame.width) {
+                return fail_publish(slot_idx, target_clients);
+            }
+            const bool has_planes = (frame.host_planes[0] != nullptr && frame.host_planes[1] != nullptr);
+            if (!has_planes && frame.host_ptr == nullptr) {
+                return fail_publish(slot_idx, target_clients);
+            }
+            if (has_planes) {
+                const uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+                const uint32_t src_uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
+                if (src_y_stride < frame.width || src_uv_stride < frame.width) {
+                    return fail_publish(slot_idx, target_clients);
+                }
+            }
+        } else if (frame.format == FRAME_FORMAT_YUV420P) {
+            if (frame.stride < frame.width) {
+                return fail_publish(slot_idx, target_clients);
+            }
+            const size_t u_stride = (static_cast<size_t>(frame.stride) + 1) / 2;
+            const size_t uv_w = (static_cast<size_t>(frame.width) + 1) / 2;
+            const bool has_planes = (frame.host_planes[0] != nullptr &&
+                                     frame.host_planes[1] != nullptr &&
+                                     frame.host_planes[2] != nullptr);
+            if (!has_planes && frame.host_ptr == nullptr) {
+                return fail_publish(slot_idx, target_clients);
+            }
+            if (has_planes) {
+                const size_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+                const size_t src_u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : u_stride;
+                const size_t src_v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : u_stride;
+                if (src_y_stride < frame.width || src_u_stride < uv_w || src_v_stride < uv_w) {
+                    return fail_publish(slot_idx, target_clients);
+                }
+            }
+        } else {
+            if (static_cast<size_t>(frame.stride) < static_cast<size_t>(frame.width) * 3 ||
+                frame.host_ptr == nullptr) {
+                return fail_publish(slot_idx, target_clients);
+            }
         }
     }
 
@@ -400,18 +491,23 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
         msg.strides[1] = static_cast<int32_t>(frame.stride);
         msg.offsets[0] = 0;
         const uint32_t eff_vstride = (frame.vstride > 0) ? std::max(frame.vstride, frame.height) : frame.height;
-        msg.offsets[1] = static_cast<uint32_t>(frame.stride * eff_vstride);
+        const size_t y_plane_bytes = static_cast<size_t>(frame.stride) * eff_vstride;
+        if (y_plane_bytes > std::numeric_limits<uint32_t>::max()) {
+            return fail_publish(slot_idx, target_clients);
+        }
+        msg.offsets[1] = static_cast<uint32_t>(y_plane_bytes);
 
         if (!is_zero_copy_frame) {
             if (frame.host_planes[0] && frame.host_planes[1]) {
                 // 安全分平面逐行独立拷贝（杜绝把 data[0] 当作单一连续缓冲引发越界）
-                // 容量已由前置门禁保证，此处无需再判。
-                size_t uv_lines = (frame.height + 1) / 2;
-                uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
-                uint32_t src_uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
+                // 容量与跨度已由前置门禁保证，此处无需再判。
+                const size_t uv_lines = (static_cast<size_t>(frame.height) + 1) / 2;
+                const uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+                const uint32_t src_uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
 
                 if (src_y_stride == frame.stride) {
-                    std::memcpy(slot_data, frame.host_planes[0], frame.stride * frame.height);
+                    std::memcpy(slot_data, frame.host_planes[0],
+                                static_cast<size_t>(frame.stride) * frame.height);
                 } else {
                     for (size_t r = 0; r < frame.height; ++r) {
                         std::memcpy(slot_data + r * frame.stride, frame.host_planes[0] + r * src_y_stride, frame.width);
@@ -420,21 +516,27 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
 
                 uint8_t* uv_dst = slot_data + msg.offsets[1];
                 if (src_uv_stride == frame.stride) {
-                    std::memcpy(uv_dst, frame.host_planes[1], frame.stride * uv_lines);
+                    std::memcpy(uv_dst, frame.host_planes[1],
+                                static_cast<size_t>(frame.stride) * uv_lines);
                 } else {
                     for (size_t r = 0; r < uv_lines; ++r) {
                         std::memcpy(uv_dst + r * frame.stride, frame.host_planes[1] + r * src_uv_stride, frame.width);
                     }
                 }
             } else if (frame.host_ptr) {
-                std::memcpy(slot_data, frame.host_ptr, frame_payload_bytes(frame));
+                std::memcpy(slot_data, frame.host_ptr, payload_bytes);
             }
         }
     } else if (frame.format == FRAME_FORMAT_YUV420P) {
         msg.format = ZHULONG_PIXEL_FORMAT_YUV420P;
-        size_t y_size = static_cast<size_t>(frame.stride) * frame.height;
-        size_t u_stride = (frame.stride + 1) / 2;
-        size_t u_size = u_stride * ((frame.height + 1) / 2);
+        const size_t y_size = static_cast<size_t>(frame.stride) * frame.height;
+        const size_t u_stride = (static_cast<size_t>(frame.stride) + 1) / 2;
+        const size_t uv_h = (static_cast<size_t>(frame.height) + 1) / 2;
+        const size_t u_size = u_stride * uv_h;
+        if (y_size > std::numeric_limits<uint32_t>::max() ||
+            u_size > std::numeric_limits<uint32_t>::max() - y_size) {
+            return fail_publish(slot_idx, target_clients);
+        }
 
         msg.strides[1] = static_cast<int32_t>(u_stride);
         msg.strides[2] = static_cast<int32_t>(u_stride);
@@ -445,13 +547,12 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
         if (!is_zero_copy_frame) {
             if (frame.host_planes[0] && frame.host_planes[1] && frame.host_planes[2]) {
                 // 安全分平面独立拷贝 (杜绝假定 data[0] 物理连续造成的读越界)
-                // 容量已由前置门禁保证，此处无需再判。
-                uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
-                uint32_t src_u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : static_cast<uint32_t>(u_stride);
-                uint32_t src_v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : static_cast<uint32_t>(u_stride);
+                // 容量与跨度已由前置门禁保证，此处无需再判。
+                const uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+                const uint32_t src_u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : static_cast<uint32_t>(u_stride);
+                const uint32_t src_v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : static_cast<uint32_t>(u_stride);
 
-                size_t uv_h = (frame.height + 1) / 2;
-                size_t uv_w = (frame.width + 1) / 2;
+                const size_t uv_w = (static_cast<size_t>(frame.width) + 1) / 2;
 
                 if (src_y_stride == frame.stride) {
                     std::memcpy(slot_data, frame.host_planes[0], y_size);
@@ -479,26 +580,33 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
                     }
                 }
             } else if (frame.host_ptr) {
-                std::memcpy(slot_data, frame.host_ptr, frame_payload_bytes(frame));
+                std::memcpy(slot_data, frame.host_ptr, payload_bytes);
             }
         }
     } else {
         msg.format = ZHULONG_PIXEL_FORMAT_BGR24;
         msg.offsets[0] = 0;
         if (!is_zero_copy_frame && frame.host_ptr) {
-            // 容量已由前置门禁保证，此处无需再判。
-            std::memcpy(slot_data, frame.host_ptr, frame_payload_bytes(frame));
+            // 容量与源指针已由前置门禁保证，此处无需再判。
+            std::memcpy(slot_data, frame.host_ptr, payload_bytes);
         }
     }
 
-    // 若非零拷贝直通且使用 DMA 槽位，同步拷入 DMA-BUF 并刷出 CPU Cache (RAII 守卫保护)
+    // 若非零拷贝直通且使用 DMA 槽位，同步拷入 DMA-BUF 并校验 Cache 刷出结果
     if (!is_zero_copy_frame && !windowed && dma_slot_data) {
         // ⚠️ 耦合前提：DMA 槽位与 SHM 槽位由 start() 用**同一个** options_.slot_size
         //    分配（dma_slots_[i] = allocate(slot_size)；shm_pool_.init(..., slot_size)），
-        //    因此「通过上面的 SHM 前置门禁」⟹「DMA 槽位也够」。若未来把两者尺寸解耦，
-        //    此处必须先单独校验 DMA 槽位容量，否则越界。
-        zhulong::platform::ScopedCpuSync dma_sync(*dma_slots_[slot_idx], zhulong::platform::DMA_SYNC_WRITE);
-        std::memcpy(dma_slot_data, slot_data, frame_payload_bytes(frame));
+        //    因此「通过上面的 SHM 前置门禁」⟹「DMA 槽位也够」。仍显式核对 size() 并校验
+        //    sync_start/sync_end 结果；若同步失败则撤销 dma_fd_to_send，安全降级到 SHM 槽位。
+        if (dma_slots_[slot_idx]->size() >= payload_bytes &&
+            dma_slots_[slot_idx]->sync_start(zhulong::platform::DMA_SYNC_WRITE)) {
+            std::memcpy(dma_slot_data, slot_data, payload_bytes);
+            if (!dma_slots_[slot_idx]->sync_end(zhulong::platform::DMA_SYNC_WRITE)) {
+                dma_fd_to_send = -1;
+            }
+        } else {
+            dma_fd_to_send = -1;
+        }
     }
 
     // 切换槽位状态为 LEASED
@@ -508,8 +616,11 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
     }
 
     // 向各合格客户端下发帧通知 (若发送失败立即清算租约)
+    size_t sent_count = 0;
     for (uint32_t cid : target_clients) {
-        if (!server_.send_msg_with_fd(cid, MSG_FRAME_DISPATCH, &msg, sizeof(msg), dma_fd_to_send)) {
+        if (server_.send_msg_with_fd(cid, MSG_FRAME_DISPATCH, &msg, sizeof(msg), dma_fd_to_send)) {
+            ++sent_count;
+        } else {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = clients_.find(cid);
             if (it != clients_.end() && it->second.in_flight_count > 0) {
@@ -517,11 +628,18 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
                 it->second.delivered_frames--;
                 it->second.dropped_frames++;
             }
-            slots_[slot_idx].active_leases.erase(cid);
-            if (slots_[slot_idx].active_leases.empty()) {
-                slots_[slot_idx].state = SlotState::FREE;
+            if (slots_[slot_idx].generation == generation) {
+                slots_[slot_idx].active_leases.erase(cid);
+                if (slots_[slot_idx].active_leases.empty()) {
+                    slots_[slot_idx].state = SlotState::FREE;
+                }
             }
         }
+    }
+
+    if (sent_count == 0) {
+        total_dropped_.fetch_add(1);
+        return false;
     }
 
     total_published_.fetch_add(1);
@@ -683,7 +801,7 @@ std::vector<ClientInfo> FrameBroker::clients_snapshot() const {
 }
 
 size_t FrameBroker::broadcast_message(uint16_t msg_type, const void* payload, size_t size) {
-    if (!running_.load(std::memory_order_relaxed)) {
+    if (!running_.load(std::memory_order_acquire)) {
         return 0;
     }
 

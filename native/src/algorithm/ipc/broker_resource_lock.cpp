@@ -107,7 +107,7 @@ std::unique_ptr<BrokerResourceLock> BrokerResourceLock::acquire(const std::vecto
     std::sort(resolved.begin(), resolved.end(),
               [](const ResolvedDir& a, const ResolvedDir& b) { return a.id < b.id; });
 
-    std::unique_ptr<BrokerResourceLock> lock(new BrokerResourceLock());
+    auto lock = std::make_unique<BrokerResourceLock>(PrivateTag{});
     lock->fds_.reserve(resolved.size());
     for (const auto& entry : resolved) {
         int fd = ::open(entry.path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);

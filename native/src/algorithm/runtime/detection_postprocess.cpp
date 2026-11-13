@@ -55,7 +55,7 @@ inline float calc_iou_with_areas(const zhulong_bbox& a, float area_a,
  * ⚠️ 输入框必须为已归一化坐标 [x1, y1, x2, y2] ∈ [0.0, 1.0]。
  */
 std::vector<zhulong_bbox> nms(const std::vector<zhulong_bbox>& boxes, float iou_threshold) {
-    if (boxes.empty()) return {};
+    if (boxes.empty() || !std::isfinite(iou_threshold)) return {};
 
     // ⚠️ 必须先剔除非有限的置信度或坐标（NaN / ±Inf）。
     //    NaN 会让 `a.confidence > b.confidence` 不满足**严格弱序**，而 std::sort 在该
@@ -74,10 +74,10 @@ std::vector<zhulong_bbox> nms(const std::vector<zhulong_bbox>& boxes, float iou_
     }
     if (sorted_boxes.empty()) return {};
 
-    std::sort(sorted_boxes.begin(), sorted_boxes.end(),
-              [](const zhulong_bbox& a, const zhulong_bbox& b) {
-                  return a.confidence > b.confidence;
-              });
+    std::stable_sort(sorted_boxes.begin(), sorted_boxes.end(),
+                     [](const zhulong_bbox& a, const zhulong_bbox& b) {
+                         return a.confidence > b.confidence;
+                     });
 
     std::vector<bool> suppressed(sorted_boxes.size(), false);
     std::vector<zhulong_bbox> keep;

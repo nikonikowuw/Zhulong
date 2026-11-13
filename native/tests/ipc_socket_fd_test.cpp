@@ -189,6 +189,42 @@ int main() {
         ::unlink(idle_sock.c_str());
     }
 
+    // 9. 对端发完尾包立刻关闭（POLLIN | POLLHUP 同时置位）：不得吞掉已入队报文，
+    //    排空后下一轮再标记断开。
+    {
+        std::string tail_sock = "/tmp/zhulong_test_peer_tail_msg.sock";
+        ::unlink(tail_sock.c_str());
+
+        UnixSocketServer server_tail;
+        assert(server_tail.start(tail_sock));
+        UnixSocketClient client_tail;
+        assert(client_tail.connect(tail_sock));
+        for (int i = 0; i < 50 && server_tail.client_count() == 0; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        assert(server_tail.client_count() == 1);
+
+        const std::string final_msg = "last_message_before_close";
+        assert(server_tail.send_msg(1, MSG_DISCONNECT, final_msg.data(), final_msg.size()));
+        server_tail.stop(); // 立刻关闭连接，制造 POLLIN | POLLHUP
+
+        IpcHeader h{};
+        std::vector<uint8_t> p;
+        int fd = -1;
+        assert(client_tail.recv_msg_with_fd(h, p, fd, 500));
+        assert(h.msg_type == MSG_DISCONNECT);
+        assert(h.sequence >= 1);
+        assert(p.size() == final_msg.size());
+        assert(std::memcmp(p.data(), final_msg.data(), final_msg.size()) == 0);
+
+        // 排空后下一轮收包应立即感知 EOF 并置 !is_connected()
+        assert(!client_tail.recv_msg_with_fd(h, p, fd, 200));
+        assert(!client_tail.is_connected());
+
+        client_tail.disconnect();
+        ::unlink(tail_sock.c_str());
+    }
+
     std::cout << "[Test] ZhulongIpcSocketFdTests PASSED" << std::endl;
     return 0;
 }

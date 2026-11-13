@@ -52,20 +52,29 @@ enum class ReadStatus {
 bool write_all(int fd, const void* data, size_t size, int timeout_ms = 50) {
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     size_t remaining = size;
+    constexpr int kMaxEagainPolls = 4;
+    int eagain_polls = 0;
     while (remaining > 0) {
         ssize_t n = send(fd, ptr, remaining, MSG_NOSIGNAL);
         if (n > 0) {
             ptr += n;
             remaining -= static_cast<size_t>(n);
+            eagain_polls = 0;
             continue;
         }
         if (n < 0 && errno == EINTR) continue;
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (++eagain_polls > kMaxEagainPolls) {
+                return false;
+            }
             struct pollfd pfd{};
             pfd.fd = fd;
             pfd.events = POLLOUT;
             const int pret = poll(&pfd, 1, timeout_ms);
-            if (pret > 0 && (pfd.revents & POLLOUT)) continue;
+            if (pret > 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) &&
+                (pfd.revents & POLLOUT)) {
+                continue;
+            }
             return false; // 超时 / POLLERR / POLLHUP / POLLNVAL
         }
         return false; // 对端关闭或不可恢复错误
@@ -75,8 +84,12 @@ bool write_all(int fd, const void* data, size_t size, int timeout_ms = 50) {
 
 /**
  * @brief 结构化报文写函数（可选携带 SCM_RIGHTS 文件描述符）
+ *
+ * @param[out] out_partial_write 若已写出至少 1 字节但后续写入失败则为 true（调用方必须断连以防帧脱节）
  */
-bool write_msg_with_fd(int fd, const IpcHeader& header, const void* payload, size_t payload_size, int fd_to_send) {
+bool write_msg_with_fd(int fd, const IpcHeader& header, const void* payload, size_t payload_size,
+                       int fd_to_send, bool& out_partial_write) {
+    out_partial_write = false;
     struct msghdr msg{};
     struct iovec iov[2];
     iov[0].iov_base = const_cast<IpcHeader*>(&header);
@@ -108,16 +121,24 @@ bool write_msg_with_fd(int fd, const IpcHeader& header, const void* payload, siz
 
     size_t total_size = sizeof(header) + payload_size;
     ssize_t n = 0;
+    constexpr int kMaxEagainPolls = 4;
+    int eagain_polls = 0;
     while (true) {
         n = sendmsg(fd, &msg, MSG_NOSIGNAL);
         if (n < 0) {
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (++eagain_polls > kMaxEagainPolls) {
+                    return false;
+                }
                 struct pollfd pfd{};
                 pfd.fd = fd;
                 pfd.events = POLLOUT;
                 int pret = poll(&pfd, 1, 50);
-                if (pret > 0 && (pfd.revents & POLLOUT)) continue;
+                if (pret > 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) &&
+                    (pfd.revents & POLLOUT)) {
+                    continue;
+                }
             }
             return false;
         }
@@ -130,20 +151,22 @@ bool write_msg_with_fd(int fd, const IpcHeader& header, const void* payload, siz
 
     // 处理局部写入：描述符已随首字节递交，剩余数据通过普通流写补齐
     size_t written = static_cast<size_t>(n);
+    bool ok = false;
     if (written < sizeof(header)) {
         const uint8_t* hdr_rem = reinterpret_cast<const uint8_t*>(&header) + written;
-        if (!write_all(fd, hdr_rem, sizeof(header) - written)) {
-            return false;
-        }
-        if (payload && payload_size > 0) {
-            return write_all(fd, payload, payload_size);
+        ok = write_all(fd, hdr_rem, sizeof(header) - written);
+        if (ok && payload && payload_size > 0) {
+            ok = write_all(fd, payload, payload_size);
         }
     } else {
         size_t payload_written = written - sizeof(header);
         const uint8_t* pay_rem = static_cast<const uint8_t*>(payload) + payload_written;
-        return write_all(fd, pay_rem, payload_size - payload_written);
+        ok = write_all(fd, pay_rem, payload_size - payload_written);
     }
-    return true;
+    if (!ok && written > 0) {
+        out_partial_write = true;
+    }
+    return ok;
 }
 
 /**
@@ -196,6 +219,13 @@ ReadStatus read_all(int fd, void* data, size_t size, int timeout_ms) {
 
 } // namespace
 
+ClientFdHandle::~ClientFdHandle() {
+    int v = fd.exchange(-1);
+    if (v >= 0) {
+        ::close(v);
+    }
+}
+
 // =============================================================================
 // UnixSocketServer Implementation
 // =============================================================================
@@ -242,15 +272,33 @@ bool UnixSocketServer::start(const std::string& socket_path, std::string* error_
     if (::listen(fd, 16) != 0) {
         if (error_msg) *error_msg = std::string("listen() failed: ") + std::strerror(errno);
         ::close(fd);
+        ::unlink(socket_path_.c_str());
         return false;
     }
 
+    auto sync = std::make_shared<ServerWorkerSync>();
+    sync->on_message = on_message_;
+    sync->on_disconnect = on_disconnect_;
+    sync->server_alive.store(true);
+    worker_sync_ = std::move(sync);
+
     listen_fd_.store(fd);
     running_.store(true);
-    if (worker_sync_) {
-        worker_sync_->server_alive.store(true);
+    try {
+        accept_thread_ = std::thread(&UnixSocketServer::listen_loop, this);
+    } catch (const std::exception& e) {
+        running_.store(false);
+        if (worker_sync_) {
+            worker_sync_->server_alive.store(false);
+        }
+        int lfd = listen_fd_.exchange(-1);
+        if (lfd >= 0) {
+            ::close(lfd);
+        }
+        ::unlink(socket_path_.c_str());
+        if (error_msg) *error_msg = std::string("accept thread spawn failed: ") + e.what();
+        return false;
     }
-    accept_thread_ = std::thread(&UnixSocketServer::listen_loop, this);
     return true;
 }
 
@@ -259,8 +307,9 @@ void UnixSocketServer::stop() {
         return;
     }
 
-    if (worker_sync_) {
-        worker_sync_->server_alive.store(false);
+    std::shared_ptr<ServerWorkerSync> sync = worker_sync_;
+    if (sync) {
+        sync->server_alive.store(false);
     }
 
     int lfd = listen_fd_.exchange(-1);
@@ -275,23 +324,23 @@ void UnixSocketServer::stop() {
 
     // 唤醒所有客户端读取线程：仅发送 shutdown，不提前 close，防止与工作线程的 recv() 产生竞态
     std::vector<std::shared_ptr<ClientChannel>> to_close;
-    {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
-        for (auto& [cid, ch] : client_channels_) {
+    if (sync) {
+        std::lock_guard<std::mutex> lock(sync->clients_mutex);
+        for (auto& [cid, ch] : sync->client_channels) {
             int cfd = ch->fd.load();
             if (cfd >= 0) {
                 ::shutdown(cfd, SHUT_RDWR);
             }
             to_close.push_back(ch);
         }
-        client_channels_.clear();
+        sync->client_channels.clear();
     }
 
     // 等待所有读取工作线程完全退出（有界等待最多 2000ms，防死锁；若当前线程即 worker 则不自等）
-    if (!g_is_worker_thread && worker_sync_) {
-        std::unique_lock<std::mutex> lock(worker_sync_->workers_mutex);
-        worker_sync_->workers_cv.wait_for(lock, std::chrono::milliseconds(2000), [this] {
-            return worker_sync_->active_workers.load() == 0;
+    if (!g_is_worker_thread && sync) {
+        std::unique_lock<std::mutex> lock(sync->workers_mutex);
+        sync->workers_cv.wait_for(lock, std::chrono::milliseconds(2000), [&sync] {
+            return sync->active_workers.load() == 0;
         });
     }
 
@@ -310,68 +359,75 @@ void UnixSocketServer::stop() {
 }
 
 void UnixSocketServer::listen_loop() {
-    while (running_.load()) {
-        int lfd = listen_fd_.load();
-        if (lfd < 0) break;
+    std::shared_ptr<ServerWorkerSync> sync = worker_sync_;
+    try {
+        while (running_.load()) {
+            int lfd = listen_fd_.load();
+            if (lfd < 0) break;
 
-        struct pollfd pfd{};
-        pfd.fd = lfd;
-        pfd.events = POLLIN;
+            struct pollfd pfd{};
+            pfd.fd = lfd;
+            pfd.events = POLLIN;
 
-        int ret = poll(&pfd, 1, 100);
-        if (ret <= 0 || !running_.load()) {
-            continue;
-        }
-
-        int client_fd = ::accept(lfd, nullptr, nullptr);
-        if (client_fd < 0) {
-            continue;
-        }
-
-        // 配置发送超时 (50ms)，防止慢/死锁 Worker 拖死主媒体推帧线程
-        struct timeval tv{};
-        tv.tv_sec = 0;
-        tv.tv_usec = 50000;
-        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-        // 发送缓冲必须容得下一条最大报文。
-        //
-        // 协议单包上限是 MAX_IPC_PAYLOAD_SIZE (64KB)，加上 IpcHeader 略高于 64KB。
-        // Linux 的 AF_UNIX 默认 SO_SNDBUF 很大（约 200KB），这条设置是冗余的；
-        // 而 macOS 默认只有 8KB，于是「单次 sendmsg 发一条满负载报文」在无并发
-        // 读者的情况下必然撞上上面的 50ms 超时并返回 false —— 把一条协议内允许
-        // 的报文误判成发送失败。缓冲按上限的两倍预留，给头部与内核记账留余量。
-        //
-        // 注意：这里只调大上限，不改变 50ms 超时语义 —— 慢消费者依旧被拒绝，
-        // 只是「一条合法报文」不再被误杀。
-        int sndbuf = static_cast<int>(MAX_IPC_PAYLOAD_SIZE) * 2;
-        setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
-
-        uint32_t cid = next_client_id_.fetch_add(1);
-        auto channel = std::make_shared<ClientChannel>();
-        channel->fd = client_fd;
-
-        {
-            std::lock_guard<std::mutex> lock(clients_mutex_);
-            client_channels_[cid] = channel;
-        }
-
-        if (on_connect_) {
-            on_connect_(cid);
-        }
-
-        // ⚠️ 在 spawn 之前预先递增活跃计数，防止 detached 线程首行尚未执行时 stop() 误判为 0
-        if (worker_sync_) {
-            worker_sync_->active_workers.fetch_add(1);
-        }
-        try {
-            std::thread(&UnixSocketServer::client_read_loop, this, cid, channel, worker_sync_).detach();
-        } catch (...) {
-            if (worker_sync_) {
-                worker_sync_->active_workers.fetch_sub(1);
+            int ret = poll(&pfd, 1, 100);
+            if (ret <= 0 || !running_.load()) {
+                continue;
             }
-            remove_client(cid);
+
+            int client_fd = ::accept(lfd, nullptr, nullptr);
+            if (client_fd < 0) {
+                continue;
+            }
+
+            // 配置发送超时 (50ms)，防止慢/死锁 Worker 拖死主媒体推帧线程
+            struct timeval tv{};
+            tv.tv_sec = 0;
+            tv.tv_usec = 50000;
+            setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+            // 发送缓冲必须容得下一条最大报文。
+            //
+            // 协议单包上限是 MAX_IPC_PAYLOAD_SIZE (64KB)，加上 IpcHeader 略高于 64KB。
+            // Linux 的 AF_UNIX 默认 SO_SNDBUF 很大（约 200KB），这条设置是冗余的；
+            // 而 macOS 默认只有 8KB，于是「单次 sendmsg 发一条满负载报文」在无并发
+            // 读者的情况下必然撞上上面的 50ms 超时并返回 false —— 把一条协议内允许
+            // 的报文误判成发送失败。缓冲按上限的两倍预留，给头部与内核记账留余量。
+            //
+            // 注意：这里只调大上限，不改变 50ms 超时语义 —— 慢消费者依旧被拒绝，
+            // 只是「一条合法报文」不再被误杀。
+            int sndbuf = static_cast<int>(MAX_IPC_PAYLOAD_SIZE) * 2;
+            setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
+            uint32_t cid = next_client_id_.fetch_add(1);
+            auto channel = std::make_shared<ClientChannel>();
+            channel->fd = client_fd;
+
+            if (sync) {
+                std::lock_guard<std::mutex> lock(sync->clients_mutex);
+                sync->client_channels[cid] = channel;
+            }
+
+            if (on_connect_) {
+                on_connect_(cid);
+            }
+
+            // ⚠️ 在 spawn 之前预先递增活跃计数，防止 detached 线程首行尚未执行时 stop() 误判为 0
+            if (sync) {
+                sync->active_workers.fetch_add(1);
+            }
+            try {
+                std::thread(&UnixSocketServer::client_read_loop, cid, channel, sync).detach();
+            } catch (...) {
+                if (sync) {
+                    sync->active_workers.fetch_sub(1);
+                }
+                remove_client(sync, cid);
+            }
         }
+    } catch (const std::exception&) {
+        ZL_LOGE(0, "ipc.unix_socket", "listen_exception");
+    } catch (...) {
+        ZL_LOGE(0, "ipc.unix_socket", "listen_unknown_exception");
     }
 }
 
@@ -396,7 +452,7 @@ void UnixSocketServer::client_read_loop(uint32_t client_id,
     // 触发 std::terminate() 终止整个进程。因此必须捕获全部异常（含未知异常），
     // 仅记录诊断后断开该客户端，绝不允许异常逃出线程入口。
     try {
-        while ((!sync || sync->server_alive.load()) && running_.load()) {
+        while (sync && sync->server_alive.load()) {
             int cfd = channel->fd.load();
             if (cfd < 0) break;
 
@@ -430,8 +486,8 @@ void UnixSocketServer::client_read_loop(uint32_t client_id,
                 }
             }
 
-            if ((!sync || sync->server_alive.load()) && on_message_) {
-                on_message_(client_id, header, payload.empty() ? nullptr : payload.data());
+            if (sync->server_alive.load() && sync->on_message) {
+                sync->on_message(client_id, header, payload.empty() ? nullptr : payload.data());
             }
         }
     } catch (const std::exception&) {
@@ -440,19 +496,20 @@ void UnixSocketServer::client_read_loop(uint32_t client_id,
         ZL_LOGE(0, "ipc.unix_socket", "worker_unknown_exception");
     }
 
-    if (!sync || sync->server_alive.load()) {
-        remove_client(client_id);
+    if (sync && sync->server_alive.load()) {
+        remove_client(sync, client_id);
     }
 }
 
-void UnixSocketServer::remove_client(uint32_t client_id) {
+void UnixSocketServer::remove_client(const std::shared_ptr<ServerWorkerSync>& sync, uint32_t client_id) {
+    if (!sync) return;
     std::shared_ptr<ClientChannel> channel;
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
-        auto it = client_channels_.find(client_id);
-        if (it != client_channels_.end()) {
+        std::lock_guard<std::mutex> lock(sync->clients_mutex);
+        auto it = sync->client_channels.find(client_id);
+        if (it != sync->client_channels.end()) {
             channel = it->second;
-            client_channels_.erase(it);
+            sync->client_channels.erase(it);
         }
     }
 
@@ -466,8 +523,8 @@ void UnixSocketServer::remove_client(uint32_t client_id) {
             }
         }
 
-        if (on_disconnect_) {
-            on_disconnect_(client_id);
+        if (sync->server_alive.load() && sync->on_disconnect) {
+            sync->on_disconnect(client_id);
         }
     }
 }
@@ -482,11 +539,16 @@ bool UnixSocketServer::send_msg_with_fd(uint32_t client_id, uint16_t msg_type, c
         return false;
     }
 
+    std::shared_ptr<ServerWorkerSync> sync = worker_sync_;
+    if (!sync || !sync->server_alive.load()) {
+        return false;
+    }
+
     std::shared_ptr<ClientChannel> channel;
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
-        auto it = client_channels_.find(client_id);
-        if (it != client_channels_.end()) {
+        std::lock_guard<std::mutex> lock(sync->clients_mutex);
+        auto it = sync->client_channels.find(client_id);
+        if (it != sync->client_channels.end()) {
             channel = it->second;
         }
     }
@@ -501,16 +563,28 @@ bool UnixSocketServer::send_msg_with_fd(uint32_t client_id, uint16_t msg_type, c
     header.msg_type = msg_type;
     header.version = IPC_VERSION;
     header.payload_size = static_cast<uint32_t>(payload_size);
+    header.sequence = next_sequence_.fetch_add(1, std::memory_order_relaxed);
 
-    return write_msg_with_fd(cfd, header, payload, payload_size, fd_to_send);
+    bool partial_write = false;
+    if (!write_msg_with_fd(cfd, header, payload, payload_size, fd_to_send, partial_write)) {
+        if (partial_write) {
+            // 报文已局部写出，流边界已损坏；立即 shutdown 唤醒读线程断开回收
+            ::shutdown(cfd, SHUT_RDWR);
+        }
+        return false;
+    }
+    return true;
 }
 
 size_t UnixSocketServer::broadcast(uint16_t msg_type, const void* payload, size_t payload_size) {
+    std::shared_ptr<ServerWorkerSync> sync = worker_sync_;
+    if (!sync) return 0;
+
     std::vector<uint32_t> ids;
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
-        ids.reserve(client_channels_.size());
-        for (const auto& [cid, _] : client_channels_) {
+        std::lock_guard<std::mutex> lock(sync->clients_mutex);
+        ids.reserve(sync->client_channels.size());
+        for (const auto& [cid, _] : sync->client_channels) {
             ids.push_back(cid);
         }
     }
@@ -525,8 +599,10 @@ size_t UnixSocketServer::broadcast(uint16_t msg_type, const void* payload, size_
 }
 
 size_t UnixSocketServer::client_count() const {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
-    return client_channels_.size();
+    std::shared_ptr<ServerWorkerSync> sync = worker_sync_;
+    if (!sync) return 0;
+    std::lock_guard<std::mutex> lock(sync->clients_mutex);
+    return sync->client_channels.size();
 }
 
 // =============================================================================
@@ -542,9 +618,6 @@ UnixSocketClient::~UnixSocketClient() {
 bool UnixSocketClient::connect(const std::string& socket_path, std::string* error_msg) {
     disconnect();
     socket_path_ = socket_path;
-    // ⚠️ 新连接必须重置挂断标记：disconnect() 只关 fd，不碰 peer_closed_（它由接收路径
-    //    写入），因此这里显式复位，否则同一对象重连后 is_connected() 会永远为假。
-    peer_closed_.store(false);
 
     struct sockaddr_un addr{};
     if (socket_path_.size() >= sizeof(addr.sun_path)) {
@@ -567,15 +640,31 @@ bool UnixSocketClient::connect(const std::string& socket_path, std::string* erro
         return false;
     }
 
-    fd_.store(sock);
+    auto handle = std::make_shared<ClientFdHandle>(sock);
+    {
+        std::lock_guard<std::mutex> lock(handle_mutex_);
+        // ⚠️ 新连接必须重置挂断标记：disconnect() 只关 fd，不碰 peer_closed_（它由接收路径
+        //    写入），因此这里显式复位，否则同一对象重连后 is_connected() 会永远为假。
+        peer_closed_.store(false);
+        fd_handle_ = std::move(handle);
+        fd_.store(sock);
+    }
     return true;
 }
 
 void UnixSocketClient::disconnect() {
-    int sock = fd_.exchange(-1);
-    if (sock >= 0) {
-        ::shutdown(sock, SHUT_RDWR);
-        ::close(sock);
+    std::shared_ptr<ClientFdHandle> handle;
+    {
+        std::lock_guard<std::mutex> lock(handle_mutex_);
+        fd_.store(-1);
+        handle = std::move(fd_handle_);
+    }
+    if (handle) {
+        int sock = handle->fd.load();
+        if (sock >= 0) {
+            ::shutdown(sock, SHUT_RDWR);
+        }
+        // handle 离开作用域时，若无并发 I/O 持有副本则立即 ::close；否则随最后退出者关闭
     }
 }
 
@@ -589,12 +678,17 @@ bool UnixSocketClient::send_msg_with_fd(uint16_t msg_type, const void* payload, 
         return false;
     }
 
-    int sock = fd_.load();
-    if (sock < 0) return false;
-    std::lock_guard<std::mutex> lock(send_mutex_);
+    std::shared_ptr<ClientFdHandle> handle;
+    {
+        std::lock_guard<std::mutex> lock(handle_mutex_);
+        if (fd_.load() < 0) return false;
+        handle = fd_handle_;
+    }
+    if (!handle) return false;
 
-    // 重新检查 fd
-    sock = fd_.load();
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    if (fd_.load() < 0) return false;
+    int sock = handle->fd.load();
     if (sock < 0) return false;
 
     IpcHeader header{};
@@ -602,17 +696,25 @@ bool UnixSocketClient::send_msg_with_fd(uint16_t msg_type, const void* payload, 
     header.msg_type = msg_type;
     header.version = IPC_VERSION;
     header.payload_size = static_cast<uint32_t>(payload_size);
+    header.sequence = next_sequence_.fetch_add(1, std::memory_order_relaxed);
 
-    return write_msg_with_fd(sock, header, payload, payload_size, fd_to_send);
+    bool partial_write = false;
+    return write_msg_with_fd(sock, header, payload, payload_size, fd_to_send, partial_write);
 }
 
 bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8_t>& out_payload, int& out_fd, int timeout_ms) {
     out_fd = -1;
-    int sock = fd_.load();
-    if (sock < 0) return false;
-    std::lock_guard<std::mutex> lock(recv_mutex_);
+    std::shared_ptr<ClientFdHandle> handle;
+    {
+        std::lock_guard<std::mutex> lock(handle_mutex_);
+        if (fd_.load() < 0) return false;
+        handle = fd_handle_;
+    }
+    if (!handle) return false;
 
-    sock = fd_.load();
+    std::lock_guard<std::mutex> lock(recv_mutex_);
+    if (fd_.load() < 0) return false;
+    int sock = handle->fd.load();
     if (sock < 0) return false;
 
     if (timeout_ms >= 0) {
@@ -631,10 +733,10 @@ bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8
             mark_peer_closed();
             return false;
         }
-        // ⚠️ 宿主进程被 kill -9 / OOM / 崩溃时，内核只会置 POLLHUP（含 POLLIN 仍可能置位），
-        //    这里必须无条件标脏：只读走 recv 会拿到 EOF，但上层的 is_connected() 若仍为真，
-        //    runner 主循环就会 `continue` 成 100% CPU 忙等孤儿进程。
-        if (pfd.revents & POLLHUP) {
+        // ⚠️ 仅当 POLLHUP 且没有可读缓冲（POLLIN）时立即短路；若 POLLIN 同时置位，
+        //    继续走 recvmsg 排空对端关闭前写入的剩余消息，排空后 recvmsg 会返回 0 (EOF)
+        //    并同样调用 mark_peer_closed()，避免吞掉尾包且防止忙等孤儿进程。
+        if ((pfd.revents & POLLHUP) && !(pfd.revents & POLLIN)) {
             mark_peer_closed();
             return false;
         }
@@ -655,9 +757,13 @@ bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8
     msg.msg_control = control_un.control;
     msg.msg_controllen = sizeof(control_un.control);
 
+    int recv_flags = 0;
+#ifdef MSG_CMSG_CLOEXEC
+    recv_flags |= MSG_CMSG_CLOEXEC;
+#endif
     ssize_t n = 0;
     while (true) {
-        n = recvmsg(sock, &msg, 0);
+        n = recvmsg(sock, &msg, recv_flags);
         if (n < 0 && (errno == EINTR)) continue;
         break;
     }

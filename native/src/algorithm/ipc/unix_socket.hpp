@@ -34,16 +34,40 @@ struct ClientChannel {
 };
 
 /**
- * @brief 服务端工作读取线程的共享生命周期与同步控制块
+ * @brief 服务端工作读取线程的共享生命周期、客户端映射与回调同步块
  *
- * 即使 UnixSocketServer 先于某个工作线程完成析构（如遭遇 stop() 等待超时），
- * 工作线程退出时的计数递减与条件变量通知依然作用于有效的堆内存，彻底杜绝 UAF。
+ * 即使 UnixSocketServer 先于某个工作线程完成析构（如遭遇 stop() 等待超时或回调内停机），
+ * 工作线程只持有该共享堆对象的 shared_ptr（不引用 UnixSocketServer* this），彻底杜绝 UAF。
  */
 struct ServerWorkerSync {
     std::atomic<bool> server_alive{false};
     std::atomic<size_t> active_workers{0};
     std::mutex workers_mutex;
     std::condition_variable workers_cv;
+
+    mutable std::mutex clients_mutex;
+    std::unordered_map<uint32_t, std::shared_ptr<ClientChannel>> client_channels;
+
+    std::function<void(uint32_t, const IpcHeader&, const uint8_t*)> on_message;
+    std::function<void(uint32_t)> on_disconnect;
+};
+
+/**
+ * @brief 客户端套接字描述符的引用计数封装
+ *
+ * 允许 disconnect() 立即 shutdown 并唤醒阻塞中的 I/O 线程，同时保证 fd 直到
+ * 最后一位持有者离开作用域才 ::close()，杜绝并发下的 FD 复用竞态。
+ */
+struct ClientFdHandle {
+    std::atomic<int> fd{-1};
+
+    explicit ClientFdHandle(int f) noexcept : fd(f) {}
+    ~ClientFdHandle();
+
+    ClientFdHandle(const ClientFdHandle&) = delete;
+    ClientFdHandle& operator=(const ClientFdHandle&) = delete;
+    ClientFdHandle(ClientFdHandle&&) = delete;
+    ClientFdHandle& operator=(ClientFdHandle&&) = delete;
 };
 
 /**
@@ -60,6 +84,11 @@ public:
 
     UnixSocketServer();
     ~UnixSocketServer();
+
+    UnixSocketServer(const UnixSocketServer&) = delete;
+    UnixSocketServer& operator=(const UnixSocketServer&) = delete;
+    UnixSocketServer(UnixSocketServer&&) = delete;
+    UnixSocketServer& operator=(UnixSocketServer&&) = delete;
 
     /**
      * @brief 启动 Unix 域套接字监听服务端
@@ -139,17 +168,16 @@ public:
 
 private:
     void listen_loop();
-    void client_read_loop(uint32_t client_id, std::shared_ptr<ClientChannel> channel, std::shared_ptr<ServerWorkerSync> sync);
-    void remove_client(uint32_t client_id);
+    static void client_read_loop(uint32_t client_id, std::shared_ptr<ClientChannel> channel, std::shared_ptr<ServerWorkerSync> sync);
+    static void remove_client(const std::shared_ptr<ServerWorkerSync>& sync, uint32_t client_id);
 
     std::string socket_path_;                                                     /**< 套接字文件绑定路径 */
     std::atomic<int> listen_fd_{-1};                                              /**< 监听套接字描述符 */
     std::atomic<bool> running_{false};                                            /**< 服务端运行状态标志 */
     std::atomic<uint32_t> next_client_id_{1};                                     /**< 客户端自增 ID 分配器 */
+    std::atomic<uint32_t> next_sequence_{1};                                      /**< 报文单调自增序号 */
     std::shared_ptr<ServerWorkerSync> worker_sync_{std::make_shared<ServerWorkerSync>()}; /**< 工作线程生命周期同步块 */
 
-    mutable std::mutex clients_mutex_;                                            /**< 客户端集合互斥锁 */
-    std::unordered_map<uint32_t, std::shared_ptr<ClientChannel>> client_channels_; /**< 客户端 ID 到通道实体的映射 */
     std::thread accept_thread_;                                                   /**< 监听接收连接的独立线程 */
 
     MessageCallback on_message_;                                                  /**< 消息接收回调 */
@@ -166,6 +194,11 @@ class UnixSocketClient {
 public:
     UnixSocketClient();
     ~UnixSocketClient();
+
+    UnixSocketClient(const UnixSocketClient&) = delete;
+    UnixSocketClient& operator=(const UnixSocketClient&) = delete;
+    UnixSocketClient(UnixSocketClient&&) = delete;
+    UnixSocketClient& operator=(UnixSocketClient&&) = delete;
 
     /**
      * @brief 连接到指定的宿主套接字
@@ -234,8 +267,11 @@ private:
      */
     void mark_peer_closed() noexcept { peer_closed_.store(true); }
 
-    std::atomic<int> fd_{-1};              /**< 套接字文件描述符 */
+    std::atomic<int> fd_{-1};              /**< 套接字文件描述符（用于无锁 is_connected 检查） */
     std::atomic<bool> peer_closed_{false}; /**< 对端是否已确定消失（EOF/HUP/脱节） */
+    std::atomic<uint32_t> next_sequence_{1}; /**< 报文单调自增序号 */
+    mutable std::mutex handle_mutex_;      /**< 保护 fd_handle_ 交换与借用 */
+    std::shared_ptr<ClientFdHandle> fd_handle_; /**< 引用计数的 FD 句柄，防止并发 close/复用竞态 */
     std::string socket_path_;      /**< 连接的服务端路径 */
     std::mutex send_mutex_;        /**< 发送锁，保证客户端并发写安全 */
     std::mutex recv_mutex_;        /**< 接收锁，保证整包接收期间互斥 */

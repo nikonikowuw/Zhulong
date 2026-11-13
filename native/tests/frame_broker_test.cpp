@@ -17,6 +17,7 @@
 #include <cstring>
 #include <csignal>
 #include <atomic>
+#include <limits>
 #include <string>
 
 using namespace zhulong;
@@ -60,6 +61,16 @@ void test_shm_pool_basic() {
     // 验证 unlink 后无法再以只读打开
     ShmPool reader2;
     assert(!reader2.init(shm_name, ShmMode::OPEN_READ_ONLY, 0, 0, &err));
+
+    // 校验 invalid ShmPool CREATE_READ_WRITE 参数拒绝
+    {
+        ShmPool bad_shm;
+        std::string bad_err;
+        assert(!bad_shm.init("/zhulong_test_bad_shm_0", ShmMode::CREATE_READ_WRITE, 0, 1024, &bad_err));
+        assert(!bad_shm.init("/zhulong_test_bad_shm_1", ShmMode::CREATE_READ_WRITE, 2, 0, &bad_err));
+        assert(!bad_shm.init("/zhulong_test_bad_shm_2", ShmMode::CREATE_READ_WRITE,
+                             static_cast<size_t>(std::numeric_limits<uint32_t>::max()) + 1ULL, 1, &bad_err));
+    }
 
     std::cout << "[PASS] test_shm_pool_basic" << std::endl;
 }
@@ -1995,6 +2006,86 @@ void test_frame_broker_windowed_publish() {
     std::cout << "[PASS] test_frame_broker_windowed_publish" << std::endl;
 }
 
+// =============================================================================
+// Test: publish_frame 必须拒绝空源指针与 stride < width，绝不发送旧槽位字节
+// =============================================================================
+void test_frame_broker_invalid_source_rejected() {
+    const uint64_t stream_id = 1902;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 2;
+    opt.slot_size = 1024 * 1024;
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "invalid_src_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> resp_payload;
+    assert(client.recv_msg(resp_hdr, resp_payload, 1000));
+    HandshakeResp resp{};
+    std::memcpy(&resp, resp_payload.data(), sizeof(resp));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    assert(broker.client_count() == 1);
+
+    // 1. BGR24 空 host_ptr
+    HardwareFrame null_bgr{};
+    null_bgr.width = 64;
+    null_bgr.height = 64;
+    null_bgr.stride = 64 * 3;
+    null_bgr.format = FRAME_FORMAT_UNKNOWN;
+    assert(!broker.publish_frame(null_bgr));
+
+    // 2. BGR24 stride < width * 3
+    std::vector<uint8_t> buf(64 * 64 * 3, 1);
+    HardwareFrame short_bgr{};
+    short_bgr.width = 64;
+    short_bgr.height = 64;
+    short_bgr.stride = 64; // < 64 * 3
+    short_bgr.format = FRAME_FORMAT_UNKNOWN;
+    short_bgr.host_ptr = buf.data();
+    assert(!broker.publish_frame(short_bgr));
+
+    // 3. NV12 缺失平面且 host_ptr 为空
+    HardwareFrame null_nv12{};
+    null_nv12.width = 64;
+    null_nv12.height = 64;
+    null_nv12.stride = 64;
+    null_nv12.format = FRAME_FORMAT_NV12;
+    null_nv12.host_planes[0] = buf.data(); // 缺少 host_planes[1] 且 host_ptr == nullptr
+    assert(!broker.publish_frame(null_nv12));
+
+    // 4. NV12 plane_strides[0] < width
+    HardwareFrame short_nv12{};
+    short_nv12.width = 64;
+    short_nv12.height = 64;
+    short_nv12.stride = 64;
+    short_nv12.format = FRAME_FORMAT_NV12;
+    short_nv12.host_planes[0] = buf.data();
+    short_nv12.host_planes[1] = buf.data();
+    short_nv12.plane_strides[0] = 32; // < width
+    assert(!broker.publish_frame(short_nv12));
+
+    // 客户端不得收到任何错误分发，且配额归零
+    IpcHeader no_hdr{};
+    std::vector<uint8_t> no_payload;
+    assert(!client.recv_msg(no_hdr, no_payload, 150));
+
+    ClientInfo info{};
+    assert(broker.get_client_info(resp.client_id, info));
+    assert(info.in_flight_count == 0);
+    assert(info.delivered_frames == 0);
+    assert(info.dropped_frames == 4);
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_invalid_source_rejected" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     // 子进程是「包形态」的桩算法可执行文件：自带算法类，argv 只有 broker 相关参数。
     const char* consumer_bin = (argc > 1) ? argv[1] : nullptr;
@@ -2022,6 +2113,7 @@ int main(int argc, char* argv[]) {
     test_frame_broker_handshake_non_null_terminated_name();
     test_frame_broker_nv12_vstride_normalization();
     test_frame_broker_windowed_publish();
+    test_frame_broker_invalid_source_rejected();
     if (consumer_bin) {
         test_consumer_subprocess_e2e(consumer_bin);
         test_consumer_multi_broker_e2e(consumer_bin);
