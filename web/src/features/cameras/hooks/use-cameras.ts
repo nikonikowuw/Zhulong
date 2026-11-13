@@ -7,30 +7,15 @@ import {
 import {
   camerasApi,
   type CreateCameraDto,
-  type GetCamerasParams,
   type UpdateCameraDto,
 } from '../api/cameras-api'
 import {
   type Camera,
-  type CameraCredentialsResponse,
   type CameraListResponse,
   type DiagnoseResponse,
 } from '../data/schema'
 
 export const CAMERAS_QUERY_KEY = ['cameras'] as const
-
-/**
- * 获取摄像机分页列表
- */
-export function useCameras(
-  params?: GetCamerasParams
-): UseQueryResult<CameraListResponse, Error> {
-  return useQuery({
-    queryKey: [...CAMERAS_QUERY_KEY, params],
-    queryFn: () => camerasApi.getCameras(params),
-    placeholderData: (previousData) => previousData,
-  })
-}
 
 /**
  * 获取全量摄像机列表（不分页）
@@ -46,17 +31,6 @@ export function useAllCameras(): UseQueryResult<CameraListResponse, Error> {
     // SSE 是主通道；窗口重新聚焦作为兼底，不做定时轮询
     staleTime: 60_000,
     refetchInterval: false,
-  })
-}
-
-/**
- * 获取单台摄像机详情
- */
-export function useCamera(id?: string): UseQueryResult<Camera, Error> {
-  return useQuery({
-    queryKey: [...CAMERAS_QUERY_KEY, 'detail', id],
-    queryFn: () => (id ? camerasApi.getCamera(id) : Promise.reject('No id')),
-    enabled: Boolean(id),
   })
 }
 
@@ -134,20 +108,6 @@ export function useDeleteCamera(options?: {
     meta: {
       suppressGlobalToast: options?.suppressGlobalToast,
     },
-  })
-}
-
-/**
- * 获取明文凭据 Query
- */
-export function useCameraCredentials(id: string | null, enabled = false) {
-  return useQuery<CameraCredentialsResponse, Error>({
-    queryKey: [...CAMERAS_QUERY_KEY, 'credentials', id],
-    queryFn: () =>
-      id ? camerasApi.getCredentials(id) : Promise.reject('No ID'),
-    enabled: Boolean(id) && enabled,
-    staleTime: 0,
-    gcTime: 0, // 不在本地缓存长效保存明文密码
   })
 }
 

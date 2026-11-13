@@ -27,7 +27,6 @@ function CamerasContent() {
   useCameraEvents(true)
 
   const cameras = data?.items ?? []
-  const total = data?.total ?? cameras.length
 
   return (
     <>
@@ -52,7 +51,6 @@ function CamerasContent() {
         {/* 核心数据表格 (首屏独占高信息密度工作区) */}
         <CamerasTable
           data={cameras}
-          total={total}
           isLoading={isLoading}
           isError={isError}
           onRetry={() => void refetch()}

@@ -1,44 +1,49 @@
 import { type ColumnDef } from '@tanstack/react-table'
 import i18n from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import { Checkbox } from '@/components/ui/checkbox'
 import { LongText } from '@/components/long-text'
 import { type Camera } from '../data/schema'
 import {
   CameraActionsHeader,
   CameraColumnHeader,
   CameraRtspCell,
+  CameraSelectAllCheckbox,
+  CameraSelectRowCheckbox,
   CameraStatusBadge,
   CameraSwitchCell,
   StreamSpecCell,
 } from './cameras-columns-cells'
 import { CamerasDataTableRowActions } from './cameras-data-table-row-actions'
 
+const updatedAtFormatters = new Map<string, Intl.DateTimeFormat>()
+
+function formatUpdatedAt(raw: string, language?: string): string {
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return '-'
+  const localeKey = language || 'default'
+  let formatter = updatedAtFormatters.get(localeKey)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(language || undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    updatedAtFormatters.set(localeKey, formatter)
+  }
+  return formatter.format(date)
+}
+
 export const camerasColumns: ColumnDef<Camera>[] = [
   {
     id: 'select',
-    header: ({ table }) => (
-      <Checkbox
-        checked={
-          table.getIsAllPageRowsSelected() ||
-          (table.getIsSomePageRowsSelected() && 'indeterminate')
-        }
-        onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
-        aria-label='Select all'
-        className='translate-y-0.5'
-      />
-    ),
+    header: ({ table }) => <CameraSelectAllCheckbox table={table} />,
     meta: {
       className: cn('inset-s-0 z-10 rounded-ss-[inherit] max-md:sticky'),
     },
-    cell: ({ row }) => (
-      <Checkbox
-        checked={row.getIsSelected()}
-        onCheckedChange={(value) => row.toggleSelected(!!value)}
-        aria-label='Select row'
-        className='translate-y-0.5'
-      />
-    ),
+    cell: ({ row }) => <CameraSelectRowCheckbox row={row} />,
     enableSorting: false,
     enableHiding: false,
   },
@@ -90,6 +95,8 @@ export const camerasColumns: ColumnDef<Camera>[] = [
       <CameraColumnHeader column={column} titleKey='table.columns.status' />
     ),
     cell: ({ row }) => <CameraStatusBadge camera={row.original} />,
+    filterFn: (row, id, filterValues: string[]) =>
+      !filterValues?.length || filterValues.includes(row.getValue(id)),
   },
   {
     id: 'mainStream',
@@ -126,10 +133,9 @@ export const camerasColumns: ColumnDef<Camera>[] = [
     cell: ({ row }) => {
       const raw = row.getValue('updatedAt') as string
       if (!raw) return <span className='text-xs text-muted-foreground'>-</span>
-      const date = new Date(raw)
       return (
         <span className='text-xs whitespace-nowrap text-muted-foreground'>
-          {date.toLocaleString(i18n.language || undefined)}
+          {formatUpdatedAt(raw, i18n.language)}
         </span>
       )
     },

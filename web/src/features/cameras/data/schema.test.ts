@@ -120,6 +120,46 @@ describe('camera schema validation', () => {
       expect(result.success).toBe(true)
     })
 
+    it('rejects bare rtsp:// without a host and trims surrounding whitespace', () => {
+      const bare = schema.safeParse({
+        name: 'Gate Camera',
+        enabled: true,
+        mainRtspUrl: 'rtsp://',
+        mainTransport: 'tcp',
+        hasSubStream: false,
+        subTransport: 'tcp',
+      })
+      expect(bare.success).toBe(false)
+
+      const barePath = schema.safeParse({
+        name: 'Gate Camera',
+        enabled: true,
+        mainRtspUrl: 'rtsp:///live',
+        mainTransport: 'tcp',
+        hasSubStream: false,
+        subTransport: 'tcp',
+      })
+      expect(barePath.success).toBe(false)
+
+      const trimmed = schema.safeParse({
+        name: '  Gate Camera  ',
+        enabled: true,
+        mainRtspUrl: '  rtsp://admin:pass@[fe80::1]:554/live  ',
+        mainTransport: 'tcp',
+        hasSubStream: true,
+        subRtspUrl: '  rtsp://192.168.1.100/sub  ',
+        subTransport: 'tcp',
+      })
+      expect(trimmed.success).toBe(true)
+      if (trimmed.success) {
+        expect(trimmed.data.name).toBe('Gate Camera')
+        expect(trimmed.data.mainRtspUrl).toBe(
+          'rtsp://admin:pass@[fe80::1]:554/live'
+        )
+        expect(trimmed.data.subRtspUrl).toBe('rtsp://192.168.1.100/sub')
+      }
+    })
+
     it('resolves validation text through i18n instead of leaking a raw key', () => {
       const calls: string[] = []
       const mockT = ((key: string) => {

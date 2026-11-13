@@ -1,8 +1,10 @@
+import { AxiosError, AxiosHeaders } from 'axios'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import { Button } from '@/components/ui/button'
+import { camerasApi } from '../api/cameras-api'
 import { type Camera } from '../data/schema'
 import { CamerasActionDialog } from './cameras-action-dialog'
 import { CamerasProvider, useCamerasContext } from './cameras-provider'
@@ -10,6 +12,7 @@ import { CamerasProvider, useCamerasContext } from './cameras-provider'
 const { updateCamera } = vi.hoisted(() => ({ updateCamera: vi.fn() }))
 
 vi.mock('../hooks/use-cameras', () => ({
+  CAMERAS_QUERY_KEY: ['cameras'],
   useCreateCamera: () => ({
     mutateAsync: vi.fn(),
     isPending: false,
@@ -123,6 +126,73 @@ describe('CamerasActionDialog', () => {
       data: {
         revision: gbCamera.revision,
         name: gbCamera.name,
+        enabled: gbCamera.enabled,
+      },
+    })
+  })
+
+  it('retains user draft on 409 CAS conflict and refreshes revision for retry', async () => {
+    const queryClient = new QueryClient()
+    const conflictErr = new AxiosError(
+      'Conflict',
+      'ERR_BAD_REQUEST',
+      undefined,
+      undefined,
+      {
+        status: 409,
+        statusText: 'Conflict',
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+        data: { code: 'CONFLICT', message: 'revision conflict' },
+      }
+    )
+
+    updateCamera.mockRejectedValueOnce(conflictErr).mockResolvedValueOnce({
+      ...gbCamera,
+      name: 'Updated Gate Name',
+      revision: 6,
+    })
+
+    const getCameraSpy = vi
+      .spyOn(camerasApi, 'getCamera')
+      .mockResolvedValueOnce({
+        ...gbCamera,
+        revision: 5,
+      })
+
+    const { getByRole, getByText } = await render(
+      <QueryClientProvider client={queryClient}>
+        <CamerasProvider>
+          <TestComponent />
+        </CamerasProvider>
+      </QueryClientProvider>
+    )
+
+    await userEvent.click(getByRole('button', { name: 'Open GB Edit' }))
+    const nameInput = getByRole('textbox', { name: '摄像机名称' })
+    await userEvent.clear(nameInput)
+    await userEvent.type(nameInput, 'Updated Gate Name')
+
+    await userEvent.click(getByRole('button', { name: '保存更改' }))
+    await expect.element(getByText('revision conflict')).toBeInTheDocument()
+
+    // Draft is preserved across conflict
+    await expect.element(nameInput).toHaveValue('Updated Gate Name')
+
+    // Refresh latest revision and retry
+    await userEvent.click(getByRole('button', { name: '刷新最新配置' }))
+    await vi.waitFor(() =>
+      expect(getCameraSpy).toHaveBeenCalledWith(gbCamera.id)
+    )
+
+    await userEvent.click(getByRole('button', { name: '保存更改' }))
+    await vi.waitFor(() => expect(updateCamera).toHaveBeenCalledTimes(2))
+
+    expect(updateCamera).toHaveBeenNthCalledWith(2, {
+      id: gbCamera.id,
+      data: {
+        revision: 5,
+        name: 'Updated Gate Name',
         enabled: gbCamera.enabled,
       },
     })

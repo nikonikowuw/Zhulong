@@ -10,6 +10,8 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { STATUS_TEXT_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -57,34 +59,45 @@ export function CamerasDataTableBulkActions({
   // 批量切换启用/停用状态
   const handleBulkStatusChange = async (enabled: boolean) => {
     setIsUpdating(true)
-    const taskPromise = Promise.allSettled(
-      selectedCameras.map((camera) =>
-        toggleMutation.mutateAsync({
-          camera,
-          enabled,
-        })
-      )
-    ).then((results) => {
-      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
-      if (fulfilled > 0) {
-        table.resetRowSelection()
-        void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
-        return t('toast.batchStatusUpdated', { count: fulfilled })
-      }
-      throw new Error(t('toast.batchStatusUpdateFailed'))
-    })
-
+    const toastId = toast.loading(t('toast.batchStatusUpdating'))
     try {
-      await toast.promise(taskPromise, {
-        loading: t('toast.batchStatusUpdating'),
-        success: (msg) => msg,
-        error: (err) =>
-          err instanceof Error
-            ? err.message
-            : t('toast.batchStatusUpdateFailed'),
+      const results = await Promise.allSettled(
+        selectedCameras.map((camera) =>
+          toggleMutation.mutateAsync({
+            camera,
+            enabled,
+          })
+        )
+      )
+      const failedSelection: Record<string, boolean> = {}
+      let fulfilled = 0
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          fulfilled += 1
+        } else {
+          failedSelection[selectedCameras[index].id] = true
+        }
       })
-    } catch {
-      // toast.promise 已统一展示失败反馈
+      const failed = results.length - fulfilled
+
+      if (fulfilled > 0) {
+        void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
+      }
+
+      if (failed === 0) {
+        table.resetRowSelection()
+        toast.success(t('toast.batchStatusUpdated', { count: fulfilled }), {
+          id: toastId,
+        })
+      } else if (fulfilled > 0) {
+        table.setRowSelection(failedSelection)
+        toast.warning(
+          t('toast.batchStatusPartial', { success: fulfilled, failed }),
+          { id: toastId }
+        )
+      } else {
+        toast.error(t('toast.batchStatusUpdateFailed'), { id: toastId })
+      }
     } finally {
       setIsUpdating(false)
     }
@@ -93,25 +106,32 @@ export function CamerasDataTableBulkActions({
   // 批量触发连通性探针诊断
   const handleBulkDiagnose = async () => {
     setIsUpdating(true)
-    const taskPromise = Promise.allSettled(
-      selectedCameras.map((camera) => diagnoseMutation.mutateAsync(camera.id))
-    ).then((results) => {
-      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
-      if (fulfilled > 0) {
-        return t('toast.batchDiagnoseSuccess', { count: fulfilled })
-      }
-      throw new Error(t('toast.batchDiagnoseFailed'))
-    })
-
+    const toastId = toast.loading(
+      t('toast.batchDiagnosing', { count: selectedCameras.length })
+    )
     try {
-      await toast.promise(taskPromise, {
-        loading: t('toast.batchDiagnosing', { count: selectedCameras.length }),
-        success: (msg) => msg,
-        error: (err) =>
-          err instanceof Error ? err.message : t('toast.batchDiagnoseFailed'),
-      })
-    } catch {
-      // toast.promise 已统一展示失败反馈
+      const results = await Promise.allSettled(
+        selectedCameras.map((camera) => diagnoseMutation.mutateAsync(camera.id))
+      )
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
+      const failed = results.length - fulfilled
+
+      if (fulfilled > 0) {
+        void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
+      }
+
+      if (failed === 0) {
+        toast.success(t('toast.batchDiagnoseSuccess', { count: fulfilled }), {
+          id: toastId,
+        })
+      } else if (fulfilled > 0) {
+        toast.warning(
+          t('toast.batchDiagnosePartial', { success: fulfilled, failed }),
+          { id: toastId }
+        )
+      } else {
+        toast.error(t('toast.batchDiagnoseFailed'), { id: toastId })
+      }
     } finally {
       setIsUpdating(false)
     }
@@ -149,7 +169,9 @@ export function CamerasDataTableBulkActions({
               onClick={() => void handleBulkStatusChange(true)}
               className='cursor-pointer'
             >
-              <CheckCircle2 className='me-2 size-4 text-emerald-500' />
+              <CheckCircle2
+                className={cn('me-2 size-4', STATUS_TEXT_CLASS.active)}
+              />
               <span>{t('table.batchEnable')}</span>
             </DropdownMenuItem>
             <DropdownMenuItem

@@ -2,24 +2,24 @@ import React, { createContext, useContext, useMemo, useState } from 'react'
 import useDialogState from '@/hooks/use-dialog-state'
 import { type Camera } from '../data/schema'
 
-export type CamerasDialogType =
+type CamerasDialogType =
   | 'create'
   | 'edit'
   | 'delete'
   | 'multi-delete'
   | 'diagnose'
 
-export interface CamerasStateContextType {
+interface CamerasStateContextType {
   open: CamerasDialogType | null
   currentRow: Camera | null
 }
 
-export interface CamerasActionsContextType {
+interface CamerasActionsContextType {
   setOpen: (str: CamerasDialogType | null) => void
   setCurrentRow: React.Dispatch<React.SetStateAction<Camera | null>>
 }
 
-export interface CamerasContextType
+interface CamerasContextType
   extends CamerasStateContextType, CamerasActionsContextType {}
 
 const CamerasStateContext = createContext<CamerasStateContextType | null>(null)
@@ -65,8 +65,7 @@ export const useCamerasActions = () => {
 }
 
 /** 仅订阅瞬态状态变化 */
-// eslint-disable-next-line react-refresh/only-export-components
-export const useCamerasState = () => {
+const useCamerasState = () => {
   const context = useContext(CamerasStateContext)
   if (!context) {
     throw new Error('useCamerasState must be used within <CamerasProvider>')

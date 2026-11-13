@@ -19,6 +19,8 @@
       "updatedAt": "更新時間",
       "actions": "操作"
     },
+    "selectAll": "全選攝影機",
+    "selectRow": "選擇攝影機 {{name}}",
     "copyRtspSuccess": "串流位址已複製至剪貼簿",
     "noStreams": "未配置",
     "empty": "暫無攝影機資產",
@@ -65,7 +67,9 @@
     "saveChanges": "儲存變更",
     "confirmAdd": "確認添加",
     "probing": "正在探測...",
-    "saving": "正在儲存..."
+    "saving": "正在儲存...",
+    "toggleEnabled": "切換攝影機 {{name}} 啟用狀態",
+    "refreshLatest": "重新整理最新配置"
   },
   "dialog": {
     "createTitle": "新增攝影機資產",
@@ -140,10 +144,18 @@
     "batchStatusUpdated": "已成功更新 {{count}} 台設備的狀態",
     "batchDiagnosing": "正在並發診斷選中的攝影機...",
     "batchDiagnoseSuccess": "已完成 {{count}} 台攝影機的連通性探測",
+    "diagnosing": "正在探測攝影機連通性...",
+    "diagnoseOnline": "攝影機連通性正常，串流已就緒",
+    "diagnoseOffline": "診斷完成：攝影機目前處於離線/異常狀態",
+    "diagnoseFailed": "診斷探針探測失敗",
     "probeFailed": "連通性探測失敗: {{reason}}",
     "batchStatusUpdateFailed": "批量更新設備狀態失敗",
+    "batchStatusPartial": "已更新 {{success}} 台設備，{{failed}} 台失敗",
     "batchDiagnoseFailed": "批量診斷探測失敗",
+    "batchDiagnosePartial": "已完成 {{success}} 台攝影機診斷，{{failed}} 台失敗",
     "batchDeleteFailed": "批量刪除攝影機失敗",
-    "deleteFailed": "刪除攝影機失敗"
+    "batchDeletePartial": "已刪除 {{success}} 台攝影機，{{failed}} 台失敗",
+    "deleteFailed": "刪除攝影機失敗",
+    "refreshLatestFailed": "重新整理攝影機最新配置失敗"
   }
 }

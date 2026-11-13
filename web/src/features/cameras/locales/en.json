@@ -19,6 +19,8 @@
       "updatedAt": "Updated",
       "actions": "Actions"
     },
+    "selectAll": "Select all cameras",
+    "selectRow": "Select camera {{name}}",
     "copyRtspSuccess": "RTSP URL copied to clipboard",
     "noStreams": "Not Configured",
     "empty": "No camera assets found",
@@ -65,7 +67,9 @@
     "saveChanges": "Save Changes",
     "confirmAdd": "Add Camera",
     "probing": "Probing...",
-    "saving": "Saving..."
+    "saving": "Saving...",
+    "toggleEnabled": "Toggle enabled state for {{name}}",
+    "refreshLatest": "Refresh latest"
   },
   "dialog": {
     "createTitle": "Add Camera Asset",
@@ -140,10 +144,18 @@
     "batchStatusUpdated": "Successfully updated {{count}} cameras",
     "batchDiagnosing": "Diagnosing {{count}} cameras in parallel...",
     "batchDiagnoseSuccess": "Finished connectivity probes for {{count}} cameras",
+    "diagnosing": "Probing camera connectivity...",
+    "diagnoseOnline": "Camera connectivity is healthy and stream is ready",
+    "diagnoseOffline": "Diagnostic complete: camera is currently offline or unhealthy",
+    "diagnoseFailed": "Diagnostic probe failed",
     "probeFailed": "Connection probe failed: {{reason}}",
     "batchStatusUpdateFailed": "Failed to update camera statuses",
+    "batchStatusPartial": "Updated {{success}} cameras, {{failed}} failed",
     "batchDiagnoseFailed": "Failed to diagnose selected cameras",
+    "batchDiagnosePartial": "Diagnosed {{success}} cameras, {{failed}} failed",
     "batchDeleteFailed": "Failed to delete selected cameras",
-    "deleteFailed": "Failed to delete camera"
+    "batchDeletePartial": "Deleted {{success}} cameras, {{failed}} failed",
+    "deleteFailed": "Failed to delete camera",
+    "refreshLatestFailed": "Failed to refresh camera details"
   }
 }

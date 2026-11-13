@@ -47,12 +47,32 @@ export function CamerasMultiDeleteDialog({
       const results = await Promise.allSettled(
         selectedCameras.map((cam) => deleteMutation.mutateAsync(cam.id))
       )
-      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
+      const failedSelection: Record<string, boolean> = {}
+      let fulfilled = 0
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          fulfilled += 1
+        } else {
+          failedSelection[selectedCameras[index].id] = true
+        }
+      })
+      const failed = results.length - fulfilled
+
       if (fulfilled > 0) {
         void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
+      }
+
+      if (failed === 0) {
         toast.success(t('toast.batchDeleteSuccess'))
         setValue('')
         table.resetRowSelection()
+        onOpenChange(false)
+      } else if (fulfilled > 0) {
+        toast.warning(
+          t('toast.batchDeletePartial', { success: fulfilled, failed })
+        )
+        setValue('')
+        table.setRowSelection(failedSelection)
         onOpenChange(false)
       } else {
         toast.error(t('toast.batchDeleteFailed'))

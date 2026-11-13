@@ -19,6 +19,8 @@
       "updatedAt": "更新时间",
       "actions": "操作"
     },
+    "selectAll": "全选摄像机",
+    "selectRow": "选择摄像机 {{name}}",
     "copyRtspSuccess": "流地址已复制到剪贴板",
     "noStreams": "未配置",
     "empty": "暂无摄像机资产",
@@ -65,7 +67,9 @@
     "saveChanges": "保存更改",
     "confirmAdd": "确认添加",
     "probing": "正在探测...",
-    "saving": "正在保存..."
+    "saving": "正在保存...",
+    "toggleEnabled": "切换摄像机 {{name}} 启用状态",
+    "refreshLatest": "刷新最新配置"
   },
   "dialog": {
     "createTitle": "新增摄像机资产",
@@ -140,10 +144,18 @@
     "batchStatusUpdated": "已成功更新 {{count}} 台设备的状态",
     "batchDiagnosing": "正在并发诊断选中的摄像机...",
     "batchDiagnoseSuccess": "已完成 {{count}} 台摄像机的连通性探测",
+    "diagnosing": "正在探测摄像头连通性...",
+    "diagnoseOnline": "摄像头连通性正常，流已就绪",
+    "diagnoseOffline": "诊断完成：摄像头当前处于离线/异常状态",
+    "diagnoseFailed": "诊断探针探测失败",
     "probeFailed": "连通性探测失败: {{reason}}",
     "batchStatusUpdateFailed": "批量更新设备状态失败",
+    "batchStatusPartial": "已更新 {{success}} 台设备，{{failed}} 台失败",
     "batchDiagnoseFailed": "批量诊断探测失败",
+    "batchDiagnosePartial": "已完成 {{success}} 台摄像机诊断，{{failed}} 台失败",
     "batchDeleteFailed": "批量删除摄像机失败",
-    "deleteFailed": "删除摄像机失败"
+    "batchDeletePartial": "已删除 {{success}} 台摄像机，{{failed}} 台失败",
+    "deleteFailed": "删除摄像机失败",
+    "refreshLatestFailed": "刷新摄像机最新配置失败"
   }
 }

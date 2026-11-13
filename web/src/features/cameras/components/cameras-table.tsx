@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   type SortingState,
   type VisibilityState,
@@ -32,7 +32,6 @@ import { useCamerasActions } from './cameras-provider'
 
 interface CamerasTableProps {
   data: Camera[]
-  total: number
   isLoading: boolean
   isError: boolean
   onRetry: () => void
@@ -40,9 +39,43 @@ interface CamerasTableProps {
   navigate: NavigateFn
 }
 
+const SKELETON_ROWS = Array.from({ length: 5 }, (_, index) => (
+  <TableRow key={`skeleton-${index}`}>
+    <TableCell className='w-12'>
+      <Skeleton className='h-4 w-4' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-4 w-24' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-4 w-32' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-4 w-44' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-6 w-16 rounded-full' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-4 w-28' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-4 w-24' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-5 w-8 rounded-full' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-4 w-24' />
+    </TableCell>
+    <TableCell className='sticky inset-e-0 z-20 w-12 bg-card text-end'>
+      <Skeleton className='size-8 rounded-md' />
+    </TableCell>
+  </TableRow>
+))
+
 export function CamerasTable({
   data,
-  total: _total,
   isLoading,
   isError,
   onRetry,
@@ -76,6 +109,7 @@ export function CamerasTable({
   const table = useReactTable({
     data,
     columns,
+    getRowId: (row) => row.id,
     state: {
       sorting,
       columnVisibility,
@@ -100,9 +134,13 @@ export function CamerasTable({
   })
 
   const pageCount = table.getPageCount()
+  const ensurePageInRangeRef = useRef(ensurePageInRange)
   useEffect(() => {
-    ensurePageInRange(pageCount)
-  }, [pageCount, ensurePageInRange])
+    ensurePageInRangeRef.current = ensurePageInRange
+  }, [ensurePageInRange])
+  useEffect(() => {
+    ensurePageInRangeRef.current(pageCount)
+  }, [pageCount, pagination.pageIndex])
 
   const statusOptions = useMemo(
     () => [
@@ -175,41 +213,7 @@ export function CamerasTable({
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              // 骨架屏加载态
-              Array.from({ length: 5 }).map((_, index) => (
-                <TableRow key={`skeleton-${index}`}>
-                  <TableCell className='w-12'>
-                    <Skeleton className='h-4 w-4' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-24' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-32' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-44' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-6 w-16 rounded-full' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-28' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-24' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-5 w-8 rounded-full' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-24' />
-                  </TableCell>
-                  <TableCell className='sticky inset-e-0 z-20 w-12 bg-card text-end'>
-                    <Skeleton className='size-8 rounded-md' />
-                  </TableCell>
-                </TableRow>
-              ))
+              SKELETON_ROWS
             ) : isError ? (
               // 请求失败态
               <TableRow>

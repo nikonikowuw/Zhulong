@@ -124,6 +124,9 @@ export type DeleteCameraResponse = z.infer<typeof deleteCameraResponseSchema>
  * 此前写成 `'cameras.validation.nameRequired'` 这类裸 key，用户看到的就是 key 本身。
  * 传 `t` 时取 `cameras` 命名空间下的 `validation.*`（不要再加 `cameras.` 前缀，否则双重前缀查不到）。
  */
+const RTSP_URL_PATTERN =
+  /^rtsp:\/\/(?:[^@\s/]+@)?(\[[^\]]+\]|[^:\s/]+)(?::\d+)?(?:\/.*)?$/i
+
 export function createCameraFormSchema(t?: TFunction, streamEditable = true) {
   const msg = {
     nameRequired: t ? t('validation.nameRequired') : '请输入摄像机名称',
@@ -141,28 +144,30 @@ export function createCameraFormSchema(t?: TFunction, streamEditable = true) {
 
   return z
     .object({
-      name: z.string().min(1, msg.nameRequired).max(64, msg.nameMax),
+      name: z.string().trim().min(1, msg.nameRequired).max(64, msg.nameMax),
       enabled: z.boolean(),
       mainRtspUrl: streamEditable
         ? z
             .string()
+            .trim()
             .min(1, msg.mainRtspRequired)
-            .regex(/^rtsp:\/\//i, msg.rtspInvalid)
+            .regex(RTSP_URL_PATTERN, msg.rtspInvalid)
         : z.string(),
       mainTransport: z.enum(['tcp', 'udp']),
       hasSubStream: z.boolean(),
-      subRtspUrl: z.string().optional(),
+      subRtspUrl: z.string().trim().optional(),
       subTransport: z.enum(['tcp', 'udp']),
     })
     .superRefine((data, ctx) => {
       if (!streamEditable || !data.hasSubStream) return
-      if (!data.subRtspUrl || data.subRtspUrl.trim().length === 0) {
+      const subUrl = data.subRtspUrl?.trim() ?? ''
+      if (subUrl.length === 0) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['subRtspUrl'],
           message: msg.subRtspRequired,
         })
-      } else if (!/^rtsp:\/\//i.test(data.subRtspUrl)) {
+      } else if (!RTSP_URL_PATTERN.test(subUrl)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['subRtspUrl'],

@@ -34,7 +34,7 @@ export interface UpdateCameraDto {
   subStream?: CreateStreamDto
 }
 
-export interface GetCamerasParams {
+interface GetCamerasParams {
   page?: number
   pageSize?: number
   search?: string
