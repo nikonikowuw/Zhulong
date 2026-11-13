@@ -692,3 +692,31 @@ func TestStoreCountEnabledTasks(t *testing.T) {
 		t.Fatalf("CountEnabledTasks = %d, want 1", cnt)
 	}
 }
+
+func TestStoreCreateTaskWithinBudgetRejectsNegativeFPSAsInvalidConfig(t *testing.T) {
+	store, db, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_neg_fps",
+		"neg_fps_detector",
+		10,
+	)
+
+	err := store.CreateTaskWithinBudget(ctx, &task.Task{
+		CameraID: "cam_neg_fps",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{AlgorithmID: "algo_neg_fps", Enabled: true, SampleFPS: -2, ConfigJSON: "{}"},
+		},
+	}, 1000)
+	if err == nil {
+		t.Fatal("expected error for negative sample_fps")
+	}
+	if errors.Is(err, task.ErrComputeBudgetExceeded) {
+		t.Fatalf("negative sample_fps must not be reported as ErrComputeBudgetExceeded, got %v", err)
+	}
+}

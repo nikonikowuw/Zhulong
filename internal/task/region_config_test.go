@@ -2,6 +2,7 @@ package task_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/nikonikowuw/Zhulong/internal/region"
@@ -369,5 +370,55 @@ func TestRegionConfigCacheSkipsEmptyRegionConfig(t *testing.T) {
 		if _, ok := cache.ConfigFor(cameraID, "algo_plain"); ok {
 			t.Errorf("an empty region config (%s) must not be cached", cameraID)
 		}
+	}
+}
+
+func TestRegionConfigCacheConcurrentReload(t *testing.T) {
+	store, db, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	insertMockAlgorithm(
+		t,
+		db,
+		"algo_conc",
+		"concurrent_detector",
+		10,
+	)
+
+	if err := store.CreateTask(ctx, &task.Task{
+		CameraID: "cam_conc",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{
+				AlgorithmID:      "algo_conc",
+				Enabled:          true,
+				SampleFPS:        5,
+				RegionConfigJSON: `{"roi": [[0.1, 0.1, 0.5, 0.5]]}`,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	cache := task.NewRegionConfigCache(store, zap.NewNop())
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 10 {
+				if err := cache.Reload(ctx); err != nil {
+					t.Errorf("concurrent Reload failed: %v", err)
+				}
+				cache.ConfigFor("cam_conc", "algo_conc")
+			}
+		}()
+	}
+	wg.Wait()
+
+	if _, ok := cache.ConfigFor("cam_conc", "algo_conc"); !ok {
+		t.Fatal("expected cam_conc/algo_conc to be cached after concurrent reloads")
 	}
 }

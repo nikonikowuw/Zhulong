@@ -71,6 +71,7 @@ func (s *Store) CreateTaskWithinBudget(ctx context.Context, task *Task, maxPoint
 	return db.Transaction(func(tx *gorm.DB) error {
 		assignIDs(task)
 		if err := validateComputeBudget(
+			ctx,
 			tx,
 			task,
 			"",
@@ -128,6 +129,7 @@ func (s *Store) SaveTaskWithinBudget(ctx context.Context, task *Task, maxPoints 
 		assignIDs(task)
 
 		if err := validateComputeBudget(
+			ctx,
 			tx,
 			task,
 			excludeID,
@@ -414,13 +416,13 @@ func syncTaskAlgorithms(ctx context.Context, tx *gorm.DB, task *Task, now time.T
 			if err != nil {
 				return fmt.Errorf("update task algorithm %q: %w", sub.AlgorithmID, err)
 			}
-		} else {
-			// 主键已由 assignIDs 在事务开头补全（syncTaskAlgorithms 只处理已登记的子项）。
-			sub.CreatedAt = now
-			sub.UpdatedAt = now
-			if err := gorm.G[TaskAlgorithm](tx).Create(ctx, sub); err != nil {
-				return fmt.Errorf("insert task algorithm %q: %w", sub.AlgorithmID, err)
-			}
+			continue
+		}
+		// 主键已由 assignIDs 在事务开头补全（syncTaskAlgorithms 只处理已登记的子项）。
+		sub.CreatedAt = now
+		sub.UpdatedAt = now
+		if err := gorm.G[TaskAlgorithm](tx).Create(ctx, sub); err != nil {
+			return fmt.Errorf("insert task algorithm %q: %w", sub.AlgorithmID, err)
 		}
 	}
 	return nil
@@ -437,12 +439,18 @@ func cameraTaskTaken(ctx context.Context, tx *gorm.DB, cameraID string) (bool, e
 
 // validateComputeBudget 累加"其它启用中的任务"与"本次任务的启用子项"所需算力点，
 // 并按时间切片校验瞬时峰值。
-func validateComputeBudget(tx *gorm.DB, task *Task, excludeTaskID string, maxPoints int64) error {
-	items, err := otherTasksSchedulableItems(tx, excludeTaskID)
+func validateComputeBudget(
+	ctx context.Context,
+	tx *gorm.DB,
+	task *Task,
+	excludeTaskID string,
+	maxPoints int64,
+) error {
+	items, err := otherTasksSchedulableItems(ctx, tx, excludeTaskID)
 	if err != nil {
 		return err
 	}
-	currentItems, err := taskSchedulableItems(tx, task, maxPoints)
+	currentItems, err := taskSchedulableItems(ctx, tx, task)
 	if err != nil {
 		return err
 	}
@@ -454,7 +462,7 @@ func validateComputeBudget(tx *gorm.DB, task *Task, excludeTaskID string, maxPoi
 	return nil
 }
 
-func taskSchedulableItems(tx *gorm.DB, task *Task, maxPoints int64) ([]schedule.SchedulableItem, error) {
+func taskSchedulableItems(ctx context.Context, tx *gorm.DB, task *Task) ([]schedule.SchedulableItem, error) {
 	if !task.Enabled {
 		return []schedule.SchedulableItem{}, nil
 	}
@@ -465,13 +473,14 @@ func taskSchedulableItems(tx *gorm.DB, task *Task, maxPoints int64) ([]schedule.
 			continue
 		}
 		if sub.SampleFPS < 0 {
-			return nil, fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
+			return nil, fmt.Errorf("%w: sample_fps %d cannot be negative", errInvalidTaskConfig, sub.SampleFPS)
 		}
 		var algorithm struct {
 			ID          string `gorm:"column:id"`
 			ComputeCost int    `gorm:"column:compute_cost"`
 		}
-		err := tx.Table("algorithms").
+		err := tx.WithContext(ctx).
+			Table("algorithms").
 			Select("id, compute_cost").
 			Where("id = ?", sub.AlgorithmID).
 			First(&algorithm).Error
@@ -482,7 +491,7 @@ func taskSchedulableItems(tx *gorm.DB, task *Task, maxPoints int64) ([]schedule.
 			return nil, err
 		}
 		if algorithm.ComputeCost < 0 {
-			return nil, fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
+			return nil, fmt.Errorf("algorithm %q has negative compute_cost %d", sub.AlgorithmID, algorithm.ComputeCost)
 		}
 		items = append(items, schedule.SchedulableItem{
 			Points:   int64(algorithm.ComputeCost) * int64(sub.SampleFPS),
@@ -493,8 +502,13 @@ func taskSchedulableItems(tx *gorm.DB, task *Task, maxPoints int64) ([]schedule.
 }
 
 // otherTasksSchedulableItems 汇总除 excludeTaskID 之外、所有启用中任务的算力调度项。
-func otherTasksSchedulableItems(tx *gorm.DB, excludeTaskID string) ([]schedule.SchedulableItem, error) {
-	query := tx.Table("task_algorithms").
+func otherTasksSchedulableItems(
+	ctx context.Context,
+	tx *gorm.DB,
+	excludeTaskID string,
+) ([]schedule.SchedulableItem, error) {
+	query := tx.WithContext(ctx).
+		Table("task_algorithms").
 		Select(
 			"task_algorithms.id AS sub_id, task_algorithms.sample_fps, "+
 				"algorithms.compute_cost, task_algorithms.schedule_json",

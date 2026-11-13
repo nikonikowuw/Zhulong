@@ -170,15 +170,17 @@ func (s *Service) SaveTask(ctx context.Context, t *Task) error {
 		return err
 	}
 
-	// 读旧值失败不阻断保存，但必须留痕：拿不到旧值时下面的比较只能按“新任务”处理
-	// （即多发一次重启）。排查“保存一下就重启”时这行日志是关键证据。
-	existing, loadErr := s.store.GetTaskByCamera(ctx, t.CameraID)
+	// 读旧值失败不阻断保存，但非 ErrNotFound 的异常必须留痕：拿不到旧值时下面的比较只能按“新任务”
+	// 处理（即多发一次重启）。排查“保存一下就重启”时这行日志是关键证据。
+	existing, loadErr := s.loadExistingForSave(ctx, t)
 	if loadErr != nil {
-		s.logger.Debug(
-			"load task before save failed; treating as new task",
-			zap.String("camera_id", t.CameraID),
-			zap.Error(loadErr),
-		)
+		if !errors.Is(loadErr, ErrNotFound) {
+			s.logger.Debug(
+				"load task before save failed; treating as new task",
+				zap.String("camera_id", t.CameraID),
+				zap.Error(loadErr),
+			)
+		}
 		existing = nil
 	}
 	previousIDs := []string{}
@@ -228,6 +230,9 @@ func (s *Service) DeleteTask(ctx context.Context, id string) error {
 
 // GetTask returns a task by its ID.
 func (s *Service) GetTask(ctx context.Context, id string) (*Task, error) {
+	if id == "" {
+		return nil, apperr.Invalid("VALIDATION_FAILED", "task id is required", nil)
+	}
 	task, err := s.loadTask(ctx, id)
 	if err != nil {
 		return nil, err
@@ -238,6 +243,9 @@ func (s *Service) GetTask(ctx context.Context, id string) (*Task, error) {
 
 // GetTaskByCamera returns a task by its camera ID.
 func (s *Service) GetTaskByCamera(ctx context.Context, cameraID string) (*Task, error) {
+	if cameraID == "" {
+		return nil, apperr.Invalid("VALIDATION_FAILED", "cameraId is required", nil)
+	}
 	task, err := s.store.GetTaskByCamera(ctx, cameraID)
 	if err != nil {
 		return nil, mapTaskError(err)
@@ -263,7 +271,7 @@ func (s *Service) ListTasks(ctx context.Context, cameraID, algorithmID string) (
 		tasks, err = s.store.ListTasks(ctx)
 	}
 	if err != nil {
-		return nil, err
+		return nil, mapTaskError(err)
 	}
 	for i := range tasks {
 		s.warnInvalidCrop(&tasks[i])
@@ -439,6 +447,14 @@ func (s *Service) ensureCameraIsFree(ctx context.Context, cameraID string) error
 	return nil
 }
 
+// loadExistingForSave 按与 Store.locateTask 相同的优先级（显式 ID 优先，其次 camera_id）读取既有任务。
+func (s *Service) loadExistingForSave(ctx context.Context, t *Task) (*Task, error) {
+	if t.ID != "" {
+		return s.store.GetTask(ctx, t.ID)
+	}
+	return s.store.GetTaskByCamera(ctx, t.CameraID)
+}
+
 // loadTask 读取任务并把 Store 错误映射成对外错误。
 func (s *Service) loadTask(ctx context.Context, id string) (*Task, error) {
 	task, err := s.store.GetTask(ctx, id)
@@ -483,6 +499,8 @@ func mapWriteError(err error, fallbackCode, fallbackMessage string) error {
 		return apperr.Conflict("TASK_ALREADY_EXISTS", "task already exists for camera", err)
 	case errors.Is(err, ErrNotFound):
 		return apperr.NotFound("ALGORITHM_NOT_FOUND", "referenced algorithm not found", err)
+	case errors.Is(err, errInvalidTaskConfig):
+		return apperr.Invalid("INVALID_TASK_CONFIG", "invalid analysis task config", err)
 	}
 	return apperr.Internal(fallbackCode, fallbackMessage, err)
 }

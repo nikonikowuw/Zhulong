@@ -44,7 +44,7 @@ func init() {
 			"zh-Hans": "分析任务至少需要绑定一个算法，清空通道请直接删除该任务",
 			"zh-Hant": "分析任務至少需要綁定一個演算法，清空通道請直接刪除該任務",
 		},
-		// INVALID_REQUEST 用于请求体绑定失败（400）与空更新载荷（422）；
+		// INVALID_REQUEST 用于请求体绑定失败（400）、nil 更新载荷或扁平字段与多算法任务冲突（422）；
 		// algorithm 包注册了同名 key，两处文案必须保持一致以免受 init 顺序影响。
 		"INVALID_REQUEST": {
 			"en":      "Invalid analysis task request payload",

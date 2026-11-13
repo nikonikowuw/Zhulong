@@ -211,7 +211,11 @@ func (h *Handler) SaveTaskByCamera(c *gin.Context) {
 	if !bindTaskPayload(c, &req) {
 		return
 	}
+	// PUT /tasks/camera/:cameraId 以路径参数为唯一归属标识，忽略载荷中可能带入的 task id 或相机别名，
+	// 防止请求体中的 id 命中并篡改其他摄像头任务的 camera_id。
+	req.ID = ""
 	req.CameraID = camID
+	req.CameraIDAlt = ""
 
 	task, err := req.toTask()
 	if err != nil {

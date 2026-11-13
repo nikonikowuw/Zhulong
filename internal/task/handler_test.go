@@ -58,7 +58,10 @@ func TestHandlerTaskEndpoints(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected map data, got %T", createResp.Data)
 	}
-	taskID := dataMap["id"].(string)
+	taskID, ok := dataMap["id"].(string)
+	if !ok || taskID == "" {
+		t.Fatalf("expected non-empty string id, got %v", dataMap["id"])
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID, nil)
 	w = httptest.NewRecorder()
@@ -151,8 +154,14 @@ func TestHandlerLegacyAlgorithmTaskEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("unmarshal response failed: %v", err)
 	}
-	dataMap := createResp.Data.(map[string]any)
-	taskID := dataMap["id"].(string)
+	dataMap, ok := createResp.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map data, got %T", createResp.Data)
+	}
+	taskID, ok := dataMap["id"].(string)
+	if !ok || taskID == "" {
+		t.Fatalf("expected non-empty string id, got %v", dataMap["id"])
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/algorithms/tasks?camera_id=cam_legacy_1", nil)
 	w = httptest.NewRecorder()
@@ -377,5 +386,75 @@ func TestHandlerSaveTaskByCameraRejectsBudgetOverflow(t *testing.T) {
 	}
 	if body.Code != "COMPUTE_BUDGET_EXCEEDED" {
 		t.Fatalf("expected COMPUTE_BUDGET_EXCEEDED, got %q", body.Code)
+	}
+}
+
+func TestHandlerSaveTaskByCameraIgnoresBodyIDAndCameraID(t *testing.T) {
+	r, _, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	// 先在 cam_alpha 上创建一个任务，拿到其 task ID。
+	seedBody := []byte(`{"cameraId": "cam_alpha", "algorithms": [{"algorithmId": "algo_helmet", "sampleFps": 5}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(seedBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("seed task failed: %d %s", w.Code, w.Body.String())
+	}
+
+	var seedResp httputil.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &seedResp); err != nil {
+		t.Fatalf("decode seed response: %v", err)
+	}
+	seedMap, ok := seedResp.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("expected object data, got %T", seedResp.Data)
+	}
+	alphaTaskID, ok := seedMap["id"].(string)
+	if !ok || alphaTaskID == "" {
+		t.Fatalf("expected non-empty alpha task id, got %v", seedMap["id"])
+	}
+
+	// 调用 PUT /tasks/camera/cam_beta 并在 body 里故意带入 alphaTaskID 与 cam_alpha，
+	// 必须新建/更新 cam_beta 自己的任务，绝对不能把 cam_alpha 的任务偷迁到 cam_beta。
+	upsertBody := []byte(`{
+		"id": "` + alphaTaskID + `",
+		"camera_id": "cam_alpha",
+		"algorithms": [{"algorithmId": "algo_vest", "sampleFps": 6}]
+	}`)
+	req = httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/tasks/camera/cam_beta",
+		bytes.NewReader(upsertBody),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on upsert, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var betaResp httputil.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &betaResp); err != nil {
+		t.Fatalf("decode beta response: %v", err)
+	}
+	betaMap, ok := betaResp.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("expected object data, got %T", betaResp.Data)
+	}
+	if betaMap["id"] == alphaTaskID {
+		t.Fatalf("cam_beta hijacked cam_alpha's task id %q", alphaTaskID)
+	}
+	if betaMap["cameraId"] != "cam_beta" {
+		t.Fatalf("expected cameraId cam_beta, got %v", betaMap["cameraId"])
+	}
+
+	// cam_alpha 原任务必须完好无损。
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/tasks/camera/cam_alpha", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cam_alpha task must still exist, got %d: %s", w.Code, w.Body.String())
 	}
 }

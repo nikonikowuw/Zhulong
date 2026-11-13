@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/nikonikowuw/Zhulong/internal/region"
@@ -18,6 +19,7 @@ type regionKey struct {
 type RegionConfigCache struct {
 	store    *Store
 	logger   *zap.Logger
+	reloadMu sync.Mutex
 	snapshot atomic.Pointer[map[regionKey]region.Config]
 }
 
@@ -64,17 +66,22 @@ func (c *RegionConfigCache) Reload(ctx context.Context) error {
 		return nil
 	}
 
+	c.reloadMu.Lock()
+	defer c.reloadMu.Unlock()
+
 	tasks, err := c.store.ListTasks(ctx)
 	if err != nil {
 		return fmt.Errorf("list tasks for region config cache: %w", err)
 	}
 
 	newMap := make(map[regionKey]region.Config, len(tasks))
-	for _, t := range tasks {
+	for i := range tasks {
+		t := &tasks[i]
 		if !t.Enabled {
 			continue
 		}
-		for _, algo := range t.Algorithms {
+		for j := range t.Algorithms {
+			algo := &t.Algorithms[j]
 			if !algo.Enabled {
 				continue
 			}

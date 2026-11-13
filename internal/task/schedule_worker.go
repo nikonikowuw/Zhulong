@@ -24,8 +24,10 @@ type ScheduleWorker struct {
 	nowFunc       func() time.Time
 
 	mu         sync.Mutex
+	started    bool
 	lastActive map[taskAlgorithmKey]bool
 	stopCh     chan struct{}
+	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 }
 
@@ -49,25 +51,30 @@ func NewScheduleWorker(
 		checkInterval: checkInterval,
 		nowFunc:       time.Now,
 		lastActive:    make(map[taskAlgorithmKey]bool),
-		stopCh:        make(chan struct{}),
 	}
 }
 
 // Start launches the periodic checking loop in a background goroutine.
+// Repeated calls while already running are no-ops.
 func (w *ScheduleWorker) Start() {
 	w.mu.Lock()
-	if w.stopCh == nil {
-		w.stopCh = make(chan struct{})
+	if w.started {
+		w.mu.Unlock()
+		return
 	}
-	stopCh := w.stopCh
+	w.started = true
+	stopCh := make(chan struct{})
+	w.stopCh = stopCh
+	stopCtx, cancel := context.WithCancel(context.Background())
+	w.cancel = cancel
+	w.wg.Add(1)
 	w.mu.Unlock()
 
-	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
 
 		// Prime the status map on startup
-		w.tick()
+		w.tick(stopCtx)
 
 		// Align to the next checkInterval wall-clock boundary to eliminate phase lag
 		now := w.nowFunc()
@@ -85,7 +92,7 @@ func (w *ScheduleWorker) Start() {
 				timer.Stop()
 				return
 			case <-timer.C:
-				w.tick()
+				w.tick(stopCtx)
 			}
 		}
 
@@ -97,15 +104,24 @@ func (w *ScheduleWorker) Start() {
 			case <-stopCh:
 				return
 			case <-ticker.C:
-				w.tick()
+				w.tick(stopCtx)
 			}
 		}
 	}()
 }
 
-// Stop cleanly terminates the worker loop.
+// Stop cleanly terminates the worker loop and cancels any in-flight check.
 func (w *ScheduleWorker) Stop() {
 	w.mu.Lock()
+	if !w.started {
+		w.mu.Unlock()
+		return
+	}
+	w.started = false
+	if w.cancel != nil {
+		w.cancel()
+		w.cancel = nil
+	}
 	if w.stopCh != nil {
 		close(w.stopCh)
 		w.stopCh = nil
@@ -114,8 +130,8 @@ func (w *ScheduleWorker) Stop() {
 	w.wg.Wait()
 }
 
-func (w *ScheduleWorker) tick() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (w *ScheduleWorker) tick(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	w.check(ctx)
 }
@@ -136,18 +152,27 @@ func (w *ScheduleWorker) check(ctx context.Context) {
 	now := w.nowFunc()
 	currentActive := make(map[taskAlgorithmKey]bool, len(tasks))
 	changedAlgos := make(map[string]struct{})
-	for _, tsk := range tasks {
+	for i := range tasks {
+		tsk := &tasks[i]
 		if !tsk.Enabled {
 			continue
 		}
-		for _, algo := range tsk.Algorithms {
+		for j := range tsk.Algorithms {
+			algo := &tsk.Algorithms[j]
 			if !algo.Enabled {
 				continue
 			}
 
-			sched, err := schedule.Parse(algo.ScheduleJSON)
 			isActive := true
-			if err == nil && sched != nil {
+			sched, err := schedule.Parse(algo.ScheduleJSON)
+			if err != nil {
+				w.logger.Warn(
+					"invalid schedule config in schedule worker; treating as always active",
+					zap.String("task_id", tsk.ID),
+					zap.String("algorithm_id", algo.AlgorithmID),
+					zap.Error(err),
+				)
+			} else if sched != nil {
 				isActive = sched.IsActiveAt(now)
 			}
 

@@ -657,4 +657,31 @@ func TestServiceRejectsIncompletePayloads(t *testing.T) {
 		_, err := svc.UpdateTask(ctx, "task_x", nil)
 		assertAppErrCode(t, err, "INVALID_REQUEST")
 	})
+
+	t.Run("get without task id", func(t *testing.T) {
+		_, err := svc.GetTask(ctx, "")
+		assertAppErrCode(t, err, "VALIDATION_FAILED")
+	})
+
+	t.Run("get by camera without camera id", func(t *testing.T) {
+		_, err := svc.GetTaskByCamera(ctx, "")
+		assertAppErrCode(t, err, "VALIDATION_FAILED")
+	})
+}
+
+func TestServiceListTasksWrapsStoreFailure(t *testing.T) {
+	store, db, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	svc := task.NewService(store, nil, nil, zap.NewNop())
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("unwrap sql.DB: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql.DB: %v", err)
+	}
+
+	_, err = svc.ListTasks(context.Background(), "", "")
+	assertAppErrCode(t, err, "INTERNAL_ERROR")
 }
