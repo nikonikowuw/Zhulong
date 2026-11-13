@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	// ErrUserNotFound is returned when no user matches the query.
-	ErrUserNotFound = errors.New("user not found")
-	// ErrUserAlreadyExists is returned when trying to create an administrator when one already exists.
-	ErrUserAlreadyExists = errors.New("user already exists")
+	// errUserNotFound is returned when no user matches the query.
+	errUserNotFound = errors.New("user not found")
+	// errUserAlreadyExists is returned when trying to create an administrator when one already exists.
+	errUserAlreadyExists = errors.New("user already exists")
 )
 
 // UserStore defines persistence operations for user credentials.
@@ -36,11 +36,11 @@ func NewUserStore(dbProvider database.DBProvider) UserStore {
 
 func (s *gormUserStore) db(ctx context.Context) (*gorm.DB, error) {
 	if s.dbProvider == nil {
-		return nil, errors.New("database provider is nil")
+		return nil, database.ErrClosed
 	}
 	db := s.dbProvider.DB()
 	if db == nil {
-		return nil, errors.New("database is not ready")
+		return nil, database.ErrClosed
 	}
 	return db.WithContext(ctx), nil
 }
@@ -66,7 +66,7 @@ func (s *gormUserStore) GetByID(ctx context.Context, id int64) (*User, error) {
 }
 
 // firstUser runs a single-row lookup and translates GORM's sentinel into
-// ErrUserNotFound, so callers never import gorm just to classify a miss.
+// errUserNotFound, so callers never import gorm just to classify a miss.
 func (s *gormUserStore) firstUser(ctx context.Context, where string, args ...any) (*User, error) {
 	db, err := s.db(ctx)
 	if err != nil {
@@ -74,7 +74,7 @@ func (s *gormUserStore) firstUser(ctx context.Context, where string, args ...any
 	}
 	user, err := gorm.G[User](db).Where(where, args...).First(ctx)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrUserNotFound
+		return nil, errUserNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get user where %s: %w", where, err)
@@ -93,7 +93,7 @@ func (s *gormUserStore) Create(ctx context.Context, user *User) error {
 			return fmt.Errorf("count existing users: %w", err)
 		}
 		if count > 0 {
-			return ErrUserAlreadyExists
+			return errUserAlreadyExists
 		}
 		now := time.Now().UTC()
 		user.CreatedAt = now

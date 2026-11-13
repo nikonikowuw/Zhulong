@@ -29,13 +29,19 @@ const (
 // session TTL, so the cookie disappears exactly when an idle session expires.
 func sessionCookieMaxAge(service AuthService) int {
 	if service == nil {
-		return DefaultSessionCookieMaxAge
+		return defaultSessionCookieMaxAge
 	}
 	ttl := service.SessionTTL()
 	if ttl <= 0 {
-		return DefaultSessionCookieMaxAge
+		return defaultSessionCookieMaxAge
 	}
-	return int(ttl / time.Second)
+	seconds := int(ttl / time.Second)
+	if seconds == 0 {
+		// Clamp sub-second TTLs to 1s so net/http does not omit Max-Age and turn
+		// the cookie into a browser-session cookie.
+		return 1
+	}
+	return seconds
 }
 
 // writeSessionCookie is the single place that knows the cookie's attribute set,

@@ -13,18 +13,23 @@ import (
 )
 
 var (
-	ErrAlreadyInitialized = apperr.PermissionDenied("SYSTEM_ALREADY_INITIALIZED", "system is already initialized", nil)
-	ErrNotInitialized     = apperr.Precondition("SYSTEM_NOT_INITIALIZED", "system is not initialized", nil)
-	ErrInvalidCredentials = apperr.Unauthenticated("INVALID_CREDENTIALS", "invalid username or password", nil)
-	ErrPasswordMismatch   = apperr.Invalid("PASSWORD_MISMATCH", "passwords do not match", nil)
-	ErrPasswordTooShort   = apperr.Invalid("PASSWORD_TOO_SHORT", "password must be at least 8 characters", nil)
-	ErrPasswordTooLong    = apperr.Invalid("PASSWORD_TOO_LONG", "password is too long", nil)
-	ErrTooManyAttempts    = apperr.RateLimited("TOO_MANY_ATTEMPTS", "too many failed login attempts", nil)
+	errAlreadyInitialized = apperr.PermissionDenied("SYSTEM_ALREADY_INITIALIZED", "system is already initialized", nil)
+	errNotInitialized     = apperr.Precondition("SYSTEM_NOT_INITIALIZED", "system is not initialized", nil)
+	errInvalidCredentials = apperr.Unauthenticated("INVALID_CREDENTIALS", "invalid username or password", nil)
+	errPasswordMismatch   = apperr.Invalid("PASSWORD_MISMATCH", "passwords do not match", nil)
+	errPasswordTooShort   = apperr.Invalid("PASSWORD_TOO_SHORT", "password must be at least 8 characters", nil)
+	errPasswordTooLong    = apperr.Invalid("PASSWORD_TOO_LONG", "password is too long", nil)
+	errTooManyAttempts    = apperr.RateLimited("TOO_MANY_ATTEMPTS", "too many failed login attempts", nil)
 )
 
-// rateLimiterCleanupInterval bounds how often the limiter sweeps expired IPs:
-// every login would otherwise walk the whole map.
-const rateLimiterCleanupInterval = time.Minute
+const (
+	defaultRateLimitWindow   = 15 * time.Minute
+	defaultRateLimitAttempts = 5
+
+	// rateLimiterCleanupInterval bounds how often the limiter sweeps expired IPs:
+	// every login would otherwise walk the whole map.
+	rateLimiterCleanupInterval = time.Minute
+)
 
 // AuthService defines the business operations for user authentication and session management.
 type AuthService interface {
@@ -60,10 +65,10 @@ type Attempt struct {
 // NewRateLimiter creates an initialized rate limiter.
 func NewRateLimiter(window time.Duration, maxAttempts int) *RateLimiter {
 	if window <= 0 {
-		window = 15 * time.Minute
+		window = defaultRateLimitWindow
 	}
 	if maxAttempts <= 0 {
-		maxAttempts = 5
+		maxAttempts = defaultRateLimitAttempts
 	}
 	return &RateLimiter{
 		window:      window,
@@ -184,7 +189,7 @@ func NewAuthService(
 	logger *zap.Logger,
 ) AuthService {
 	if limiter == nil {
-		limiter = NewRateLimiter(15*time.Minute, 5)
+		limiter = NewRateLimiter(defaultRateLimitWindow, defaultRateLimitAttempts)
 	}
 	if logger == nil {
 		logger = zap.NewNop()
@@ -197,7 +202,27 @@ func NewAuthService(
 	}
 }
 
+func (s *authService) ensureUserStore() error {
+	if s.userStore == nil {
+		return errors.New("auth user store is nil")
+	}
+	return nil
+}
+
+func (s *authService) ensureStores() error {
+	if err := s.ensureUserStore(); err != nil {
+		return err
+	}
+	if s.sessionStore == nil {
+		return errors.New("auth session store is nil")
+	}
+	return nil
+}
+
 func (s *authService) GetStatus(ctx context.Context) (AuthStatusResponse, error) {
+	if err := s.ensureUserStore(); err != nil {
+		return AuthStatusResponse{}, err
+	}
 	hasUser, err := s.userStore.HasUser(ctx)
 	if err != nil {
 		return AuthStatusResponse{}, fmt.Errorf("check initialized status: %w", err)
@@ -206,8 +231,11 @@ func (s *authService) GetStatus(ctx context.Context) (AuthStatusResponse, error)
 }
 
 func (s *authService) InitAdmin(ctx context.Context, req InitAdminRequest) (UserResponse, string, error) {
+	if err := s.ensureStores(); err != nil {
+		return UserResponse{}, "", err
+	}
 	if req.Password != req.ConfirmPassword {
-		return UserResponse{}, "", ErrPasswordMismatch
+		return UserResponse{}, "", errPasswordMismatch
 	}
 	if err := validateNewPassword(req.Password); err != nil {
 		return UserResponse{}, "", err
@@ -218,7 +246,7 @@ func (s *authService) InitAdmin(ctx context.Context, req InitAdminRequest) (User
 		return UserResponse{}, "", fmt.Errorf("verify user existence: %w", err)
 	}
 	if hasUser {
-		return UserResponse{}, "", ErrAlreadyInitialized
+		return UserResponse{}, "", errAlreadyInitialized
 	}
 
 	hash, err := hashPassword(req.Password)
@@ -233,8 +261,8 @@ func (s *authService) InitAdmin(ctx context.Context, req InitAdminRequest) (User
 	// The store re-checks emptiness inside its transaction, so a concurrent
 	// initialization loses here instead of creating a second administrator.
 	if err := s.userStore.Create(ctx, user); err != nil {
-		if errors.Is(err, ErrUserAlreadyExists) {
-			return UserResponse{}, "", ErrAlreadyInitialized
+		if errors.Is(err, errUserAlreadyExists) {
+			return UserResponse{}, "", errAlreadyInitialized
 		}
 		return UserResponse{}, "", fmt.Errorf("create admin: %w", err)
 	}
@@ -249,10 +277,13 @@ func (s *authService) InitAdmin(ctx context.Context, req InitAdminRequest) (User
 }
 
 func (s *authService) Login(ctx context.Context, clientIP string, req LoginRequest) (UserResponse, string, error) {
+	if err := s.ensureStores(); err != nil {
+		return UserResponse{}, "", err
+	}
 	attempt, allowed := s.limiter.Reserve(clientIP)
 	if !allowed {
 		s.logger.Warn("login attempt rejected by rate limiter", zap.String("clientIP", clientIP))
-		return UserResponse{}, "", ErrTooManyAttempts
+		return UserResponse{}, "", errTooManyAttempts
 	}
 	// Fail and Reset already finish the attempt; a deferred Cancel only fires on an
 	// unexpected return path, so a future edit cannot leak the reservation.
@@ -263,11 +294,11 @@ func (s *authService) Login(ctx context.Context, clientIP string, req LoginReque
 		return UserResponse{}, "", fmt.Errorf("check initialized: %w", err)
 	}
 	if !hasUser {
-		return UserResponse{}, "", ErrNotInitialized
+		return UserResponse{}, "", errNotInitialized
 	}
 
 	user, err := s.userStore.GetByUsername(ctx, req.Username)
-	if err != nil && !errors.Is(err, ErrUserNotFound) {
+	if err != nil && !errors.Is(err, errUserNotFound) {
 		return UserResponse{}, "", fmt.Errorf("get user for login: %w", err)
 	}
 
@@ -280,7 +311,7 @@ func (s *authService) Login(ctx context.Context, clientIP string, req LoginReque
 	matched := verifyPassword(passwordHash, req.Password)
 	if !matched || user == nil {
 		attempt.Fail()
-		return UserResponse{}, "", ErrInvalidCredentials
+		return UserResponse{}, "", errInvalidCredentials
 	}
 
 	attempt.Reset()
@@ -290,20 +321,27 @@ func (s *authService) Login(ctx context.Context, clientIP string, req LoginReque
 		return UserResponse{}, "", fmt.Errorf("create login session: %w", err)
 	}
 
-	s.logger.Info("user logged in successfully", zap.String("username", user.Username), zap.String("clientIP", clientIP))
+	s.logger.Info(
+		"user logged in successfully",
+		zap.String("username", user.Username),
+		zap.String("clientIP", clientIP),
+	)
 	return userResponse(user), token, nil
 }
 
 func (s *authService) Logout(token string) {
-	if token == "" {
+	if token == "" || s.sessionStore == nil {
 		return
 	}
 	s.sessionStore.Delete(token)
 }
 
-// The store error already names the query, and the handler maps ErrUserNotFound,
+// The store error already names the query, and the handler maps errUserNotFound,
 // so it is returned unchanged instead of being wrapped a second time.
 func (s *authService) GetCurrentUser(ctx context.Context, userID int64) (UserResponse, error) {
+	if err := s.ensureUserStore(); err != nil {
+		return UserResponse{}, err
+	}
 	user, err := s.userStore.GetByID(ctx, userID)
 	if err != nil {
 		return UserResponse{}, err
@@ -312,6 +350,9 @@ func (s *authService) GetCurrentUser(ctx context.Context, userID int64) (UserRes
 }
 
 func (s *authService) ValidateSession(token string) (SessionItem, bool) {
+	if s.sessionStore == nil {
+		return SessionItem{}, false
+	}
 	return s.sessionStore.Get(token)
 }
 
@@ -322,7 +363,7 @@ func (s *authService) SessionTTL() time.Duration {
 	if s.sessionStore != nil {
 		return s.sessionStore.TTL()
 	}
-	return DefaultSessionTTL
+	return defaultSessionTTL
 }
 
 // userResponse projects a persisted account onto the client-facing response type.

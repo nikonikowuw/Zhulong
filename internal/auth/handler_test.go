@@ -491,3 +491,15 @@ func assertAuditEntries(t *testing.T, entries []audit.AuditLog) {
 		t.Errorf("auth.logout mismatch: %+v", logoutEntry)
 	}
 }
+
+func TestSessionCookieMaxAge_SubSecondClamped(t *testing.T) {
+	svc := NewAuthService(
+		nil,
+		NewMemorySessionStore(500*time.Millisecond),
+		nil,
+		zap.NewNop(),
+	)
+	if maxAge := sessionCookieMaxAge(svc); maxAge != 1 {
+		t.Fatalf("expected sub-second TTL to clamp to 1s, got %d", maxAge)
+	}
+}

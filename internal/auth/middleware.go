@@ -26,8 +26,8 @@ type SessionUser struct {
 	Username string
 }
 
-// SetCurrentUser stores the authenticated session identity into Gin context.
-func SetCurrentUser(c *gin.Context, user SessionUser) {
+// setCurrentUser stores the authenticated session identity into Gin context.
+func setCurrentUser(c *gin.Context, user SessionUser) {
 	c.Set(currentUserKey, user)
 }
 
@@ -109,7 +109,7 @@ func RequireAuth(service AuthService) gin.HandlerFunc {
 		}
 
 		SetSessionToken(c, token)
-		SetCurrentUser(c, SessionUser{
+		setCurrentUser(c, SessionUser{
 			ID:       sessionItem.UserID,
 			Username: sessionItem.Username,
 		})

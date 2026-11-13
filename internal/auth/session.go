@@ -9,11 +9,11 @@ import (
 )
 
 const (
-	// DefaultSessionTTL is the duration an inactive session remains valid.
-	DefaultSessionTTL = 24 * time.Hour
+	// defaultSessionTTL is the duration an inactive session remains valid.
+	defaultSessionTTL = 24 * time.Hour
 
-	// DefaultSessionCookieMaxAge is the cookie lifetime matching DefaultSessionTTL in seconds.
-	DefaultSessionCookieMaxAge = int(DefaultSessionTTL / time.Second)
+	// defaultSessionCookieMaxAge is the cookie lifetime matching defaultSessionTTL in seconds.
+	defaultSessionCookieMaxAge = int(defaultSessionTTL / time.Second)
 
 	// tokenBytes is the CSPRNG payload behind a session token; hex encoding doubles it.
 	tokenBytes = 32
@@ -45,7 +45,7 @@ type MemorySessionStore struct {
 // NewMemorySessionStore creates an initialized in-memory session store.
 func NewMemorySessionStore(ttl time.Duration) *MemorySessionStore {
 	if ttl <= 0 {
-		ttl = DefaultSessionTTL
+		ttl = defaultSessionTTL
 	}
 	return &MemorySessionStore{
 		ttl:      ttl,
@@ -123,7 +123,5 @@ func (s *MemorySessionStore) pruneExpiredLocked(now time.Time) {
 
 // TTL returns the configured session duration.
 func (s *MemorySessionStore) TTL() time.Duration {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.ttl
 }

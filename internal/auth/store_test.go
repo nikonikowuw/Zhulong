@@ -62,14 +62,14 @@ func TestGORMUserStore_HasUserAndCreate(t *testing.T) {
 		t.Fatal("expected user to exist after creation")
 	}
 
-	// Single-user constraint: creating a second user must fail with ErrUserAlreadyExists
+	// Single-user constraint: creating a second user must fail with errUserAlreadyExists
 	secondUser := &User{
 		Username:     "second_admin",
 		PasswordHash: "another_hash",
 	}
 	err = userStore.Create(ctx, secondUser)
-	if !errors.Is(err, ErrUserAlreadyExists) {
-		t.Fatalf("expected ErrUserAlreadyExists, got %v", err)
+	if !errors.Is(err, errUserAlreadyExists) {
+		t.Fatalf("expected errUserAlreadyExists, got %v", err)
 	}
 }
 
@@ -80,12 +80,12 @@ func TestGORMUserStore_GetAndModify(t *testing.T) {
 
 	// Not found checks
 	_, err := userStore.GetByUsername(ctx, "nonexistent")
-	if !errors.Is(err, ErrUserNotFound) {
-		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	if !errors.Is(err, errUserNotFound) {
+		t.Fatalf("expected errUserNotFound, got %v", err)
 	}
 	_, err = userStore.GetByID(ctx, 999)
-	if !errors.Is(err, ErrUserNotFound) {
-		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	if !errors.Is(err, errUserNotFound) {
+		t.Fatalf("expected errUserNotFound, got %v", err)
 	}
 
 	user := &User{
@@ -125,17 +125,17 @@ func TestGORMUserStore_UnreadyDatabase(t *testing.T) {
 		"nil":     NewUserStore(nil),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := store.HasUser(ctx); err == nil {
-				t.Errorf("%s: expected error on HasUser, got nil", name)
+			if _, err := store.HasUser(ctx); !errors.Is(err, database.ErrClosed) {
+				t.Errorf("%s: expected database.ErrClosed on HasUser, got %v", name, err)
 			}
-			if _, err := store.GetByUsername(ctx, "admin"); err == nil {
-				t.Errorf("%s: expected error on GetByUsername, got nil", name)
+			if _, err := store.GetByUsername(ctx, "admin"); !errors.Is(err, database.ErrClosed) {
+				t.Errorf("%s: expected database.ErrClosed on GetByUsername, got %v", name, err)
 			}
-			if _, err := store.GetByID(ctx, 1); err == nil {
-				t.Errorf("%s: expected error on GetByID, got nil", name)
+			if _, err := store.GetByID(ctx, 1); !errors.Is(err, database.ErrClosed) {
+				t.Errorf("%s: expected database.ErrClosed on GetByID, got %v", name, err)
 			}
-			if err := store.Create(ctx, &User{Username: "test"}); err == nil {
-				t.Errorf("%s: expected error on Create, got nil", name)
+			if err := store.Create(ctx, &User{Username: "test"}); !errors.Is(err, database.ErrClosed) {
+				t.Errorf("%s: expected database.ErrClosed on Create, got %v", name, err)
 			}
 		})
 	}

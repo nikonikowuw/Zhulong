@@ -43,7 +43,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		"/logout",
 		withoutCookieRenewal(),
 		RequireAuth(h.service),
-		h.logoutHandler,
+		httputil.Handle(h.logoutHandler),
 	)
 	authGroup.GET("/me", RequireAuth(h.service), httputil.Handle(h.meHandler))
 }
@@ -122,7 +122,7 @@ func (h *Handler) completeAuthSession(c *gin.Context, user UserResponse, token s
 // @Success      200  {object}  httputil.Response{data=LogoutResponse}
 // @Failure      401  {object}  httputil.Response
 // @Router       /auth/logout [post]
-func (h *Handler) logoutHandler(c *gin.Context) {
+func (h *Handler) logoutHandler(c *gin.Context) (LogoutResponse, error) {
 	username, token := h.sessionIdentity(c)
 	h.service.Logout(token)
 
@@ -138,23 +138,21 @@ func (h *Handler) logoutHandler(c *gin.Context) {
 	}
 
 	clearSessionCookie(c)
-	httputil.Success(c, LogoutResponse{LoggedOut: true})
+	return LogoutResponse{LoggedOut: true}, nil
 }
 
-// sessionIdentity resolves the account name and token for the audit record. The
-// session is the only authority: it never defaults to a hardcoded admin, and a
-// missing or expired session leaves the actor anonymous.
+// sessionIdentity resolves the account name and token for the audit record.
+// RequireAuth already populated the Gin context, so ValidateSession is only used
+// as a fallback when a caller invokes the handler without the middleware.
 func (h *Handler) sessionIdentity(c *gin.Context) (username, token string) {
 	if user, ok := GetCurrentUser(c); ok {
 		username = user.Username
 	}
-
 	token = GetSessionToken(c)
-	if token == "" {
-		return username, ""
-	}
-	if session, ok := h.service.ValidateSession(token); ok && session.Username != "" {
-		username = session.Username
+	if username == "" && token != "" {
+		if session, ok := h.service.ValidateSession(token); ok && session.Username != "" {
+			username = session.Username
+		}
 	}
 	return username, token
 }
@@ -173,7 +171,7 @@ func (h *Handler) meHandler(c *gin.Context) (UserResponse, error) {
 	}
 
 	user, err := h.service.GetCurrentUser(c.Request.Context(), sessionUser.ID)
-	if errors.Is(err, ErrUserNotFound) {
+	if errors.Is(err, errUserNotFound) {
 		// The account vanished between the session lookup and this query: drop the
 		// dangling session instead of leaving the client half authenticated.
 		h.service.Logout(GetSessionToken(c))

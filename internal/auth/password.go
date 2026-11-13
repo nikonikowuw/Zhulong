@@ -38,10 +38,10 @@ var timingEqualizerHash = sync.OnceValue(func() []byte {
 func validateNewPassword(password string) error {
 	runes := utf8.RuneCountInString(password)
 	if runes < minPasswordRunes {
-		return ErrPasswordTooShort
+		return errPasswordTooShort
 	}
 	if runes > maxPasswordRunes || len(password) > maxPasswordBytes {
-		return ErrPasswordTooLong
+		return errPasswordTooLong
 	}
 	return nil
 }

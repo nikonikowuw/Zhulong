@@ -42,16 +42,16 @@ func TestAuthService_InitAndStatus(t *testing.T) {
 		Username:        "admin",
 		Password:        "secret123",
 		ConfirmPassword: "differentPassword",
-	}); !errors.Is(err, ErrPasswordMismatch) {
-		t.Fatalf("expected ErrPasswordMismatch, got %v", err)
+	}); !errors.Is(err, errPasswordMismatch) {
+		t.Fatalf("expected errPasswordMismatch, got %v", err)
 	}
 
 	if _, _, err := svc.InitAdmin(ctx, InitAdminRequest{
 		Username:        "admin",
 		Password:        "short",
 		ConfirmPassword: "short",
-	}); !errors.Is(err, ErrPasswordTooShort) {
-		t.Fatalf("expected ErrPasswordTooShort, got %v", err)
+	}); !errors.Is(err, errPasswordTooShort) {
+		t.Fatalf("expected errPasswordTooShort, got %v", err)
 	}
 
 	userResp, token, err := svc.InitAdmin(ctx, InitAdminRequest{
@@ -81,8 +81,8 @@ func TestAuthService_InitAndStatus(t *testing.T) {
 		Username:        "admin2",
 		Password:        "password123",
 		ConfirmPassword: "password123",
-	}); !errors.Is(err, ErrAlreadyInitialized) {
-		t.Fatalf("expected ErrAlreadyInitialized, got %v", err)
+	}); !errors.Is(err, errAlreadyInitialized) {
+		t.Fatalf("expected errAlreadyInitialized, got %v", err)
 	}
 }
 
@@ -99,8 +99,8 @@ func TestAuthService_InitAdminRejectsPasswordBeyondBcryptLimit(t *testing.T) {
 		Password:        password,
 		ConfirmPassword: password,
 	})
-	if !errors.Is(err, ErrPasswordTooLong) {
-		t.Fatalf("expected ErrPasswordTooLong, got %v", err)
+	if !errors.Is(err, errPasswordTooLong) {
+		t.Fatalf("expected errPasswordTooLong, got %v", err)
 	}
 
 	users, err := userCount(dbStore)
@@ -154,8 +154,8 @@ func TestAuthService_ConcurrentInitKeepsSingleUser(t *testing.T) {
 		switch {
 		case err == nil:
 			succeeded++
-		case !errors.Is(err, ErrAlreadyInitialized):
-			t.Errorf("caller %d: expected ErrAlreadyInitialized, got %v", i, err)
+		case !errors.Is(err, errAlreadyInitialized):
+			t.Errorf("caller %d: expected errAlreadyInitialized, got %v", i, err)
 		}
 	}
 	if succeeded != 1 {
@@ -284,7 +284,7 @@ func TestAuthService_LoginPropagatesUserStoreFailures(t *testing.T) {
 		Username: "admin",
 		Password: "password123",
 	})
-	if !errors.Is(err, cause) || errors.Is(err, ErrInvalidCredentials) {
+	if !errors.Is(err, cause) || errors.Is(err, errInvalidCredentials) {
 		t.Fatalf("expected wrapped database failure, got %v", err)
 	}
 
@@ -321,16 +321,16 @@ func TestAuthService_UnknownUsernameConsumesAttempt(t *testing.T) {
 		{Username: "admin", Password: "wrongpassword"},
 	}
 	for _, req := range credentials {
-		if _, _, err := svc.Login(ctx, "192.0.2.9", req); !errors.Is(err, ErrInvalidCredentials) {
-			t.Fatalf("login as %q: expected ErrInvalidCredentials, got %v", req.Username, err)
+		if _, _, err := svc.Login(ctx, "192.0.2.9", req); !errors.Is(err, errInvalidCredentials) {
+			t.Fatalf("login as %q: expected errInvalidCredentials, got %v", req.Username, err)
 		}
 	}
 
 	if _, _, err := svc.Login(ctx, "192.0.2.9", LoginRequest{
 		Username: "admin",
 		Password: "password123",
-	}); !errors.Is(err, ErrTooManyAttempts) {
-		t.Fatalf("expected ErrTooManyAttempts after both failures, got %v", err)
+	}); !errors.Is(err, errTooManyAttempts) {
+		t.Fatalf("expected errTooManyAttempts after both failures, got %v", err)
 	}
 }
 
@@ -350,8 +350,8 @@ func TestAuthService_LoginAndRateLimiter(t *testing.T) {
 	if _, _, err := svc.Login(ctx, "127.0.0.1", LoginRequest{
 		Username: "admin",
 		Password: "password123",
-	}); !errors.Is(err, ErrNotInitialized) {
-		t.Fatalf("expected ErrNotInitialized, got %v", err)
+	}); !errors.Is(err, errNotInitialized) {
+		t.Fatalf("expected errNotInitialized, got %v", err)
 	}
 
 	if _, _, err := svc.InitAdmin(ctx, InitAdminRequest{
@@ -362,12 +362,12 @@ func TestAuthService_LoginAndRateLimiter(t *testing.T) {
 		t.Fatalf("InitAdmin: %v", err)
 	}
 
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := range 3 {
 		if _, _, err := svc.Login(ctx, "127.0.0.1", LoginRequest{
 			Username: "admin",
 			Password: "wrongpassword",
-		}); !errors.Is(err, ErrInvalidCredentials) {
-			t.Fatalf("attempt %d: expected ErrInvalidCredentials, got %v", attempt, err)
+		}); !errors.Is(err, errInvalidCredentials) {
+			t.Fatalf("attempt %d: expected errInvalidCredentials, got %v", attempt+1, err)
 		}
 	}
 
@@ -375,8 +375,8 @@ func TestAuthService_LoginAndRateLimiter(t *testing.T) {
 	if _, _, err := svc.Login(ctx, "127.0.0.1", LoginRequest{
 		Username: "admin",
 		Password: "password123",
-	}); !errors.Is(err, ErrTooManyAttempts) {
-		t.Fatalf("expected ErrTooManyAttempts, got %v", err)
+	}); !errors.Is(err, errTooManyAttempts) {
+		t.Fatalf("expected errTooManyAttempts, got %v", err)
 	}
 
 	userResp, token, err := svc.Login(ctx, "192.168.1.100", LoginRequest{
@@ -398,5 +398,37 @@ func TestAuthService_LoginAndRateLimiter(t *testing.T) {
 	svc.Logout(token)
 	if _, ok := svc.ValidateSession(token); ok {
 		t.Fatal("session should be invalidated after logout")
+	}
+}
+
+func TestAuthService_NilStoresDoNotPanic(t *testing.T) {
+	ctx := context.Background()
+	svc := NewAuthService(nil, nil, nil, nil)
+
+	if _, err := svc.GetStatus(ctx); err == nil {
+		t.Fatal("expected error from GetStatus when userStore is nil")
+	}
+	if _, _, err := svc.InitAdmin(ctx, InitAdminRequest{
+		Username:        "admin",
+		Password:        "password123",
+		ConfirmPassword: "password123",
+	}); err == nil {
+		t.Fatal("expected error from InitAdmin when stores are nil")
+	}
+	if _, _, err := svc.Login(ctx, "127.0.0.1", LoginRequest{
+		Username: "admin",
+		Password: "password123",
+	}); err == nil {
+		t.Fatal("expected error from Login when stores are nil")
+	}
+	if _, err := svc.GetCurrentUser(ctx, 1); err == nil {
+		t.Fatal("expected error from GetCurrentUser when userStore is nil")
+	}
+	if _, ok := svc.ValidateSession("token"); ok {
+		t.Fatal("expected ValidateSession to return false when sessionStore is nil")
+	}
+	svc.Logout("token")
+	if svc.SessionTTL() != defaultSessionTTL {
+		t.Fatalf("expected fallback TTL %v, got %v", defaultSessionTTL, svc.SessionTTL())
 	}
 }
