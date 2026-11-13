@@ -275,6 +275,16 @@ CREATE TABLE camera_streams (
    - `StreamHub.consumeAIResults` 必须先非阻塞调用 `eventHub.BroadcastAIResult(res)`，再执行同步落库/抓拍 `consumer.ProcessInferenceResult`，严禁让 SQLite 事务或 JPEG 抓拍阻塞实时画框；
    - 前端 `AIOverlaySynchronizer` 按 `algorithm_id` 分槽隔离多算法状态：主流（`main`）在开启叠加层时经 `PresentationScheduler.setTargetLatencyMs(160)` 在线抬高呈现缓冲（严禁触发 `VideoDecoder` 重建）并按 `VideoFrame.timestamp` 对齐释放 AI 框，结合 `track_id` 受限速度外推平滑与显式空目标信标即时清槽；子码流（`sub`）因独立 `PreviewNormalizer` 时钟起点自动回退墙钟驱动。
 
+---
+
+## 5.2 AI 流前置裁剪视图与逆映射收口 (`StreamHub` / `region.Reproject`)
+
+1. **只读获取契约 (`TaskCropProvider`)**：`StreamHub` 通过 `TaskCropProvider.CropFor(ctx, cameraID)` 按相机读取启用中的任务裁剪矩形；错误时记 Warn 日志并**保留当前视图**（不清空），避免数据库瞬态异常导致窗口静默回退全幅。
+2. **严禁非订阅路径拉起拉流**：`RefreshTaskCrop` / `applyTaskCrop` 仅在 `h.aiStreams[cameraID]` 已有活跃引用时调用 `SetView`；流未建立时直接返回（等下次 `acquire` 重放），绝不触发 `ResolveAIStreamBrokerPath` 去新建拉流。
+3. **复合动作串行化与锁边界**：`aiStreamRef.applySem`（容量 1）在 **Hub 锁外**串行化「读 `CropFor` + 调 `SetView`」，防止 `RefreshTaskCrop` 与 `acquire` 快路径倒序覆盖；CGO `SetView`/`GetView` 绝不持 `h.mu` 执行。`SetView` 返回 `ErrStreamNotReady`（首帧未到）视为正常 pending，不伪造 `E`。
+4. **单点逆映射与边界时钟**：`consumeAIResults` 在 `ParseInferenceResult` 之后、`region.Filter` 之前，当 `ref.needsViewPoll()` 为真时刷新 `GetView`，按 `res.Timestamp < view.Since` 选择 `viewPrev` 或当前 `view.Rect` 执行 `region.Reproject`，下游抓拍/告警/ROI/MASK/SSE 全程吃全幅坐标。
+5. **共享物理流释放前显式清空**：`ReleaseAIStreamSubscriber` 在锁外 `Close` 底层 `MediaStream` **之前**必须先调用 `SetView(clearCtx, nil)`（忽略 `ErrNotFound` / `ErrStreamNotReady`），防止 preview 仍持有同一物理流时残留上一任裁剪窗口。
+
 
 
 

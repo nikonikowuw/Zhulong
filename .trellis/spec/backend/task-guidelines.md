@@ -130,3 +130,17 @@ type TaskChangeListener interface {
 `region_config_json` 在既有ROI/MASK之外支持 `tripwires`，完整字段与方向合同见 [SDK绊线配置](../native/algo-plugin-contract.md#绊线配置与区域读取sdk-120)。每算法最多8条，稳定ID和有序端点持久化；名称与方向属于配置。保存只表示配置存在，不代表算法支持或已启用统计。无需新增数据库列。Go服务继续用 `region.ParseConfig` 校验，错误复用 `INVALID_REGION_CONFIG`。
 
 区域读取沿现有 `appBrokerPathResolver` → `TaskRegionProvider` → `TaskConfigBroadcaster.BroadcastRegions` → `MSG_TASK_REGIONS`；不改变 `config_json` 的算法自定义参数语义。任务变更按现有生命周期重启包，启动前播种Broker缓存。
+
+---
+
+## 任务级前置裁剪视图 (`crop_json` 与 `TaskSavedListener`)
+
+1. **存储与归属**：`analysis_tasks.crop_json`（迁移 `000032`）存储任务/相机级唯一矩形 `{"crop":[x1,y1,x2,y2]}` 或 `{}`；`[0,0,1,1]` / `null` / `[]` / `{}` 统一归一化为不裁剪（`{}`）。`writeTaskRow` 显式更新 map 必须包含 `crop_json`。
+2. **三态更新与校验入口**：
+   - 最小边长权威在 Go（`region.MinCropSide = 0.02`），与 ROI/MASK 的 `0.01` 独立；校验失败返回 `apperr.Invalid("INVALID_CROP_CONFIG", …)`（HTTP 422），三语文案注册于 `internal/task/locale.go`。
+   - `CreateTaskRequest` / 按相机 upsert：`Crop *region.Rect`（缺省/`nil`/`[0,0,1,1]` 为不裁剪；畸形数组返回 422 `INVALID_CROP_CONFIG`）。
+   - `UpdateTaskRequest`：`Crop json.RawMessage`（`omitempty` 省略 = 不改；`null`/`[]`/`{}` = 清空；4 元归一化数组 = 设置）。必须经 `ApplyCrop` 在 `ApplyTo` 之前解析校验，避免提前 `return` 跳过校验。
+3. **只改 crop 不重启算法进程**：
+   - `Service` 维护正交的 `TaskSavedListener`（`OnTaskSaved(ctx, taskID, cameraID)`，以 `context.WithoutCancel(ctx)` 投递给 `StreamHub.RefreshTaskCrop`）。
+   - `UpdateTask` / `SaveTask` 在改写前深拷贝旧任务并通过 `sameTaskSemantics` 比较除 `CropJSON`、`Name`、簿记时间戳/ID 外的任务语义；**仅 `CropJSON` 变化时跳过 `TaskChangeListener`（不重启算法子进程）**，只触发 `TaskSavedListener` 下一帧热切换。
+4. **读库容错 (`CropFor`)**：`Store.CropFor` 对「任务不存在 / 停用 / 无裁剪」返回 `(nil, nil)`；读库或解析失败返回 error，由调用方保留当前流视图，绝不把读库抖动误当清空。

@@ -136,6 +136,8 @@ const HEALTH_LEVEL: Record<HealthStatus, StatusLevel> = {
 | 3 | `emerald` | `border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:border-emerald-500/40 dark:bg-emerald-500/20 dark:text-emerald-400` |
 | 4 | `fuchsia` | `border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-600 dark:border-fuchsia-500/40 dark:bg-fuchsia-500/20 dark:text-fuchsia-400` |
 | 5 | `cyan` | `border-cyan-500/30 bg-cyan-500/10 text-cyan-600 dark:border-cyan-500/40 dark:bg-cyan-500/20 dark:text-cyan-400` |
+
+> 任务级分析裁剪（`crop`）画布框、工具及明细徽章使用槽位 5 `cyan`（区别于 ROI/MASK 与状态色），对应三语文案（`toolCrop` / `cropHint` / `cropClear` / `cropClearHint` 等）统一维护于 `features/tasks/locales/{en,zh-Hans,zh-Hant}.json`。
 | 兜底 | 未分类 / 未知 | 复用 §1.3.3 未激活档：`border-neutral-300 bg-neutral-300/40 text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800/40` |
 
 4. **暗色必须成对升级**：亮色 `border/30 + bg/10 + text-600` → 暗色 `dark:border/40 + dark:bg/20 + dark:text-400`。只加 `dark:text-*` 而不同步提升 border/bg 透明度，会导致 10% 底色在深色背景上几乎不可见（§1.3.5 的 ❌ 范例即此症）。
