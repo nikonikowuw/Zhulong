@@ -53,6 +53,13 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		// Face bulk import jobs
 		group.GET("/import-face-jobs/:jobId", h.GetFaceImportJob)
 		group.GET("/import-face-jobs/:jobId/failed-report", h.GetFaceImportFailedReport)
+
+		// Face feature re-extraction jobs
+		group.POST("/reextract-face-jobs", h.CreateFaceReextractJob)
+		group.GET("/reextract-face-jobs/latest", h.GetLatestFaceReextractJob)
+		group.GET("/reextract-face-jobs/:jobId", h.GetFaceReextractJob)
+		group.POST("/reextract-face-jobs/:jobId/cancel", h.CancelFaceReextractJob)
+		group.GET("/reextract-face-jobs/:jobId/failed-report", h.GetFaceReextractFailedReport)
 	}
 }
 
@@ -590,6 +597,133 @@ func (h *Handler) GetFaceImportFailedReport(c *gin.Context) {
 	}
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="failed_report_%s.csv"`, jobID))
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", csvBytes)
+}
+
+// CreateFaceReextractJob godoc
+// @Summary      Create an asynchronous face feature re-extraction job
+// @Tags         person
+// @Accept       json
+// @Produce      json
+// @Param        request body CreateFaceReextractJobRequest false "Optional list of person IDs; omit or leave empty for full gallery"
+// @Success      202  {object}  httputil.Response{data=FaceReextractJobResponse}
+// @Failure      400  {object}  httputil.Response
+// @Failure      409  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/reextract-face-jobs [post]
+func (h *Handler) CreateFaceReextractJob(c *gin.Context) {
+	audithttp.Tag(
+		c,
+		ActionPersonFaceReextractCreate,
+		"job:",
+		"Create face feature re-extraction job",
+	)
+
+	var req CreateFaceReextractJobRequest
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+		httputil.HandleBindError(c, err)
+		return
+	}
+
+	job, err := h.service.StartFaceReextractJob(c.Request.Context(), req.PersonIDs)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+
+	audithttp.TagTarget(c, "job:"+job.ID)
+	if len(req.PersonIDs) > 0 {
+		audithttp.TagDetail(c, fmt.Sprintf("Re-extract faces for %d selected persons", len(req.PersonIDs)))
+	} else {
+		audithttp.TagDetail(c, "Re-extract faces for full gallery")
+	}
+	httputil.SuccessWithStatus(c, http.StatusAccepted, newFaceReextractJobResponse(job, requestLocale(c)))
+}
+
+// GetLatestFaceReextractJob godoc
+// @Summary      Get latest face feature re-extraction job
+// @Tags         person
+// @Produce      json
+// @Success      200  {object}  httputil.Response{data=FaceReextractJobResponse}
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/reextract-face-jobs/latest [get]
+func (h *Handler) GetLatestFaceReextractJob(c *gin.Context) {
+	job, err := h.service.GetLatestFaceReextractJob(c.Request.Context())
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	if job == nil {
+		httputil.Success(c, (*FaceReextractJobResponse)(nil))
+		return
+	}
+	resp := newFaceReextractJobResponse(job, requestLocale(c))
+	httputil.Success(c, resp)
+}
+
+// GetFaceReextractJob godoc
+// @Summary      Get face feature re-extraction job progress and status
+// @Tags         person
+// @Produce      json
+// @Param        jobId path string true "Job ID"
+// @Success      200  {object}  httputil.Response{data=FaceReextractJobResponse}
+// @Failure      404  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/reextract-face-jobs/{jobId} [get]
+func (h *Handler) GetFaceReextractJob(c *gin.Context) {
+	jobID := c.Param("jobId")
+	job, err := h.service.GetFaceReextractJob(c.Request.Context(), jobID)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, newFaceReextractJobResponse(job, requestLocale(c)))
+}
+
+// CancelFaceReextractJob godoc
+// @Summary      Cancel a running or queued face feature re-extraction job
+// @Tags         person
+// @Produce      json
+// @Param        jobId path string true "Job ID"
+// @Success      200  {object}  httputil.Response{data=CancelFaceReextractJobResponse}
+// @Failure      404  {object}  httputil.Response
+// @Failure      409  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/reextract-face-jobs/{jobId}/cancel [post]
+func (h *Handler) CancelFaceReextractJob(c *gin.Context) {
+	jobID := c.Param("jobId")
+	audithttp.Tag(
+		c,
+		ActionPersonFaceReextractCancel,
+		"job:"+jobID,
+		"Cancel face feature re-extraction job",
+	)
+	if err := h.service.CancelFaceReextractJob(c.Request.Context(), jobID); err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, CancelFaceReextractJobResponse{Cancelled: true})
+}
+
+// GetFaceReextractFailedReport godoc
+// @Summary      Download failed report CSV for a face re-extraction job
+// @Tags         person
+// @Produce      text/csv
+// @Param        jobId path string true "Job ID"
+// @Success      200  {file}    binary
+// @Failure      404  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/reextract-face-jobs/{jobId}/failed-report [get]
+func (h *Handler) GetFaceReextractFailedReport(c *gin.Context) {
+	jobID := c.Param("jobId")
+	csvBytes, err := h.service.GetFaceReextractFailedReportCSV(c.Request.Context(), jobID, c.GetHeader("Accept-Language"))
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="reextract_failed_report_%s.csv"`, jobID))
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", csvBytes)
 }
 

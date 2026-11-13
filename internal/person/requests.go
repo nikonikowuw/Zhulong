@@ -36,6 +36,13 @@ type CreateFaceImportJobRequest struct {
 	File *multipart.FileHeader `form:"file" binding:"required"`
 }
 
+// CreateFaceReextractJobRequest represents the optional scope payload to start an
+// asynchronous face feature re-extraction job. Empty/omitted personIds targets the
+// entire enrolled gallery.
+type CreateFaceReextractJobRequest struct {
+	PersonIDs []string `json:"personIds,omitempty"`
+}
+
 // ImageSearchRequest represents the multipart form payload for 1:N facial search.
 type ImageSearchRequest struct {
 	Image     *multipart.FileHeader `form:"image" binding:"required"`

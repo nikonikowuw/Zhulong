@@ -17,6 +17,12 @@ const PersonsImportDialog = lazy(() =>
   }))
 )
 
+const PersonsFaceReextractDialog = lazy(() =>
+  import('./persons-face-reextract-dialog').then((m) => ({
+    default: m.PersonsFaceReextractDialog,
+  }))
+)
+
 export function PersonsDialogs() {
   const { open } = usePersonsState()
 
@@ -30,6 +36,7 @@ export function PersonsDialogs() {
       <Suspense fallback={null}>
         {open === 'import' && <PersonsImportDialog />}
         {open === 'import-faces' && <PersonsFaceImportDialog />}
+        {open === 'reextract-faces' && <PersonsFaceReextractDialog />}
       </Suspense>
     </>
   )

@@ -6,9 +6,10 @@ import { PersonsActionDialog } from './persons-action-dialog'
 import { PersonsProvider, usePersonsContext } from './persons-provider'
 
 vi.mock('../hooks/use-persons', () => ({
-  // Provider 现在会订阅批量导入任务（关闭弹窗后仍要跟踪），这里一并桩掉。
+  // Provider 现在会订阅批量导入与特征重提任务（关闭弹窗后仍要跟踪），这里一并桩掉。
   PERSONS_QUERY_KEY: ['persons'],
   useFaceImportJob: () => ({ data: null, isError: false, refetch: vi.fn() }),
+  useFaceReextractJob: () => ({ data: null, isError: false, refetch: vi.fn() }),
   useCreatePerson: () => ({
     mutateAsync: vi.fn(),
     isPending: false,

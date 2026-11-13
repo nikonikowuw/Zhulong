@@ -337,3 +337,72 @@ export function useFaceImportJob(jobId: string | null, enabled: boolean) {
     },
   })
 }
+
+/**
+ * 创建人脸特征重新提取任务
+ */
+export function useCreateFaceReextractJob() {
+  return useMutation({
+    mutationFn: (personIds?: string[]) =>
+      personsApi.createFaceReextractJob(personIds),
+    meta: { suppressGlobalToast: true },
+  })
+}
+
+/**
+ * 查询最近一次人脸特征重新提取任务（用于在页面刷新后恢复后台任务跟踪）
+ */
+export function useLatestFaceReextractJob(enabled = true) {
+  return useQuery({
+    queryKey: [...PERSONS_QUERY_KEY, 'face-reextract-job', 'latest'],
+    queryFn: () => {
+      if (typeof personsApi?.getLatestFaceReextractJob !== 'function') {
+        return null
+      }
+      return personsApi.getLatestFaceReextractJob()
+    },
+    enabled,
+    staleTime: 10_000,
+  })
+}
+
+/**
+ * 轮询/查询人脸特征重新提取任务状态
+ */
+export function useFaceReextractJob(jobId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: [...PERSONS_QUERY_KEY, 'face-reextract-job', jobId],
+    queryFn: () => {
+      if (!jobId || typeof personsApi?.getFaceReextractJob !== 'function') {
+        return null
+      }
+      return personsApi.getFaceReextractJob(jobId)
+    },
+    enabled: Boolean(jobId && enabled),
+    refetchInterval: (query) => {
+      const data = query.state.data
+      if (!data) return 1000
+      if (FACE_IMPORT_TERMINAL_STATUSES.has(data.status)) return false
+      return data.processed >= data.total / 2 ? 2000 : 1000
+    },
+  })
+}
+
+/**
+ * 取消人脸特征重新提取任务
+ */
+export function useCancelFaceReextractJob() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (jobId: string) => personsApi.cancelFaceReextractJob(jobId),
+    onSuccess: (_data, jobId) => {
+      void queryClient.invalidateQueries({
+        queryKey: [...PERSONS_QUERY_KEY, 'face-reextract-job', jobId],
+      })
+      void queryClient.invalidateQueries({
+        queryKey: [...PERSONS_QUERY_KEY, 'face-reextract-job', 'latest'],
+      })
+    },
+    meta: { suppressGlobalToast: true },
+  })
+}

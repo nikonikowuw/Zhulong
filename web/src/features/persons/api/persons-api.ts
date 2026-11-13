@@ -6,8 +6,10 @@ import {
 import { triggerDownload } from '@/lib/csv'
 import { getGalleryImageUrl } from '@/lib/media-url'
 import {
+  cancelFaceReextractJobResponseSchema,
   faceImportJobResponseSchema,
   faceListResponseSchema,
+  faceReextractJobResponseSchema,
   faceSchema,
   personImportCommitResponseSchema,
   personImportPreviewResponseSchema,
@@ -17,6 +19,7 @@ import {
   type Face,
   type FaceImportJobResponse,
   type FaceListResponse,
+  type FaceReextractJobResponse,
   type Person,
   type PersonImportCommitResponse,
   type PersonImportPreviewResponse,
@@ -247,6 +250,58 @@ export const personsApi = {
    */
   getFaceImportFailedReportUrl(jobId: string): string {
     return `/api/v1/persons/import-face-jobs/${encodeURIComponent(jobId)}/failed-report`
+  },
+
+  /**
+   * 创建人脸特征重新提取异步任务（不传 personIds 或为空数组则重提全库）
+   */
+  async createFaceReextractJob(
+    personIds?: string[]
+  ): Promise<FaceReextractJobResponse> {
+    const payload = personIds && personIds.length > 0 ? { personIds } : {}
+    const resp = await apiClient.post<ApiResponse<FaceReextractJobResponse>>(
+      '/persons/reextract-face-jobs',
+      payload
+    )
+    return faceReextractJobResponseSchema.parse(resp.data.data)
+  },
+
+  /**
+   * 获取最近一次人脸特征重新提取任务（无记录时返回 null）
+   */
+  async getLatestFaceReextractJob(): Promise<FaceReextractJobResponse | null> {
+    const resp = await apiClient.get<
+      ApiResponse<FaceReextractJobResponse | null>
+    >('/persons/reextract-face-jobs/latest')
+    if (!resp.data.data) return null
+    return faceReextractJobResponseSchema.parse(resp.data.data)
+  },
+
+  /**
+   * 获取人脸特征重新提取任务进度状态
+   */
+  async getFaceReextractJob(jobId: string): Promise<FaceReextractJobResponse> {
+    const resp = await apiClient.get<ApiResponse<FaceReextractJobResponse>>(
+      `/persons/reextract-face-jobs/${encodeURIComponent(jobId)}`
+    )
+    return faceReextractJobResponseSchema.parse(resp.data.data)
+  },
+
+  /**
+   * 取消正在执行或排队中的人脸特征重新提取任务
+   */
+  async cancelFaceReextractJob(jobId: string): Promise<boolean> {
+    const resp = await apiClient.post<ApiResponse<{ cancelled: boolean }>>(
+      `/persons/reextract-face-jobs/${encodeURIComponent(jobId)}/cancel`
+    )
+    return cancelFaceReextractJobResponseSchema.parse(resp.data.data).cancelled
+  },
+
+  /**
+   * 获取特征重提失败报告 CSV 下载地址
+   */
+  getFaceReextractFailedReportUrl(jobId: string): string {
+    return `/api/v1/persons/reextract-face-jobs/${encodeURIComponent(jobId)}/failed-report`
   },
 
   /**

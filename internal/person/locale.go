@@ -224,6 +224,26 @@ func init() {
 			"zh-Hans": "人脸批量导入任务不存在",
 			"zh-Hant": "人臉批量匯入任務不存在",
 		},
+		"FACE_REEXTRACT_JOB_NOT_FOUND": {
+			"en":      "Face feature re-extraction job not found",
+			"zh-Hans": "人脸特征重提任务不存在",
+			"zh-Hant": "人臉特徵重提任務不存在",
+		},
+		"FACE_REEXTRACT_IN_PROGRESS": {
+			"en":      "A face feature re-extraction job is already in progress",
+			"zh-Hans": "已有特征重新提取任务正在进行中",
+			"zh-Hant": "已有特徵重新提取任務正在進行中",
+		},
+		"NO_FACES_TO_REEXTRACT": {
+			"en":      "No enrolled face photos found to re-extract",
+			"zh-Hans": "当前范围内没有可重新提取特征的人脸底库照片",
+			"zh-Hant": "目前範圍內沒有可重新提取特徵的人臉底庫照片",
+		},
+		"REEXTRACT_TOO_MANY_PERSONS": {
+			"en":      "Too many persons selected for a single re-extraction job",
+			"zh-Hans": "单次选择的人员数量超出限制",
+			"zh-Hant": "單次選擇的人員數量超出限制",
+		},
 		"FACE_IMPORT_ARCHIVE_EMPTY": {
 			"en":      "No usable image or manifest was found in the archive",
 			"zh-Hans": "未在压缩包中找到有效图片或清单",

@@ -7,16 +7,18 @@ import "time"
 // queried by exact action string, so bare verbs like "CREATE" cannot be grouped or
 // filtered alongside the other domains.
 const (
-	ActionPersonCreate           = "person.create"
-	ActionPersonUpdate           = "person.update"
-	ActionPersonDelete           = "person.delete"
-	ActionPersonFaceAdd          = "person.face.add"
-	ActionPersonFaceDelete       = "person.face.delete"
-	ActionPersonPrimaryFaceSet   = "person.primary_face.set"
-	ActionPersonSearchByImage    = "person.search_by_image"
-	ActionPersonImportPreview    = "person.import.preview"
-	ActionPersonImportCommit     = "person.import.commit"
-	ActionPersonFaceImportCreate = "person.face_import.create"
+	ActionPersonCreate              = "person.create"
+	ActionPersonUpdate              = "person.update"
+	ActionPersonDelete              = "person.delete"
+	ActionPersonFaceAdd             = "person.face.add"
+	ActionPersonFaceDelete          = "person.face.delete"
+	ActionPersonPrimaryFaceSet      = "person.primary_face.set"
+	ActionPersonSearchByImage       = "person.search_by_image"
+	ActionPersonImportPreview       = "person.import.preview"
+	ActionPersonImportCommit        = "person.import.commit"
+	ActionPersonFaceImportCreate    = "person.face_import.create"
+	ActionPersonFaceReextractCreate = "person.face_reextract.create"
+	ActionPersonFaceReextractCancel = "person.face_reextract.cancel"
 )
 
 // Person source values. Source is immutable once written and records where the
@@ -106,4 +108,16 @@ type FaceImportFailedItem struct {
 	PersonID  string `json:"personId"`
 	ErrorCode string `json:"errorCode"`
 	Message   string `json:"message"`
+}
+
+// FaceReextractFailedItem represents an item that failed re-extraction in a face
+// feature re-extraction job.
+type FaceReextractFailedItem struct {
+	FaceID      string `json:"faceId"`
+	PersonRowID string `json:"personRowId"`
+	PersonID    string `json:"personId"`
+	PersonName  string `json:"personName"`
+	FilePath    string `json:"filePath"`
+	ErrorCode   string `json:"errorCode"`
+	Message     string `json:"message"`
 }

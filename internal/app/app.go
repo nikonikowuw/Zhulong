@@ -653,8 +653,13 @@ func providePerson(p personParams) personOut {
 		AsyncJobs:                    p.AsyncJobs,
 	}
 	comp := person.NewPersonComponents(p.DBProvider, facesDir, p.Logger, opts)
-	if p.AsyncJobs != nil && comp.JobHandler != nil {
-		p.AsyncJobs.RegisterHandler(comp.JobHandler)
+	if p.AsyncJobs != nil {
+		if comp.JobHandler != nil {
+			p.AsyncJobs.RegisterHandler(comp.JobHandler)
+		}
+		if comp.ReextractJobHandler != nil {
+			p.AsyncJobs.RegisterHandler(comp.ReextractJobHandler)
+		}
 	}
 	p.Supervisor.SetGallerySync(&supervisorGallerySyncAdapter{service: comp.Service}, p.Broadcaster)
 	return personOut{

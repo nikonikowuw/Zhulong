@@ -48,8 +48,9 @@ vi.mock('../hooks/use-persons', () => ({
     mutateAsync: vi.fn(),
     isPending: false,
   }),
-  // Provider 现在自己持有批量导入任务的轮询（弹窗关闭后仍要跟踪任务）。
+  // Provider 现在自己持有批量导入与特征重提任务的轮询（弹窗关闭后仍要跟踪任务）。
   useFaceImportJob: () => ({ data: null, isError: false, refetch: vi.fn() }),
+  useFaceReextractJob: () => ({ data: null, isError: false, refetch: vi.fn() }),
 }))
 
 function TestComponent() {

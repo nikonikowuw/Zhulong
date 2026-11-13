@@ -43,6 +43,8 @@ export const AUDIT_ACTION_KEYS = [
   'person.import.preview',
   'person.import.commit',
   'person.face_import.create',
+  'person.face_reextract.create',
+  'person.face_reextract.cancel',
   // GB28181 接入
   'gb28181.config_update',
   'gb28181.device_upsert',

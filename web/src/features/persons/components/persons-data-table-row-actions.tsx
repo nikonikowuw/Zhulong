@@ -3,6 +3,7 @@ import {
   Image as ImageIcon,
   MoreHorizontal,
   Pencil,
+  ScanFace,
   Trash2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -29,12 +30,18 @@ interface PersonsRowActionsProps {
 export const PersonsDataTableRowActions = memo(
   function PersonsDataTableRowActions({ person }: PersonsRowActionsProps) {
     const { t } = useTranslation('persons')
-    const { setOpen, setCurrentRow } = usePersonsActions()
+    const { setOpen, setCurrentRow, openFaceReextract } = usePersonsActions()
 
     const handleAction = (action: 'edit' | 'faces' | 'delete') => {
       setCurrentRow(person)
       setOpen(action)
     }
+
+    const handleReextract = () => {
+      openFaceReextract({ personIds: [person.id], label: person.name })
+    }
+
+    const hasFaces = (person.faces?.length ?? 0) > 0
 
     return (
       <DropdownMenu modal={false}>
@@ -56,6 +63,11 @@ export const PersonsDataTableRowActions = memo(
           <DropdownMenuItem onClick={() => handleAction('faces')}>
             <ImageIcon className='me-2 h-4 w-4 text-primary' />
             {t('actions.manageFaces')}
+          </DropdownMenuItem>
+
+          <DropdownMenuItem disabled={!hasFaces} onClick={handleReextract}>
+            <ScanFace className='me-2 h-4 w-4' />
+            {t('actions.reextractFeatures')}
           </DropdownMenuItem>
 
           <DropdownMenuSeparator />

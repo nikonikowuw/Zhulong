@@ -1,14 +1,20 @@
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import useDialogState from '@/hooks/use-dialog-state'
 import { type Person } from '../data/schema'
-import { PERSONS_QUERY_KEY, useFaceImportJob } from '../hooks/use-persons'
+import {
+  PERSONS_QUERY_KEY,
+  useFaceImportJob,
+  useFaceReextractJob,
+} from '../hooks/use-persons'
 
 type PersonsDialogType =
   | 'create'
@@ -17,6 +23,12 @@ type PersonsDialogType =
   | 'faces'
   | 'import'
   | 'import-faces'
+  | 'reextract-faces'
+
+export interface ReextractTarget {
+  personIds: string[]
+  label?: string
+}
 
 interface PreviewImageInfo {
   url: string
@@ -35,6 +47,9 @@ interface PersonsStateContextType {
    * 后也没人刷新列表。挂到全局后，弹窗关闭期间轮询与失效照常进行。
    */
   faceImportJobId: string | null
+  faceReextractJobId: string | null
+  isFaceReextractRunning: boolean
+  reextractTarget: ReextractTarget | null
 }
 
 interface PersonsActionsContextType {
@@ -42,6 +57,11 @@ interface PersonsActionsContextType {
   setCurrentRow: React.Dispatch<React.SetStateAction<Person | null>>
   setPreviewImage: React.Dispatch<React.SetStateAction<PreviewImageInfo | null>>
   setFaceImportJobId: React.Dispatch<React.SetStateAction<string | null>>
+  setFaceReextractJobId: React.Dispatch<React.SetStateAction<string | null>>
+  setReextractTarget: React.Dispatch<
+    React.SetStateAction<ReextractTarget | null>
+  >
+  openFaceReextract: (target: ReextractTarget | null) => void
 }
 
 interface PersonsContextType
@@ -59,6 +79,11 @@ export function PersonsProvider({ children }: { children: React.ReactNode }) {
     null
   )
   const [faceImportJobId, setFaceImportJobId] = useState<string | null>(null)
+  const [faceReextractJobId, setFaceReextractJobId] = useState<string | null>(
+    null
+  )
+  const [reextractTarget, setReextractTarget] =
+    useState<ReextractTarget | null>(null)
 
   // 轮询与「任务完成后刷新列表」都在这里跑，不依赖弹窗是否挂载。
   const queryClient = useQueryClient()
@@ -70,17 +95,72 @@ export function PersonsProvider({ children }: { children: React.ReactNode }) {
     }
   }, [jobStatus, queryClient])
 
+  const reextractJobQuery = useFaceReextractJob(faceReextractJobId, true)
+  const reextractStatus = reextractJobQuery.data?.status
+  const isFaceReextractRunning = Boolean(
+    faceReextractJobId &&
+    (!reextractStatus ||
+      reextractStatus === 'PENDING' ||
+      reextractStatus === 'EXTRACTING' ||
+      reextractStatus === 'PROCESSING')
+  )
+  const isFaceReextractRunningRef = useRef(isFaceReextractRunning)
+  useEffect(() => {
+    isFaceReextractRunningRef.current = isFaceReextractRunning
+  }, [isFaceReextractRunning])
+
+  const openFaceReextract = useCallback(
+    (target: ReextractTarget | null) => {
+      if (!isFaceReextractRunningRef.current) {
+        setFaceReextractJobId(null)
+        setReextractTarget(target)
+      }
+      setOpen('reextract-faces')
+    },
+    [setOpen]
+  )
+
+  useEffect(() => {
+    if (reextractStatus === 'COMPLETED' || reextractStatus === 'CANCELLED') {
+      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+    }
+  }, [reextractStatus, queryClient])
+
   const stateValue = useMemo<PersonsStateContextType>(
-    () => ({ open, currentRow, previewImage, faceImportJobId }),
-    [open, currentRow, previewImage, faceImportJobId]
+    () => ({
+      open,
+      currentRow,
+      previewImage,
+      faceImportJobId,
+      faceReextractJobId,
+      isFaceReextractRunning,
+      reextractTarget,
+    }),
+    [
+      open,
+      currentRow,
+      previewImage,
+      faceImportJobId,
+      faceReextractJobId,
+      isFaceReextractRunning,
+      reextractTarget,
+    ]
   )
 
   // 所有 setter 引用恒定（`useDialogState` 用 `useCallback`，`useState` 的
   // setter 天然稳定），因此这个对象在整个 Provider 生命周期内只创建一次 ——
   // 弹窗切换与行变化都不会让「只订阅动作」的消费者重渲染。
   const actionsValue = useMemo<PersonsActionsContextType>(
-    () => ({ setOpen, setCurrentRow, setPreviewImage, setFaceImportJobId }),
-    [setOpen]
+    () => ({
+      setOpen,
+      setCurrentRow,
+      setPreviewImage,
+      setFaceImportJobId,
+      setFaceReextractJobId,
+      setReextractTarget,
+      openFaceReextract,
+    }),
+    [setOpen, openFaceReextract]
   )
 
   return (

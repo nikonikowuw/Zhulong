@@ -54,6 +54,8 @@
     "person.import.preview": "人员批量导入预览",
     "person.import.commit": "提交人员批量导入",
     "person.face_import.create": "创建人脸批量导入任务",
+    "person.face_reextract.create": "创建人脸特征重提任务",
+    "person.face_reextract.cancel": "取消人脸特征重提任务",
     "gb28181.config_update": "更新 GB28181 配置",
     "gb28181.device_upsert": "新增或更新 GB28181 设备",
     "gb28181.device_delete": "删除 GB28181 设备",

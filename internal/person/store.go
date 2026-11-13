@@ -835,6 +835,85 @@ func (s *Store) ListSearchFaceItemsPaged(ctx context.Context, limit, offset int)
 	return items, nil
 }
 
+// FaceReextractTarget holds the metadata needed to re-extract features from an
+// already-enrolled face photo on disk without loading old feature vectors.
+type FaceReextractTarget struct {
+	FaceID           string  `gorm:"column:face_id"`
+	PersonRowID      string  `gorm:"column:person_row_id"`
+	PersonExternalID *string `gorm:"column:person_external_id"`
+	PersonName       string  `gorm:"column:person_name"`
+	ImagePath        string  `gorm:"column:image_path"`
+}
+
+const reextractTargetColumns = "f.id AS face_id, " +
+	"f.person_id AS person_row_id, " +
+	"p.person_id AS person_external_id, " +
+	"p.name AS person_name, " +
+	"f.image_path AS image_path"
+
+// ListFacesForReextract returns enrolled face targets for feature re-extraction.
+// When personIDs is non-empty, only faces belonging to those person row IDs are
+// returned; otherwise all enrolled faces in the gallery are returned.
+func (s *Store) ListFacesForReextract(ctx context.Context, personIDs []string) ([]FaceReextractTarget, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(personIDs) == 0 {
+		var items []FaceReextractTarget
+		err = db.Table("person_faces f").
+			Select(reextractTargetColumns).
+			Joins("INNER JOIN persons p ON f.person_id = p.id").
+			Order("f.created_at ASC, f.id ASC").
+			Find(&items).Error
+		if err != nil {
+			return nil, fmt.Errorf("list faces for reextract: %w", err)
+		}
+		if items == nil {
+			items = []FaceReextractTarget{}
+		}
+		return items, nil
+	}
+
+	const chunkSize = 500
+	items := make([]FaceReextractTarget, 0)
+	for start := 0; start < len(personIDs); start += chunkSize {
+		end := min(start+chunkSize, len(personIDs))
+		var chunk []FaceReextractTarget
+		err = db.Table("person_faces f").
+			Select(reextractTargetColumns).
+			Joins("INNER JOIN persons p ON f.person_id = p.id").
+			Where("f.person_id IN ?", personIDs[start:end]).
+			Order("f.created_at ASC, f.id ASC").
+			Find(&chunk).Error
+		if err != nil {
+			return nil, fmt.Errorf("list faces for reextract by person ids: %w", err)
+		}
+		items = append(items, chunk...)
+	}
+	return items, nil
+}
+
+// UpdateFaceFeature replaces only the stored feature_vector for an existing face row,
+// preserving its ID, image_path, created_at, and any primary_face_id reference.
+func (s *Store) UpdateFaceFeature(ctx context.Context, faceID string, featureVector []byte) error {
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	res := db.Model(&Face{}).
+		Where("id = ?", faceID).
+		Update("feature_vector", featureVector)
+	if res.Error != nil {
+		return fmt.Errorf("update face feature: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // DeleteFace deletes a specific face template, scoped to its owning person so
 // that a face cannot be removed through another person's path segment.
 // If the deleted face was the person's primary face, the earliest remaining

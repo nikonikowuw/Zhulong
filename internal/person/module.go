@@ -10,13 +10,14 @@ import (
 
 // PersonComponents groups instantiated person domain services.
 type PersonComponents struct {
-	Store           *Store
-	Service         *Service
-	Handler         *Handler
-	JobHandler      *FaceImportJobHandler
-	Lifecycle       PersonLifecycle
-	ProtectedRoutes RouteRegistrar
-	UploadRoutes    RouteRegistrar
+	Store               *Store
+	Service             *Service
+	Handler             *Handler
+	JobHandler          *FaceImportJobHandler
+	ReextractJobHandler *FaceReextractJobHandler
+	Lifecycle           PersonLifecycle
+	ProtectedRoutes     RouteRegistrar
+	UploadRoutes        RouteRegistrar
 }
 
 // PersonLifecycle defines lifecycle hooks for person domain.
@@ -72,14 +73,16 @@ func NewPersonComponents(
 	)
 	handler := NewHandler(service, logger)
 	jobHandler := NewFaceImportJobHandler(service)
+	reextractJobHandler := NewFaceReextractJobHandler(service)
 
 	return &PersonComponents{
-		Store:           store,
-		Service:         service,
-		Handler:         handler,
-		JobHandler:      jobHandler,
-		Lifecycle:       &personLifecycleImpl{service: service, logger: logger},
-		ProtectedRoutes: handler,
-		UploadRoutes:    handler.UploadRouteRegistrar(),
+		Store:               store,
+		Service:             service,
+		Handler:             handler,
+		JobHandler:          jobHandler,
+		ReextractJobHandler: reextractJobHandler,
+		Lifecycle:           &personLifecycleImpl{service: service, logger: logger},
+		ProtectedRoutes:     handler,
+		UploadRoutes:        handler.UploadRouteRegistrar(),
 	}
 }

@@ -489,4 +489,81 @@ describe('personsApi', () => {
       'Request failed with status code 500'
     )
   })
+
+  it('createFaceReextractJob sends full or selected personIds payload', async () => {
+    const jobPayload = {
+      jobId: 're-job-1',
+      scope: 'all' as const,
+      status: 'PENDING' as const,
+      progress: 0,
+      total: 10,
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      currentStage: '',
+      currentFile: '',
+      errorCode: '',
+      errorMessage: '',
+      createdAt: '2026-11-12T00:00:00Z',
+      updatedAt: '2026-11-12T00:00:00Z',
+      finishedAt: null,
+    }
+    const spy = vi
+      .spyOn(apiClient, 'post')
+      .mockResolvedValueOnce(mockResponse(jobPayload, 202))
+      .mockResolvedValueOnce(
+        mockResponse({ ...jobPayload, scope: 'selected' as const }, 202)
+      )
+
+    const resAll = await personsApi.createFaceReextractJob()
+    expect(resAll.scope).toBe('all')
+    expect(spy).toHaveBeenNthCalledWith(1, '/persons/reextract-face-jobs', {})
+
+    const resSel = await personsApi.createFaceReextractJob(['p1', 'p2'])
+    expect(resSel.scope).toBe('selected')
+    expect(spy).toHaveBeenNthCalledWith(2, '/persons/reextract-face-jobs', {
+      personIds: ['p1', 'p2'],
+    })
+  })
+
+  it('getLatestFaceReextractJob returns null when no job exists', async () => {
+    vi.spyOn(apiClient, 'get').mockResolvedValueOnce(mockResponse(null))
+    await expect(personsApi.getLatestFaceReextractJob()).resolves.toBeNull()
+  })
+
+  it('getFaceReextractJob, cancelFaceReextractJob and failed report url work', async () => {
+    const jobPayload = {
+      jobId: 're-job-2',
+      scope: 'all' as const,
+      status: 'PROCESSING' as const,
+      progress: 50,
+      total: 4,
+      processed: 2,
+      succeeded: 2,
+      failed: 0,
+      createdAt: '2026-11-12T00:00:00Z',
+      updatedAt: '2026-11-12T00:00:01Z',
+    }
+    const getSpy = vi
+      .spyOn(apiClient, 'get')
+      .mockResolvedValueOnce(mockResponse(jobPayload))
+    const postSpy = vi
+      .spyOn(apiClient, 'post')
+      .mockResolvedValueOnce(mockResponse({ cancelled: true }))
+
+    const got = await personsApi.getFaceReextractJob('re-job-2')
+    expect(got.status).toBe('PROCESSING')
+    expect(getSpy).toHaveBeenCalledWith('/persons/reextract-face-jobs/re-job-2')
+
+    await expect(personsApi.cancelFaceReextractJob('re-job-2')).resolves.toBe(
+      true
+    )
+    expect(postSpy).toHaveBeenCalledWith(
+      '/persons/reextract-face-jobs/re-job-2/cancel'
+    )
+
+    expect(personsApi.getFaceReextractFailedReportUrl('re-job-2')).toBe(
+      '/api/v1/persons/reextract-face-jobs/re-job-2/failed-report'
+    )
+  })
 })

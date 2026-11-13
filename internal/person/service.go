@@ -132,10 +132,12 @@ type Options struct {
 	AsyncJobs AsyncJobSubmitter
 }
 
-// AsyncJobSubmitter abstracts job submission to the system background task runner.
+// AsyncJobSubmitter abstracts job submission and lifecycle inspection against the system background task runner.
 type AsyncJobSubmitter interface {
 	SubmitJob(ctx context.Context, jobType string, metadataJSON string) (*asyncjob.Job, error)
 	GetJob(ctx context.Context, id string) (*asyncjob.Job, error)
+	ListJobs(ctx context.Context, jobType string, limit, offset int) ([]asyncjob.Job, int64, error)
+	CancelJob(ctx context.Context, id string) error
 }
 
 // Service provides high-level business logic for personnel and face gallery.

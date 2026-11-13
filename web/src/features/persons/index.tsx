@@ -17,7 +17,11 @@ import {
 } from './components/persons-provider'
 import { PersonsTable } from './components/persons-table'
 import { type Person } from './data/schema'
-import { usePerson, usePersons } from './hooks/use-persons'
+import {
+  useLatestFaceReextractJob,
+  usePerson,
+  usePersons,
+} from './hooks/use-persons'
 
 const route = getRouteApi('/_authenticated/persons/')
 
@@ -64,6 +68,30 @@ function PersonsUrlSync({
     }
     prevOpenRef.current = open
   }, [open, personId, navigate])
+
+  return null
+}
+
+/**
+ * 挂载页面时检查一次是否存在未完成的特征重提任务，如有则挂回 Provider 继续轮询。
+ */
+function PersonsReextractResume() {
+  const { faceReextractJobId } = usePersonsState()
+  const { setFaceReextractJobId } = usePersonsActions()
+  const latestQuery = useLatestFaceReextractJob(!faceReextractJobId)
+  const latestJob = latestQuery.data
+
+  useEffect(() => {
+    if (!faceReextractJobId && latestJob) {
+      const isActive =
+        latestJob.status === 'PENDING' ||
+        latestJob.status === 'EXTRACTING' ||
+        latestJob.status === 'PROCESSING'
+      if (isActive) {
+        setFaceReextractJobId(latestJob.jobId)
+      }
+    }
+  }, [faceReextractJobId, latestJob, setFaceReextractJobId])
 
   return null
 }
@@ -144,6 +172,7 @@ function PersonsContent() {
       </Main>
 
       <PersonsUrlSync personId={search.personId} navigate={navigate} />
+      <PersonsReextractResume />
       <PersonsDialogs />
     </>
   )

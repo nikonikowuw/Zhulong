@@ -1637,6 +1637,18 @@ definitions:
     required:
     - name
     type: object
+  person.CancelFaceReextractJobResponse:
+    properties:
+      cancelled:
+        type: boolean
+    type: object
+  person.CreateFaceReextractJobRequest:
+    properties:
+      personIds:
+        items:
+          type: string
+        type: array
+    type: object
   person.CreatePersonRequest:
     properties:
       name:
@@ -1674,6 +1686,39 @@ definitions:
         type: integer
       progress:
         type: integer
+      status:
+        $ref: '#/definitions/asyncjob.JobStatus'
+      succeeded:
+        type: integer
+      total:
+        type: integer
+      updatedAt:
+        type: string
+    type: object
+  person.FaceReextractJobResponse:
+    properties:
+      createdAt:
+        type: string
+      currentFile:
+        type: string
+      currentStage:
+        type: string
+      errorCode:
+        type: string
+      errorMessage:
+        type: string
+      failed:
+        type: integer
+      finishedAt:
+        type: string
+      jobId:
+        type: string
+      processed:
+        type: integer
+      progress:
+        type: integer
+      scope:
+        type: string
       status:
         $ref: '#/definitions/asyncjob.JobStatus'
       succeeded:
@@ -5326,6 +5371,160 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Preview a person CSV import
+      tags:
+      - person
+  /persons/reextract-face-jobs:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Optional list of person IDs; omit or leave empty for full gallery
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/person.CreateFaceReextractJobRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.FaceReextractJobResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Create an asynchronous face feature re-extraction job
+      tags:
+      - person
+  /persons/reextract-face-jobs/{jobId}:
+    get:
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.FaceReextractJobResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get face feature re-extraction job progress and status
+      tags:
+      - person
+  /persons/reextract-face-jobs/{jobId}/cancel:
+    post:
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.CancelFaceReextractJobResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Cancel a running or queued face feature re-extraction job
+      tags:
+      - person
+  /persons/reextract-face-jobs/{jobId}/failed-report:
+    get:
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Download failed report CSV for a face re-extraction job
+      tags:
+      - person
+  /persons/reextract-face-jobs/latest:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.FaceReextractJobResponse'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get latest face feature re-extraction job
       tags:
       - person
   /persons/search-by-image:

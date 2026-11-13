@@ -7,6 +7,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  ScanFace,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -21,7 +22,7 @@ import {
   PERSONS_QUERY_KEY,
   useExportPersonsManifest,
 } from '../hooks/use-persons'
-import { usePersonsActions } from './persons-provider'
+import { usePersonsActions, usePersonsState } from './persons-provider'
 
 interface PersonsPrimaryButtonsProps {
   /** 当前 URL 搜索关键词，导出时保持一致，避免「看到的」和「导出的」不是同一批人。 */
@@ -35,7 +36,8 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
   faceStatus,
 }: PersonsPrimaryButtonsProps) {
   const { t } = useTranslation('persons')
-  const { setOpen, setCurrentRow } = usePersonsActions()
+  const { isFaceReextractRunning } = usePersonsState()
+  const { setOpen, setCurrentRow, openFaceReextract } = usePersonsActions()
   const queryClient = useQueryClient()
   const exportMutation = useExportPersonsManifest()
 
@@ -56,6 +58,11 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
   const handleImportFaces = () => {
     setCurrentRow(null)
     setOpen('import-faces')
+  }
+
+  const handleReextractFaces = () => {
+    setCurrentRow(null)
+    openFaceReextract(null)
   }
 
   const handleExportManifest = async () => {
@@ -129,6 +136,30 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
         <Images className='me-1 h-4 w-4' />
         <span className='hidden md:inline'>{t('actions.importFaces')}</span>
       </Button>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant='outline'
+            size='sm'
+            className='h-8'
+            onClick={handleReextractFaces}
+            title={t('actions.reextractFeatures')}
+          >
+            {isFaceReextractRunning ? (
+              <Loader2 className='me-1 h-4 w-4 animate-spin text-primary' />
+            ) : (
+              <ScanFace className='me-1 h-4 w-4' />
+            )}
+            <span className='hidden lg:inline'>
+              {t('actions.reextractFeatures')}
+            </span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p className='max-w-xs'>{t('faceReextract.toolbarTooltip')}</p>
+        </TooltipContent>
+      </Tooltip>
 
       <Button size='sm' className='h-8' onClick={handleCreate}>
         <Plus className='me-1 h-4 w-4' />

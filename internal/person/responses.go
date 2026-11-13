@@ -1,6 +1,7 @@
 package person
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
@@ -159,6 +160,69 @@ func newFaceImportJobResponse(job *asyncjob.Job, locale string) FaceImportJobRes
 		UpdatedAt:    job.UpdatedAt.UTC(),
 		FinishedAt:   finishedAt,
 	}
+}
+
+// FaceReextractJobResponse represents the HTTP status projection of an asynchronous
+// face feature re-extraction job.
+type FaceReextractJobResponse struct {
+	JobID        string             `json:"jobId"`
+	Scope        string             `json:"scope"`
+	Status       asyncjob.JobStatus `json:"status"`
+	Progress     int                `json:"progress"`
+	Total        int                `json:"total"`
+	Processed    int                `json:"processed"`
+	Succeeded    int                `json:"succeeded"`
+	Failed       int                `json:"failed"`
+	CurrentStage string             `json:"currentStage,omitempty"`
+	CurrentFile  string             `json:"currentFile,omitempty"`
+	ErrorCode    string             `json:"errorCode,omitempty"`
+	ErrorMessage string             `json:"errorMessage,omitempty"`
+	CreatedAt    time.Time          `json:"createdAt"`
+	UpdatedAt    time.Time          `json:"updatedAt"`
+	FinishedAt   *time.Time         `json:"finishedAt,omitempty"`
+}
+
+func newFaceReextractJobResponse(job *asyncjob.Job, locale string) FaceReextractJobResponse {
+	var finishedAt *time.Time
+	if job.FinishedAt != nil {
+		utc := job.FinishedAt.UTC()
+		finishedAt = &utc
+	}
+	errorMessage := job.ErrorMessage
+	if job.ErrorCode != "" {
+		if localized, ok := httputil.LookupMessage(job.ErrorCode, locale); ok && localized != "" {
+			errorMessage = localized
+		}
+	}
+	scope := reextractScopeAll
+	if job.MetadataJSON != "" && job.MetadataJSON != "{}" {
+		var meta FaceReextractMetadata
+		if err := json.Unmarshal([]byte(job.MetadataJSON), &meta); err == nil && meta.Scope != "" {
+			scope = meta.Scope
+		}
+	}
+	return FaceReextractJobResponse{
+		JobID:        job.ID,
+		Scope:        scope,
+		Status:       job.Status,
+		Progress:     job.Progress,
+		Total:        job.Total,
+		Processed:    job.Processed,
+		Succeeded:    job.Succeeded,
+		Failed:       job.Failed,
+		CurrentStage: job.CurrentStage,
+		CurrentFile:  job.CurrentFile,
+		ErrorCode:    job.ErrorCode,
+		ErrorMessage: errorMessage,
+		CreatedAt:    job.CreatedAt.UTC(),
+		UpdatedAt:    job.UpdatedAt.UTC(),
+		FinishedAt:   finishedAt,
+	}
+}
+
+// CancelFaceReextractJobResponse is the payload returned when cancelling a re-extraction job.
+type CancelFaceReextractJobResponse struct {
+	Cancelled bool `json:"cancelled"`
 }
 
 // ImageSearchMatchInfo represents a candidate person hit in an image-based facial search.

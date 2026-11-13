@@ -173,3 +173,33 @@ export const faceImportJobResponseSchema = z.object({
 })
 
 export type FaceImportJobResponse = z.infer<typeof faceImportJobResponseSchema>
+
+export const faceReextractScopeSchema = z.enum(['all', 'selected'])
+
+export type FaceReextractScope = z.infer<typeof faceReextractScopeSchema>
+
+export const faceReextractJobResponseSchema = z.object({
+  jobId: z.string(),
+  scope: faceReextractScopeSchema.default('all'),
+  status: faceImportJobStatusSchema,
+  progress: z.number().optional().default(0),
+  total: z.number(),
+  processed: z.number(),
+  succeeded: z.number(),
+  failed: z.number(),
+  currentStage: z.string().optional().default(''),
+  currentFile: z.string().optional().default(''),
+  errorCode: z.string().optional().default(''),
+  errorMessage: z.string().optional().default(''),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  finishedAt: z.string().nullable().optional(),
+})
+
+export type FaceReextractJobResponse = z.infer<
+  typeof faceReextractJobResponseSchema
+>
+
+export const cancelFaceReextractJobResponseSchema = z.object({
+  cancelled: z.boolean(),
+})

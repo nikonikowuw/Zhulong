@@ -447,6 +447,14 @@ func (s stubAsyncJobs) GetJob(context.Context, string) (*asyncjob.Job, error) {
 	return s.job, s.err
 }
 
+func (s stubAsyncJobs) ListJobs(context.Context, string, int, int) ([]asyncjob.Job, int64, error) {
+	return nil, 0, nil
+}
+
+func (s stubAsyncJobs) CancelJob(context.Context, string) error {
+	return errors.New("not used by this test")
+}
+
 func TestGetFaceImportJobRejectsForeignJobType(t *testing.T) {
 	svc := &Service{
 		asyncJobs: stubAsyncJobs{job: &asyncjob.Job{ID: "job-other", Type: "other.domain_job"}},
