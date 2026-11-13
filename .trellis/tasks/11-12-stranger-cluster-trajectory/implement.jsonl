@@ -1,0 +1,14 @@
+{"file": ".trellis/spec/architecture.md", "reason": "系统跨层职责边界、SSE 隔离与内嵌 SPA 交付契约"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端分层入口与 Pre-Development Checklist（含 Makefile api-docs 白名单）"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 internal/stranger 包职责定位与跨包单向无环依赖铁律"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Uber Fx 纯构造函数、路由值组注册与 lifecycleRuntime 优雅停机序列"}
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "识别记录持久化、冷却去重、异步抓拍时序、证据图生命周期与 RetentionPruner 清理契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "000036 迁移规则、MaxOpenConns=1 事务防死锁、ULID 主键与零 TEMP B-TREE / INDEXED BY 契约"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "/api/v1/strangers 请求响应命名 (*Request/*Response/*Info)、信封与 Swagger 2.0 规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "apperr.Error 映射与模块内 locale.go (internal/stranger/locale.go, internal/spatial/locale.go) 三语错误码注册"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go -race 竞态测试、Handler 层审计接线与 audit/action_locales_test 规范"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "React 前端特性切片边界 (含 features/persons/contract.ts)、TanStack Query/Router 与开发前检查清单"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "URL 状态同步 (recMode/timeRange)、Zod 解析、弹窗与表单统一契约"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "OKLCH 语义调色板、RTL 逻辑类与 en/zh-Hans/zh-Hant 三语国际化契约 (records/spatial/audit)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "识别记录 → 在线聚类 → 转正入底库 → 空间轨迹的跨层数据流定位"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 spatial 轨迹聚合与 person 入册广播通道"}

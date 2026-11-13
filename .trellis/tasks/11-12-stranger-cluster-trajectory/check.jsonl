@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "逐项核对后端 Pre-Development Checklist 与 api-docs 白名单"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "核验 internal/stranger 与 record/person/spatial 无循环依赖且 Handler 独占审计调用"}
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "核验 cluster_id 逻辑弱引用、SSE 零特征泄漏、fail-open 落库、异步抓拍与 RetentionPruner 孤儿簇联动"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核验 000036 up/down 可逆、MaxOpenConns=1 事务无重入死锁、EXPLAIN QUERY PLAN 无 TEMP B-TREE 与部分索引生效"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "核验 *Request/*Response/*Info 命名、httputil 信封与 BLOB 字段过滤"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核验 internal/stranger/locale.go 与 internal/spatial/locale.go 新增错误码 (404/409/422) 及三语文案完整性"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验多路并发 -race 单测、审计接线、action_locales_test 与全仓门禁通过"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "核验 records/spatial 跨特性只走 contract/index 隔离与前端检查清单"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "核验 recMode 不碰撞 view、spatial 深链接时间窗与 Zod 校验"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "核验英/简/繁三语词条对齐 (records/spatial/audit)、深浅色与无硬编码文案"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核验前端 format/lint/type-check、真实无头浏览器测试与 webui/dist 同步"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核验转正外扩裁剪与失败补偿、底库广播、内存驱逐与合并簇轨迹解析的跨层一致性"}
