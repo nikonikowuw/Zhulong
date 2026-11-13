@@ -89,6 +89,11 @@ inline constexpr float kDefaultFusionTtlSeconds = 3.0f;
 inline constexpr float kMinFusionTtlSeconds = 0.5f;
 inline constexpr float kMaxFusionTtlSeconds = 30.0f;
 
+/** @brief 底库录入水平镜像 TTA 特征融合开关默认值（默认开启） */
+inline constexpr bool kDefaultEnableEnrollFlipTta = true;
+/** @brief 底库录入暗光自适应增强与无 EXIF 旋转重检兜底开关默认值（默认开启） */
+inline constexpr bool kDefaultEnableEnrollImageEnhance = true;
+
 /**
  * @brief 判断 JSON 拿到的 `double` 是否落在以 `float` 常量表示的闭区间内
  *
@@ -129,6 +134,8 @@ struct MatchParams {
     bool enable_face_feature_fusion{kDefaultEnableFaceFeatureFusion};
     float fusion_similarity_threshold{kDefaultFusionSimilarityThreshold};
     float fusion_ttl_seconds{kDefaultFusionTtlSeconds};
+    bool enable_enroll_flip_tta{kDefaultEnableEnrollFlipTta};
+    bool enable_enroll_image_enhance{kDefaultEnableEnrollImageEnhance};
 };
 
 namespace detail {
@@ -231,6 +238,12 @@ inline MatchParams load_match_params_from_env(MatchParams base = MatchParams{}) 
     if (detail::parse_env_double("ZHULONG_FUSION_TTL_SECONDS", dval) &&
         within_float_bounds(dval, kMinFusionTtlSeconds, kMaxFusionTtlSeconds)) {
         p.fusion_ttl_seconds = static_cast<float>(dval);
+    }
+    if (detail::parse_env_bool("ZHULONG_ENABLE_ENROLL_FLIP_TTA", bval)) {
+        p.enable_enroll_flip_tta = bval;
+    }
+    if (detail::parse_env_bool("ZHULONG_ENABLE_ENROLL_IMAGE_ENHANCE", bval)) {
+        p.enable_enroll_image_enhance = bval;
     }
 
     return p;
@@ -490,6 +503,18 @@ inline MatchParams resolve_match_params(std::string_view task_json, MatchParams 
     if (find_json_number(json, "fusion_ttl_seconds", fusion_ttl_seconds) &&
         within_float_bounds(fusion_ttl_seconds, kMinFusionTtlSeconds, kMaxFusionTtlSeconds)) {
         resolved.fusion_ttl_seconds = static_cast<float>(fusion_ttl_seconds);
+    }
+
+    // 16. 底库录入水平镜像 TTA 开关
+    bool enable_enroll_flip_tta = true;
+    if (find_json_bool(json, "enable_enroll_flip_tta", enable_enroll_flip_tta)) {
+        resolved.enable_enroll_flip_tta = enable_enroll_flip_tta;
+    }
+
+    // 17. 底库录入暗光增强与旋转兜底开关
+    bool enable_enroll_image_enhance = true;
+    if (find_json_bool(json, "enable_enroll_image_enhance", enable_enroll_image_enhance)) {
+        resolved.enable_enroll_image_enhance = enable_enroll_image_enhance;
     }
 
     return resolved;

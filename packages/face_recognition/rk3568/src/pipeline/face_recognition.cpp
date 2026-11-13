@@ -13,6 +13,7 @@
 
 #include "alignment/aligner.hpp"
 #include "common/face_association.hpp"
+#include "common/face_enroll_enhance.hpp"
 #include "common/face_image_quality.hpp"
 #include "common/face_quality.hpp"
 #include "common/match_config.hpp"
@@ -688,90 +689,185 @@ zhulong_status_t FaceExtractorContext::extract(
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
-    zhulong_frame_view view{};
-    view.width = width;
-    view.height = height;
-    view.format = ZHULONG_PIXEL_FORMAT_RGB24;
-    view.planes[0] = rgb_pixels;
-    view.strides[0] = rgb_stride;
-    view.dma_buf_fd = -1;
+    auto try_prepare_patch = [&](const uint8_t* frame_rgb,
+                                 int32_t frame_w,
+                                 int32_t frame_h,
+                                 int32_t frame_stride,
+                                 zhulong::Tensor& out_rec_input,
+                                 std::array<float, 6>& out_affine_mat) -> zhulong_status_t {
+        zhulong_frame_view fv{};
+        fv.width = frame_w;
+        fv.height = frame_h;
+        fv.format = ZHULONG_PIXEL_FORMAT_RGB24;
+        fv.planes[0] = frame_rgb;
+        fv.strides[0] = frame_stride;
+        fv.dma_buf_fd = -1;
+        zhulong::Image img(fv);
 
-    zhulong::Image image(view);
-
-    // 1. 人脸检测与 5 点关键点定位
-    const std::vector<FaceDetection> detections = detector_.detect(det_session_, image);
-    if (detections.empty()) {
-        return ZHULONG_PLUGIN_ERR_NOT_FOUND;
-    }
-
-    // 2. 底库登记只接受**单人特写**：可入册的人脸（真实检出且置信度达标）多于一张时
-    //    一律拒绝，绝不猜「哪张是本人」。
-    //    工业标准（GA/T 1400 类项目与 NVIDIA 录入流程）都要求人工复核合影，盲选最高分
-    //    脸会把同事、路人写进底库，而且写入后**无法从特征向量看出错**。
-    //    进程级退出码不跟着变：这是帧级裁决，下一张单人照照常登记。
-    size_t embeddable_faces = 0;
-    for (const auto& detection : detections) {
-        if (detection.is_real_detection && detection.face_score >= kMinimumEmbeddableFaceScore) {
-            ++embeddable_faces;
+        // 1. 人脸检测与 5 点关键点定位
+        const std::vector<FaceDetection> detections = detector_.detect(det_session_, img);
+        if (detections.empty()) {
+            return ZHULONG_PLUGIN_ERR_NOT_FOUND;
         }
-    }
-    if (embeddable_faces > 1) {
-        return ZHULONG_PLUGIN_ERR_AMBIGUOUS;
-    }
 
-    // 3. 选取置信度最高的主人脸
-    const FaceDetection* best_detection = &detections.front();
-    for (const auto& detection : detections) {
-        if (detection.face_score > best_detection->face_score) {
-            best_detection = &detection;
+        // 2. 底库登记只接受**单人特写**：可入册的人脸（真实检出且置信度达标）多于一张时
+        //    一律拒绝，绝不猜「哪张是本人」。
+        size_t embeddable_faces = 0;
+        for (const auto& detection : detections) {
+            if (detection.is_real_detection && detection.face_score >= kMinimumEmbeddableFaceScore) {
+                ++embeddable_faces;
+            }
         }
-    }
+        if (embeddable_faces > 1) {
+            return ZHULONG_PLUGIN_ERR_AMBIGUOUS;
+        }
 
-    // 检出结果来自 CPU 降级桩而非真实神经网络时，说明当前推理后端不具备真实人脸能力：
-    // 必须显式返回 NOT_SUPPORTED（闭环报错），严禁用桩坐标伪造出「看起来有效」的特征向量。
-    if (!best_detection->is_real_detection) {
-        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
-    }
-    if (best_detection->face_score < kMinimumEmbeddableFaceScore) {
-        return ZHULONG_PLUGIN_ERR_NOT_FOUND;
-    }
+        // 3. 选取置信度最高的主人脸
+        const FaceDetection* best_detection = &detections.front();
+        for (const auto& detection : detections) {
+            if (detection.face_score > best_detection->face_score) {
+                best_detection = &detection;
+            }
+        }
 
-    // 4. 关键点拓扑校验 + 仿射对齐
-    const FaceQualityAssessment geom_check = assess_face_quality(*best_detection, width, height, 0, 0.0f);
-    if (!geom_check.pass) {
-        return ZHULONG_PLUGIN_ERR_NOT_FOUND;
-    }
+        // 检出结果来自 CPU 降级桩而非真实神经网络时，必须显式返回 NOT_SUPPORTED
+        if (!best_detection->is_real_detection) {
+            return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
+        }
+        if (best_detection->face_score < kMinimumEmbeddableFaceScore) {
+            return ZHULONG_PLUGIN_ERR_NOT_FOUND;
+        }
 
-    const auto src_pixels = pixel_landmarks(*best_detection, width, height);
-    std::array<float, 6> affine_mat{};
-    if (!Aligner::estimate_similarity_transform(src_pixels, affine_mat)) {
-        return ZHULONG_PLUGIN_ERR_INTERNAL;
-    }
+        // 4. 最小像素尺寸 + 关键点拓扑校验 + 仿射对齐（大脸自动触发抗混叠超采样）
+        const FaceQualityAssessment geom_check =
+            assess_face_quality(*best_detection, frame_w, frame_h, match_params_.min_face_size, 0.0f);
+        if (!geom_check.pass) {
+            return ZHULONG_PLUGIN_ERR_NOT_FOUND;
+        }
+
+        const auto src_pixels = pixel_landmarks(*best_detection, frame_w, frame_h);
+        if (!Aligner::estimate_similarity_transform(src_pixels, out_affine_mat)) {
+            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        }
+
+        if (!Aligner::crop_and_align_direct(img, out_affine_mat, out_rec_input.data<uint8_t>(),
+                                            out_rec_input.element_count(),
+                                            kFeaturePatchWidth, kFeaturePatchHeight)) {
+            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        }
+
+        // 5. eDifFIQA(T) 质量门禁（暗光人脸自适应 Gamma 提亮且仅在提升质量分时采纳）
+        float quality_score = 0.0f;
+        if (!quality_assessor_.assess(quality_session_, out_rec_input, quality_score)) {
+            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        }
+
+        if (match_params_.enable_enroll_image_enhance) {
+            std::vector<uint8_t> enhanced_patch_buf;
+            if (auto_enhance_dark_patch_rgb24(out_rec_input.data<uint8_t>(),
+                                              kFeaturePatchWidth, kFeaturePatchHeight,
+                                              enhanced_patch_buf) &&
+                enhanced_patch_buf.size() == out_rec_input.element_count()) {
+                zhulong::Tensor enhanced_patch(
+                    {1, kFeaturePatchHeight, kFeaturePatchWidth, 3}, zhulong::DataType::UINT8);
+                std::copy_n(enhanced_patch_buf.data(), enhanced_patch_buf.size(), enhanced_patch.data<uint8_t>());
+                float enhanced_quality = 0.0f;
+                if (quality_assessor_.assess(quality_session_, enhanced_patch, enhanced_quality) &&
+                    enhanced_quality > quality_score) {
+                    std::copy_n(enhanced_patch_buf.data(), enhanced_patch_buf.size(), out_rec_input.data<uint8_t>());
+                    quality_score = enhanced_quality;
+                }
+            }
+        }
+
+        if (match_params_.min_face_quality > 0.0f && quality_score < match_params_.min_face_quality) {
+            return ZHULONG_PLUGIN_ERR_NOT_FOUND;
+        }
+
+        if (match_params_.enable_face_image_gate) {
+            const float affine_det =
+                out_affine_mat[0] * out_affine_mat[4] - out_affine_mat[1] * out_affine_mat[3];
+            if (!passes_face_image_gate(out_rec_input.data<uint8_t>(), kFeaturePatchWidth, kFeaturePatchHeight,
+                                        affine_det, match_params_)) {
+                return ZHULONG_PLUGIN_ERR_NOT_FOUND;
+            }
+        }
+
+        return ZHULONG_PLUGIN_OK;
+    };
 
     zhulong::Tensor rec_input({1, kFeaturePatchHeight, kFeaturePatchWidth, 3}, zhulong::DataType::UINT8);
-    if (!Aligner::crop_and_align_direct(image, affine_mat, rec_input.data<uint8_t>(),
-                                        rec_input.element_count(),
-                                        kFeaturePatchWidth, kFeaturePatchHeight)) {
+    std::array<float, 6> affine_mat{};
+    zhulong_status_t prepare_rc =
+        try_prepare_patch(rgb_pixels, width, height, rgb_stride, rec_input, affine_mat);
+
+    // 常规正向未检出或未过质量门禁时，按需触发：暗光提亮重检 + 无 EXIF 侧躺/倒置照片旋转重检（90°/270°/180°）
+    if (prepare_rc == ZHULONG_PLUGIN_ERR_NOT_FOUND && match_params_.enable_enroll_image_enhance) {
+        const uint8_t* fallback_src = rgb_pixels;
+        int32_t fallback_stride = rgb_stride;
+        std::vector<uint8_t> enhanced_frame_buf;
+        float mean_luma = 255.0f;
+        if (compute_rgb24_mean_luma(rgb_pixels, width, height, rgb_stride, mean_luma) &&
+            mean_luma < kEnrollDarkLumaThreshold &&
+            apply_gamma_rgb24(rgb_pixels, width, height, rgb_stride, kEnrollDetectGamma, enhanced_frame_buf)) {
+            fallback_src = enhanced_frame_buf.data();
+            fallback_stride = width * 3;
+            prepare_rc = try_prepare_patch(fallback_src, width, height, fallback_stride, rec_input, affine_mat);
+        }
+
+        if (prepare_rc == ZHULONG_PLUGIN_ERR_NOT_FOUND) {
+            std::vector<uint8_t> rotated_frame_buf;
+            constexpr std::array<int, 3> kFallbackRotations{90, 270, 180};
+            for (int deg : kFallbackRotations) {
+                int rot_w = 0;
+                int rot_h = 0;
+                if (!rotate_rgb24(fallback_src, width, height, fallback_stride, deg,
+                                  rotated_frame_buf, rot_w, rot_h)) {
+                    continue;
+                }
+                const zhulong_status_t rot_rc =
+                    try_prepare_patch(rotated_frame_buf.data(), rot_w, rot_h, rot_w * 3, rec_input, affine_mat);
+                if (rot_rc != ZHULONG_PLUGIN_ERR_NOT_FOUND) {
+                    prepare_rc = rot_rc;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (prepare_rc != ZHULONG_PLUGIN_OK) {
+        return prepare_rc;
+    }
+
+    // 6. 512 维特征提取 + 水平镜像 TTA 融合
+    const std::vector<float> features_orig = extractor_.extract(rec_session_, rec_input);
+    if (features_orig.size() != kFeatureDimension) {
         return ZHULONG_PLUGIN_ERR_INTERNAL;
     }
 
-    // 5. eDifFIQA(T) 质量门禁：低质登记照按帧级 NO_FACE_DETECTED 拒绝，不杀掉热进程
-    float quality_score = 0.0f;
-    if (!quality_assessor_.assess(quality_session_, rec_input, quality_score)) {
-        return ZHULONG_PLUGIN_ERR_INTERNAL;
-    }
-    if (match_params_.min_face_quality > 0.0f && quality_score < match_params_.min_face_quality) {
-        return ZHULONG_PLUGIN_ERR_NOT_FOUND;
+    std::vector<float> final_features;
+    if (match_params_.enable_enroll_flip_tta) {
+        zhulong::Tensor rec_input_flip(
+            {1, kFeaturePatchHeight, kFeaturePatchWidth, 3}, zhulong::DataType::UINT8);
+        if (flip_rgb24_horizontal(rec_input.data<uint8_t>(), rec_input_flip.data<uint8_t>(),
+                                  kFeaturePatchWidth, kFeaturePatchHeight)) {
+            const std::vector<float> features_flip = extractor_.extract(rec_session_, rec_input_flip);
+            if (!fuse_l2_normalized_features(features_orig, features_flip, final_features)) {
+                return ZHULONG_PLUGIN_ERR_INTERNAL;
+            }
+        } else {
+            final_features = features_orig;
+        }
+    } else {
+        final_features = features_orig;
     }
 
-    // 6. 512 维特征提取
-    const std::vector<float> features = extractor_.extract(rec_session_, rec_input);
-    if (features.size() != kFeatureDimension) {
+    if (final_features.size() != kFeatureDimension) {
         return ZHULONG_PLUGIN_ERR_INTERNAL;
     }
 
-    // 特征抽取器已保证返回 512 维 L2 归一化单位向量
-    std::copy_n(features.data(), kFeatureDimension, out_features);
+    // 特征抽取与融合后均为 512 维 L2 归一化单位向量
+    std::copy_n(final_features.data(), kFeatureDimension, out_features);
     *feature_dim = static_cast<uint32_t>(kFeatureDimension);
     return ZHULONG_PLUGIN_OK;
 }

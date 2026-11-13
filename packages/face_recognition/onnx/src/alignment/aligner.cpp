@@ -60,10 +60,10 @@ inline void sample_packed_channels(
              (1.0f - dx) * dy * p10[2] + dx * dy * p11[2];
 }
 
-/** @brief RGB24/BGR24/YUV420P/NV12 通用单点采样（格式已在入口校验） */
-inline void sample_pixel_rgb(
+/** @brief RGB24/BGR24/YUV420P/NV12 通用单点浮点采样（避免过早 8-bit 截断） */
+inline void sample_pixel_rgb_f(
     const zhulong_frame_view& raw,
-    float fx, float fy, uint8_t& out_r, uint8_t& out_g, uint8_t& out_b
+    float fx, float fy, float& out_r, float& out_g, float& out_b
 ) {
     const int w = raw.width;
     const int h = raw.height;
@@ -79,7 +79,11 @@ inline void sample_pixel_rgb(
         const float y_val = zhulong::sample_plane_bilinear(raw.planes[0], w, h, raw.strides[0] > 0 ? raw.strides[0] : w, fx, fy);
         const float u_val = zhulong::sample_plane_bilinear(raw.planes[1], uv_w, uv_h, u_stride, uv_x, uv_y);
         const float v_val = zhulong::sample_plane_bilinear(raw.planes[2], uv_w, uv_h, v_stride, uv_x, uv_y);
-        zhulong::yuv_to_rgb_u8(y_val, u_val, v_val, out_r, out_g, out_b);
+        uint8_t r = 0, g = 0, b = 0;
+        zhulong::yuv_to_rgb_u8(y_val, u_val, v_val, r, g, b);
+        out_r = static_cast<float>(r);
+        out_g = static_cast<float>(g);
+        out_b = static_cast<float>(b);
         return;
     }
 
@@ -90,7 +94,11 @@ inline void sample_pixel_rgb(
         float u_val = 128.0f;
         float v_val = 128.0f;
         zhulong::sample_nv12_uv_bilinear(raw.planes[1], uv_w, uv_h, uv_stride, uv_x, uv_y, u_val, v_val);
-        zhulong::yuv_to_rgb_u8(y_val, u_val, v_val, out_r, out_g, out_b);
+        uint8_t r = 0, g = 0, b = 0;
+        zhulong::yuv_to_rgb_u8(y_val, u_val, v_val, r, g, b);
+        out_r = static_cast<float>(r);
+        out_g = static_cast<float>(g);
+        out_b = static_cast<float>(b);
         return;
     }
 
@@ -101,15 +109,19 @@ inline void sample_pixel_rgb(
         float c2 = 0.0f;
         sample_packed_channels(raw.planes[0], w, h, stride, fx, fy, c0, c1, c2);
         if (raw.format == ZHULONG_PIXEL_FORMAT_BGR24) {
-            out_r = static_cast<uint8_t>(std::clamp(c2, 0.0f, 255.0f));
-            out_g = static_cast<uint8_t>(std::clamp(c1, 0.0f, 255.0f));
-            out_b = static_cast<uint8_t>(std::clamp(c0, 0.0f, 255.0f));
+            out_r = c2;
+            out_g = c1;
+            out_b = c0;
         } else {
-            out_r = static_cast<uint8_t>(std::clamp(c0, 0.0f, 255.0f));
-            out_g = static_cast<uint8_t>(std::clamp(c1, 0.0f, 255.0f));
-            out_b = static_cast<uint8_t>(std::clamp(c2, 0.0f, 255.0f));
+            out_r = c0;
+            out_g = c1;
+            out_b = c2;
         }
     }
+}
+
+inline uint8_t round_u8(float val) noexcept {
+    return static_cast<uint8_t>(std::clamp(std::lround(val), 0L, 255L));
 }
 
 } // namespace
@@ -283,23 +295,65 @@ bool Aligner::crop_and_align_direct(
     const float im3 = -m3 * inv_det;
     const float im4 = m0 * inv_det;
 
-    for (int dy = 0; dy < dst_h; ++dy) {
-        const float oy = static_cast<float>(dy) - m5;
-        const float row_sx = im1 * oy - im0 * m2;
-        const float row_sy = im4 * oy - im3 * m2;
-        uint8_t* dst_row = dst_buf + static_cast<size_t>(dy) * static_cast<size_t>(dst_w) * 3;
-        for (int dx = 0; dx < dst_w; ++dx) {
-            const float sx = static_cast<float>(dx) * im0 + row_sx;
-            const float sy = static_cast<float>(dx) * im3 + row_sy;
+    // 逆缩放比 > 2.0（原图人脸尺寸 > 224px）时启用子像素网格超采样，抑制直接双线性缩小的混叠/锯齿。
+    const float inv_scale = std::hypot(im0, im3);
+    const int supersample_grid =
+        (inv_scale > 2.0f) ? std::clamp(static_cast<int>(std::ceil(inv_scale)), 2, 4) : 1;
 
-            uint8_t r = 0;
-            uint8_t g = 0;
-            uint8_t b = 0;
-            sample_pixel_rgb(raw, sx, sy, r, g, b);
-            const size_t dst_offset = static_cast<size_t>(dx) * 3;
-            dst_row[dst_offset + 0] = r;
-            dst_row[dst_offset + 1] = g;
-            dst_row[dst_offset + 2] = b;
+    if (supersample_grid == 1) {
+        for (int dy = 0; dy < dst_h; ++dy) {
+            const float oy = static_cast<float>(dy) - m5;
+            const float row_sx = im1 * oy - im0 * m2;
+            const float row_sy = im4 * oy - im3 * m2;
+            uint8_t* dst_row = dst_buf + static_cast<size_t>(dy) * static_cast<size_t>(dst_w) * 3;
+            for (int dx = 0; dx < dst_w; ++dx) {
+                const float sx = static_cast<float>(dx) * im0 + row_sx;
+                const float sy = static_cast<float>(dx) * im3 + row_sy;
+
+                float r = 0.0f;
+                float g = 0.0f;
+                float b = 0.0f;
+                sample_pixel_rgb_f(raw, sx, sy, r, g, b);
+                const size_t dst_offset = static_cast<size_t>(dx) * 3;
+                dst_row[dst_offset + 0] = round_u8(r);
+                dst_row[dst_offset + 1] = round_u8(g);
+                dst_row[dst_offset + 2] = round_u8(b);
+            }
+        }
+    } else {
+        const float inv_count = 1.0f / static_cast<float>(supersample_grid * supersample_grid);
+        for (int dy = 0; dy < dst_h; ++dy) {
+            const float oy_base = static_cast<float>(dy) - m5;
+            uint8_t* dst_row = dst_buf + static_cast<size_t>(dy) * static_cast<size_t>(dst_w) * 3;
+            for (int dx = 0; dx < dst_w; ++dx) {
+                const float ox_base = static_cast<float>(dx);
+                float sum_r = 0.0f;
+                float sum_g = 0.0f;
+                float sum_b = 0.0f;
+                for (int sy_i = 0; sy_i < supersample_grid; ++sy_i) {
+                    const float sub_y = (static_cast<float>(sy_i) + 0.5f) / static_cast<float>(supersample_grid) - 0.5f;
+                    const float oy = oy_base + sub_y;
+                    const float row_sx = im1 * oy - im0 * m2;
+                    const float row_sy = im4 * oy - im3 * m2;
+                    for (int sx_i = 0; sx_i < supersample_grid; ++sx_i) {
+                        const float sub_x = (static_cast<float>(sx_i) + 0.5f) / static_cast<float>(supersample_grid) - 0.5f;
+                        const float ox = ox_base + sub_x;
+                        const float sx = ox * im0 + row_sx;
+                        const float sy = ox * im3 + row_sy;
+                        float r = 0.0f;
+                        float g = 0.0f;
+                        float b = 0.0f;
+                        sample_pixel_rgb_f(raw, sx, sy, r, g, b);
+                        sum_r += r;
+                        sum_g += g;
+                        sum_b += b;
+                    }
+                }
+                const size_t dst_offset = static_cast<size_t>(dx) * 3;
+                dst_row[dst_offset + 0] = round_u8(sum_r * inv_count);
+                dst_row[dst_offset + 1] = round_u8(sum_g * inv_count);
+                dst_row[dst_offset + 2] = round_u8(sum_b * inv_count);
+            }
         }
     }
 

@@ -23,6 +23,7 @@
 
 #include "alignment/aligner.hpp"
 #include "common/face_association.hpp"
+#include "common/face_enroll_enhance.hpp"
 #include "common/face_feature_fusion.hpp"
 #include "common/face_image_quality.hpp"
 #include "common/face_quality.hpp"
@@ -715,6 +716,22 @@ void test_resolve_match_params() {
     ::unsetenv("ZHULONG_FILTER_UNMATCHED");
     ::unsetenv("ZHULONG_FUSION_SIMILARITY_THRESHOLD");
     ::unsetenv("ZHULONG_FACE_TOP_K");
+
+    check(untouched.enable_enroll_flip_tta, "录入水平镜像 TTA 默认应开启");
+    check(untouched.enable_enroll_image_enhance, "录入图像增强与旋转兜底默认应开启");
+    const MatchParams enroll_override = resolve_match_params(
+        R"({"enable_enroll_flip_tta": false, "enable_enroll_image_enhance": false})",
+        defaults);
+    check(!enroll_override.enable_enroll_flip_tta, "JSON 可关闭 enable_enroll_flip_tta");
+    check(!enroll_override.enable_enroll_image_enhance, "JSON 可关闭 enable_enroll_image_enhance");
+
+    ::setenv("ZHULONG_ENABLE_ENROLL_FLIP_TTA", "0", 1);
+    ::setenv("ZHULONG_ENABLE_ENROLL_IMAGE_ENHANCE", "false", 1);
+    const MatchParams env_enroll = zhulong::face::load_match_params_from_env();
+    check(!env_enroll.enable_enroll_flip_tta, "ZHULONG_ENABLE_ENROLL_FLIP_TTA 环境变量生效");
+    check(!env_enroll.enable_enroll_image_enhance, "ZHULONG_ENABLE_ENROLL_IMAGE_ENHANCE 环境变量生效");
+    ::unsetenv("ZHULONG_ENABLE_ENROLL_FLIP_TTA");
+    ::unsetenv("ZHULONG_ENABLE_ENROLL_IMAGE_ENHANCE");
 }
 
 void test_face_quality_assessment() {
@@ -2265,6 +2282,163 @@ void test_face_feature_fusion() {
     }
 }
 
+void test_aligner_downscale_antialiasing() {
+    using namespace zhulong::face;
+
+    // 448x448 高频黑白棋盘（2x2 像素交替 0 / 255）；缩小 4 倍到 112x112。
+    // 若无超采样抗混叠，单点双线性会踩中单一黑/白格产生极端 0/255 混叠；
+    // 开启 4x4 区域超采样后输出应平滑落在中间灰度 [100, 155]。
+    constexpr int src_w = 448;
+    constexpr int src_h = 448;
+    std::vector<uint8_t> src(static_cast<size_t>(src_w) * src_h * 3, 0);
+    for (int y = 0; y < src_h; ++y) {
+        for (int x = 0; x < src_w; ++x) {
+            const uint8_t v = (((x / 2) + (y / 2)) % 2 == 0) ? 0 : 255;
+            const size_t off = (static_cast<size_t>(y) * src_w + x) * 3;
+            src[off + 0] = v;
+            src[off + 1] = v;
+            src[off + 2] = v;
+        }
+    }
+
+    zhulong_frame_view fv{};
+    fv.width = src_w;
+    fv.height = src_h;
+    fv.format = ZHULONG_PIXEL_FORMAT_RGB24;
+    fv.planes[0] = src.data();
+    fv.strides[0] = src_w * 3;
+    fv.dma_buf_fd = -1;
+
+    constexpr int dst_w = 112;
+    constexpr int dst_h = 112;
+    std::vector<uint8_t> dst(static_cast<size_t>(dst_w) * dst_h * 3, 0);
+    const std::array<float, 6> downscale_mat{0.25f, 0.0f, 0.0f, 0.0f, 0.25f, 0.0f};
+    const bool ok = Aligner::crop_and_align_direct(
+        zhulong::Image(fv), downscale_mat, dst.data(), dst.size(), dst_w, dst_h);
+    check(ok, "4x 缩小仿射裁剪必须成功");
+
+    int mid_gray_count = 0;
+    const int center_start = 16;
+    const int center_end = 96;
+    for (int y = center_start; y < center_end; ++y) {
+        for (int x = center_start; x < center_end; ++x) {
+            const uint8_t r = dst[(static_cast<size_t>(y) * dst_w + x) * 3];
+            if (r >= 96 && r <= 160) {
+                ++mid_gray_count;
+            }
+        }
+    }
+    const int total_center = (center_end - center_start) * (center_end - center_start);
+    check(mid_gray_count == total_center,
+          "4x 缩小高频棋盘应经过子像素超采样平滑为中间灰度，不应出现严重混叠极值");
+}
+
+void test_face_enroll_enhance() {
+    using namespace zhulong::face;
+
+    // 1. 水平镜像翻转：非对称 4x2 图像验证像素精确对调与二次翻转还原
+    const std::vector<uint8_t> patch{
+        10, 11, 12,   20, 21, 22,   30, 31, 32,   40, 41, 42,
+        50, 51, 52,   60, 61, 62,   70, 71, 72,   80, 81, 82,
+    };
+    std::vector<uint8_t> flipped(patch.size(), 0);
+    std::vector<uint8_t> restored(patch.size(), 0);
+    check(!flip_rgb24_horizontal(patch.data(), const_cast<uint8_t*>(patch.data()), 4, 2),
+          "原址重叠翻转必须被拒绝");
+    check(flip_rgb24_horizontal(patch.data(), flipped.data(), 4, 2), "水平翻转应成功");
+    check(flipped[0] == 40 && flipped[9] == 10 && flipped[12] == 80 && flipped[21] == 50,
+          "水平翻转后每行首尾像素必须精确交换");
+    check(flip_rgb24_horizontal(flipped.data(), restored.data(), 4, 2), "二次水平翻转应成功");
+    check(restored == patch, "两次水平翻转必须精确还原原图");
+
+    // 2. 旋转 90°/180°/270°（含非紧凑 stride 输入）
+    constexpr int rw = 3;
+    constexpr int rh = 2;
+    constexpr int r_stride = 12; // > 3 * 3 = 9
+    std::vector<uint8_t> padded(static_cast<size_t>(rh) * r_stride, 0xEE);
+    for (int y = 0; y < rh; ++y) {
+        for (int x = 0; x < rw; ++x) {
+            const uint8_t v = static_cast<uint8_t>(y * 10 + x + 1);
+            padded[static_cast<size_t>(y) * r_stride + static_cast<size_t>(x) * 3 + 0] = v;
+            padded[static_cast<size_t>(y) * r_stride + static_cast<size_t>(x) * 3 + 1] = v;
+            padded[static_cast<size_t>(y) * r_stride + static_cast<size_t>(x) * 3 + 2] = v;
+        }
+    }
+    std::vector<uint8_t> rot90;
+    int w90 = 0, h90 = 0;
+    check(rotate_rgb24(padded.data(), rw, rh, r_stride, 90, rot90, w90, h90), "90° 顺时针旋转应成功");
+    check(w90 == 2 && h90 == 3, "90° 旋转后宽高应互换");
+    // 原 (y=1, x=0)=11 应到 (dx=0, dy=0); 原 (y=0, x=0)=1 应到 (dx=1, dy=0)
+    check(rot90[0] == 11 && rot90[3] == 1 && rot90[6] == 12 && rot90[9] == 2 && rot90[12] == 13 && rot90[15] == 3,
+          "90° 顺时针旋转像素映射精确匹配");
+
+    std::vector<uint8_t> rot_back;
+    int wb = 0, hb = 0;
+    check(rotate_rgb24(rot90.data(), w90, h90, w90 * 3, 270, rot_back, wb, hb), "270° 旋转回正应成功");
+    check(wb == rw && hb == rh && rot_back[0] == 1 && rot_back[(1 * rw + 2) * 3] == 13,
+          "90° 再 270° 必须还原所有像素");
+
+    std::vector<uint8_t> rot180;
+    int w180 = 0, h180 = 0;
+    check(rotate_rgb24(padded.data(), rw, rh, r_stride, 180, rot180, w180, h180), "180° 旋转应成功");
+    check(w180 == rw && h180 == rh && rot180[0] == 13 && rot180[(1 * rw + 2) * 3] == 1,
+          "180° 旋转角点必须对角交换");
+
+    // 3. 暗光自适应 Gamma 提亮：正常亮度不改动，纯暗图提亮，过曝高光图不触发
+    std::vector<uint8_t> normal_patch(112 * 112 * 3, 130);
+    std::vector<uint8_t> enh_out;
+    check(!auto_enhance_dark_patch_rgb24(normal_patch.data(), 112, 112, enh_out),
+          "正常曝光 112x112 块不得触发 Gamma 修改");
+
+    std::vector<uint8_t> dark_patch(112 * 112 * 3, 28);
+    for (size_t i = 0; i < dark_patch.size(); i += 6) {
+        dark_patch[i] = 42;
+    }
+    check(auto_enhance_dark_patch_rgb24(dark_patch.data(), 112, 112, enh_out),
+          "欠曝暗光块应触发自适应 Gamma 提亮");
+    float enh_luma = 0.0f;
+    check(compute_rgb24_mean_luma(enh_out.data(), 112, 112, 112 * 3, enh_luma) && enh_luma > 75.0f,
+          "提亮后暗光块平均亮度应明显抬升");
+
+    std::vector<uint8_t> backlit_patch(112 * 112 * 3, 25);
+    for (int y = 0; y < 30; ++y) {
+        for (int x = 0; x < 30; ++x) {
+            const size_t off = (static_cast<size_t>(y) * 112 + x) * 3;
+            backlit_patch[off + 0] = 252;
+            backlit_patch[off + 1] = 252;
+            backlit_patch[off + 2] = 252;
+        }
+    }
+    check(!auto_enhance_dark_patch_rgb24(backlit_patch.data(), 112, 112, enh_out),
+          "含明显高光过曝的暗图不得继续提亮");
+
+    // 4. TTA 特征融合：单位范数、可加性、异常/相消安全回退
+    std::vector<float> f1(512, 0.0f);
+    std::vector<float> f2(512, 0.0f);
+    f1[0] = 1.0f;
+    f2[0] = 0.6f;
+    f2[1] = 0.8f;
+    std::vector<float> fused;
+    check(fuse_l2_normalized_features(f1, f2, fused) && fused.size() == 512, "TTA 融合应成功");
+    double norm_sq = 0.0;
+    for (float v : fused) {
+        norm_sq += static_cast<double>(v) * static_cast<double>(v);
+    }
+    check(std::fabs(std::sqrt(norm_sq) - 1.0) < 1e-5, "TTA 融合后必须严格 L2 单位化");
+    check(nearly_equal(fused[0], 1.6f / std::sqrt(1.6f * 1.6f + 0.8f * 0.8f), 1e-5f) &&
+              nearly_equal(fused[1], 0.8f / std::sqrt(1.6f * 1.6f + 0.8f * 0.8f), 1e-5f),
+          "TTA 融合向量方向必须与单位向量求和一致");
+
+    std::vector<float> opp(512, 0.0f);
+    opp[0] = -1.0f;
+    check(fuse_l2_normalized_features(f1, opp, fused) && nearly_equal(fused[0], 1.0f, 1e-6f),
+          "正交/反向相消时必须安全回退原图特征");
+
+    std::vector<float> bad_nan(512, std::numeric_limits<float>::quiet_NaN());
+    check(fuse_l2_normalized_features(f1, bad_nan, fused) && nearly_equal(fused[0], 1.0f, 1e-6f),
+          "镜像特征出现 NaN 时必须安全回退原图特征");
+}
+
 } // namespace
 
 int main() {
@@ -2289,6 +2463,8 @@ int main() {
     test_scrfd_decode_crowded_budget_and_determinism();
     test_drop_unmatched_persons();
     test_face_feature_fusion();
+    test_aligner_downscale_antialiasing();
+    test_face_enroll_enhance();
 #if defined(ZHULONG_FACE_HAS_PREPROCESS_HELPER)
     test_hwc_to_nchw_normalized();
 #endif
