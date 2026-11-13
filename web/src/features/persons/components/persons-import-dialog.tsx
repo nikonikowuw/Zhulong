@@ -1,5 +1,4 @@
 import { useMemo, useRef, useState } from 'react'
-import { type TFunction } from 'i18next'
 import {
   AlertCircle,
   CheckCircle2,
@@ -12,6 +11,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { toCsv, triggerDownload } from '@/lib/csv'
 import { errorMessageOf } from '@/lib/handle-server-error'
+import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,20 +23,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { type PersonImportRow } from '../data/schema'
 import {
   useCommitPersonImport,
   usePreviewPersonImport,
 } from '../hooks/use-persons'
+import { PersonsImportPreviewTable } from './persons-import-preview-table'
 import { usePersonsActions, usePersonsState } from './persons-provider'
 
 /** CSV 模板与导出共用的列头。 */
@@ -49,14 +42,6 @@ function downloadImportTemplate() {
   )
 }
 
-/**
- * 导出失败行。
- *
- * 走 `@/lib/csv` 而不是本地一份 `escapeCsvCell`：那里的 `escapeCsvField` 覆盖
- * 了 `\t\r` 前缀（Excel 同样会把它当公式起始）、数值类型豁免加引号，并且
- * `triggerDownload` 会在 10s 后才 revoke —— 立即 revoke 会让 Safari/Firefox
- * 在下载真正启动前丢掉大 Blob。
- */
 function downloadFailedRows(rows: PersonImportRow[], filename: string) {
   const csv = toCsv(
     MANIFEST_HEADERS,
@@ -104,8 +89,6 @@ export function PersonsImportDialog() {
     try {
       await previewMutation.mutateAsync(selected)
     } catch (err: unknown) {
-      // 服务端消息已经过本地化（拦截器读回了 blob 错误信封），
-      // 直接展示比 `String(err)` 的英文兜底可用得多。
       toast.error(errorMessageOf(err))
     }
   }
@@ -116,8 +99,6 @@ export function PersonsImportDialog() {
       await commitMutation.mutateAsync(file)
       toast.success(t('import.completed'))
     } catch (err: unknown) {
-      // 服务端消息已经过本地化（拦截器读回了 blob 错误信封），
-      // 直接展示比 `String(err)` 的英文兜底可用得多。
       toast.error(errorMessageOf(err))
     }
   }
@@ -225,13 +206,13 @@ export function PersonsImportDialog() {
                     </div>
                   </div>
                 </div>
-                <ImportRowsTable rows={preview.items} t={t} />
+                <PersonsImportPreviewTable rows={preview.items} t={t} />
               </>
             )}
 
             {result && (
               <>
-                <Alert>
+                <Alert className={cn('border', STATUS_LEVEL_CLASS.active)}>
                   <CheckCircle2 />
                   <AlertTitle>{t('import.completed')}</AlertTitle>
                   <AlertDescription>
@@ -241,7 +222,7 @@ export function PersonsImportDialog() {
                     })}
                   </AlertDescription>
                 </Alert>
-                <ImportRowsTable rows={result.items} t={t} isResult />
+                <PersonsImportPreviewTable rows={result.items} t={t} isResult />
               </>
             )}
 
@@ -292,62 +273,5 @@ export function PersonsImportDialog() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function ImportRowsTable({
-  rows,
-  t,
-  isResult = false,
-}: {
-  rows: PersonImportRow[]
-  t: TFunction
-  isResult?: boolean
-}) {
-  return (
-    <ScrollArea className='h-64 rounded-md border border-border'>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t('import.line')}</TableHead>
-            <TableHead>{t('fields.name')}</TableHead>
-            <TableHead>{t('fields.personId')}</TableHead>
-            <TableHead>{t('import.status')}</TableHead>
-            <TableHead>{t('import.reason')}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => {
-            const hasIssues = row.issues.length > 0
-            const statusText = hasIssues
-              ? t('import.invalid')
-              : isResult && row.imported
-                ? t('import.imported')
-                : t('import.ready')
-
-            return (
-              <TableRow key={row.line}>
-                <TableCell>{row.line}</TableCell>
-                <TableCell>{row.name || '-'}</TableCell>
-                <TableCell>{row.personId || '-'}</TableCell>
-                <TableCell>{statusText}</TableCell>
-                <TableCell className='whitespace-normal text-destructive'>
-                  {row.issues
-                    // 后端新增错误码时 `import.errors.*` 可能还没跟上：
-                    // 必须回落到稳定机器码，而不是把这串原始 i18n key
-                    // 直接扇给用户。
-                    .map((issue) =>
-                      t(`import.errors.${issue.code}`, {
-                        defaultValue: issue.code,
-                      })
-                    )
-                    .join('、') || '-'}
-                </TableCell>
-              </TableRow>
-            )
-          })}
-        </TableBody>
-      </Table>
-    </ScrollArea>
   )
 }

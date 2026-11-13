@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useCallback, useRef, useState } from 'react'
 import {
   Copy,
   Edit2,
@@ -26,11 +25,10 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useFaceBatchUpload } from '../hooks/use-face-batch-upload'
 import {
-  PERSONS_QUERY_KEY,
-  personFacesQueryKey,
-  useAddFace,
   useDeleteFace,
+  usePerson,
   usePersonFaces,
   useSetPrimaryFace,
 } from '../hooks/use-persons'
@@ -38,7 +36,6 @@ import {
   FACE_IMAGE_ACCEPT,
   initialOf,
   primaryFaceIdOf,
-  validateFaceImageFile,
 } from '../persons-helpers'
 import { FaceCard } from './persons-face-card'
 import { usePersonsContext } from './persons-provider'
@@ -49,18 +46,15 @@ export function PersonsFacesDialog() {
     usePersonsContext()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [settingPrimaryId, setSettingPrimaryId] = useState<string | null>(null)
-
-  const [isDragOver, setIsDragOver] = useState(false)
-  const [isUploadingBatch, setIsUploadingBatch] = useState(false)
-  const [batchProgress, setBatchProgress] = useState<{
-    current: number
-    total: number
-  } | null>(null)
-
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const isOpen = open === 'faces' && Boolean(currentRow)
   const personId = currentRow?.id
+
+  // 订阅详情 query：删除主脸、设主脸或修改姓名后，后端可能自动顺延主图或变更
+  // 展示字段，仅靠列表打开时的 `currentRow` 快照会导致显示过期甚至 404。
+  const { data: personDetail } = usePerson(isOpen ? personId : undefined)
+  const activePerson = personDetail ?? currentRow
 
   const {
     data: facePage,
@@ -71,127 +65,51 @@ export function PersonsFacesDialog() {
   const faces = facePage?.items ?? []
   const faceTotal = facePage?.total ?? 0
 
-  const queryClient = useQueryClient()
-  const addFaceBatchMutation = useAddFace({
-    suppressGlobalToast: true,
-    suppressInvalidate: true,
-  })
-  // 单张删除/设主脸自带 toast 与错误横幅，交给全局 MutationCache 会重复弹窗。
   const deleteFaceMutation = useDeleteFace({ suppressGlobalToast: true })
   const setPrimaryMutation = useSetPrimaryFace({ suppressGlobalToast: true })
 
-  // 复制工号到剪贴板。
-  //
-  // 不能直接 `navigator.clipboard.writeText`：边缘设备以 `http://192.168.x.x:8000`
-  // 暴露服务时它不是安全上下文，`navigator.clipboard` 是 `undefined`，裸调会在
-  // 同步求值阶段抛 TypeError；`copyToClipboard` 带 execCommand 降级。
+  const handleFirstFaceEnrolled = useCallback(
+    (faceId: string) => {
+      setCurrentRow((prev) =>
+        prev ? { ...prev, primaryFaceId: faceId } : prev
+      )
+    },
+    [setCurrentRow]
+  )
+
+  const {
+    isDragOver,
+    setIsDragOver,
+    isUploadingBatch,
+    batchProgress,
+    uploadFiles,
+  } = useFaceBatchUpload({
+    personId,
+    hasExistingFaces: faces.length > 0,
+    onFirstFaceEnrolled: handleFirstFaceEnrolled,
+  })
+
   const handleCopyPersonId = async () => {
-    const value = currentRow?.personId
+    const value = activePerson?.personId
     if (!value) return
     const ok = await copyToClipboard(value)
-    if (ok) {
-      toast.success(t('sheet.idCopied'))
-    } else {
-      toast.error(t('sheet.idCopyFailed'))
-    }
+    toast[ok ? 'success' : 'error'](
+      ok ? t('sheet.idCopied') : t('sheet.idCopyFailed')
+    )
   }
-
-  // 批量文件上传处理（整批完成统一刷新 Query，避免 Invalidation 洪水）
-  //
-  // 依赖里**不能**出现 `addFaceBatchMutation` / `faces.length` / `currentRow`：
-  // mutation 结果对象每次渲染都新建，`faces`/`currentRow` 也会随上传进度
-  // 变化，把它们放进依赖会让 `useCallback` 完全失效（批量上传时 `batchProgress`
-  // 每次 setState 都重建一次）。可变信息一律走 ref，稳定引用才进依赖。
-  const uploadRef = useRef({
-    mutate: addFaceBatchMutation.mutateAsync,
-    hasExistingFaces: faces.length > 0,
-    currentRow,
-  })
-  useEffect(() => {
-    uploadRef.current = {
-      mutate: addFaceBatchMutation.mutateAsync,
-      hasExistingFaces: faces.length > 0,
-      currentRow,
-    }
-  }, [addFaceBatchMutation.mutateAsync, faces.length, currentRow])
-
-  const handleFilesUpload = useCallback(
-    async (files: FileList | File[]) => {
-      if (!personId || files.length === 0) return
-
-      const validFiles: File[] = []
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i]
-        const problem = validateFaceImageFile(file)
-        if (problem) {
-          toast.error(
-            `${file.name}: ${
-              problem === 'invalidType'
-                ? t('validation.invalidFileType')
-                : t('validation.fileTooLarge')
-            }`
-          )
-          continue
-        }
-        validFiles.push(file)
-      }
-
-      if (validFiles.length === 0) return
-
-      setIsUploadingBatch(true)
-      setBatchProgress({ current: 0, total: validFiles.length })
-
-      const { mutate, hasExistingFaces, currentRow: row } = uploadRef.current
-      let successCount = 0
-      for (let i = 0; i < validFiles.length; i++) {
-        const file = validFiles[i]
-        setBatchProgress({ current: i + 1, total: validFiles.length })
-        try {
-          const enrolled = await mutate({ personId, data: file })
-          // 首张入库时把它设为主人脸，避免抽屉顶部继续显示占位头像。
-          if (!hasExistingFaces && i === 0 && row) {
-            setCurrentRow({ ...row, primaryFaceId: enrolled.id })
-          }
-          successCount++
-        } catch (err: unknown) {
-          // 每张失败单独报出文件名与原因；错误文案走统一本地化。
-          toast.error(`${file.name}: ${errorMessageOf(err)}`)
-        }
-      }
-
-      setIsUploadingBatch(false)
-      setBatchProgress(null)
-
-      if (successCount > 0) {
-        void queryClient.invalidateQueries({
-          queryKey: personFacesQueryKey(personId),
-        })
-        void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
-        toast.success(
-          successCount === validFiles.length
-            ? t('notifications.addFaceSuccess')
-            : t('notifications.addFacePartial', {
-                success: successCount,
-                failed: validFiles.length - successCount,
-              })
-        )
-      }
-    },
-    [personId, t, setCurrentRow, queryClient]
-  )
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      void handleFilesUpload(e.target.files)
+      void uploadFiles(e.target.files)
     }
     e.target.value = ''
   }
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = (e: React.DragEvent<HTMLButtonElement>) => {
     e.preventDefault()
     setIsDragOver(false)
     if (e.dataTransfer.files) {
-      void handleFilesUpload(e.dataTransfer.files)
+      void uploadFiles(e.dataTransfer.files)
     }
   }
 
@@ -200,9 +118,9 @@ export function PersonsFacesDialog() {
     setSettingPrimaryId(faceId)
     try {
       await setPrimaryMutation.mutateAsync({ personId, faceId })
-      if (currentRow) {
-        setCurrentRow({ ...currentRow, primaryFaceId: faceId })
-      }
+      setCurrentRow((prev) =>
+        prev ? { ...prev, primaryFaceId: faceId } : prev
+      )
       toast.success(t('notifications.setPrimarySuccess'))
     } catch (err: unknown) {
       toast.error(errorMessageOf(err))
@@ -216,6 +134,14 @@ export function PersonsFacesDialog() {
     setDeletingId(faceId)
     try {
       await deleteFaceMutation.mutateAsync({ personId, faceId })
+      // 若删掉的是当前主人脸，在详情 refetch 完成前先同步回落到剩余第一张或清空，
+      // 防止抽屉顶部头像继续用已删除 ID 发请求产生 404。
+      if (activePerson?.primaryFaceId === faceId) {
+        const nextFaceId = faces.find((f) => f.id !== faceId)?.id ?? null
+        setCurrentRow((prev) =>
+          prev ? { ...prev, primaryFaceId: nextFaceId } : prev
+        )
+      }
       toast.success(t('notifications.deleteFaceSuccess'))
     } catch (err: unknown) {
       toast.error(errorMessageOf(err))
@@ -236,12 +162,19 @@ export function PersonsFacesDialog() {
     setOpen(null)
   }
 
-  // 头像与首字母
-  const primaryFaceId = currentRow
-    ? primaryFaceIdOf({ ...currentRow, faces })
-    : undefined
-  const avatarUrl = getGalleryImageUrl(personId, primaryFaceId)
-  const fallbackChar = initialOf(currentRow?.name)
+  // 主人脸 ID：faces 加载完后校验 `primaryFaceId` 是否仍在当前集合内，避免
+  // 快照残留已删 ID；加载中回落人员快照字段。
+  const effectivePrimaryFaceId = isLoadingFaces
+    ? activePerson
+      ? primaryFaceIdOf(activePerson)
+      : undefined
+    : activePerson?.primaryFaceId &&
+        faces.some((f) => f.id === activePerson.primaryFaceId)
+      ? activePerson.primaryFaceId
+      : faces[0]?.id
+
+  const avatarUrl = getGalleryImageUrl(personId, effectivePrimaryFaceId)
+  const fallbackChar = initialOf(activePerson?.name)
 
   return (
     <Sheet open={isOpen} onOpenChange={(v) => !v && handleClose()}>
@@ -250,15 +183,13 @@ export function PersonsFacesDialog() {
         className='flex h-full w-full flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl'
       >
         <SheetHeader className='border-b border-border px-6 py-4'>
-          <div className='flex items-center justify-between'>
-            <div className='space-y-1 pe-6'>
-              <SheetTitle className='text-lg font-semibold tracking-tight'>
-                {t('dialogs.facesTitle', { name: currentRow?.name || '' })}
-              </SheetTitle>
-              <SheetDescription className='text-xs text-muted-foreground'>
-                {t('dialogs.facesDesc')}
-              </SheetDescription>
-            </div>
+          <div className='space-y-1 pe-6'>
+            <SheetTitle className='text-lg font-semibold tracking-tight'>
+              {t('dialogs.facesTitle', { name: activePerson?.name || '' })}
+            </SheetTitle>
+            <SheetDescription className='text-xs text-muted-foreground'>
+              {t('dialogs.facesDesc')}
+            </SheetDescription>
           </div>
         </SheetHeader>
 
@@ -269,7 +200,7 @@ export function PersonsFacesDialog() {
               {avatarUrl && (
                 <AvatarImage
                   src={avatarUrl}
-                  alt={currentRow?.name}
+                  alt={activePerson?.name}
                   className='object-cover'
                 />
               )}
@@ -280,14 +211,14 @@ export function PersonsFacesDialog() {
             <div className='space-y-1'>
               <div className='flex items-center gap-2'>
                 <span className='text-base font-semibold text-foreground'>
-                  {currentRow?.name}
+                  {activePerson?.name}
                 </span>
-                {currentRow?.personId ? (
+                {activePerson?.personId ? (
                   <Badge
                     variant='secondary'
                     className='gap-1 font-mono text-[11px] text-muted-foreground'
                   >
-                    <span>{currentRow.personId}</span>
+                    <span>{activePerson.personId}</span>
                     <button
                       type='button'
                       onClick={() => void handleCopyPersonId()}
@@ -303,31 +234,32 @@ export function PersonsFacesDialog() {
                     variant='outline'
                     className='text-[10px] text-muted-foreground'
                   >
-                    {t('status.unregistered')}
+                    {t('sheet.noPersonId')}
                   </Badge>
                 )}
               </div>
               <p className='text-xs text-muted-foreground'>
                 {t('fields.createdAt')}:{' '}
-                {currentRow?.createdAt
-                  ? formatLocalDateTime(currentRow.createdAt)
+                {activePerson?.createdAt
+                  ? formatLocalDateTime(activePerson.createdAt)
                   : '-'}
               </p>
             </div>
           </div>
 
-          <div className='flex items-center gap-2'>
-            <Button
-              type='button'
-              size='sm'
-              variant='outline'
-              onClick={() => setOpen('edit')}
-              className='h-8 gap-1 text-xs'
-            >
-              <Edit2 className='h-3.5 w-3.5' />
-              <span>{t('actions.edit')}</span>
-            </Button>
-          </div>
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            onClick={() => {
+              if (personDetail) setCurrentRow(personDetail)
+              setOpen('edit')
+            }}
+            className='h-8 gap-1 text-xs'
+          >
+            <Edit2 className='h-3.5 w-3.5' />
+            <span>{t('actions.edit')}</span>
+          </Button>
         </div>
 
         {/* 人脸底库主操作区与画廊 */}
@@ -379,8 +311,8 @@ export function PersonsFacesDialog() {
             </div>
           )}
 
-          {/* 常驻拖拽上传区域 */}
-          <div
+          <button
+            type='button'
             onClick={() => fileInputRef.current?.click()}
             onDragOver={(e) => {
               e.preventDefault()
@@ -389,7 +321,7 @@ export function PersonsFacesDialog() {
             onDragLeave={() => setIsDragOver(false)}
             onDrop={handleDrop}
             className={cn(
-              'group flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-5 text-center transition-all select-none',
+              'group flex w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-5 text-center transition-all select-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden',
               isDragOver
                 ? 'scale-99 border-primary bg-primary/10'
                 : 'border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/30'
@@ -404,10 +336,8 @@ export function PersonsFacesDialog() {
             <span className='mt-1 text-[11px] leading-tight text-muted-foreground/80'>
               {t('fields.dragDropDesc')}
             </span>
-          </div>
+          </button>
 
-          {/* 加载失败：不能落进"暂无人脸底库照片"的空态，否则用户会以为
-              数据丢了并开始重复上传。 */}
           {isFacesError && (
             <div className='flex flex-col items-center justify-center gap-2 rounded-xl border border-border bg-card py-8 text-center text-destructive'>
               <ImageIcon className='h-6 w-6 opacity-40' />
@@ -425,7 +355,6 @@ export function PersonsFacesDialog() {
             </div>
           )}
 
-          {/* 画廊网格 */}
           <div className='grid grid-cols-2 gap-3.5 pb-6 sm:grid-cols-3'>
             {isLoadingFaces && (
               <>
@@ -437,25 +366,19 @@ export function PersonsFacesDialog() {
 
             {!isLoadingFaces &&
               !isFacesError &&
-              faces.map((face) => {
-                const isPrimary = currentRow?.primaryFaceId
-                  ? currentRow.primaryFaceId === face.id
-                  : faces[0]?.id === face.id
-
-                return (
-                  <FaceCard
-                    key={face.id}
-                    face={face}
-                    personId={personId || ''}
-                    isPrimary={isPrimary}
-                    isDeleting={deletingId === face.id}
-                    isSettingPrimary={settingPrimaryId === face.id}
-                    onDelete={(id) => void handleDeleteFace(id)}
-                    onSetPrimary={(id) => void handleSetPrimary(id)}
-                    onPreview={handlePreview}
-                  />
-                )
-              })}
+              faces.map((face) => (
+                <FaceCard
+                  key={face.id}
+                  face={face}
+                  personId={personId || ''}
+                  isPrimary={face.id === effectivePrimaryFaceId}
+                  isDeleting={deletingId === face.id}
+                  isSettingPrimary={settingPrimaryId === face.id}
+                  onDelete={(id) => void handleDeleteFace(id)}
+                  onSetPrimary={(id) => void handleSetPrimary(id)}
+                  onPreview={handlePreview}
+                />
+              ))}
           </div>
 
           {!isLoadingFaces && !isFacesError && faces.length === 0 && (

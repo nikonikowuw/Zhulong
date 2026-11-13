@@ -1,22 +1,9 @@
 import { useRef } from 'react'
-import {
-  AlertCircle,
-  CheckCircle2,
-  Download,
-  FileArchive,
-  Loader2,
-  RotateCcw,
-  Upload,
-  XCircle,
-} from 'lucide-react'
+import { Download, FileArchive, Loader2, RotateCcw, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { toCsv, triggerDownload, triggerUrlDownload } from '@/lib/csv'
 import { errorMessageOf } from '@/lib/handle-server-error'
-import { STATUS_LEVEL_CLASS, statusTextClass } from '@/lib/status-palette'
-import { cn } from '@/lib/utils'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -28,6 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import { personsApi } from '../api/persons-api'
 import { useCreateFaceImportJob, useFaceImportJob } from '../hooks/use-persons'
+import { FaceJobProgressPanel } from './face-job-progress-panel'
 import { usePersonsContext, usePersonsState } from './persons-provider'
 
 /** 状态 → 本地化文案 key。查表而不是链式三元：新增状态时不会漏一个分支。 */
@@ -88,7 +76,6 @@ export function PersonsFaceImportDialog() {
 
   const handleClose = () => {
     if (isBusy) {
-      // 轮询与完成后的失效都在 Provider 上，关闭弹窗不会中断任务跟踪。
       toast.info(t('faceImport.runningInBackground'))
     }
     setOpen(null)
@@ -122,12 +109,8 @@ export function PersonsFaceImportDialog() {
     )
   }
 
-  const total = job?.total ?? 0
-  const processed = job?.processed ?? 0
   const succeeded = job?.succeeded ?? 0
   const failed = job?.failed ?? 0
-  const percent =
-    total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
 
   return (
     <Dialog
@@ -201,135 +184,32 @@ export function PersonsFaceImportDialog() {
               </ul>
             </div>
           </div>
-        ) : isJobQueryError ? (
-          <div className='flex flex-col items-center justify-center gap-2 py-8 text-center text-destructive'>
-            <AlertCircle className='size-6' />
-            <span className='font-medium'>{t('table.loadFailed')}</span>
-            <Button
-              type='button'
-              size='sm'
-              variant='outline'
-              onClick={() => void jobQuery.refetch()}
-              className='mt-1'
-            >
-              {t('actions.retry')}
-            </Button>
-          </div>
         ) : (
-          <div className='min-w-0 space-y-4 py-2'>
-            <div className='flex min-w-0 flex-wrap items-center justify-between gap-2'>
-              <div className='flex min-w-0 flex-1 items-center gap-2'>
-                {isBusy ? (
-                  <Loader2 className='size-5 shrink-0 animate-spin text-primary' />
-                ) : job?.status === 'COMPLETED' ? (
-                  <CheckCircle2
-                    className={cn('size-5 shrink-0', statusTextClass('active'))}
-                  />
-                ) : (
-                  <XCircle className='size-5 shrink-0 text-destructive' />
-                )}
-                <span className='truncate font-medium'>
-                  {job ? t(STATUS_LABEL_KEYS[job.status]) : null}
-                </span>
-              </div>
-              <Badge
-                className='shrink-0'
-                variant={job?.status === 'COMPLETED' ? 'default' : 'secondary'}
-              >
-                {job?.status ?? 'PENDING'}
-              </Badge>
-            </div>
-
-            <div className='min-w-0 space-y-1.5'>
-              <div className='flex justify-between text-xs text-muted-foreground'>
-                <span>{t('faceImport.progressLabel')}</span>
-                <span className='tabular-nums'>{percent}%</span>
-              </div>
-              <div
-                role='progressbar'
-                aria-valuenow={percent}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                className='h-2 w-full overflow-hidden rounded-full bg-secondary'
-              >
-                <div
-                  className='h-full bg-primary transition-all duration-300'
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
-              {job?.currentFile && isBusy && (
-                <p
-                  className='min-w-0 truncate text-xs text-muted-foreground'
-                  title={job.currentFile}
-                >
-                  {t('faceImport.currentFile')} {job.currentFile}
-                </p>
-              )}
-            </div>
-
-            <div className='grid min-w-0 grid-cols-2 gap-2 text-center sm:grid-cols-4'>
-              <div className='min-w-0 rounded-md border border-border bg-muted/20 p-2'>
-                <div className='truncate text-xs text-muted-foreground'>
-                  {t('faceImport.total')}
-                </div>
-                <div className='text-lg font-semibold tabular-nums'>
-                  {total}
-                </div>
-              </div>
-              <div className='min-w-0 rounded-md border border-border bg-muted/20 p-2'>
-                <div className='truncate text-xs text-muted-foreground'>
-                  {t('faceImport.processed')}
-                </div>
-                <div className='text-lg font-semibold tabular-nums'>
-                  {processed}
-                </div>
-              </div>
-              <div
-                className={cn(
-                  'min-w-0 rounded-md border p-2',
-                  STATUS_LEVEL_CLASS.active
-                )}
-              >
-                <div className='truncate text-xs'>
-                  {t('faceImport.succeeded')}
-                </div>
-                <div className='text-lg font-semibold tabular-nums'>
-                  {succeeded}
-                </div>
-              </div>
-              <div
-                className={cn(
-                  'min-w-0 rounded-md border p-2',
-                  STATUS_LEVEL_CLASS.destructive
-                )}
-              >
-                <div className='truncate text-xs'>{t('faceImport.failed')}</div>
-                <div className='text-lg font-semibold tabular-nums'>
-                  {failed}
-                </div>
-              </div>
-            </div>
-
-            {job?.status === 'FAILED' && (
-              <Alert variant='destructive'>
-                <AlertCircle className='size-4' />
-                <AlertTitle>{t('faceImport.errorTitle')}</AlertTitle>
-                <AlertDescription>
-                  {job.errorMessage || t('faceImport.unknownError')}
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {job?.status === 'COMPLETED' && (
-              <Alert className={cn('border', STATUS_LEVEL_CLASS.active)}>
-                <CheckCircle2 className='size-4' />
-                <AlertTitle>{t('faceImport.completeTitle')}</AlertTitle>
-                <AlertDescription>
-                  {t('faceImport.completeSummary', { succeeded, failed })}
-                </AlertDescription>
-              </Alert>
-            )}
-          </div>
+          <FaceJobProgressPanel
+            job={job}
+            isBusy={isBusy}
+            isQueryError={isJobQueryError}
+            onRetryQuery={() => void jobQuery.refetch()}
+            statusLabel={job ? t(STATUS_LABEL_KEYS[job.status]) : ''}
+            statusBadgeLabel={job?.status ?? 'PENDING'}
+            progressLabel={t('faceImport.progressLabel')}
+            currentFileLabel={t('faceImport.currentFile')}
+            statLabels={{
+              total: t('faceImport.total'),
+              processed: t('faceImport.processed'),
+              succeeded: t('faceImport.succeeded'),
+              failed: t('faceImport.failed'),
+            }}
+            alerts={{
+              errorTitle: t('faceImport.errorTitle'),
+              unknownError: t('faceImport.unknownError'),
+              completeTitle: t('faceImport.completeTitle'),
+              completeSummary: t('faceImport.completeSummary', {
+                succeeded,
+                failed,
+              }),
+            }}
+          />
         )}
 
         <DialogFooter className='gap-2 sm:justify-between'>

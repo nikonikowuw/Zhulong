@@ -41,11 +41,18 @@ export function PersonsActionDialog() {
   const { open, currentRow } = usePersonsState()
   const { setOpen } = usePersonsActions()
 
-  const isEdit = open === 'edit' && Boolean(currentRow)
+  const isOpen = open === 'create' || open === 'edit'
+  const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create')
+  if (isOpen) {
+    const nextMode = open === 'edit' && Boolean(currentRow) ? 'edit' : 'create'
+    if (nextMode !== dialogMode) {
+      setDialogMode(nextMode)
+    }
+  }
+  const isEdit = dialogMode === 'edit' && Boolean(currentRow)
   const isPersonIdBound = Boolean(
     isEdit && currentRow?.personId && currentRow.personId.trim()
   )
-  const isOpen = open === 'create' || open === 'edit'
 
   const createMutation = useCreatePerson()
   const updateMutation = useUpdatePerson()
@@ -268,7 +275,8 @@ export function PersonsActionDialog() {
                   className='hidden'
                 />
                 {!initialFaceFile ? (
-                  <div
+                  <button
+                    type='button'
                     onClick={() => fileInputRef.current?.click()}
                     onDragOver={(e) => {
                       e.preventDefault()
@@ -282,7 +290,7 @@ export function PersonsActionDialog() {
                       if (f) handleFaceSelect(f)
                     }}
                     className={cn(
-                      'flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed p-4 text-center transition-colors',
+                      'flex w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed p-4 text-center transition-colors focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden',
                       isDragOver
                         ? 'border-primary bg-primary/10'
                         : 'border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/40'
@@ -295,7 +303,7 @@ export function PersonsActionDialog() {
                     <span className='text-[11px] text-muted-foreground/80'>
                       {t('fields.initialFaceTip')}
                     </span>
-                  </div>
+                  </button>
                 ) : (
                   <div className='relative flex items-center gap-3 rounded-lg border bg-muted/30 p-2'>
                     {initialFacePreview && (
@@ -323,7 +331,7 @@ export function PersonsActionDialog() {
                           fileInputRef.current.value = ''
                         }
                       }}
-                      className='hover:text-destructive-foreground h-7 w-7 rounded-full p-0 text-muted-foreground hover:bg-destructive'
+                      className='h-7 w-7 rounded-full p-0 text-muted-foreground hover:bg-destructive hover:text-white'
                       aria-label={t('fields.removeSelected')}
                     >
                       <X className='h-4 w-4' />

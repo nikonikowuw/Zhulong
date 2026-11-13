@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { errorMessageOf } from '@/lib/handle-server-error'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { LanguageSwitch } from '@/components/language-switch'
 import { Header } from '@/components/layout/header'
@@ -41,6 +43,7 @@ function PersonsUrlSync({
 
   // 当 URL 参数携带精确 personId 时，加载人员数据并打开面容档案弹窗
   const hasOpenedRef = useRef<string | null>(null)
+  const hasErroredRef = useRef<string | null>(null)
   useEffect(() => {
     if (
       personId &&
@@ -48,16 +51,38 @@ function PersonsUrlSync({
       hasOpenedRef.current !== personId
     ) {
       hasOpenedRef.current = personId
+      hasErroredRef.current = null
       setCurrentRow(targetPersonQuery.data)
       setOpen('faces')
     }
   }, [personId, targetPersonQuery.data, setCurrentRow, setOpen])
+
+  // 深链接的 personId 不存在或查询失败时提示并移除无效参数，避免页面静默卡死
+  useEffect(() => {
+    if (
+      personId &&
+      targetPersonQuery.isError &&
+      hasErroredRef.current !== personId
+    ) {
+      hasErroredRef.current = personId
+      toast.error(errorMessageOf(targetPersonQuery.error))
+      void navigate({
+        replace: true,
+        search: (prev) => {
+          const next = { ...prev }
+          delete next.personId
+          return next
+        },
+      })
+    }
+  }, [personId, targetPersonQuery.isError, targetPersonQuery.error, navigate])
 
   // 弹窗关闭时清除 URL 中的 personId 参数
   const prevOpenRef = useRef(open)
   useEffect(() => {
     if (prevOpenRef.current && !open && personId) {
       hasOpenedRef.current = null
+      hasErroredRef.current = null
       void navigate({
         search: (prev) => {
           const next = { ...prev }
@@ -78,10 +103,15 @@ function PersonsUrlSync({
 function PersonsReextractResume() {
   const { faceReextractJobId } = usePersonsState()
   const { setFaceReextractJobId } = usePersonsActions()
+  const hasCheckedRef = useRef(false)
   const latestQuery = useLatestFaceReextractJob(!faceReextractJobId)
   const latestJob = latestQuery.data
 
   useEffect(() => {
+    if (hasCheckedRef.current) return
+    if (latestQuery.isFetched === false || latestQuery.isStale) return
+
+    hasCheckedRef.current = true
     if (!faceReextractJobId && latestJob) {
       const isActive =
         latestJob.status === 'PENDING' ||
@@ -91,7 +121,13 @@ function PersonsReextractResume() {
         setFaceReextractJobId(latestJob.jobId)
       }
     }
-  }, [faceReextractJobId, latestJob, setFaceReextractJobId])
+  }, [
+    faceReextractJobId,
+    latestJob,
+    latestQuery.isFetched,
+    latestQuery.isStale,
+    setFaceReextractJobId,
+  ])
 
   return null
 }

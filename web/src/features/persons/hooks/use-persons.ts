@@ -16,8 +16,31 @@ import {
   type PersonListResponse,
   type UpdatePersonDto,
 } from '../data/schema'
+import { mapWithConcurrency } from '../persons-helpers'
 
 export const PERSONS_QUERY_KEY = ['persons'] as const
+
+/**
+ * 异步后台任务（ZIP 批量导入 / 特征重提）的独立 query key 前缀。
+ *
+ * 与 `PERSONS_QUERY_KEY` 隔离：刷新人员列表/详情时不会连带把已完成任务或
+ * `latest` 状态轮询也一并 invalidate 引发冗余请求。
+ */
+const PERSON_JOBS_QUERY_KEY = ['persons-jobs'] as const
+
+function faceImportJobQueryKey(jobId: string | null) {
+  return [...PERSON_JOBS_QUERY_KEY, 'face-import', jobId] as const
+}
+
+function faceReextractJobQueryKey(jobId: string | null) {
+  return [...PERSON_JOBS_QUERY_KEY, 'face-reextract', jobId] as const
+}
+
+export const LATEST_FACE_REEXTRACT_JOB_QUERY_KEY = [
+  ...PERSON_JOBS_QUERY_KEY,
+  'face-reextract',
+  'latest',
+] as const
 
 /** 单个人脸底库的 query key。失效时按 personId 精确命中。 */
 export function personFacesQueryKey(personId: string) {
@@ -266,18 +289,20 @@ export function useAllPersons(): UseQueryResult<PersonListResponse, Error> {
         { length: pageCount - 1 },
         (_, i) => i + 2
       )
-      const restResults = await Promise.all(
-        remainingPages.map((page) =>
-          personsApi.getPersons({
-            page,
-            pageSize: PERSONS_MAX_PAGE_SIZE,
-          })
-        )
+      const restResults = await mapWithConcurrency(remainingPages, 4, (page) =>
+        personsApi.getPersons({
+          page,
+          pageSize: PERSONS_MAX_PAGE_SIZE,
+        })
       )
 
       const items = [...first.items]
       for (const res of restResults) {
-        items.push(...res.items)
+        if (res.status === 'fulfilled') {
+          items.push(...res.value.items)
+        } else {
+          throw res.reason
+        }
       }
 
       return { ...first, items, total: first.total }
@@ -296,6 +321,7 @@ export function useCreateFaceImportJob() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
     },
+    meta: { suppressGlobalToast: true },
   })
 }
 
@@ -308,6 +334,7 @@ export function useExportPersonsManifest() {
   return useMutation({
     mutationFn: (params: { search?: string; faceStatus?: string }) =>
       personsApi.exportManifest(params),
+    meta: { suppressGlobalToast: true },
   })
 }
 
@@ -326,7 +353,7 @@ const FACE_IMPORT_TERMINAL_STATUSES = new Set<FaceImportJobStatus>([
  */
 export function useFaceImportJob(jobId: string | null, enabled: boolean) {
   return useQuery({
-    queryKey: [...PERSONS_QUERY_KEY, 'face-import-job', jobId],
+    queryKey: faceImportJobQueryKey(jobId),
     queryFn: () => (jobId ? personsApi.getFaceImportJob(jobId) : null),
     enabled: Boolean(jobId && enabled),
     refetchInterval: (query) => {
@@ -354,7 +381,7 @@ export function useCreateFaceReextractJob() {
  */
 export function useLatestFaceReextractJob(enabled = true) {
   return useQuery({
-    queryKey: [...PERSONS_QUERY_KEY, 'face-reextract-job', 'latest'],
+    queryKey: LATEST_FACE_REEXTRACT_JOB_QUERY_KEY,
     queryFn: () => {
       if (typeof personsApi?.getLatestFaceReextractJob !== 'function') {
         return null
@@ -371,7 +398,7 @@ export function useLatestFaceReextractJob(enabled = true) {
  */
 export function useFaceReextractJob(jobId: string | null, enabled: boolean) {
   return useQuery({
-    queryKey: [...PERSONS_QUERY_KEY, 'face-reextract-job', jobId],
+    queryKey: faceReextractJobQueryKey(jobId),
     queryFn: () => {
       if (!jobId || typeof personsApi?.getFaceReextractJob !== 'function') {
         return null
@@ -397,10 +424,10 @@ export function useCancelFaceReextractJob() {
     mutationFn: (jobId: string) => personsApi.cancelFaceReextractJob(jobId),
     onSuccess: (_data, jobId) => {
       void queryClient.invalidateQueries({
-        queryKey: [...PERSONS_QUERY_KEY, 'face-reextract-job', jobId],
+        queryKey: faceReextractJobQueryKey(jobId),
       })
       void queryClient.invalidateQueries({
-        queryKey: [...PERSONS_QUERY_KEY, 'face-reextract-job', 'latest'],
+        queryKey: LATEST_FACE_REEXTRACT_JOB_QUERY_KEY,
       })
     },
     meta: { suppressGlobalToast: true },

@@ -190,7 +190,7 @@ export function PersonsImagePreviewDialog() {
                   variant='ghost'
                   size='icon'
                   onClick={handleClose}
-                  className='hover:text-destructive-foreground h-8 w-8 text-white hover:bg-destructive'
+                  className='h-8 w-8 text-white hover:bg-destructive hover:text-white'
                   title={t('imagePreview.close')}
                 >
                   <X className='h-4 w-4' />

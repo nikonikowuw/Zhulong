@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { type Person } from '../data/schema'
 import { PERSONS_QUERY_KEY, useDeletePerson } from '../hooks/use-persons'
+import { mapWithConcurrency } from '../persons-helpers'
 
 type PersonsMultiDeleteDialogProps = {
   open: boolean
@@ -18,41 +19,6 @@ type PersonsMultiDeleteDialogProps = {
 
 /** 并发上限：100 行选中一次打出 100 个 DELETE 会把 SQLite 写锁和 HTTP 池一起打满。 */
 const DELETE_CONCURRENCY = 6
-
-/**
- * 有界并发执行。返回结果按输入顺序对齐，`Promise.allSettled` 的语义不变。
- */
-async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  worker: (item: T) => Promise<R>
-): Promise<PromiseSettledResult<R>[]> {
-  const results: PromiseSettledResult<R>[] = Array.from(
-    { length: items.length },
-    () => ({ status: 'rejected', reason: new Error('not started') })
-  )
-  let cursor = 0
-
-  const run = async () => {
-    for (;;) {
-      const index = cursor++
-      if (index >= items.length) return
-      try {
-        results[index] = {
-          status: 'fulfilled',
-          value: await worker(items[index]),
-        }
-      } catch (err) {
-        results[index] = { status: 'rejected', reason: err }
-      }
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, () => run())
-  )
-  return results
-}
 
 export function PersonsMultiDeleteDialog({
   open,

@@ -124,6 +124,7 @@
   "sheet": {
     "faceGallery": "Face Gallery",
     "copyId": "Copy ID",
+    "noPersonId": "No Personnel ID",
     "idCopied": "Personnel ID copied to clipboard",
     "idCopyFailed": "Copy failed. Select the ID and copy manually."
   },

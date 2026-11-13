@@ -124,6 +124,7 @@
   "sheet": {
     "faceGallery": "底庫畫廊",
     "copyId": "複製工號",
+    "noPersonId": "未綁定工號",
     "idCopied": "工號已複製到剪貼簿",
     "idCopyFailed": "複製失敗，請手動選取工號複製"
   },

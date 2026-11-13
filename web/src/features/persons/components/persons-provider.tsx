@@ -11,6 +11,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import useDialogState from '@/hooks/use-dialog-state'
 import { type Person } from '../data/schema'
 import {
+  LATEST_FACE_REEXTRACT_JOB_QUERY_KEY,
   PERSONS_QUERY_KEY,
   useFaceImportJob,
   useFaceReextractJob,
@@ -104,15 +105,14 @@ export function PersonsProvider({ children }: { children: React.ReactNode }) {
       reextractStatus === 'EXTRACTING' ||
       reextractStatus === 'PROCESSING')
   )
-  const isFaceReextractRunningRef = useRef(isFaceReextractRunning)
+  const faceReextractJobIdRef = useRef(faceReextractJobId)
   useEffect(() => {
-    isFaceReextractRunningRef.current = isFaceReextractRunning
-  }, [isFaceReextractRunning])
+    faceReextractJobIdRef.current = faceReextractJobId
+  }, [faceReextractJobId])
 
   const openFaceReextract = useCallback(
     (target: ReextractTarget | null) => {
-      if (!isFaceReextractRunningRef.current) {
-        setFaceReextractJobId(null)
+      if (!faceReextractJobIdRef.current) {
         setReextractTarget(target)
       }
       setOpen('reextract-faces')
@@ -123,6 +123,15 @@ export function PersonsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (reextractStatus === 'COMPLETED' || reextractStatus === 'CANCELLED') {
       void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+    }
+    if (
+      reextractStatus === 'COMPLETED' ||
+      reextractStatus === 'CANCELLED' ||
+      reextractStatus === 'FAILED'
+    ) {
+      void queryClient.invalidateQueries({
+        queryKey: LATEST_FACE_REEXTRACT_JOB_QUERY_KEY,
+      })
     }
   }, [reextractStatus, queryClient])
 

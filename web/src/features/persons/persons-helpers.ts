@@ -40,3 +40,41 @@ export function primaryFaceIdOf(person: Person): string | undefined {
 export function initialOf(name: string | null | undefined): string {
   return name ? name.trim().charAt(0).toUpperCase() || '?' : '?'
 }
+
+/**
+ * 有界并发执行。返回结果按输入顺序对齐，`Promise.allSettled` 的语义不变。
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  if (items.length === 0) return []
+  const results: PromiseSettledResult<R>[] = Array.from(
+    { length: items.length },
+    () => ({ status: 'rejected', reason: new Error('not started') })
+  )
+  let cursor = 0
+
+  const run = async () => {
+    for (;;) {
+      const index = cursor++
+      if (index >= items.length) return
+      try {
+        results[index] = {
+          status: 'fulfilled',
+          value: await worker(items[index]),
+        }
+      } catch (err) {
+        results[index] = { status: 'rejected', reason: err }
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(1, limit), items.length) }, () =>
+      run()
+    )
+  )
+  return results
+}

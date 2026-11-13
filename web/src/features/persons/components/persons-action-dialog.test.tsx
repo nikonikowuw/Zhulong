@@ -5,24 +5,30 @@ import { Button } from '@/components/ui/button'
 import { PersonsActionDialog } from './persons-action-dialog'
 import { PersonsProvider, usePersonsContext } from './persons-provider'
 
-vi.mock('../hooks/use-persons', () => ({
-  // Provider 现在会订阅批量导入与特征重提任务（关闭弹窗后仍要跟踪），这里一并桩掉。
-  PERSONS_QUERY_KEY: ['persons'],
-  useFaceImportJob: () => ({ data: null, isError: false, refetch: vi.fn() }),
-  useFaceReextractJob: () => ({ data: null, isError: false, refetch: vi.fn() }),
-  useCreatePerson: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
-  useUpdatePerson: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
-  useAddFace: () => ({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  }),
-}))
+vi.mock('../hooks/use-persons', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../hooks/use-persons')>()
+  return {
+    ...actual,
+    useFaceImportJob: () => ({ data: null, isError: false, refetch: vi.fn() }),
+    useFaceReextractJob: () => ({
+      data: null,
+      isError: false,
+      refetch: vi.fn(),
+    }),
+    useCreatePerson: () => ({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    }),
+    useUpdatePerson: () => ({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    }),
+    useAddFace: () => ({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    }),
+  }
+})
 
 function TestComponent() {
   const { setOpen } = usePersonsContext()
