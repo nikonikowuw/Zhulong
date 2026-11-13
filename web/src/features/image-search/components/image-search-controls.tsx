@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { type KeyboardEvent, memo, useRef } from 'react'
 import {
   Activity,
   Gauge,
@@ -8,6 +8,8 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -26,8 +28,8 @@ interface ImageSearchControlsProps {
   uploadProgress: number | null
 }
 
-const TOP_K_OPTIONS = [10, 20, 50]
-const PRESET_THRESHOLDS = [50, 70, 85]
+const TOP_K_OPTIONS = [10, 20, 50] as const
+const PRESET_THRESHOLDS = [50, 70, 85] as const
 
 export const ImageSearchControls = memo(function ImageSearchControls({
   threshold,
@@ -41,32 +43,50 @@ export const ImageSearchControls = memo(function ImageSearchControls({
   uploadProgress,
 }: ImageSearchControlsProps) {
   const { t } = useTranslation('imageSearch')
+  const topKButtonRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   const thresholdPercent = Math.round(threshold * 100)
 
-  // 动态等级分类与颜色指示
   const getThresholdLevel = (percent: number) => {
     if (percent >= 80) {
       return {
         label: t('controls.levelStrict'),
-        color:
-          'text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+        color: STATUS_LEVEL_CLASS.active,
       }
     }
     if (percent >= 65) {
       return {
         label: t('controls.levelBalanced'),
-        color: 'text-primary border-primary/30 bg-primary/10',
+        color:
+          'border-primary/30 bg-primary/10 text-primary dark:border-primary/40 dark:bg-primary/20',
       }
     }
     return {
       label: t('controls.levelRelaxed'),
-      color:
-        'text-amber-600 dark:text-amber-400 border-amber-500/30 bg-amber-500/10',
+      color: STATUS_LEVEL_CLASS.warning,
     }
   }
 
   const levelInfo = getThresholdLevel(thresholdPercent)
+
+  const handleTopKKeyDown = (
+    e: KeyboardEvent<HTMLButtonElement>,
+    index: number
+  ) => {
+    if (isSearching) return
+    let nextIndex: number | null = null
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      nextIndex = (index + 1) % TOP_K_OPTIONS.length
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      nextIndex = (index - 1 + TOP_K_OPTIONS.length) % TOP_K_OPTIONS.length
+    }
+
+    if (nextIndex !== null) {
+      e.preventDefault()
+      onTopKChange(TOP_K_OPTIONS[nextIndex])
+      topKButtonRefs.current[nextIndex]?.focus()
+    }
+  }
 
   return (
     <Card className='relative flex flex-col gap-4 overflow-hidden border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-xs'>
@@ -82,7 +102,10 @@ export const ImageSearchControls = memo(function ImageSearchControls({
           <div className='flex items-center gap-1.5'>
             <Badge
               variant='outline'
-              className={`px-1.5 py-0 text-[10px] font-medium transition-colors ${levelInfo.color}`}
+              className={cn(
+                'px-1.5 py-0 text-[10px] font-medium transition-colors',
+                levelInfo.color
+              )}
             >
               {levelInfo.label}
             </Badge>
@@ -120,28 +143,31 @@ export const ImageSearchControls = memo(function ImageSearchControls({
                     : 'controls.preset85'
               const isSelected = thresholdPercent === preset
               return (
-                <button
+                <Button
                   key={preset}
                   type='button'
+                  variant={isSelected ? 'default' : 'secondary'}
+                  size='sm'
                   disabled={isSearching}
                   aria-pressed={isSelected}
                   title={t(labelKey, `${preset}%`)}
                   onClick={() => onThresholdChange(preset / 100)}
-                  className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] transition-all ${
+                  className={cn(
+                    'h-5 rounded-md px-1.5 py-0 font-mono text-[10px]',
                     isSelected
-                      ? 'bg-primary font-bold text-primary-foreground shadow-2xs'
-                      : 'bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground'
-                  }`}
+                      ? 'font-bold shadow-2xs'
+                      : 'text-muted-foreground'
+                  )}
                 >
                   {preset}%
-                </button>
+                </Button>
               )
             })}
           </div>
         </div>
       </div>
 
-      {/* Top-K 候选数量选择 */}
+      {/* Top-K 候选数量选择（支持方向键漫游 Roving Tabindex） */}
       <div className='flex items-center justify-between gap-4 border-t border-border/50 pt-3'>
         <div className='flex items-center gap-1.5'>
           <Activity className='h-3.5 w-3.5 text-primary' />
@@ -150,29 +176,40 @@ export const ImageSearchControls = memo(function ImageSearchControls({
           </Label>
         </div>
 
-        {/* 快捷 Segmented Pills */}
         <div
           role='radiogroup'
           aria-label={t('controls.topK')}
           className='flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5'
         >
-          {TOP_K_OPTIONS.map((opt) => (
-            <button
-              key={opt}
-              type='button'
-              role='radio'
-              aria-checked={topK === opt}
-              disabled={isSearching}
-              onClick={() => onTopKChange(opt)}
-              className={`rounded-md px-2.5 py-0.5 font-mono text-xs transition-all ${
-                topK === opt
-                  ? 'bg-background font-semibold text-foreground shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {opt}
-            </button>
-          ))}
+          {TOP_K_OPTIONS.map((opt, index) => {
+            const isSelected = topK === opt
+            return (
+              <Button
+                key={opt}
+                ref={(el) => {
+                  topKButtonRefs.current[index] = el
+                }}
+                type='button'
+                role='radio'
+                variant={isSelected ? 'secondary' : 'ghost'}
+                size='sm'
+                aria-checked={isSelected}
+                tabIndex={isSelected ? 0 : -1}
+                disabled={isSearching}
+                title={t('controls.topKOption', { count: opt })}
+                onClick={() => onTopKChange(opt)}
+                onKeyDown={(e) => handleTopKKeyDown(e, index)}
+                className={cn(
+                  'h-6 rounded-md px-2.5 py-0 font-mono text-xs',
+                  isSelected
+                    ? 'bg-background font-semibold text-foreground shadow-xs hover:bg-background'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {opt}
+              </Button>
+            )
+          })}
         </div>
       </div>
 
@@ -180,11 +217,12 @@ export const ImageSearchControls = memo(function ImageSearchControls({
       <div className='flex items-center gap-2 border-t border-border/50 pt-3'>
         <Button
           type='button'
-          className={`relative h-9.5 flex-1 gap-2 overflow-hidden text-xs font-semibold shadow-xs transition-all duration-200 active:scale-[0.99] ${
-            canSearch && !isSearching
-              ? 'ring-2 shadow-primary/20 ring-primary/25 hover:shadow-md'
-              : ''
-          }`}
+          className={cn(
+            'relative h-9.5 flex-1 gap-2 overflow-hidden text-xs font-semibold shadow-xs transition-all duration-200 active:scale-[0.99]',
+            canSearch &&
+              !isSearching &&
+              'ring-2 shadow-primary/20 ring-primary/25 hover:shadow-md'
+          )}
           disabled={!canSearch || isSearching}
           onClick={onSearch}
         >

@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { imageSearchApi } from '../api/image-search-api'
+import {
+  DEFAULT_IMAGE_SEARCH_THRESHOLD,
+  DEFAULT_IMAGE_SEARCH_TOP_K,
+} from '../data/match-utils'
 import { type ImageSearchResponse } from '../data/schema'
-
-const DEFAULT_IMAGE_SEARCH_THRESHOLD = 0.7
-const DEFAULT_IMAGE_SEARCH_TOP_K = 10
 
 interface SearchVariables {
   file: File
   threshold: number
   topK: number
+}
+
+interface SearchOverrides {
+  threshold?: number
+  topK?: number
 }
 
 export function useImageSearch() {
@@ -35,12 +41,15 @@ export function useImageSearch() {
   const {
     mutate: executeSearch,
     reset: resetMutation,
+    variables: searchedVariables,
     isPending: isSearching,
     isSuccess,
     isError,
     error,
     data: searchData,
   } = useMutation<ImageSearchResponse, Error, SearchVariables>({
+    // 右侧结果面板自带完整的错误态展示与重试入口，抑制全局 MutationCache Toast 防止双重报错
+    meta: { suppressGlobalToast: true },
     mutationFn: async ({
       file,
       threshold: searchThreshold,
@@ -66,7 +75,7 @@ export function useImageSearch() {
     },
   })
 
-  // 交互逻辑归位事件处理函数：变更或清除图片时即时释放旧 ObjectURL，避免图文脱节与级联渲染
+  // 变更或清除图片时即时释放旧 ObjectURL，避免图文脱节与级联渲染
   const setFile = useCallback(
     (file: File | null) => {
       if (previewUrlRef.current) {
@@ -92,14 +101,25 @@ export function useImageSearch() {
     setTopK(DEFAULT_IMAGE_SEARCH_TOP_K)
   }, [setFile])
 
-  const search = useCallback(() => {
-    if (!selectedFile) return
-    executeSearch({
-      file: selectedFile,
-      threshold,
-      topK,
-    })
-  }, [executeSearch, selectedFile, threshold, topK])
+  const search = useCallback(
+    (overrides?: SearchOverrides) => {
+      if (!selectedFile) return
+      const nextThreshold = overrides?.threshold ?? threshold
+      const nextTopK = overrides?.topK ?? topK
+      if (overrides?.threshold !== undefined) {
+        setThreshold(overrides.threshold)
+      }
+      if (overrides?.topK !== undefined) {
+        setTopK(overrides.topK)
+      }
+      executeSearch({
+        file: selectedFile,
+        threshold: nextThreshold,
+        topK: nextTopK,
+      })
+    },
+    [executeSearch, selectedFile, threshold, topK]
+  )
 
   return {
     selectedFile,
@@ -108,6 +128,8 @@ export function useImageSearch() {
     setThreshold,
     topK,
     setTopK,
+    appliedThreshold: searchData ? searchedVariables?.threshold : undefined,
+    appliedTopK: searchedVariables?.topK,
     uploadProgress,
     setFile,
     reset,

@@ -1,24 +1,20 @@
-import { memo } from 'react'
-import { useNavigate } from '@tanstack/react-router'
-import {
-  ArrowRightLeft,
-  Crown,
-  Images,
-  Map,
-  User,
-  UserCheck,
-} from 'lucide-react'
+import { memo, type MouseEvent } from 'react'
+import { ArrowRightLeft, Images, Map, User, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { imageSearchApi } from '../api/image-search-api'
+import { getSimilarityPresentation } from '../data/match-utils'
 import { type ImageSearchMatchInfo } from '../data/schema'
+import { usePersonDeepLinks } from '../hooks/use-person-deep-links'
+import { ImageSearchRankBadge } from './image-search-rank-badge'
 
 interface ImageSearchMatchCardProps {
   match: ImageSearchMatchInfo
   rank: number
-  onInspect: (match: ImageSearchMatchInfo, rank: number) => void
+  onInspect: (personId: string) => void
 }
 
 export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
@@ -27,128 +23,67 @@ export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
   onInspect,
 }: ImageSearchMatchCardProps) {
   const { t } = useTranslation('imageSearch')
-  const navigate = useNavigate()
+  const { goRecords, goSpatial, goProfile } = usePersonDeepLinks(match.personId)
 
   const faceUrl = imageSearchApi.getFaceImageUrl(
     match.personId,
     match.matchedFaceId
   )
 
-  const similarityNum = match.similarity * 100
-  const similarityPercent = similarityNum.toFixed(1)
-
+  const { percentWidth, similarityPercent, textClass, barClass } =
+    getSimilarityPresentation(match.similarity)
   const isTopRank = rank === 1
-  const isHighMatch = match.similarity >= 0.85
-  const isMediumMatch = match.similarity >= 0.7
 
-  const handleGoRecords = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    void navigate({
-      to: '/records',
-      search: {
-        tab: 'recognitions',
-        view: 'table',
-        page: 1,
-        pageSize: 20,
-        personId: match.personId,
-      },
-    })
-  }
-
-  const handleGoSpatial = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    void navigate({
-      to: '/spatial',
-      search: {
-        targetType: 'person',
-        personId: match.personId,
-      },
-    })
-  }
-
-  const handleGoProfile = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    void navigate({
-      to: '/persons',
-      search: {
-        personId: match.personId,
-      },
-    })
-  }
-
-  const getRankBadge = () => {
-    if (rank === 1) {
-      return (
-        <span className='inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/20 px-1.5 py-0.5 font-mono text-[11px] font-bold text-amber-600 shadow-xs backdrop-blur-xs dark:text-amber-400'>
-          <Crown className='h-3 w-3 fill-amber-500/30 text-amber-500' />
-          <span>#1</span>
-        </span>
-      )
+  const handleCardClick = (e: MouseEvent<HTMLElement>) => {
+    const target = e.target as HTMLElement | null
+    if (target?.closest('button, a')) {
+      return
     }
-    if (rank === 2) {
-      return (
-        <span className='inline-flex items-center gap-1 rounded-md border border-slate-400/40 bg-slate-400/20 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-700 shadow-xs backdrop-blur-xs dark:text-slate-200'>
-          <span>#2</span>
-        </span>
-      )
-    }
-    if (rank === 3) {
-      return (
-        <span className='inline-flex items-center gap-1 rounded-md border border-amber-700/30 bg-amber-700/20 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-800 shadow-xs backdrop-blur-xs dark:text-amber-300'>
-          <span>#3</span>
-        </span>
-      )
-    }
-    return (
-      <span className='rounded-md border border-border/70 bg-background/80 px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground backdrop-blur-xs'>
-        #{rank}
-      </span>
-    )
+    onInspect(match.personId)
   }
 
   return (
-    <div
-      onClick={() => onInspect(match, rank)}
-      className={`group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border transition-all duration-200 hover:-translate-y-1 hover:shadow-lg ${
+    <article
+      data-testid='image-search-match-card'
+      onClick={handleCardClick}
+      className={cn(
+        'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border transition-all duration-200 hover:-translate-y-1 hover:shadow-lg',
         isTopRank
           ? 'border-amber-500/50 bg-card shadow-xs ring-1 ring-amber-500/20 hover:border-amber-500'
           : 'border-border/70 bg-card hover:border-primary/50'
-      }`}
+      )}
     >
       {/* 顶名流光顶线 */}
       {isTopRank && (
         <div className='absolute inset-x-0 top-0 z-20 h-1 bg-gradient-to-r from-amber-500/30 via-amber-400 to-amber-500/30' />
       )}
 
-      {/* 图片展示区 (大头像，视觉排查核心) */}
-      <div className='relative aspect-square w-full overflow-hidden bg-muted/40'>
+      {/* 图片展示区：原生 button 保证键盘可达，且不与底部操作按钮嵌套 */}
+      <button
+        type='button'
+        onClick={() => onInspect(match.personId)}
+        aria-label={`${t('results.compare')}: ${match.personName}`}
+        className='group/img relative aspect-square w-full cursor-pointer overflow-hidden bg-muted/40 text-start focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset'
+      >
         {/* HUD 四角瞄准线条 */}
         <div className='pointer-events-none absolute inset-2 z-10 opacity-60 transition-opacity group-hover:opacity-100'>
-          <div className='absolute top-0 left-0 h-2 w-2 border-t-2 border-l-2 border-primary/70' />
-          <div className='absolute top-0 right-0 h-2 w-2 border-t-2 border-r-2 border-primary/70' />
-          <div className='absolute bottom-0 left-0 h-2 w-2 border-b-2 border-l-2 border-primary/70' />
-          <div className='absolute right-0 bottom-0 h-2 w-2 border-r-2 border-b-2 border-primary/70' />
+          <div className='absolute start-0 top-0 h-2 w-2 border-s-2 border-t-2 border-primary/70' />
+          <div className='absolute end-0 top-0 h-2 w-2 border-e-2 border-t-2 border-primary/70' />
+          <div className='absolute start-0 bottom-0 h-2 w-2 border-s-2 border-b-2 border-primary/70' />
+          <div className='absolute end-0 bottom-0 h-2 w-2 border-e-2 border-b-2 border-primary/70' />
         </div>
 
-        {/* 左上角排名 */}
-        <div className='absolute start-2.5 top-2.5 z-20'>{getRankBadge()}</div>
+        {/* 起始角排名 */}
+        <div className='absolute start-2.5 top-2.5 z-20'>
+          <ImageSearchRankBadge rank={rank} variant='card' />
+        </div>
 
-        {/* 右上角相似度胶囊 */}
+        {/* 结束角相似度胶囊 */}
         <div
           title={`${t('results.card.similarity')}: ${similarityPercent}%`}
           className='absolute end-2.5 top-2.5 z-20 flex items-center gap-1 rounded-full border border-background/40 bg-background/90 px-2 py-0.5 font-mono text-xs font-bold shadow-xs backdrop-blur-xs'
         >
-          <span
-            className={
-              isHighMatch
-                ? 'text-emerald-600 dark:text-emerald-400'
-                : isMediumMatch
-                  ? 'text-primary'
-                  : 'text-amber-600 dark:text-amber-400'
-            }
-          >
-            {similarityPercent}%
-          </span>
+          <span className={textClass}>{similarityPercent}%</span>
         </div>
 
         {/* 头像 */}
@@ -163,14 +98,14 @@ export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
           </AvatarFallback>
         </Avatar>
 
-        {/* 鼠标悬停时的“1:1 比对”快速入口遮罩 */}
-        <div className='absolute inset-0 z-10 flex items-center justify-center bg-black/40 opacity-0 backdrop-blur-[1px] transition-opacity duration-200 group-hover:opacity-100'>
+        {/* 悬停或键盘聚焦时的“1:1 比对”快速入口遮罩 */}
+        <div className='absolute inset-0 z-10 flex items-center justify-center bg-black/40 opacity-0 backdrop-blur-[1px] transition-opacity duration-200 group-hover:opacity-100 group-focus-visible/img:opacity-100'>
           <span className='inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-background/90 px-3 py-1 text-xs font-semibold text-foreground shadow-md backdrop-blur-xs'>
             <ArrowRightLeft className='h-3.5 w-3.5 text-primary' />
             <span>{t('results.compare')}</span>
           </span>
         </div>
-      </div>
+      </button>
 
       {/* 底部信息区 */}
       <div className='flex flex-1 flex-col justify-between p-3'>
@@ -206,27 +141,22 @@ export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
         {/* 相似度进度条 */}
         <div className='mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-muted/60'>
           <div
-            className={`h-full rounded-full transition-all duration-500 ${
-              isHighMatch
-                ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
-                : isMediumMatch
-                  ? 'bg-gradient-to-r from-primary/80 to-primary'
-                  : 'bg-gradient-to-r from-amber-500 to-amber-400'
-            }`}
-            style={{
-              width: `${Math.max(0, Math.min(similarityNum, 100))}%`,
-            }}
+            className={cn(
+              'h-full rounded-full transition-all duration-500',
+              barClass
+            )}
+            style={{ width: `${percentWidth}%` }}
           />
         </div>
 
-        {/* 底部业务穿透快捷按钮群（采用均分网格，图标+文字完整显示，绝无遮挡） */}
+        {/* 底部业务穿透快捷按钮群 */}
         <div className='mt-3 grid grid-cols-3 gap-1.5 border-t border-border/40 pt-2.5'>
           <Button
             type='button'
             variant='outline'
             size='sm'
             className='h-7.5 w-full gap-1 px-1 text-[11px] font-medium text-muted-foreground hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
-            onClick={handleGoRecords}
+            onClick={goRecords}
             title={t('results.card.viewRecords')}
             aria-label={t('results.card.viewRecords')}
           >
@@ -238,7 +168,7 @@ export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
             variant='outline'
             size='sm'
             className='h-7.5 w-full gap-1 px-1 text-[11px] font-medium text-muted-foreground hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
-            onClick={handleGoSpatial}
+            onClick={goSpatial}
             title={t('results.card.viewTrajectory')}
             aria-label={t('results.card.viewTrajectory')}
           >
@@ -250,7 +180,7 @@ export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
             variant='outline'
             size='sm'
             className='h-7.5 w-full gap-1 px-1 text-[11px] font-medium text-muted-foreground hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
-            onClick={handleGoProfile}
+            onClick={goProfile}
             title={t('results.card.viewProfile')}
             aria-label={t('results.card.viewProfile')}
           >
@@ -259,6 +189,6 @@ export const ImageSearchMatchCard = memo(function ImageSearchMatchCard({
           </Button>
         </div>
       </div>
-    </div>
+    </article>
   )
 })

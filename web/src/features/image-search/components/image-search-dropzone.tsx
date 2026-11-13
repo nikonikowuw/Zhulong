@@ -18,6 +18,8 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { STATUS_DOT_CLASS, STATUS_TEXT_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -27,6 +29,7 @@ interface ImageSearchDropzoneProps {
   previewUrl: string | null
   onFileSelect: (file: File | null) => void
   disabled?: boolean
+  pasteSuspended?: boolean
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
@@ -40,6 +43,16 @@ function isAllowedImageFile(file: File): boolean {
   return ALLOWED_EXTENSIONS.test(file.name)
 }
 
+function getFileFormatLabel(file: File): string {
+  const mimeSubtype = file.type.replace(/^image\//i, '').toUpperCase()
+  if (mimeSubtype) {
+    return mimeSubtype === 'JPEG' ? 'JPG' : mimeSubtype
+  }
+  const extMatch = /\.([a-z0-9]+)$/i.exec(file.name)
+  const ext = extMatch?.[1]?.toUpperCase() ?? ''
+  return ext === 'JPEG' ? 'JPG' : ext
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -51,6 +64,7 @@ export const ImageSearchDropzone = memo(function ImageSearchDropzone({
   previewUrl,
   onFileSelect,
   disabled = false,
+  pasteSuspended = false,
 }: ImageSearchDropzoneProps) {
   const { t } = useTranslation('imageSearch')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -72,15 +86,20 @@ export const ImageSearchDropzone = memo(function ImageSearchDropzone({
     [onFileSelect, t]
   )
 
-  // 支持全局剪贴板图片粘贴 (Ctrl+V)
+  // 支持全局剪贴板图片粘贴 (Ctrl+V)，严格避让输入态与模态弹窗打开态
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
-      if (disabled) return
+      if (disabled || pasteSuspended) return
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) {
+        return
+      }
+
       const target = e.target as HTMLElement | null
       if (
         target &&
         (target.tagName === 'INPUT' ||
           target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
           target.isContentEditable)
       ) {
         return
@@ -103,7 +122,7 @@ export const ImageSearchDropzone = memo(function ImageSearchDropzone({
 
     window.addEventListener('paste', handlePaste)
     return () => window.removeEventListener('paste', handlePaste)
-  }, [disabled, handleValidateAndSelect])
+  }, [disabled, pasteSuspended, handleValidateAndSelect])
 
   const handleDragEnter = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -149,6 +168,8 @@ export const ImageSearchDropzone = memo(function ImageSearchDropzone({
     e.target.value = ''
   }
 
+  const formatLabel = selectedFile ? getFileFormatLabel(selectedFile) : ''
+
   return (
     <Card className='group relative overflow-hidden border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-xs transition-all duration-200 hover:border-primary/40 hover:shadow-md'>
       <input
@@ -169,10 +190,10 @@ export const ImageSearchDropzone = memo(function ImageSearchDropzone({
 
             {/* HUD 瞄准角标 */}
             <div className='pointer-events-none absolute inset-2.5 z-10'>
-              <div className='absolute top-0 left-0 h-3 w-3 border-t-2 border-l-2 border-primary/70' />
-              <div className='absolute top-0 right-0 h-3 w-3 border-t-2 border-r-2 border-primary/70' />
-              <div className='absolute bottom-0 left-0 h-3 w-3 border-b-2 border-l-2 border-primary/70' />
-              <div className='absolute right-0 bottom-0 h-3 w-3 border-r-2 border-b-2 border-primary/70' />
+              <div className='absolute start-0 top-0 h-3 w-3 border-s-2 border-t-2 border-primary/70' />
+              <div className='absolute end-0 top-0 h-3 w-3 border-e-2 border-t-2 border-primary/70' />
+              <div className='absolute start-0 bottom-0 h-3 w-3 border-s-2 border-b-2 border-primary/70' />
+              <div className='absolute end-0 bottom-0 h-3 w-3 border-e-2 border-b-2 border-primary/70' />
             </div>
 
             <img
@@ -183,15 +204,19 @@ export const ImageSearchDropzone = memo(function ImageSearchDropzone({
 
             {/* 瞄准中提示徽章 */}
             <div className='pointer-events-none absolute start-3 bottom-3 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-background/90 px-2.5 py-0.5 text-[11px] font-medium text-foreground shadow-xs backdrop-blur-xs'>
-              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500' />
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 animate-pulse rounded-full',
+                  STATUS_DOT_CLASS.active
+                )}
+              />
               <Scan className='h-3 w-3 text-primary' />
               <span>{t('dropzone.tagFaceReq')}</span>
             </div>
           </div>
 
-          {/* 下半部：独立信息与操作卡片（上下两行结构，彻底消除挤压与换行重叠） */}
+          {/* 下半部：独立信息与操作卡片 */}
           <div className='flex shrink-0 flex-col gap-2 rounded-xl border border-border/60 bg-muted/30 p-2.5'>
-            {/* 第一行：文件元信息（独占全宽，保证文件名与大小清晰舒展） */}
             <div className='flex items-center gap-2'>
               <div className='flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary'>
                 <FileImage className='h-4 w-4' />
@@ -207,17 +232,22 @@ export const ImageSearchDropzone = memo(function ImageSearchDropzone({
                   })}
                 </p>
                 <div className='flex items-center gap-1.5 text-[10px] text-muted-foreground'>
-                  <CheckCircle2 className='h-3 w-3 shrink-0 text-emerald-500' />
+                  <CheckCircle2
+                    className={cn('h-3 w-3 shrink-0', STATUS_TEXT_CLASS.active)}
+                  />
                   <span>{formatBytes(selectedFile.size)}</span>
-                  <span>•</span>
-                  <span className='font-mono font-medium uppercase'>
-                    {selectedFile.type.replace('image/', '') || 'IMAGE'}
-                  </span>
+                  {formatLabel && (
+                    <>
+                      <span>•</span>
+                      <span className='font-mono font-medium uppercase'>
+                        {formatLabel}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* 第二行：操作按钮并排平铺（各占 50%，舒展规整，绝不与文本抢占宽度） */}
             <div className='grid grid-cols-2 gap-2 border-t border-border/40 pt-2'>
               <Button
                 type='button'
@@ -251,17 +281,18 @@ export const ImageSearchDropzone = memo(function ImageSearchDropzone({
           onDragOver={handleDragOver}
           onDrop={handleDrop}
           onClick={() => !disabled && fileInputRef.current?.click()}
-          className={`relative flex h-[340px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed p-6 text-center transition-all duration-200 ${
+          className={cn(
+            'relative flex h-[340px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed p-6 text-center transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
             disabled
               ? 'cursor-not-allowed opacity-50'
               : isDragging
                 ? 'border-primary bg-primary/10 ring-4 ring-primary/10'
                 : 'border-muted-foreground/25 hover:border-primary/60 hover:bg-muted/30'
-          }`}
+          )}
           role='button'
           aria-label={t('dropzone.title')}
           aria-disabled={disabled}
-          tabIndex={0}
+          tabIndex={disabled ? -1 : 0}
           onKeyDown={(e) => {
             if (disabled) return
             if (e.key === 'Enter' || e.key === ' ') {

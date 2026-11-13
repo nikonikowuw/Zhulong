@@ -1,5 +1,6 @@
 {
   "title": "Visual Search",
+  "engineBadge": "1:N VECTOR",
   "subtitle": "Upload a face photo to run 1:N cosine similarity matching against enrolled gallery templates",
   "disclaimer": "Candidates are ranked by similarity and do not constitute identity confirmation; manual inspection is required.",
   "dropzone": {
@@ -38,6 +39,7 @@
   },
   "results": {
     "title": "Search Results",
+    "count": "Found {{count}} matching candidate(s)",
     "count_one": "Found {{count}} matching candidate",
     "count_other": "Found {{count}} matching candidates",
     "filterCriteria": "Threshold ≥ {{threshold}}% • Top {{topK}} Max",
@@ -48,6 +50,7 @@
     "emptyActionLowerThreshold": "Lower Threshold to 50% & Retry",
     "errorTitle": "Search Failed",
     "errorDescription": "Image search encountered an error. Please verify network connectivity and retry.",
+    "retry": "Retry Search",
     "workflowStep1": "Upload Query Face",
     "workflowStep1Desc": "Upload capture crops or ID portraits; clearer photos ensure higher matching accuracy",
     "workflowStep2": "512-D Feature Search",
@@ -58,19 +61,16 @@
     "tipsItem1": "Use frontal face photos with level gaze, even lighting, and high resolution",
     "tipsItem2": "Avoid heavy occlusions such as dark sunglasses, face masks, or wide-brimmed hats",
     "tipsItem3": "Embeddings are extracted in 512-d cosine vector space, resilient to lighting and subtle micro-expressions",
-    "otherCandidates": "Other Matching Candidates ({{count}})",
     "compare": "1:1 Compare",
     "card": {
       "similarity": "Similarity",
-      "externalId": "ID",
       "unboundId": "Unassigned",
       "viewRecords": "Records",
       "viewTrajectory": "Trajectory",
       "viewProfile": "Profile",
       "matchedFaceAlt": "Enrolled Face Portrait",
       "rankTop": "Top Match",
-      "highMatch": "High Match",
-      "moderateMatch": "Candidate"
+      "highMatch": "High Match"
     }
   },
   "compareDialog": {
@@ -78,6 +78,7 @@
     "description": "1:1 side-by-side comparison between query photo and enrolled template",
     "queryImage": "Query Image",
     "enrolledImage": "Enrolled Template",
+    "versus": "VS",
     "similarityScore": "Similarity Score",
     "vectorCosine": "512-d Vector Cosine Similarity",
     "verdictHigh": "High Match: Facial landmark features match enrolled template with very high confidence.",

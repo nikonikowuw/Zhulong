@@ -1,20 +1,29 @@
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
+import { AxiosError } from 'axios'
 import {
   AlertCircle,
   Cpu,
   Inbox,
+  Info,
   LayoutGrid,
   List,
   Network,
+  RotateCw,
   ScanFace,
   Sparkles,
   UploadCloud,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { errorMessageOf } from '@/lib/handle-server-error'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  ViewModeSwitch,
+  type ViewModeOption,
+} from '@/components/view-mode-switch'
+import { LOWER_RETRY_THRESHOLD } from '../data/match-utils'
 import { type ImageSearchMatchInfo } from '../data/schema'
 import { ImageSearchMatchCard } from './image-search-match-card'
 import { ImageSearchMatchRow } from './image-search-match-row'
@@ -24,21 +33,30 @@ interface ImageSearchResultsProps {
   isSearching: boolean
   isError: boolean
   error: Error | null
-  topK: number
-  threshold?: number
+  appliedThreshold?: number
+  appliedTopK: number
   viewMode?: 'grid' | 'list'
   onViewModeChange?: (mode: 'grid' | 'list') => void
-  onInspect?: (match: ImageSearchMatchInfo, rank: number) => void
+  onInspect: (personId: string) => void
+  onRetry?: () => void
   onLowerThresholdAndSearch?: () => void
 }
 
-function getErrorMessage(error: Error | null, fallback: string): string {
+const GENERIC_FALLBACK_MSG = 'Something went wrong!'
+
+function resolveSearchErrorMessage(
+  error: Error | null,
+  fallback: string
+): string {
   if (!error) return fallback
-  const maybeAxios = error as { response?: { data?: { message?: string } } }
-  if (typeof maybeAxios.response?.data?.message === 'string') {
-    return maybeAxios.response.data.message
+  if (!(error instanceof AxiosError) && error.message.trim().length === 0) {
+    return fallback
   }
-  return error.message || fallback
+  const resolved = errorMessageOf(error)
+  if (!resolved || resolved === GENERIC_FALLBACK_MSG) {
+    return fallback
+  }
+  return resolved
 }
 
 export const ImageSearchResults = memo(function ImageSearchResults({
@@ -46,14 +64,25 @@ export const ImageSearchResults = memo(function ImageSearchResults({
   isSearching,
   isError,
   error,
-  topK,
-  threshold,
+  appliedThreshold,
+  appliedTopK,
   viewMode = 'grid',
   onViewModeChange,
   onInspect,
+  onRetry,
   onLowerThresholdAndSearch,
 }: ImageSearchResultsProps) {
   const { t } = useTranslation('imageSearch')
+
+  const viewModeOptions = useMemo<
+    ReadonlyArray<ViewModeOption<'grid' | 'list'>>
+  >(
+    () => [
+      { value: 'grid', label: t('controls.viewGrid'), icon: LayoutGrid },
+      { value: 'list', label: t('controls.viewList'), icon: List },
+    ],
+    [t]
+  )
 
   // 加载检索中骨架屏状态
   if (isSearching) {
@@ -70,7 +99,7 @@ export const ImageSearchResults = memo(function ImageSearchResults({
         </div>
 
         <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4'>
-          {Array.from({ length: Math.min(topK, 6) }).map((_, i) => (
+          {Array.from({ length: Math.min(appliedTopK, 6) }).map((_, i) => (
             <div
               key={i}
               className='flex flex-col overflow-hidden rounded-2xl border border-border/70 bg-card/60 p-3.5 shadow-xs'
@@ -95,9 +124,12 @@ export const ImageSearchResults = memo(function ImageSearchResults({
     )
   }
 
-  // 检索失败错误状态
+  // 检索失败错误状态（含重试入口）
   if (isError) {
-    const errorText = getErrorMessage(error, t('results.errorDescription'))
+    const errorText = resolveSearchErrorMessage(
+      error,
+      t('results.errorDescription')
+    )
     return (
       <Card className='relative flex h-full min-h-[420px] flex-1 flex-col items-center justify-center overflow-hidden rounded-2xl border border-destructive/30 bg-destructive/5 p-8 text-center shadow-xs backdrop-blur-xs lg:min-h-full'>
         <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,color-mix(in_oklch,var(--destructive)_8%,transparent),transparent_70%)]' />
@@ -110,6 +142,18 @@ export const ImageSearchResults = memo(function ImageSearchResults({
         <p className='relative mt-1.5 max-w-md text-xs leading-relaxed text-muted-foreground'>
           {errorText}
         </p>
+        {onRetry && (
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='relative mt-4 gap-1.5 text-xs'
+            onClick={onRetry}
+          >
+            <RotateCw className='h-3.5 w-3.5' />
+            <span>{t('results.retry')}</span>
+          </Button>
+        )}
       </Card>
     )
   }
@@ -175,7 +219,7 @@ export const ImageSearchResults = memo(function ImageSearchResults({
         </div>
 
         {/* 专业研判指南贴士卡片 */}
-        <div className='relative mt-5 w-full max-w-2xl rounded-xl border border-border/60 bg-muted/30 p-3.5 text-left text-xs'>
+        <div className='relative mt-5 w-full max-w-2xl rounded-xl border border-border/60 bg-muted/30 p-3.5 text-start text-xs'>
           <div className='flex items-center gap-1.5 font-semibold text-foreground'>
             <Sparkles className='h-3.5 w-3.5 text-primary' />
             <span>{t('results.tipsTitle')}</span>
@@ -201,6 +245,11 @@ export const ImageSearchResults = memo(function ImageSearchResults({
 
   // 检索完成但无匹配人员
   if (results.length === 0) {
+    const canLowerThreshold =
+      onLowerThresholdAndSearch &&
+      (appliedThreshold === undefined ||
+        appliedThreshold > LOWER_RETRY_THRESHOLD)
+
     return (
       <Card className='relative flex h-full min-h-[420px] flex-1 flex-col items-center justify-center overflow-hidden rounded-2xl border border-border/70 bg-card/60 p-8 text-center shadow-xs backdrop-blur-xs lg:min-h-full'>
         <div className='mb-3.5 flex h-14 w-14 items-center justify-center rounded-2xl border border-muted bg-muted/50 text-muted-foreground shadow-xs'>
@@ -213,7 +262,7 @@ export const ImageSearchResults = memo(function ImageSearchResults({
           {t('results.emptyDescription')}
         </p>
 
-        {onLowerThresholdAndSearch && (
+        {canLowerThreshold && (
           <Button
             type='button'
             variant='outline'
@@ -230,8 +279,8 @@ export const ImageSearchResults = memo(function ImageSearchResults({
   }
 
   return (
-    <div className='flex h-full flex-1 flex-col gap-4'>
-      {/* 结果栏 Header Toolbar */}
+    <div className='flex h-full flex-1 flex-col gap-3'>
+      {/* 结果栏 Header Toolbar（基于实际生效检索快照展示条件） */}
       <div className='flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card/50 px-4 py-2.5 shadow-2xs backdrop-blur-xs'>
         <div className='flex flex-wrap items-center gap-2'>
           <span className='text-xs font-bold text-foreground'>
@@ -243,45 +292,29 @@ export const ImageSearchResults = memo(function ImageSearchResults({
           >
             {t('results.count', { count: results.length })}
           </Badge>
-          {threshold !== undefined && (
+          {appliedThreshold !== undefined && (
             <span className='hidden font-mono text-[11px] text-muted-foreground sm:inline-block'>
               {t('results.filterCriteria', {
-                threshold: Math.round(threshold * 100),
-                topK,
+                threshold: Math.round(appliedThreshold * 100),
+                topK: appliedTopK,
               })}
             </span>
           )}
         </div>
 
-        {/* 视图切换按钮 */}
         {onViewModeChange && (
-          <div className='flex items-center gap-1 rounded-lg border border-border/60 bg-muted/40 p-0.5'>
-            <button
-              type='button'
-              onClick={() => onViewModeChange('grid')}
-              className={`flex h-6.5 w-6.5 items-center justify-center rounded-md transition-colors ${
-                viewMode === 'grid'
-                  ? 'bg-background text-foreground shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              title={t('controls.viewGrid')}
-            >
-              <LayoutGrid className='h-3 w-3' />
-            </button>
-            <button
-              type='button'
-              onClick={() => onViewModeChange('list')}
-              className={`flex h-6.5 w-6.5 items-center justify-center rounded-md transition-colors ${
-                viewMode === 'list'
-                  ? 'bg-background text-foreground shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              title={t('controls.viewList')}
-            >
-              <List className='h-3 w-3' />
-            </button>
-          </div>
+          <ViewModeSwitch
+            value={viewMode}
+            options={viewModeOptions}
+            onChange={onViewModeChange}
+          />
         )}
+      </div>
+
+      {/* 人工核验合规提示 */}
+      <div className='flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground'>
+        <Info className='h-3.5 w-3.5 shrink-0 text-primary' />
+        <span>{t('disclaimer')}</span>
       </div>
 
       {/* 结果主体流式展示：相册网格 / 紧凑列表 */}
@@ -289,10 +322,10 @@ export const ImageSearchResults = memo(function ImageSearchResults({
         <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4'>
           {results.map((match, index) => (
             <ImageSearchMatchCard
-              key={`${match.personId}-${match.matchedFaceId}-${index}`}
+              key={match.personId}
               match={match}
               rank={index + 1}
-              onInspect={(m, r) => onInspect?.(m, r)}
+              onInspect={onInspect}
             />
           ))}
         </div>
@@ -300,10 +333,10 @@ export const ImageSearchResults = memo(function ImageSearchResults({
         <div className='flex flex-col gap-2.5'>
           {results.map((match, index) => (
             <ImageSearchMatchRow
-              key={`${match.personId}-${match.matchedFaceId}-${index}`}
+              key={match.personId}
               match={match}
               rank={index + 1}
-              onInspect={(m, r) => onInspect?.(m, r)}
+              onInspect={onInspect}
             />
           ))}
         </div>

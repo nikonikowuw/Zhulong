@@ -1,5 +1,4 @@
-import { memo } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { memo, useCallback } from 'react'
 import {
   ArrowRightLeft,
   CheckCircle2,
@@ -11,6 +10,9 @@ import {
   UserCheck,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { STATUS_LEVEL_CLASS, STATUS_TEXT_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,7 +24,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { imageSearchApi } from '../api/image-search-api'
+import { getSimilarityPresentation } from '../data/match-utils'
 import { type ImageSearchMatchInfo } from '../data/schema'
+import { usePersonDeepLinks } from '../hooks/use-person-deep-links'
 
 interface ImageSearchCompareDialogProps {
   match: ImageSearchMatchInfo | null
@@ -40,7 +44,15 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
   onOpenChange,
 }: ImageSearchCompareDialogProps) {
   const { t } = useTranslation('imageSearch')
-  const navigate = useNavigate()
+
+  const closeDialog = useCallback(() => {
+    onOpenChange(false)
+  }, [onOpenChange])
+
+  const { goRecords, goSpatial, goProfile } = usePersonDeepLinks(
+    match?.personId,
+    closeDialog
+  )
 
   if (!match) return null
 
@@ -49,52 +61,22 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
     match.matchedFaceId
   )
 
-  const similarityNum = match.similarity * 100
-  const similarityPercent = similarityNum.toFixed(1)
-  const isHighMatch = match.similarity >= 0.85
-  const isMediumMatch = match.similarity >= 0.7
-
-  const handleGoRecords = () => {
-    onOpenChange(false)
-    void navigate({
-      to: '/records',
-      search: {
-        tab: 'recognitions',
-        view: 'table',
-        page: 1,
-        pageSize: 20,
-        personId: match.personId,
-      },
-    })
-  }
-
-  const handleGoSpatial = () => {
-    onOpenChange(false)
-    void navigate({
-      to: '/spatial',
-      search: {
-        targetType: 'person',
-        personId: match.personId,
-      },
-    })
-  }
-
-  const handleGoProfile = () => {
-    onOpenChange(false)
-    void navigate({
-      to: '/persons',
-      search: {
-        personId: match.personId,
-      },
-    })
-  }
+  const {
+    percentWidth,
+    similarityPercent,
+    isHighMatch,
+    isMediumMatch,
+    panelClass,
+    textClass,
+    barClass,
+  } = getSimilarityPresentation(match.similarity)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='flex max-h-[90vh] max-w-2xl flex-col overflow-hidden p-0 sm:max-h-[85vh] sm:max-w-2xl'>
         {/* 顶部头部 */}
         <DialogHeader className='shrink-0 border-b border-border/60 bg-muted/30 px-6 py-3.5'>
-          <div className='flex items-center justify-between'>
+          <div className='flex items-center justify-between pe-6'>
             <div className='flex items-center gap-2'>
               <div className='flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary'>
                 <ArrowRightLeft className='h-4 w-4' />
@@ -112,9 +94,12 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
             {/* 排名角标 */}
             <div className='flex items-center gap-1.5'>
               {rank === 1 ? (
-                <Badge className='border-amber-500/40 bg-amber-500/15 text-amber-600 dark:text-amber-400'>
-                  <Crown className='me-1 h-3.5 w-3.5 fill-amber-500/30' />
-                  #1 {t('results.card.rankTop')}
+                <Badge
+                  variant='outline'
+                  className={cn('gap-1 text-xs', STATUS_LEVEL_CLASS.warning)}
+                >
+                  <Crown className='h-3.5 w-3.5 fill-amber-500/30 text-amber-500' />
+                  <span>#1 {t('results.card.rankTop')}</span>
                 </Badge>
               ) : (
                 <Badge variant='outline' className='font-mono text-xs'>
@@ -125,21 +110,20 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
           </div>
         </DialogHeader>
 
-        {/* 核心双图 1:1 比对区域 (支持视口超高时垂直滚动) */}
+        {/* 核心双图 1:1 比对区域 */}
         <div className='flex-1 space-y-4 overflow-y-auto p-4 sm:space-y-5 sm:p-5'>
           <div className='grid grid-cols-1 items-center gap-3 sm:grid-cols-11 sm:gap-4'>
-            {/* 左侧：检索原图 */}
+            {/* 起始侧：检索原图 */}
             <div className='flex flex-col items-center gap-1.5 sm:col-span-5'>
               <div className='text-xs font-semibold text-muted-foreground'>
                 {t('compareDialog.queryImage')}
               </div>
               <div className='relative flex aspect-square w-full max-w-[160px] items-center justify-center overflow-hidden rounded-2xl border-2 border-primary/30 bg-muted/30 p-1.5 shadow-xs sm:max-w-[180px]'>
-                {/* HUD 边角标 */}
                 <div className='pointer-events-none absolute inset-2 z-10'>
-                  <div className='absolute top-0 left-0 h-3 w-3 border-t-2 border-l-2 border-primary/70' />
-                  <div className='absolute top-0 right-0 h-3 w-3 border-t-2 border-r-2 border-primary/70' />
-                  <div className='absolute bottom-0 left-0 h-3 w-3 border-b-2 border-l-2 border-primary/70' />
-                  <div className='absolute right-0 bottom-0 h-3 w-3 border-r-2 border-b-2 border-primary/70' />
+                  <div className='absolute start-0 top-0 h-3 w-3 border-s-2 border-t-2 border-primary/70' />
+                  <div className='absolute end-0 top-0 h-3 w-3 border-e-2 border-t-2 border-primary/70' />
+                  <div className='absolute start-0 bottom-0 h-3 w-3 border-s-2 border-b-2 border-primary/70' />
+                  <div className='absolute end-0 bottom-0 h-3 w-3 border-e-2 border-b-2 border-primary/70' />
                 </div>
                 {previewUrl ? (
                   <img
@@ -153,35 +137,35 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
               </div>
             </div>
 
-            {/* 中间：VS 与相似度指示 */}
+            {/* 中间：VS 指示 */}
             <div className='flex flex-col items-center justify-center gap-2 sm:col-span-1'>
               <div className='flex h-9 w-9 items-center justify-center rounded-full border border-border/80 bg-background font-mono text-xs font-bold text-muted-foreground shadow-xs'>
-                VS
+                {t('compareDialog.versus')}
               </div>
             </div>
 
-            {/* 右侧：底库命中登记照 */}
+            {/* 结束侧：底库命中登记照（声明式 Avatar 降级占位，杜绝命令式 display:none） */}
             <div className='flex flex-col items-center gap-1.5 sm:col-span-5'>
               <div className='text-xs font-semibold text-muted-foreground'>
                 {t('compareDialog.enrolledImage')}
               </div>
-              <div className='relative flex aspect-square w-full max-w-[160px] items-center justify-center overflow-hidden rounded-2xl border-2 border-emerald-500/30 bg-muted/30 p-1.5 shadow-xs sm:max-w-[180px]'>
-                {/* HUD 边角标 */}
+              <div className='relative flex aspect-square w-full max-w-[160px] items-center justify-center overflow-hidden rounded-2xl border-2 border-teal-500/30 bg-muted/30 p-1.5 shadow-xs sm:max-w-[180px]'>
                 <div className='pointer-events-none absolute inset-2 z-10'>
-                  <div className='absolute top-0 left-0 h-3 w-3 border-t-2 border-l-2 border-emerald-500/70' />
-                  <div className='absolute top-0 right-0 h-3 w-3 border-t-2 border-r-2 border-emerald-500/70' />
-                  <div className='absolute bottom-0 left-0 h-3 w-3 border-b-2 border-l-2 border-emerald-500/70' />
-                  <div className='absolute right-0 bottom-0 h-3 w-3 border-r-2 border-b-2 border-emerald-500/70' />
+                  <div className='absolute start-0 top-0 h-3 w-3 border-s-2 border-t-2 border-teal-500/70' />
+                  <div className='absolute end-0 top-0 h-3 w-3 border-e-2 border-t-2 border-teal-500/70' />
+                  <div className='absolute start-0 bottom-0 h-3 w-3 border-s-2 border-b-2 border-teal-500/70' />
+                  <div className='absolute end-0 bottom-0 h-3 w-3 border-e-2 border-b-2 border-teal-500/70' />
                 </div>
-                <img
-                  src={faceUrl}
-                  alt={match.personName}
-                  className='h-full w-full rounded-xl object-contain'
-                  onError={(e) => {
-                    // 降级占位
-                    e.currentTarget.style.display = 'none'
-                  }}
-                />
+                <Avatar className='h-full w-full rounded-xl'>
+                  <AvatarImage
+                    src={faceUrl}
+                    alt={match.personName}
+                    className='h-full w-full rounded-xl object-contain'
+                  />
+                  <AvatarFallback className='rounded-xl bg-muted/50 text-muted-foreground'>
+                    <User className='h-10 w-10 opacity-40' />
+                  </AvatarFallback>
+                </Avatar>
               </div>
             </div>
           </div>
@@ -210,25 +194,21 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
 
               {/* 相似度评分胶囊 */}
               <div className='flex items-center gap-3'>
-                <div className='text-right'>
+                <div className='text-end'>
                   <div className='text-[10px] text-muted-foreground uppercase'>
                     {t('compareDialog.similarityScore')}
                   </div>
                   <div
-                    className={`font-mono text-2xl font-black ${
-                      isHighMatch
-                        ? 'text-emerald-600 dark:text-emerald-400'
-                        : isMediumMatch
-                          ? 'text-primary'
-                          : 'text-amber-600 dark:text-amber-400'
-                    }`}
+                    className={cn('font-mono text-2xl font-black', textClass)}
                   >
                     {similarityPercent}%
                   </div>
                 </div>
                 <div className='flex h-10 w-10 items-center justify-center rounded-xl border border-border/80 bg-background shadow-xs'>
                   {isHighMatch ? (
-                    <CheckCircle2 className='h-5 w-5 text-emerald-500' />
+                    <CheckCircle2
+                      className={cn('h-5 w-5', STATUS_TEXT_CLASS.active)}
+                    />
                   ) : (
                     <User className='h-5 w-5 text-primary' />
                   )}
@@ -239,37 +219,23 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
             {/* 相似度渐变进度条 */}
             <div className='mt-3 h-2 w-full overflow-hidden rounded-full bg-muted/60'>
               <div
-                className={`h-full rounded-full transition-all duration-500 ${
-                  isHighMatch
-                    ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
-                    : isMediumMatch
-                      ? 'bg-gradient-to-r from-primary/80 to-primary'
-                      : 'bg-gradient-to-r from-amber-500 to-amber-400'
-                }`}
-                style={{
-                  width: `${Math.max(0, Math.min(similarityNum, 100))}%`,
-                }}
+                className={cn(
+                  'h-full rounded-full transition-all duration-500',
+                  barClass
+                )}
+                style={{ width: `${percentWidth}%` }}
               />
             </div>
 
             {/* 专业研判结论建议 */}
             <div
-              className={`mt-3.5 flex items-start gap-2.5 rounded-lg border p-2.5 text-xs ${
-                isHighMatch
-                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300'
-                  : isMediumMatch
-                    ? 'border-primary/30 bg-primary/10 text-foreground'
-                    : 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300'
-              }`}
+              className={cn(
+                'mt-3.5 flex items-start gap-2.5 rounded-lg border p-2.5 text-xs',
+                panelClass
+              )}
             >
               <CheckCircle2
-                className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
-                  isHighMatch
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : isMediumMatch
-                      ? 'text-primary'
-                      : 'text-amber-600 dark:text-amber-400'
-                }`}
+                className={cn('mt-0.5 h-3.5 w-3.5 shrink-0', textClass)}
               />
               <span className='leading-relaxed font-medium'>
                 {isHighMatch
@@ -284,12 +250,7 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
 
         {/* 底部业务穿透与操作 */}
         <DialogFooter className='shrink-0 border-t border-border/60 bg-muted/30 px-6 py-3.5 sm:justify-between'>
-          <Button
-            type='button'
-            variant='ghost'
-            size='sm'
-            onClick={() => onOpenChange(false)}
-          >
+          <Button type='button' variant='ghost' size='sm' onClick={closeDialog}>
             {t('compareDialog.close')}
           </Button>
 
@@ -299,7 +260,7 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
               variant='outline'
               size='sm'
               className='gap-1.5'
-              onClick={handleGoRecords}
+              onClick={goRecords}
             >
               <Images className='h-3.5 w-3.5' />
               <span>{t('results.card.viewRecords')}</span>
@@ -309,7 +270,7 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
               variant='outline'
               size='sm'
               className='gap-1.5'
-              onClick={handleGoSpatial}
+              onClick={goSpatial}
             >
               <Map className='h-3.5 w-3.5' />
               <span>{t('results.card.viewTrajectory')}</span>
@@ -318,7 +279,7 @@ export const ImageSearchCompareDialog = memo(function ImageSearchCompareDialog({
               type='button'
               size='sm'
               className='gap-1.5'
-              onClick={handleGoProfile}
+              onClick={goProfile}
             >
               <UserCheck className='h-3.5 w-3.5' />
               <span>{t('results.card.viewProfile')}</span>

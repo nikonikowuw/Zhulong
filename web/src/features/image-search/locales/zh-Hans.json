@@ -1,5 +1,6 @@
 {
   "title": "以图搜图",
+  "engineBadge": "1:N 向量检索",
   "subtitle": "上传人脸图片，在已登记的人员底库模板中进行 1:N 相似度检索",
   "disclaimer": "候选结果按相似度排序，不构成身份确认，需由人工核验。",
   "dropzone": {
@@ -38,6 +39,7 @@
   },
   "results": {
     "title": "检索结果",
+    "count": "找到 {{count}} 位匹配候选人员",
     "count_one": "找到 {{count}} 位匹配候选人员",
     "count_other": "找到 {{count}} 位匹配候选人员",
     "filterCriteria": "阈值 ≥ {{threshold}}% • 上限 {{topK}} 人",
@@ -48,6 +50,7 @@
     "emptyActionLowerThreshold": "调低阈值至 50% 并重新检索",
     "errorTitle": "检索失败",
     "errorDescription": "检索服务发生异常，请检查网络或稍后重试。",
+    "retry": "重新检索",
     "workflowStep1": "上传目标人脸",
     "workflowStep1Desc": "支持抓拍截图或正脸证件照，清晰度越高比对越精准",
     "workflowStep2": "向量特征比对",
@@ -58,19 +61,16 @@
     "tipsItem1": "优先选择正脸无俯仰、双眼平视、光照均匀的高清截图或登记照",
     "tipsItem2": "避免大面积佩戴墨镜、口罩或帽子等五官严重遮挡物",
     "tipsItem3": "算法基于 512 维深度特征空间余弦相似度匹配，具备强抗光照与微表情干扰能力",
-    "otherCandidates": "其他相似候选人员 (共 {{count}} 位)",
     "compare": "1:1 双图比对",
     "card": {
       "similarity": "相似度",
-      "externalId": "编号",
       "unboundId": "未绑定",
       "viewRecords": "抓拍记录",
       "viewTrajectory": "时空轨迹",
       "viewProfile": "人员档案",
       "matchedFaceAlt": "底库命中登记照",
       "rankTop": "最高匹配",
-      "highMatch": "极高匹配",
-      "moderateMatch": "相似候选"
+      "highMatch": "极高匹配"
     }
   },
   "compareDialog": {
@@ -78,6 +78,7 @@
     "description": "1:1 并排比对检索原图与底库登记照五官细节",
     "queryImage": "检索原图",
     "enrolledImage": "底库登记照",
+    "versus": "VS",
     "similarityScore": "综合相似度",
     "vectorCosine": "512 维特征向量余弦相似度匹配",
     "verdictHigh": "极高匹配：五官特征与底库档案高度一致，判定同一人置信度极高。",

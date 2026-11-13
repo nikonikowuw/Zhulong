@@ -1,24 +1,21 @@
 import { memo } from 'react'
-import { useNavigate } from '@tanstack/react-router'
-import {
-  ArrowRightLeft,
-  Crown,
-  Images,
-  Map,
-  User,
-  UserCheck,
-} from 'lucide-react'
+import { ArrowRightLeft, Images, Map, User, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { imageSearchApi } from '../api/image-search-api'
+import { getSimilarityPresentation } from '../data/match-utils'
 import { type ImageSearchMatchInfo } from '../data/schema'
+import { usePersonDeepLinks } from '../hooks/use-person-deep-links'
+import { ImageSearchRankBadge } from './image-search-rank-badge'
 
 interface ImageSearchMatchRowProps {
   match: ImageSearchMatchInfo
   rank: number
-  onInspect?: (match: ImageSearchMatchInfo, rank: number) => void
+  onInspect?: (personId: string) => void
 }
 
 export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
@@ -27,115 +24,52 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
   onInspect,
 }: ImageSearchMatchRowProps) {
   const { t } = useTranslation('imageSearch')
-  const navigate = useNavigate()
+  const { goRecords, goSpatial, goProfile } = usePersonDeepLinks(match.personId)
 
   const faceUrl = imageSearchApi.getFaceImageUrl(
     match.personId,
     match.matchedFaceId
   )
 
-  const similarityNum = match.similarity * 100
-  const similarityPercent = similarityNum.toFixed(1)
-
-  const handleGoRecords = () => {
-    void navigate({
-      to: '/records',
-      search: {
-        tab: 'recognitions',
-        view: 'table',
-        page: 1,
-        pageSize: 20,
-        personId: match.personId,
-      },
-    })
-  }
-
-  const handleGoSpatial = () => {
-    void navigate({
-      to: '/spatial',
-      search: {
-        targetType: 'person',
-        personId: match.personId,
-      },
-    })
-  }
-
-  const handleGoProfile = () => {
-    void navigate({
-      to: '/persons',
-      search: {
-        personId: match.personId,
-      },
-    })
-  }
-
-  // 相似度级别与主题状态
+  const { percentWidth, similarityPercent, isHighMatch, textClass, barClass } =
+    getSimilarityPresentation(match.similarity)
   const isTopRank = rank === 1
-  const isHighMatch = match.similarity >= 0.85
-  const isMediumMatch = match.similarity >= 0.7
-
-  const getRankBadge = () => {
-    if (rank === 1) {
-      return (
-        <span className='inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 font-mono text-xs font-bold text-amber-600 dark:text-amber-400'>
-          <Crown className='h-3.5 w-3.5 fill-amber-500/30 text-amber-500' />
-          <span>#1</span>
-        </span>
-      )
-    }
-    if (rank === 2) {
-      return (
-        <span className='inline-flex items-center gap-1 rounded-md border border-slate-400/40 bg-slate-400/15 px-2 py-0.5 font-mono text-xs font-semibold text-slate-600 dark:text-slate-300'>
-          <span>#2</span>
-        </span>
-      )
-    }
-    if (rank === 3) {
-      return (
-        <span className='inline-flex items-center gap-1 rounded-md border border-amber-700/30 bg-amber-700/10 px-2 py-0.5 font-mono text-xs font-semibold text-amber-800 dark:text-amber-500'>
-          <span>#3</span>
-        </span>
-      )
-    }
-    return (
-      <span className='shrink-0 font-mono text-xs font-medium text-muted-foreground'>
-        #{rank}
-      </span>
-    )
-  }
 
   return (
     <div
-      className={`group relative flex flex-col gap-3 rounded-xl border p-3 shadow-2xs backdrop-blur-xs transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md md:flex-row md:items-center md:justify-between md:gap-4 ${
+      data-testid='image-search-match-row'
+      className={cn(
+        'group relative flex flex-col gap-3 rounded-xl border p-3 shadow-2xs backdrop-blur-xs transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md md:flex-row md:items-center md:justify-between md:gap-4',
         isTopRank
           ? 'border-amber-500/40 bg-card/85 hover:border-amber-500/70'
           : 'border-border/70 bg-card/60 hover:border-primary/50'
-      }`}
+      )}
     >
       {/* 顶名高亮流光顶线（仅限第 1 名） */}
       {isTopRank && (
         <div className='absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-amber-500/30 via-amber-400 to-amber-500/30' />
       )}
 
-      {/* 左侧：排名、底库人脸登记照与人员信息 */}
+      {/* 起始侧：排名、底库人脸登记照与人员信息 */}
       <div className='flex min-w-0 items-center gap-3'>
-        {/* 排名徽标 */}
         <div className='flex w-9 shrink-0 items-center justify-center'>
-          {getRankBadge()}
+          <ImageSearchRankBadge rank={rank} variant='row' />
         </div>
 
-        {/* 命中底库面容头像与 HUD 角标 */}
-        <div
-          onClick={() => onInspect?.(match, rank)}
-          className='relative h-13 w-13 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-border/80 bg-muted/40 shadow-xs transition-transform group-hover:scale-105'
+        {/* 命中底库面容头像按钮（支持键盘聚焦触发 1:1 比对） */}
+        <button
+          type='button'
+          disabled={!onInspect}
+          onClick={() => onInspect?.(match.personId)}
+          aria-label={`${t('results.compare')}: ${match.personName}`}
           title={t('results.compare')}
+          className='relative h-13 w-13 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-border/80 bg-muted/40 shadow-xs transition-transform group-hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-default'
         >
-          {/* HUD 四角瞄准线条 */}
           <div className='pointer-events-none absolute inset-0.5 z-10 opacity-70'>
-            <div className='absolute top-0 left-0 h-1.5 w-1.5 border-t border-l border-primary/60' />
-            <div className='absolute top-0 right-0 h-1.5 w-1.5 border-t border-r border-primary/60' />
-            <div className='absolute bottom-0 left-0 h-1.5 w-1.5 border-b border-l border-primary/60' />
-            <div className='absolute right-0 bottom-0 h-1.5 w-1.5 border-r border-b border-primary/60' />
+            <div className='absolute start-0 top-0 h-1.5 w-1.5 border-s border-t border-primary/60' />
+            <div className='absolute end-0 top-0 h-1.5 w-1.5 border-e border-t border-primary/60' />
+            <div className='absolute start-0 bottom-0 h-1.5 w-1.5 border-s border-b border-primary/60' />
+            <div className='absolute end-0 bottom-0 h-1.5 w-1.5 border-e border-b border-primary/60' />
           </div>
 
           <Avatar className='h-full w-full rounded-xl'>
@@ -149,14 +83,16 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
             </AvatarFallback>
           </Avatar>
 
-          {/* 高置信度状态标记点 */}
           {isHighMatch && (
             <div
-              className='absolute end-0.5 bottom-0.5 z-20 h-2 w-2 rounded-full bg-emerald-500 shadow-xs ring-2 ring-background'
+              className={cn(
+                'absolute end-0.5 bottom-0.5 z-20 h-2 w-2 rounded-full shadow-xs ring-2 ring-background',
+                STATUS_DOT_CLASS.active
+              )}
               title={t('results.card.highMatch')}
             />
           )}
-        </div>
+        </button>
 
         {/* 核心身份信息：姓名与外部工号 */}
         <div className='flex min-w-0 flex-col justify-center gap-1'>
@@ -184,9 +120,8 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
         </div>
       </div>
 
-      {/* 右侧集群：相似度比对指标与联动操作区 */}
+      {/* 结束侧：相似度比对指标与联动操作区 */}
       <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between md:justify-end md:gap-5'>
-        {/* 相似度评分指标与进度条 */}
         <div className='flex min-w-[170px] flex-col gap-1.5 md:min-w-[200px]'>
           <div className='flex items-center justify-between gap-2 text-xs'>
             <div className='flex items-center gap-1.5'>
@@ -194,37 +129,40 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
                 {t('results.card.similarity')}
               </span>
               {isHighMatch && (
-                <span className='rounded bg-emerald-500/10 px-1.5 py-0.5 font-sans text-[10px] font-medium whitespace-nowrap text-emerald-600 dark:text-emerald-400'>
+                <Badge
+                  variant='outline'
+                  className={cn(
+                    'gap-1 px-1.5 py-0 font-sans text-[10px] font-normal whitespace-nowrap',
+                    STATUS_LEVEL_CLASS.active
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'inline-block h-1.5 w-1.5 rounded-full',
+                      STATUS_DOT_CLASS.active
+                    )}
+                  />
                   {t('results.card.highMatch')}
-                </span>
+                </Badge>
               )}
             </div>
             <span
-              className={`font-mono text-sm font-bold whitespace-nowrap tabular-nums ${
-                isHighMatch
-                  ? 'text-emerald-600 dark:text-emerald-400'
-                  : isMediumMatch
-                    ? 'text-primary'
-                    : 'text-amber-600 dark:text-amber-400'
-              }`}
+              className={cn(
+                'font-mono text-sm font-bold whitespace-nowrap tabular-nums',
+                textClass
+              )}
             >
               {similarityPercent}%
             </span>
           </div>
 
-          {/* 相似度微型彩色进度条 */}
           <div className='h-1.5 w-full overflow-hidden rounded-full bg-muted/60'>
             <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                isHighMatch
-                  ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
-                  : isMediumMatch
-                    ? 'bg-gradient-to-r from-primary/80 to-primary'
-                    : 'bg-gradient-to-r from-amber-500 to-amber-400'
-              }`}
-              style={{
-                width: `${Math.max(0, Math.min(similarityNum, 100))}%`,
-              }}
+              className={cn(
+                'h-full rounded-full transition-all duration-500',
+                barClass
+              )}
+              style={{ width: `${percentWidth}%` }}
             />
           </div>
         </div>
@@ -237,7 +175,7 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
               variant='outline'
               size='sm'
               className='group/btn h-8 gap-1.5 border-border/70 bg-muted/20 px-2.5 text-xs font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
-              onClick={() => onInspect(match, rank)}
+              onClick={() => onInspect(match.personId)}
               title={t('results.compare')}
             >
               <ArrowRightLeft className='h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover/btn:text-primary' />
@@ -249,7 +187,7 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
             variant='outline'
             size='sm'
             className='group/btn h-8 gap-1.5 border-border/70 bg-muted/20 px-2.5 text-xs font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
-            onClick={handleGoRecords}
+            onClick={goRecords}
             title={t('results.card.viewRecords')}
           >
             <Images className='h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover/btn:text-foreground' />
@@ -260,7 +198,7 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
             variant='outline'
             size='sm'
             className='group/btn h-8 gap-1.5 border-border/70 bg-muted/20 px-2.5 text-xs font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
-            onClick={handleGoSpatial}
+            onClick={goSpatial}
             title={t('results.card.viewTrajectory')}
           >
             <Map className='h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover/btn:text-foreground' />
@@ -271,7 +209,7 @@ export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
             variant='outline'
             size='sm'
             className='group/btn h-8 gap-1.5 border-border/70 bg-muted/20 px-2.5 text-xs font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
-            onClick={handleGoProfile}
+            onClick={goProfile}
             title={t('results.card.viewProfile')}
           >
             <UserCheck className='h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover/btn:text-foreground' />
