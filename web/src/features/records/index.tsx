@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { AlertTriangle, Camera, CarFront, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -9,7 +10,6 @@ import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { RecordDetailDialog } from './components/detail/record-detail-dialog'
-import { RecordsExportDialog } from './components/export/records-export-dialog'
 import { RecordsSelectionBar } from './components/export/records-selection-bar'
 import { RecordsPrimaryButtons } from './components/records-primary-buttons'
 import { RecordsToolbar } from './components/records-toolbar'
@@ -18,6 +18,12 @@ import { CapturesView } from './components/views/captures-view'
 import { RecognitionsView } from './components/views/recognitions-view'
 import { type RecordsTab } from './data/schema'
 import { useRecordsPage } from './hooks/use-records-page'
+
+const LazyRecordsExportDialog = lazy(() =>
+  import('./components/export/records-export-dialog').then((m) => ({
+    default: m.RecordsExportDialog,
+  }))
+)
 
 export function Records() {
   const { t } = useTranslation('records')
@@ -45,14 +51,23 @@ export function Records() {
     selectedTab,
     exportDialogOpen,
     setExportDialogOpen,
+    exportDialogMounted,
     exportDialogMode,
     exportQueryParams,
-    updateSearch,
     handleTabChange,
     handleRefresh,
+    handleRetry,
     handleOpenDetail,
     handleOpenBatchExport,
     handleOpenSelectionExport,
+    handleViewChange,
+    handleCameraChange,
+    handleMatchedChange,
+    handlePersonIdChange,
+    handleAlarmTypeChange,
+    handleTargetTypeChange,
+    handlePageChange,
+    handlePageSizeChange,
     handleDateRangeChange,
     handleResetFilters,
   } = useRecordsPage()
@@ -117,23 +132,13 @@ export function Records() {
               personId={personId}
               alarmType={alarmType}
               targetType={targetType}
-              onViewChange={(nextView) => updateSearch({ view: nextView })}
-              onCameraChange={(nextCam) =>
-                updateSearch({ cameraId: nextCam, page: 1 })
-              }
+              onViewChange={handleViewChange}
+              onCameraChange={handleCameraChange}
               onDateRangeChange={handleDateRangeChange}
-              onMatchedChange={(nextMatched) =>
-                updateSearch({ matched: nextMatched, page: 1 })
-              }
-              onPersonIdChange={(nextPid) =>
-                updateSearch({ personId: nextPid, page: 1 })
-              }
-              onAlarmTypeChange={(nextAt) =>
-                updateSearch({ alarmType: nextAt, page: 1 })
-              }
-              onTargetTypeChange={(nextTt) =>
-                updateSearch({ targetType: nextTt, page: 1 })
-              }
+              onMatchedChange={handleMatchedChange}
+              onPersonIdChange={handlePersonIdChange}
+              onAlarmTypeChange={handleAlarmTypeChange}
+              onTargetTypeChange={handleTargetTypeChange}
               onResetFilters={handleResetFilters}
             />
 
@@ -147,12 +152,10 @@ export function Records() {
                 cameraName={cameraName}
                 isLoading={recognitionsQuery.isLoading}
                 isError={recognitionsQuery.isError}
-                onPageChange={(nextPage) => updateSearch({ page: nextPage })}
-                onPageSizeChange={(nextPageSize) =>
-                  updateSearch({ pageSize: nextPageSize, page: 1 })
-                }
+                onPageChange={handlePageChange}
+                onPageSizeChange={handlePageSizeChange}
                 onSelect={handleOpenDetail}
-                onRetry={() => void recognitionsQuery.refetch()}
+                onRetry={handleRetry}
                 isSelected={selection.isSelected}
                 onToggleSelect={selection.toggleItem}
                 isAllPageSelected={selection.isAllPageSelected}
@@ -171,12 +174,10 @@ export function Records() {
                 cameraName={cameraName}
                 isLoading={alarmsQuery.isLoading}
                 isError={alarmsQuery.isError}
-                onPageChange={(nextPage) => updateSearch({ page: nextPage })}
-                onPageSizeChange={(nextPageSize) =>
-                  updateSearch({ pageSize: nextPageSize, page: 1 })
-                }
+                onPageChange={handlePageChange}
+                onPageSizeChange={handlePageSizeChange}
                 onSelect={handleOpenDetail}
-                onRetry={() => void alarmsQuery.refetch()}
+                onRetry={handleRetry}
                 isSelected={selection.isSelected}
                 onToggleSelect={selection.toggleItem}
                 isAllPageSelected={selection.isAllPageSelected}
@@ -196,12 +197,10 @@ export function Records() {
                 cameraName={cameraName}
                 isLoading={capturesQuery.isLoading}
                 isError={capturesQuery.isError}
-                onPageChange={(nextPage) => updateSearch({ page: nextPage })}
-                onPageSizeChange={(nextPageSize) =>
-                  updateSearch({ pageSize: nextPageSize, page: 1 })
-                }
+                onPageChange={handlePageChange}
+                onPageSizeChange={handlePageSizeChange}
                 onSelect={handleOpenDetail}
-                onRetry={() => void capturesQuery.refetch()}
+                onRetry={handleRetry}
                 isSelected={selection.isSelected}
                 onToggleSelect={selection.toggleItem}
                 isAllPageSelected={selection.isAllPageSelected}
@@ -227,16 +226,20 @@ export function Records() {
         onClearSelection={selection.clearSelection}
       />
 
-      <RecordsExportDialog
-        open={exportDialogOpen}
-        onOpenChange={setExportDialogOpen}
-        activeTab={tab}
-        mode={exportDialogMode}
-        selectedItems={selection.selectedItems}
-        queryParams={exportQueryParams}
-        estimatedTotal={currentTotal}
-        cameraName={cameraName}
-      />
+      {exportDialogMounted && (
+        <Suspense fallback={null}>
+          <LazyRecordsExportDialog
+            open={exportDialogOpen}
+            onOpenChange={setExportDialogOpen}
+            activeTab={tab}
+            mode={exportDialogMode}
+            selectedItems={selection.selectedItems}
+            queryParams={exportQueryParams}
+            estimatedTotal={currentTotal}
+            cameraName={cameraName}
+          />
+        </Suspense>
+      )}
     </>
   )
 }

@@ -71,7 +71,14 @@
     "similarity": "相似度",
     "confidence": "置信度",
     "trackId": "跟踪 #",
-    "viewDetail": "查看研判详情"
+    "viewDetail": "查看研判详情",
+    "fallbackAlarm": "告警抓拍图",
+    "fallbackAlarmShort": "告警",
+    "fallbackCapture": "目标裁剪图",
+    "fallbackCaptureShort": "抓拍",
+    "fallbackFace": "人脸特写",
+    "fallbackFaceShort": "人脸",
+    "fallbackScene": "全景监控画面"
   },
   "detail": {
     "title": "记录审阅研判",
@@ -160,6 +167,8 @@
       "30d": "近 30 天"
     },
     "clearDateRange": "清空时间",
+    "startTime": "开始时间",
+    "endTime": "结束时间",
     "cancel": "取消",
     "apply": "应用",
     "reset": "重置筛选"
@@ -168,7 +177,10 @@
     "ariaLabel": "批量多选操作",
     "selectedCount": "已选择 {{count}} 项",
     "exportSelected": "导出选中项",
-    "clearSelection": "清空"
+    "clearSelection": "清空",
+    "selectAll": "全选当前页",
+    "selectRow": "选择记录 {{id}}",
+    "selectCard": "选择记录 {{id}}"
   },
   "export": {
     "button": "批量导出",
@@ -217,6 +229,15 @@
     "emptySelection": "尚未勾选任何记录",
     "hardCapHint": "取消限额时仍受单次 {{limit}} 张上限保护",
     "progressLabel": "导出进度",
+    "progress": {
+      "preparing": "正在准备导出任务...",
+      "fetching": "正在拉取 {{tab}}（{{current}}/{{total}}）...",
+      "generatingCsv": "正在生成 {{tab}} 报表...",
+      "generatingCsvSingle": "正在生成 CSV 文件...",
+      "processingImages": "正在处理图片：{{current}} / {{total}}",
+      "zipping": "正在打包压缩归档...",
+      "completed": "导出完成"
+    },
     "resumeHint": "续传沿用上次任务的报表与图片清单，当前筛选条件不参与",
     "csv": {
       "id": "ID",

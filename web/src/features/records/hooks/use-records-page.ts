@@ -30,10 +30,17 @@ export function useRecordsPage() {
   const startTime = search.startTime
   const endTime = search.endTime
 
-  // memo 必须存在：相对预设内部取 now()，每次渲染重算会让 react-query 的 key 抖动
+  // 以显式刷新的时间戳作为相对预设锚点：既保证 queryKey 不在无关渲染中抖动，
+  // 又确保用户点击刷新、切换 Tab 或导出时能够推进到最新时间窗口
+  const [windowAnchor, setWindowAnchor] = useState<number>(() => Date.now())
+
   const activeRange = useMemo(
-    () => resolveRecordsWindow({ preset, startTime, endTime }),
-    [preset, startTime, endTime]
+    () =>
+      resolveRecordsWindow(
+        { preset, startTime, endTime },
+        new Date(windowAnchor)
+      ),
+    [preset, startTime, endTime, windowAnchor]
   )
 
   const matched = search.matched
@@ -46,6 +53,7 @@ export function useRecordsPage() {
   const [selectedTab, setSelectedTab] = useState<RecordsTab>('recognitions')
 
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const [exportDialogMounted, setExportDialogMounted] = useState(false)
   const [exportDialogMode, setExportDialogMode] = useState<
     'selection' | 'batch'
   >('batch')
@@ -112,6 +120,7 @@ export function useRecordsPage() {
 
   const handleTabChange = useCallback(
     (nextTab: RecordsTab) => {
+      setWindowAnchor(Date.now())
       updateSearch({
         tab: nextTab,
         page: 1,
@@ -125,6 +134,34 @@ export function useRecordsPage() {
   )
 
   const handleRefresh = useCallback(() => {
+    const now = Date.now()
+    const nextRange = resolveRecordsWindow(
+      { preset, startTime, endTime },
+      new Date(now)
+    )
+    setWindowAnchor(now)
+    // 若时间窗口未发生位移（如今日全天同一天内或自定义绝对区间），主动触发 refetch
+    if (
+      nextRange.startTime === activeRange.startTime &&
+      nextRange.endTime === activeRange.endTime
+    ) {
+      if (tab === 'recognitions') void recognitionsQuery.refetch()
+      else if (tab === 'alarms') void alarmsQuery.refetch()
+      else void capturesQuery.refetch()
+    }
+  }, [
+    preset,
+    startTime,
+    endTime,
+    activeRange.startTime,
+    activeRange.endTime,
+    tab,
+    recognitionsQuery,
+    alarmsQuery,
+    capturesQuery,
+  ])
+
+  const handleRetry = useCallback(() => {
     if (tab === 'recognitions') void recognitionsQuery.refetch()
     else if (tab === 'alarms') void alarmsQuery.refetch()
     else void capturesQuery.refetch()
@@ -140,41 +177,86 @@ export function useRecordsPage() {
   )
 
   const handleOpenBatchExport = useCallback(() => {
+    setWindowAnchor(Date.now())
     setExportDialogMode('batch')
+    setExportDialogMounted(true)
     setExportDialogOpen(true)
   }, [])
 
   const handleOpenSelectionExport = useCallback(() => {
     setExportDialogMode('selection')
+    setExportDialogMounted(true)
     setExportDialogOpen(true)
   }, [])
 
+  const handleViewChange = useCallback(
+    (nextView: 'grid' | 'table') => updateSearch({ view: nextView }),
+    [updateSearch]
+  )
+
+  const handleCameraChange = useCallback(
+    (nextCam?: string) => updateSearch({ cameraId: nextCam, page: 1 }),
+    [updateSearch]
+  )
+
+  const handleMatchedChange = useCallback(
+    (nextMatched?: 'all' | 'true' | 'false') =>
+      updateSearch({ matched: nextMatched, page: 1 }),
+    [updateSearch]
+  )
+
+  const handlePersonIdChange = useCallback(
+    (nextPid?: string) => updateSearch({ personId: nextPid, page: 1 }),
+    [updateSearch]
+  )
+
+  const handleAlarmTypeChange = useCallback(
+    (nextAt?: string) => updateSearch({ alarmType: nextAt, page: 1 }),
+    [updateSearch]
+  )
+
+  const handleTargetTypeChange = useCallback(
+    (nextTt?: string) => updateSearch({ targetType: nextTt, page: 1 }),
+    [updateSearch]
+  )
+
+  const handlePageChange = useCallback(
+    (nextPage: number) => updateSearch({ page: nextPage }),
+    [updateSearch]
+  )
+
+  const handlePageSizeChange = useCallback(
+    (nextPageSize: number) => updateSearch({ pageSize: nextPageSize, page: 1 }),
+    [updateSearch]
+  )
+
   const handleDateRangeChange = useCallback(
-    (range: RecordsDateRange) =>
+    (range: RecordsDateRange) => {
+      setWindowAnchor(Date.now())
       updateSearch({
         preset: range.preset,
         startTime: range.startTime,
         endTime: range.endTime,
         page: 1,
-      }),
+      })
+    },
     [updateSearch]
   )
 
-  const handleResetFilters = useCallback(
-    () =>
-      updateSearch({
-        cameraId: undefined,
-        preset: undefined,
-        startTime: undefined,
-        endTime: undefined,
-        matched: undefined,
-        personId: undefined,
-        alarmType: undefined,
-        targetType: undefined,
-        page: 1,
-      }),
-    [updateSearch]
-  )
+  const handleResetFilters = useCallback(() => {
+    setWindowAnchor(Date.now())
+    updateSearch({
+      cameraId: undefined,
+      preset: undefined,
+      startTime: undefined,
+      endTime: undefined,
+      matched: undefined,
+      personId: undefined,
+      alarmType: undefined,
+      targetType: undefined,
+      page: 1,
+    })
+  }, [updateSearch])
 
   const isFetching =
     recognitionsQuery.isFetching ||
@@ -251,14 +333,23 @@ export function useRecordsPage() {
     selectedTab,
     exportDialogOpen,
     setExportDialogOpen,
+    exportDialogMounted,
     exportDialogMode,
     exportQueryParams,
-    updateSearch,
     handleTabChange,
     handleRefresh,
+    handleRetry,
     handleOpenDetail,
     handleOpenBatchExport,
     handleOpenSelectionExport,
+    handleViewChange,
+    handleCameraChange,
+    handleMatchedChange,
+    handlePersonIdChange,
+    handleAlarmTypeChange,
+    handleTargetTypeChange,
+    handlePageChange,
+    handlePageSizeChange,
     handleDateRangeChange,
     handleResetFilters,
   }

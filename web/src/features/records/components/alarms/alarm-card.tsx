@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, type KeyboardEvent } from 'react'
 import { AlertTriangle, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { statusDotClass, statusLevelClass } from '@/lib/status-palette'
@@ -25,17 +25,28 @@ export const AlarmCard = memo(function AlarmCard({
   const formattedTime = formatRecordTime(item.capturedAt, 'MM-dd HH:mm:ss')
   const scorePercent = Math.round((item.score || 0) * 100)
 
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onSelect(item)
+    }
+  }
+
   return (
     <Card
+      role='button'
+      tabIndex={0}
+      aria-label={`${item.alarmType} - ${t('card.viewDetail')}`}
       onClick={() => onSelect(item)}
-      className='group relative cursor-pointer overflow-hidden border-border bg-card transition-all hover:border-destructive/50 hover:shadow-md'
+      onKeyDown={handleKeyDown}
+      className='group relative cursor-pointer overflow-hidden border-border bg-card transition-all hover:border-destructive/50 hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden'
     >
       <div className='relative aspect-square w-full overflow-hidden bg-muted/40'>
         <MediaImage
           path={item.cropPath || item.imagePath}
           alt={item.alarmType}
           className='size-full transition-transform duration-300 group-hover:scale-105'
-          fallbackText='Alarm Snapshot'
+          fallbackText={t('card.fallbackAlarm')}
         />
 
         {/* 顶部告警类型 Badge（遵循 §1.3.2 Dot-Indicator Outline 规范） */}

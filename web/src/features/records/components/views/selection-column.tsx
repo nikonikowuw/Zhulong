@@ -1,4 +1,5 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Checkbox } from '@/components/ui/checkbox'
 
 export interface TableSelectionState<T> {
@@ -44,6 +45,7 @@ export function TableSelectionProvider<T>({
 }
 
 export function SelectionHeaderCell() {
+  const { t } = useTranslation('records')
   const { isAllPageSelected, isPartiallySelected, onToggleSelectAll } =
     useContext(TableSelectionContext)
 
@@ -58,7 +60,7 @@ export function SelectionHeaderCell() {
               : false
         }
         onCheckedChange={() => onToggleSelectAll?.()}
-        aria-label='Select all'
+        aria-label={t('selection.selectAll')}
         className='size-4'
       />
     </div>
@@ -70,6 +72,7 @@ export function SelectionRowCell<T extends { id: string }>({
 }: {
   item: T
 }) {
+  const { t } = useTranslation('records')
   const { isSelected, onToggleSelect } = useContext(TableSelectionContext)
 
   return (
@@ -80,7 +83,7 @@ export function SelectionRowCell<T extends { id: string }>({
       <Checkbox
         checked={isSelected?.(item.id) ?? false}
         onCheckedChange={() => onToggleSelect?.(item)}
-        aria-label={`Select row ${item.id}`}
+        aria-label={t('selection.selectRow', { id: item.id })}
         className='size-4'
       />
     </div>

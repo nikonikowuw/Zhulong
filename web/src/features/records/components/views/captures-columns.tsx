@@ -9,6 +9,7 @@ import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { formatRecordTime } from '../../data/format-time'
 import { algorithmLabel, type Capture } from '../../data/schema'
 import { formatTargetType, targetTypeBadgeClass } from '../../data/target-type'
+import { extractVehicleAttributes } from '../../data/vehicle-attributes'
 import { MediaImage } from '../common/media-image'
 import { VehicleEvidence } from '../vehicles/vehicle-evidence'
 import { createSelectionColumn } from './create-selection-column'
@@ -42,7 +43,7 @@ export function buildCaptureColumns(
               alt={formatTargetType(t, row.original.targetType)}
               className='size-full'
               imageClassName='object-contain p-0.5'
-              fallbackText='Capture'
+              fallbackText={t('card.fallbackCaptureShort')}
             />
           </div>
         ),
@@ -81,13 +82,9 @@ export function buildCaptureColumns(
       ),
       enableSorting: false,
       cell: ({ row }) => {
-        const attrs = row.original.attributes as
-          | Record<string, unknown>
-          | undefined
-        const plateNo =
-          typeof attrs?.plate_number === 'string' ? attrs.plate_number : ''
-        const plateColor =
-          typeof attrs?.plate_color === 'string' ? attrs.plate_color : ''
+        const { plateNumber: plateNo, plateColor } = extractVehicleAttributes(
+          row.original.attributes
+        )
         if (!plateNo) {
           return <span className='text-xs text-muted-foreground'>-</span>
         }

@@ -24,8 +24,11 @@ export interface BoundingBoxCanvasProps {
   imageClassName?: string
   /** 控制是否渲染标注覆盖层，默认 true */
   showBoxes?: boolean
-  /** 图像尺寸加载成功后的回调 */
+  /** 图像加载成功后的回调 */
   onDimensionsLoaded?: (dimensions: { width: number; height: number }) => void
+  /** 点击已加载全景图触发的预览回调（错误态不挂载，避免遮挡重试按钮） */
+  onPreviewClick?: () => void
+  previewLabel?: string
 }
 
 function isValidBox(box?: BoundingBox): boolean {
@@ -64,7 +67,7 @@ function normalizeCoords(
 
 export function BoundingBoxCanvas({
   imagePath,
-  alt = 'Inspection Scene',
+  alt,
   primaryBox,
   primaryLabel,
   secondaryBox,
@@ -73,8 +76,11 @@ export function BoundingBoxCanvas({
   imageClassName,
   showBoxes = true,
   onDimensionsLoaded,
+  onPreviewClick,
+  previewLabel,
 }: BoundingBoxCanvasProps) {
   const { t } = useTranslation('records')
+  const resolvedAlt = alt ?? t('card.fallbackScene')
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [imgLoaded, setImgLoaded] = useState(false)
   const [imgError, setImgError] = useState(false)
@@ -170,7 +176,7 @@ export function BoundingBoxCanvas({
         <img
           key={`${resolvedUrl}-${retryNonce}`}
           src={resolvedUrl}
-          alt={alt}
+          alt={resolvedAlt}
           className={cn(
             'block w-auto max-w-full transition-opacity duration-300 ease-out',
             className || 'max-h-[600px]',
@@ -188,6 +194,16 @@ export function BoundingBoxCanvas({
             onDimensionsLoaded?.(dims)
           }}
           onError={() => setImgError(true)}
+        />
+      )}
+
+      {/* 仅在图像加载成功时挂载全屏触发按钮，避免错误态下遮挡重试按钮 */}
+      {imgLoaded && !imgError && onPreviewClick && (
+        <button
+          type='button'
+          onClick={onPreviewClick}
+          aria-label={previewLabel}
+          className='absolute inset-0 cursor-zoom-in bg-transparent focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
         />
       )}
 

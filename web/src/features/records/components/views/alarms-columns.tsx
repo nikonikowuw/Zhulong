@@ -30,7 +30,7 @@ export function buildAlarmColumns(
             path={row.original.cropPath || row.original.imagePath}
             alt={row.original.alarmType}
             className='size-full'
-            fallbackText='Alarm'
+            fallbackText={t('card.fallbackAlarmShort')}
           />
         </div>
       ),

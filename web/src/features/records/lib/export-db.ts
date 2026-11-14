@@ -272,10 +272,14 @@ async function pruneExpiredTasks(maxAgeMs = DRAFT_TTL_MS): Promise<number> {
   const cutoff = Date.now() - maxAgeMs
   // 用 <= 而不是 <：maxAgeMs 为 0 时 cutoff 可能与 updatedAt 落在同一毫秒，
   // 严格小于会让「刚写入的也算过期」这个语义变得依赖时钟分辨率。
-  const stale = tasks.filter((t) => t.updatedAt <= cutoff)
-  for (const task of stale) {
-    await clearTaskDraft(task.taskId)
-  }
+  // 已完成任务的产物保留 10s 宽限期，之后随过期清理一起回收。
+  const completedCutoff = Date.now() - Math.min(maxAgeMs, 10_000)
+  const stale = tasks.filter(
+    (t) =>
+      t.updatedAt <= cutoff ||
+      (t.status === 'completed' && t.updatedAt <= completedCutoff)
+  )
+  await Promise.all(stale.map((task) => clearTaskDraft(task.taskId)))
   return stale.length
 }
 

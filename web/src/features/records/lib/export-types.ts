@@ -41,9 +41,20 @@ export interface OverlayLabelContext {
 
 export type OverlayLabelBuilder = (ctx: OverlayLabelContext) => string
 
+export interface ExportProgressLabels {
+  preparing?: string
+  fetching?: (tab: RecordsTab, current: number, total: number) => string
+  generatingCsv?: (tab: RecordsTab) => string
+  generatingCsvSingle?: string
+  processingImages?: (current: number, total: number) => string
+  zipping?: string
+  completed?: string
+}
+
 export interface ExportLabels {
   scene?: OverlayLabelBuilder
   person?: string
+  progress?: ExportProgressLabels
 }
 
 export interface ExportQueryConfig {

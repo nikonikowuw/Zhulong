@@ -1,6 +1,5 @@
 import { format } from 'date-fns'
 import { strToU8, zip, type AsyncZippable } from 'fflate'
-import { recordsApi } from '../api/records-api'
 import { type RecordItem, type RecordsTab } from '../data/schema'
 import { exportRecordsToCsv } from './export-csv'
 import {
@@ -24,12 +23,17 @@ import {
   type JobsSnapshot,
 } from './export-jobs'
 import {
+  fetchRecordsByQuery,
+  probeRecordTotals,
+  runConcurrentPool,
+  type EmitExportProgress,
+} from './export-records-fetcher'
+import {
   DEFAULT_MAX_RECORDS,
   ExportLimitError,
   HARD_MAX_IMAGES,
   type ExportOptions,
   type ExportPhase,
-  type ExportQueryConfig,
   type ExportResult,
   type ImageJob,
   type JobFailure,
@@ -50,7 +54,6 @@ export {
   type OverlayLabelContext,
 } from './export-types'
 
-const RECORD_PAGE_SIZE = 100
 const IMAGE_CONCURRENCY = 3
 const MANIFEST_KEY = 'manifest.json'
 const DRAFT_PERSIST_EVERY = 10
@@ -64,14 +67,6 @@ const PHASE_RANGE: Record<ExportPhase, [number, number]> = {
   zipping: [92, 99],
   completed: [99, 100],
 }
-
-type Emit = (
-  phase: ExportPhase,
-  current: number,
-  total: number,
-  message: string | undefined,
-  ratio: number
-) => void
 
 function percentFor(phase: ExportPhase, ratio: number): number {
   const [start, end] = PHASE_RANGE[phase]
@@ -90,141 +85,7 @@ function createTaskId(): string {
   return `task_${Date.now()}_${random}`
 }
 
-async function runConcurrentPool<T>(
-  items: T[],
-  limit: number,
-  signal: AbortSignal | undefined,
-  fn: (item: T) => Promise<void>
-): Promise<void> {
-  let currentIndex = 0
-
-  const workers = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      while (currentIndex < items.length) {
-        assertNotAborted(signal)
-        const index = currentIndex++
-        await fn(items[index])
-      }
-    }
-  )
-
-  await Promise.all(workers)
-}
-
-interface RecordPage {
-  items: RecordItem[]
-  total: number
-}
-
-async function requestRecordPage(
-  tab: RecordsTab,
-  query: ExportQueryConfig,
-  page: number,
-  pageSize: number,
-  endTime: string
-): Promise<RecordPage> {
-  if (tab === 'recognitions') {
-    const resp = await recordsApi.getRecognitions({
-      page,
-      pageSize,
-      cameraId: query.cameraId,
-      personId: query.personId,
-      matched: query.matched,
-      startTime: query.startTime,
-      endTime,
-    })
-    return { items: resp.items, total: resp.total }
-  }
-  if (tab === 'alarms') {
-    const resp = await recordsApi.getAlarms({
-      page,
-      pageSize,
-      cameraId: query.cameraId,
-      alarmType: query.alarmType,
-      startTime: query.startTime,
-      endTime,
-    })
-    return { items: resp.items, total: resp.total }
-  }
-  const resp = await recordsApi.getCaptures({
-    page,
-    pageSize,
-    cameraId: query.cameraId,
-    targetType: tab === 'vehicles' ? 'vehicle' : query.targetType,
-    startTime: query.startTime,
-    endTime,
-  })
-  return { items: resp.items, total: resp.total }
-}
-
-async function probeRecordTotals(
-  query: ExportQueryConfig,
-  tabs: RecordsTab[],
-  endTime: string,
-  signal: AbortSignal | undefined
-): Promise<number> {
-  let total = 0
-  for (const tab of tabs) {
-    assertNotAborted(signal)
-    const page = await requestRecordPage(tab, query, 1, 1, endTime)
-    total += page.total
-  }
-  return total
-}
-
-async function fetchRecordsByQuery(
-  query: ExportQueryConfig,
-  tabs: RecordsTab[],
-  endTime: string,
-  expectedTotal: number,
-  maxRecords: number,
-  signal: AbortSignal | undefined,
-  emit: Emit
-): Promise<Map<RecordsTab, RecordItem[]>> {
-  const dataset = new Map<RecordsTab, RecordItem[]>()
-  const denom = Math.max(expectedTotal, 1)
-  let fetched = 0
-
-  for (const tab of tabs) {
-    const items: RecordItem[] = []
-    let page = 1
-    while (true) {
-      assertNotAborted(signal)
-      const resp = await requestRecordPage(
-        tab,
-        query,
-        page,
-        RECORD_PAGE_SIZE,
-        endTime
-      )
-      items.push(...resp.items)
-      fetched += resp.items.length
-
-      if (fetched > maxRecords) {
-        throw new ExportLimitError('records', maxRecords, fetched)
-      }
-
-      emit(
-        'fetching_records',
-        fetched,
-        Math.max(expectedTotal, fetched),
-        `Fetching ${tab}... (${fetched}/${Math.max(expectedTotal, fetched)})`,
-        fetched / denom
-      )
-
-      if (items.length >= resp.total || resp.items.length === 0) break
-      page++
-    }
-    dataset.set(tab, items)
-  }
-
-  return dataset
-}
-
-/**
- * 感知记录导出流水线核心执行入口
- */
+/** 感知记录导出流水线核心执行入口 */
 export async function executeRecordsExport(
   options: ExportOptions
 ): Promise<ExportResult> {
@@ -246,7 +107,8 @@ export async function executeRecordsExport(
 
   assertNotAborted(signal)
 
-  const emit: Emit = (phase, current, total, message, ratio) => {
+  const progressLabels = labels?.progress
+  const emit: EmitExportProgress = (phase, current, total, message, ratio) => {
     onProgress?.({
       phase,
       current,
@@ -256,7 +118,7 @@ export async function executeRecordsExport(
     })
   }
 
-  emit('preparing', 0, 1, 'Preparing export...', 0)
+  emit('preparing', 0, 1, progressLabels?.preparing ?? 'Preparing export...', 0)
 
   const draft = resumeTaskId ? await exportDb.getTaskDraft(resumeTaskId) : null
   const snapshot = draft ? await loadResumeSnapshot(draft.taskId) : null
@@ -276,7 +138,6 @@ export async function executeRecordsExport(
     : maxImagesOption
 
   const warnings: string[] = []
-
   let tabs: RecordsTab[]
   let dataset: Map<RecordsTab, RecordItem[]> | null = null
   let reportBytes = new Map<RecordsTab, Uint8Array>()
@@ -321,7 +182,8 @@ export async function executeRecordsExport(
       expectedTotal,
       maxRecords,
       signal,
-      emit
+      emit,
+      labels
     )
     recordCount = tabs.reduce(
       (sum, tab) => sum + (dataset?.get(tab)?.length ?? 0),
@@ -335,10 +197,16 @@ export async function executeRecordsExport(
   if (exportCsv && !exportImages && tabs.length === 1 && dataset) {
     const tab = tabs[0]
     const records = dataset.get(tab) ?? []
-    emit('generating_csv', 1, 1, 'Generating CSV file...', 1)
+    emit(
+      'generating_csv',
+      1,
+      1,
+      progressLabels?.generatingCsvSingle ?? 'Generating CSV file...',
+      1
+    )
     const csvString = exportRecordsToCsv(tab, records, resolveCameraName)
     assertNotAborted(signal)
-    emit('completed', 1, 1, 'Export completed', 1)
+    emit('completed', 1, 1, progressLabels?.completed ?? 'Export completed', 1)
     return {
       blob: new Blob([csvString], { type: 'text/csv;charset=utf-8;' }),
       filename: `zhulong_${tab}_export_${localStamp()}.csv`,
@@ -377,7 +245,7 @@ export async function executeRecordsExport(
           'generating_csv',
           index,
           dataset.size,
-          `Generating ${tab} report...`,
+          progressLabels?.generatingCsv?.(tab) ?? `Generating ${tab} report...`,
           index / Math.max(dataset.size, 1)
         )
       }
@@ -493,7 +361,8 @@ export async function executeRecordsExport(
       'processing_images',
       0,
       totalJobs,
-      `Processing images: 0 / ${totalJobs}`,
+      progressLabels?.processingImages?.(0, totalJobs) ??
+        `Processing images: 0 / ${totalJobs}`,
       completedSet.size / denominator
     )
 
@@ -528,7 +397,8 @@ export async function executeRecordsExport(
             'processing_images',
             processed,
             totalJobs,
-            `Processing images: ${processed} / ${totalJobs}`,
+            progressLabels?.processingImages?.(processed, totalJobs) ??
+              `Processing images: ${processed} / ${totalJobs}`,
             processed / denominator
           )
         }
@@ -567,7 +437,7 @@ export async function executeRecordsExport(
   ]
 
   assertNotAborted(signal)
-  emit('zipping', 0, 1, 'Compressing archive...', 0)
+  emit('zipping', 0, 1, progressLabels?.zipping ?? 'Compressing archive...', 0)
 
   const zipData = await new Promise<Uint8Array>((resolve, reject) => {
     zip(zipFiles, (err, data) => {
@@ -586,11 +456,11 @@ export async function executeRecordsExport(
   if (persistDraftStatus) {
     await persistDraftStatus('completed')
     setTimeout(() => {
-      void exportDb.clearTaskDraft(taskId)
+      void exportDb.clearTaskDraft(taskId).catch(() => undefined)
     }, 10_000)
   }
 
-  emit('completed', 1, 1, 'Export completed', 1)
+  emit('completed', 1, 1, progressLabels?.completed ?? 'Export completed', 1)
 
   return {
     blob: toZipBlob(zipData),

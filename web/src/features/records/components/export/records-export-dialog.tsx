@@ -108,7 +108,7 @@ export function RecordsExportDialog({
     }
   }, [open])
 
-  const overlayLabels = useMemo<ExportLabels>(
+  const exportLabels = useMemo<ExportLabels>(
     () => ({
       scene: (ctx) => {
         const percent = Math.round((ctx.similarity ?? ctx.score ?? 0) * 100)
@@ -129,6 +129,22 @@ export function RecordsExportDialog({
         return `${subject} (${percent}%)`
       },
       person: t('export.overlayPerson'),
+      progress: {
+        preparing: t('export.progress.preparing'),
+        fetching: (tab, current, total) =>
+          t('export.progress.fetching', {
+            tab: t(`tabs.${tab}`),
+            current,
+            total,
+          }),
+        generatingCsv: (tab) =>
+          t('export.progress.generatingCsv', { tab: t(`tabs.${tab}`) }),
+        generatingCsvSingle: t('export.progress.generatingCsvSingle'),
+        processingImages: (current, total) =>
+          t('export.progress.processingImages', { current, total }),
+        zipping: t('export.progress.zipping'),
+        completed: t('export.progress.completed'),
+      },
     }),
     [t]
   )
@@ -145,9 +161,7 @@ export function RecordsExportDialog({
     setSelectedTabs((prev) => {
       const next = new Set(prev)
       if (next.has(tabKey)) {
-        if (next.size > 1) {
-          next.delete(tabKey)
-        }
+        if (next.size > 1) next.delete(tabKey)
       } else {
         next.add(tabKey)
       }
@@ -171,7 +185,7 @@ export function RecordsExportDialog({
       return
     }
 
-    if (!exportCsv && !exportImages) {
+    if (!resumeTaskId && !exportCsv && !exportImages) {
       toast.error(t('export.selectAtLeastOneFormat'))
       return
     }
@@ -192,10 +206,7 @@ export function RecordsExportDialog({
         resumeTaskId,
         selectedRecords:
           mode === 'selection'
-            ? {
-                tab: activeTab,
-                items: selectedItems,
-              }
+            ? { tab: activeTab, items: selectedItems }
             : undefined,
         queryConfig:
           mode === 'batch'
@@ -215,15 +226,13 @@ export function RecordsExportDialog({
         burnOverlay,
         imageKind,
         maxImages: limitImages ? maxImages : undefined,
-        labels: overlayLabels,
+        labels: exportLabels,
         signal: controller.signal,
         resolveCameraName: cameraName,
         onProgress: setProgress,
       })
 
-      if (controller.signal.aborted) {
-        return
-      }
+      if (controller.signal.aborted) return
 
       triggerDownload(result.blob, result.filename)
       setPendingDraft(null)
@@ -237,15 +246,10 @@ export function RecordsExportDialog({
       }
       onOpenChange(false)
     } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        return
-      }
+      if (err instanceof DOMException && err.name === 'AbortError') return
       if (err instanceof ExportLimitError) {
         toast.error(
-          t('export.tooManyRecords', {
-            total: err.actual,
-            limit: err.limit,
-          })
+          t('export.tooManyRecords', { total: err.actual, limit: err.limit })
         )
         return
       }
@@ -267,9 +271,7 @@ export function RecordsExportDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (isExporting) {
-          handleCancelExport()
-        }
+        if (isExporting) handleCancelExport()
         onOpenChange(next)
       }}
     >

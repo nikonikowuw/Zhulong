@@ -1,15 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import { Cross2Icon } from '@radix-ui/react-icons'
-import {
-  Download,
-  LayoutGrid,
-  RotateCcw,
-  Table as TableIcon,
-} from 'lucide-react'
+import { LayoutGrid, Table as TableIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -26,56 +19,8 @@ import {
 } from '../data/time-presets'
 import { useAlarmTypes } from '../hooks/use-alarm-types'
 import { useCaptureTargetTypes } from '../hooks/use-capture-target-types'
+import { PersonIdSearchInput } from './person-id-search-input'
 import { RecordsDateRangePicker } from './records-date-range-picker'
-
-const PERSON_ID_DEBOUNCE_MS = 300
-
-function PersonIdSearchInput({
-  value,
-  placeholder,
-  onCommit,
-}: {
-  value: string
-  placeholder: string
-  onCommit: (next?: string) => void
-}) {
-  const [draft, setDraft] = useState(value)
-  const [syncedValue, setSyncedValue] = useState(value)
-  const onCommitRef = useRef(onCommit)
-
-  useEffect(() => {
-    onCommitRef.current = onCommit
-  }, [onCommit])
-
-  if (value !== syncedValue) {
-    setSyncedValue(value)
-    setDraft(value)
-  }
-
-  useEffect(() => {
-    const normalizedDraft = draft.trim()
-    const normalizedValue = value.trim()
-    if (normalizedDraft === normalizedValue) return
-    const timer = setTimeout(() => {
-      onCommitRef.current(normalizedDraft || undefined)
-    }, PERSON_ID_DEBOUNCE_MS)
-    return () => clearTimeout(timer)
-  }, [draft, value])
-
-  return (
-    <Input
-      placeholder={placeholder}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          onCommitRef.current(draft.trim() || undefined)
-        }
-      }}
-      className='h-8 w-37.5 text-xs lg:w-62.5'
-    />
-  )
-}
 
 export interface RecordsToolbarProps {
   tab: RecordsTab
@@ -95,9 +40,6 @@ export interface RecordsToolbarProps {
   onAlarmTypeChange?: (alarmType?: string) => void
   onTargetTypeChange?: (targetType?: string) => void
   onResetFilters: () => void
-  onRefresh?: () => void
-  isFetching?: boolean
-  onExport?: () => void
 }
 
 export function RecordsToolbar({
@@ -117,9 +59,6 @@ export function RecordsToolbar({
   onAlarmTypeChange,
   onTargetTypeChange,
   onResetFilters,
-  onRefresh,
-  isFetching = false,
-  onExport,
 }: RecordsToolbarProps) {
   const { t } = useTranslation('records')
   const { data: cameraData } = useAllCameras()
@@ -159,7 +98,6 @@ export function RecordsToolbar({
     <div className='flex items-center justify-between gap-2'>
       {/* 左侧：搜索/类型选择在最首位，紧接着是各个过滤控件 */}
       <div className='flex flex-1 flex-wrap items-center gap-2'>
-        {/* 1. 首位过滤控件：识别记录使用人员搜索框，告警和抓拍使用动态类型下拉选择 */}
         {tab === 'recognitions' && (
           <PersonIdSearchInput
             value={personId ?? ''}
@@ -210,7 +148,6 @@ export function RecordsToolbar({
           </Select>
         )}
 
-        {/* 2. 摄像机筛选下拉 */}
         <Select
           value={cameraId ?? 'all'}
           onValueChange={(val) =>
@@ -230,7 +167,6 @@ export function RecordsToolbar({
           </SelectContent>
         </Select>
 
-        {/* 3. 时间范围选择器 */}
         <RecordsDateRangePicker
           preset={dateRange.preset}
           startTime={dateRange.startTime}
@@ -239,7 +175,6 @@ export function RecordsToolbar({
           onRangeChange={onDateRangeChange}
         />
 
-        {/* 4. Tab 专属细化过滤项 */}
         {tab === 'recognitions' && (
           <Select
             value={matched ?? 'all'}
@@ -262,7 +197,6 @@ export function RecordsToolbar({
           </Select>
         )}
 
-        {/* 5. 重置筛选按钮 */}
         {isFiltered && (
           <Button
             variant='ghost'
@@ -276,20 +210,8 @@ export function RecordsToolbar({
         )}
       </div>
 
-      {/* 右侧：视图切换、可选导出与可选刷新 */}
+      {/* 右侧：视图切换 */}
       <div className='flex items-center gap-2'>
-        {onExport && (
-          <Button
-            variant='outline'
-            size='sm'
-            onClick={onExport}
-            className='h-8 gap-1.5 text-xs'
-          >
-            <Download className='size-3.5' />
-            <span>{t('export.button')}</span>
-          </Button>
-        )}
-
         <div className='flex items-center rounded-md border border-border bg-muted/30 p-0.5'>
           <Button
             variant={view === 'grid' ? 'secondary' : 'ghost'}
@@ -312,21 +234,6 @@ export function RecordsToolbar({
             <span>{t('views.table')}</span>
           </Button>
         </div>
-
-        {onRefresh && (
-          <Button
-            variant='outline'
-            size='sm'
-            onClick={onRefresh}
-            disabled={isFetching}
-            className='h-8 px-2.5'
-            title={t('filters.refresh')}
-          >
-            <RotateCcw
-              className={cn('size-3.5', isFetching && 'animate-spin')}
-            />
-          </Button>
-        )}
       </div>
     </div>
   )

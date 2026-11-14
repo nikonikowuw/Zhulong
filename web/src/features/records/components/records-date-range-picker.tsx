@@ -13,7 +13,12 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
-import { type RecordsDateRange, type TimePresetKey } from '../data/time-presets'
+import {
+  PERIOD_TIME_PRESETS,
+  RECENT_TIME_PRESETS,
+  type RecordsDateRange,
+  type TimePresetKey,
+} from '../data/time-presets'
 
 interface RecordsDateRangePickerProps {
   preset?: TimePresetKey
@@ -32,36 +37,28 @@ function parseValidDate(value?: string): Date | undefined {
 
 function formatBadgeText(startStr?: string, endStr?: string): string {
   if (!startStr && !endStr) return ''
-  try {
-    const s = parseValidDate(startStr)
-    const e = parseValidDate(endStr)
-    if (s && e) {
-      if (format(s, 'yyyy-MM-dd') === format(e, 'yyyy-MM-dd')) {
-        return `${format(s, 'MM-dd HH:mm')} ~ ${format(e, 'HH:mm')}`
-      }
-      return `${format(s, 'MM-dd HH:mm')} ~ ${format(e, 'MM-dd HH:mm')}`
+  const s = parseValidDate(startStr)
+  const e = parseValidDate(endStr)
+  if (s && e) {
+    if (format(s, 'yyyy-MM-dd') === format(e, 'yyyy-MM-dd')) {
+      return `${format(s, 'MM-dd HH:mm')} ~ ${format(e, 'HH:mm')}`
     }
-    if (s) return `>= ${format(s, 'MM-dd HH:mm')}`
-    if (e) return `<= ${format(e, 'MM-dd HH:mm')}`
-  } catch {
-    return ''
+    return `${format(s, 'MM-dd HH:mm')} ~ ${format(e, 'MM-dd HH:mm')}`
   }
+  if (s) return `>= ${format(s, 'MM-dd HH:mm')}`
+  if (e) return `<= ${format(e, 'MM-dd HH:mm')}`
   return ''
 }
 
-const recentPresets: { key: TimePresetKey; labelKey: string }[] = [
-  { key: '15m', labelKey: 'toolbar.presets.15m' },
-  { key: '30m', labelKey: 'toolbar.presets.30m' },
-  { key: '1h', labelKey: 'toolbar.presets.1h' },
-  { key: '6h', labelKey: 'toolbar.presets.6h' },
-  { key: '24h', labelKey: 'toolbar.presets.24h' },
-]
-
-const periodPresets: { key: TimePresetKey; labelKey: string }[] = [
-  { key: 'today', labelKey: 'toolbar.presets.today' },
-  { key: '7d', labelKey: 'toolbar.presets.7d' },
-  { key: '30d', labelKey: 'toolbar.presets.30d' },
-]
+function buildLocalDateTime(
+  dateStr: string,
+  timePart: string,
+  fallbackTime: string
+): Date {
+  const candidate = new Date(`${dateStr}T${timePart || fallbackTime}`)
+  if (!Number.isNaN(candidate.getTime())) return candidate
+  return new Date(`${dateStr}T${fallbackTime}`)
+}
 
 export function RecordsDateRangePicker({
   preset,
@@ -73,7 +70,6 @@ export function RecordsDateRangePicker({
   const { t } = useTranslation('records')
   const [open, setOpen] = useState(false)
 
-  // 内部日历临时选中状态
   const [selectedRange, setSelectedRange] = useState<DateRange | undefined>(
     undefined
   )
@@ -103,7 +99,6 @@ export function RecordsDateRangePicker({
   }
 
   const handlePresetSelect = (key: TimePresetKey) => {
-    // 只提交预设本身，由 resolveRecordsWindow 现算窗口：URL 不存会过期的绝对时间戳。
     onRangeChange({ preset: key })
     setOpen(false)
   }
@@ -121,8 +116,12 @@ export function RecordsDateRangePicker({
       'yyyy-MM-dd'
     )
 
-    const startDate = new Date(`${startDateStr}T${startTimePart || '00:00:00'}`)
-    const endDate = new Date(`${endDateStr}T${endTimePart || '23:59:59'}`)
+    let startDate = buildLocalDateTime(startDateStr, startTimePart, '00:00:00')
+    let endDate = buildLocalDateTime(endDateStr, endTimePart, '23:59:59')
+
+    if (startDate.getTime() > endDate.getTime()) {
+      ;[startDate, endDate] = [endDate, startDate]
+    }
 
     onRangeChange({
       startTime: startDate.toISOString(),
@@ -161,15 +160,14 @@ export function RecordsDateRangePicker({
 
       <PopoverContent className='w-auto p-0 shadow-lg' align='start'>
         <div className='flex flex-col md:flex-row'>
-          {/* 左侧：日历主体与精细时分微调 */}
           <div className='flex flex-col p-3'>
-            {/* 顶部时分精确控制 */}
             <div className='mb-2 flex items-center justify-between gap-2 border-b border-border pb-2'>
               <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
                 <Clock className='size-3.5' />
                 <Input
                   type='time'
                   step='1'
+                  aria-label={t('toolbar.startTime')}
                   value={startTimePart}
                   onChange={(e) => setStartTimePart(e.target.value)}
                   className='h-7 w-22 bg-background font-mono text-xs'
@@ -178,6 +176,7 @@ export function RecordsDateRangePicker({
                 <Input
                   type='time'
                   step='1'
+                  aria-label={t('toolbar.endTime')}
                   value={endTimePart}
                   onChange={(e) => setEndTimePart(e.target.value)}
                   className='h-7 w-22 bg-background font-mono text-xs'
@@ -209,7 +208,6 @@ export function RecordsDateRangePicker({
               </div>
             </div>
 
-            {/* 单月日历主体 */}
             <Calendar
               mode='range'
               selected={selectedRange}
@@ -219,7 +217,6 @@ export function RecordsDateRangePicker({
               className='p-0'
             />
 
-            {/* 底部操作底栏 */}
             <div className='mt-2 flex items-center justify-between border-t border-border pt-2.5'>
               {hasRange && !isDefaultWindow && (
                 <Button
@@ -252,7 +249,6 @@ export function RecordsDateRangePicker({
             </div>
           </div>
 
-          {/* 右侧：经典垂直快捷预设 (Quick Ranges Sidebar) */}
           <div className='flex w-full flex-col gap-1 border-t border-border bg-muted/20 p-3 md:w-36 md:border-s md:border-t-0'>
             <span className='mb-1 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase'>
               {t('toolbar.quickPresets')}
@@ -261,7 +257,7 @@ export function RecordsDateRangePicker({
             <span className='mt-1 text-[10px] font-medium text-muted-foreground/70'>
               {t('toolbar.presetGroups.recent')}
             </span>
-            {recentPresets.map((item) => (
+            {RECENT_TIME_PRESETS.map((item) => (
               <Button
                 key={item.key}
                 variant={preset === item.key ? 'secondary' : 'ghost'}
@@ -280,7 +276,7 @@ export function RecordsDateRangePicker({
             <span className='mt-2 text-[10px] font-medium text-muted-foreground/70'>
               {t('toolbar.presetGroups.period')}
             </span>
-            {periodPresets.map((item) => (
+            {PERIOD_TIME_PRESETS.map((item) => (
               <Button
                 key={item.key}
                 variant={preset === item.key ? 'secondary' : 'ghost'}

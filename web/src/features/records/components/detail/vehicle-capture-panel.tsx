@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { type Capture } from '../../data/schema'
+import { extractVehicleAttributes } from '../../data/vehicle-attributes'
 import { MediaImage } from '../common/media-image'
 import { getMediaUrl } from '../common/media-utils'
 import { getPlateBadgeStyle, useCopyFeedback } from './record-detail-helpers'
@@ -20,13 +21,11 @@ export function VehicleCapturePanel({
   const { t } = useTranslation('records')
   const plateCopy = useCopyFeedback()
 
-  const attrs = cap.attributes as Record<string, unknown> | undefined
-  const plateNo =
-    typeof attrs?.plate_number === 'string' ? attrs.plate_number : ''
-  const plateColor =
-    typeof attrs?.plate_color === 'string' ? attrs.plate_color : ''
-  const vehicleType =
-    typeof attrs?.vehicle_type === 'string' ? attrs.vehicle_type : ''
+  const {
+    plateNumber: plateNo,
+    plateColor,
+    vehicleType,
+  } = extractVehicleAttributes(cap.attributes)
 
   return (
     <div className='space-y-3 rounded-lg border border-border bg-card p-4 shadow-xs'>

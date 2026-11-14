@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, type KeyboardEvent } from 'react'
 import { Eye, UserCheck, UserX } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { statusLevelClass } from '@/lib/status-palette'
@@ -24,18 +24,31 @@ export const RecognitionCard = memo(function RecognitionCard({
   const { t } = useTranslation('records')
   const formattedTime = formatRecordTime(item.capturedAt, 'MM-dd HH:mm:ss')
   const simPercent = Math.round((item.similarity || 0) * 100)
+  const displayName =
+    item.personName || (item.matched ? item.personId : t('card.stranger'))
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onSelect(item)
+    }
+  }
 
   return (
     <Card
+      role='button'
+      tabIndex={0}
+      aria-label={`${displayName || t('card.stranger')} - ${t('card.viewDetail')}`}
       onClick={() => onSelect(item)}
-      className='group relative cursor-pointer overflow-hidden border-border bg-card transition-all hover:border-primary/50 hover:shadow-md'
+      onKeyDown={handleKeyDown}
+      className='group relative cursor-pointer overflow-hidden border-border bg-card transition-all hover:border-primary/50 hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden'
     >
       <div className='relative aspect-square w-full overflow-hidden bg-muted/40'>
         <MediaImage
           path={item.faceImagePath || item.imagePath}
-          alt={item.personName || 'Face'}
+          alt={item.personName || t('card.fallbackFaceShort')}
           className='size-full transition-transform duration-300 group-hover:scale-105'
-          fallbackText='Face Crop'
+          fallbackText={t('card.fallbackFace')}
         />
 
         {/* 顶部匹配状态 Badge */}
@@ -78,8 +91,7 @@ export const RecognitionCard = memo(function RecognitionCard({
       <CardContent className='space-y-1.5 p-3'>
         <div className='flex items-center justify-between text-xs'>
           <span className='max-w-[120px] truncate font-semibold text-foreground'>
-            {item.personName ||
-              (item.matched ? item.personId : t('card.stranger'))}
+            {displayName}
           </span>
           <span className='font-mono text-[11px] text-muted-foreground'>
             {formattedTime}

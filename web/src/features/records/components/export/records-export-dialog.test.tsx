@@ -152,4 +152,49 @@ describe('RecordsExportDialog', () => {
     const draftAfter = await exportDb.getTaskDraft('draft-detect-01')
     expect(draftAfter).toBeNull()
   })
+
+  it('allows resuming a pending draft even when current format switches are turned off', async () => {
+    await exportDb.saveTaskDraft({
+      taskId: 'draft-resume-01',
+      mode: 'selection',
+      activeTab: 'recognitions',
+      tabs: ['recognitions'],
+      recordCount: 1,
+      totalCount: 1,
+      completedKeys: [],
+      options: {
+        exportCsv: true,
+        exportImages: true,
+        burnOverlay: false,
+        imageKind: 'scene',
+      },
+      status: 'paused',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+
+    const screen = await render(
+      <RecordsExportDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        activeTab='recognitions'
+        mode='selection'
+      />
+    )
+
+    // 关闭当前的 CSV 开关（图片开关默认也是关）
+    await userEvent.click(
+      screen.getByRole('switch', { name: '结构化数据报表 (CSV)' })
+    )
+    await expect
+      .element(screen.getByRole('switch', { name: '结构化数据报表 (CSV)' }))
+      .not.toBeChecked()
+
+    // 点击继续断点导出不应被 "!exportCsv && !exportImages" 错误拦住
+    const resumeBtn = screen.getByRole('button', { name: '继续断点导出' })
+    await userEvent.click(resumeBtn)
+    expect(
+      screen.getByText('请至少选择一种导出内容（报表或图片）').query()
+    ).toBeNull()
+  })
 })

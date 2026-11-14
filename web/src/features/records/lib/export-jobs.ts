@@ -12,8 +12,6 @@ import {
 } from '../data/schema'
 import {
   burnOverlayOnImage,
-  fetchImageAsBlob,
-  MediaFetchError,
   type OverlayBurnOptions,
 } from './canvas-overlay-drawer'
 import { exportDb, type ExportDraftOptions } from './export-db'
@@ -24,6 +22,7 @@ import {
   type JobFailure,
   type OverlayLabelContext,
 } from './export-types'
+import { fetchImageAsBlob, MediaFetchError } from './media-fetch'
 
 const REPORT_KEY_PREFIX = '__reports__/'
 const REPORT_KEY_SUFFIX = '_records.csv'
@@ -146,6 +145,128 @@ function defaultSceneLabel(ctx: OverlayLabelContext): string {
   return `${ctx.targetType ?? ''} (${pct}%)`
 }
 
+function jobsForRecord(
+  tab: RecordsTab,
+  item: RecordItem,
+  wantScene: boolean,
+  wantCloseup: boolean,
+  burnOverlay: boolean,
+  sceneLabel: (ctx: OverlayLabelContext) => string,
+  personLabel: string
+): ImageJob[] {
+  const jobs: ImageJob[] = []
+
+  if (tab === 'recognitions') {
+    const rec = item as Recognition
+    const overlayOptions: OverlayBurnOptions = burnOverlay
+      ? {
+          primaryBox: rec.box,
+          primaryLabel: sceneLabel({
+            tab,
+            personName: rec.personName,
+            matched: rec.matched,
+            similarity: rec.similarity,
+          }),
+          palette: rec.matched ? 'emerald' : 'rose',
+          secondaryBox: rec.bodyBox,
+          secondaryLabel: personLabel,
+          secondaryPalette: 'violet',
+        }
+      : {}
+    if (wantScene && rec.imagePath) {
+      jobs.push({
+        tab,
+        recordId: rec.id,
+        capturedAt: rec.capturedAt,
+        kind: 'scene',
+        imagePath: rec.imagePath,
+        overlayOptions,
+      })
+    }
+    if (wantCloseup && rec.faceImagePath) {
+      jobs.push({
+        tab,
+        recordId: rec.id,
+        capturedAt: rec.capturedAt,
+        kind: 'closeup',
+        imagePath: rec.faceImagePath,
+        overlayOptions: {},
+      })
+    }
+    return jobs
+  }
+
+  if (tab === 'alarms') {
+    const alarm = item as Alarm
+    const overlayOptions: OverlayBurnOptions = burnOverlay
+      ? {
+          primaryBox: alarm.box,
+          primaryLabel: sceneLabel({
+            tab,
+            alarmType: alarm.alarmType,
+            score: alarm.score,
+          }),
+          palette: 'amber',
+        }
+      : {}
+    if (wantScene && alarm.imagePath) {
+      jobs.push({
+        tab,
+        recordId: alarm.id,
+        capturedAt: alarm.capturedAt,
+        kind: 'scene',
+        imagePath: alarm.imagePath,
+        overlayOptions,
+      })
+    }
+    if (wantCloseup && alarm.cropPath) {
+      jobs.push({
+        tab,
+        recordId: alarm.id,
+        capturedAt: alarm.capturedAt,
+        kind: 'closeup',
+        imagePath: alarm.cropPath,
+        overlayOptions: {},
+      })
+    }
+    return jobs
+  }
+
+  const cap = item as Capture
+  const overlayOptions: OverlayBurnOptions = burnOverlay
+    ? {
+        primaryBox: cap.box,
+        primaryLabel: sceneLabel({
+          tab,
+          targetType: cap.targetType,
+          score: cap.score,
+        }),
+        palette: 'sky',
+      }
+    : {}
+  if (wantScene && cap.imagePath) {
+    jobs.push({
+      tab,
+      recordId: cap.id,
+      capturedAt: cap.capturedAt,
+      kind: 'scene',
+      imagePath: cap.imagePath,
+      overlayOptions,
+    })
+  }
+  if (wantCloseup && cap.cropPath) {
+    jobs.push({
+      tab,
+      recordId: cap.id,
+      capturedAt: cap.capturedAt,
+      kind: 'closeup',
+      imagePath: cap.cropPath,
+      overlayOptions: {},
+    })
+  }
+  return jobs
+}
+
 export function extractImageJobs(
   tab: RecordsTab,
   records: RecordItem[],
@@ -153,127 +274,22 @@ export function extractImageJobs(
   burnOverlay: boolean,
   labels?: ExportLabels
 ): ImageJob[] {
-  const jobs: ImageJob[] = []
   const sceneLabel = labels?.scene ?? defaultSceneLabel
   const personLabel = labels?.person ?? 'Person'
   const wantScene = imageKind === 'scene' || imageKind === 'both'
   const wantCloseup = imageKind === 'closeup' || imageKind === 'both'
 
-  for (const item of records) {
-    if (tab === 'recognitions') {
-      const rec = item as Recognition
-      const overlayOptions: OverlayBurnOptions = burnOverlay
-        ? {
-            primaryBox: rec.box,
-            primaryLabel: sceneLabel({
-              tab,
-              personName: rec.personName,
-              matched: rec.matched,
-              similarity: rec.similarity,
-            }),
-            palette: rec.matched ? 'emerald' : 'rose',
-            secondaryBox: rec.bodyBox,
-            secondaryLabel: personLabel,
-            secondaryPalette: 'violet',
-          }
-        : {}
-
-      if (wantScene && rec.imagePath) {
-        jobs.push({
-          tab,
-          recordId: rec.id,
-          capturedAt: rec.capturedAt,
-          kind: 'scene',
-          imagePath: rec.imagePath,
-          overlayOptions,
-        })
-      }
-      if (wantCloseup && rec.faceImagePath) {
-        jobs.push({
-          tab,
-          recordId: rec.id,
-          capturedAt: rec.capturedAt,
-          kind: 'closeup',
-          imagePath: rec.faceImagePath,
-          overlayOptions: {},
-        })
-      }
-      continue
-    }
-
-    if (tab === 'alarms') {
-      const alarm = item as Alarm
-      const overlayOptions: OverlayBurnOptions = burnOverlay
-        ? {
-            primaryBox: alarm.box,
-            primaryLabel: sceneLabel({
-              tab,
-              alarmType: alarm.alarmType,
-              score: alarm.score,
-            }),
-            palette: 'amber',
-          }
-        : {}
-
-      if (wantScene && alarm.imagePath) {
-        jobs.push({
-          tab,
-          recordId: alarm.id,
-          capturedAt: alarm.capturedAt,
-          kind: 'scene',
-          imagePath: alarm.imagePath,
-          overlayOptions,
-        })
-      }
-      if (wantCloseup && alarm.cropPath) {
-        jobs.push({
-          tab,
-          recordId: alarm.id,
-          capturedAt: alarm.capturedAt,
-          kind: 'closeup',
-          imagePath: alarm.cropPath,
-          overlayOptions: {},
-        })
-      }
-      continue
-    }
-
-    const cap = item as Capture
-    const overlayOptions: OverlayBurnOptions = burnOverlay
-      ? {
-          primaryBox: cap.box,
-          primaryLabel: sceneLabel({
-            tab,
-            targetType: cap.targetType,
-            score: cap.score,
-          }),
-          palette: 'sky',
-        }
-      : {}
-
-    if (wantScene && cap.imagePath) {
-      jobs.push({
-        tab,
-        recordId: cap.id,
-        capturedAt: cap.capturedAt,
-        kind: 'scene',
-        imagePath: cap.imagePath,
-        overlayOptions,
-      })
-    }
-    if (wantCloseup && cap.cropPath) {
-      jobs.push({
-        tab,
-        recordId: cap.id,
-        capturedAt: cap.capturedAt,
-        kind: 'closeup',
-        imagePath: cap.cropPath,
-        overlayOptions: {},
-      })
-    }
-  }
-
-  return jobs
+  return records.flatMap((item) =>
+    jobsForRecord(
+      tab,
+      item,
+      wantScene,
+      wantCloseup,
+      burnOverlay,
+      sceneLabel,
+      personLabel
+    )
+  )
 }
 
 export function jobArtifactPath(job: ImageJob): string {
@@ -297,10 +313,15 @@ export async function loadResumeSnapshot(
     return null
   }
 
+  const reportEntries = await Promise.all(
+    snapshot.tabs.map(async (tab) => {
+      const bytes = await exportDb.getArtifact(taskId, reportKey(tab))
+      return bytes ? ([tab, bytes] as const) : null
+    })
+  )
   const reports = new Map<RecordsTab, Uint8Array>()
-  for (const tab of snapshot.tabs) {
-    const bytes = await exportDb.getArtifact(taskId, reportKey(tab))
-    if (bytes) reports.set(tab, bytes)
+  for (const entry of reportEntries) {
+    if (entry) reports.set(entry[0], entry[1])
   }
 
   return {

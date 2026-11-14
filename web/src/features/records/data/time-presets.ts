@@ -25,6 +25,20 @@ export type TimePresetKey =
  */
 export const DEFAULT_TIME_PRESET: TimePresetKey = 'today'
 
+export const RECENT_TIME_PRESETS: { key: TimePresetKey; labelKey: string }[] = [
+  { key: '15m', labelKey: 'toolbar.presets.15m' },
+  { key: '30m', labelKey: 'toolbar.presets.30m' },
+  { key: '1h', labelKey: 'toolbar.presets.1h' },
+  { key: '6h', labelKey: 'toolbar.presets.6h' },
+  { key: '24h', labelKey: 'toolbar.presets.24h' },
+]
+
+export const PERIOD_TIME_PRESETS: { key: TimePresetKey; labelKey: string }[] = [
+  { key: 'today', labelKey: 'toolbar.presets.today' },
+  { key: '7d', labelKey: 'toolbar.presets.7d' },
+  { key: '30d', labelKey: 'toolbar.presets.30d' },
+]
+
 export type ResolvedRecordsWindow = {
   /** 用于展示与高亮的预设；自定义区间时为 undefined */
   preset?: TimePresetKey

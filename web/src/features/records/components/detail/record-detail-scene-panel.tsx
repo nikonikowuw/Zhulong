@@ -55,7 +55,7 @@ export function RecordDetailScenePanel({
         : undefined
 
   return (
-    <div className='flex flex-1 flex-col border-b border-border bg-neutral-950 p-4 lg:w-7/12 lg:border-r lg:border-b-0'>
+    <div className='flex flex-1 flex-col border-b border-border bg-neutral-950 p-4 lg:w-7/12 lg:border-e lg:border-b-0'>
       <div className='mb-2 flex items-center justify-between text-xs'>
         <div className='flex items-center gap-2'>
           <h4 className='flex items-center gap-1.5 font-semibold tracking-wider text-neutral-300 uppercase'>
@@ -145,18 +145,12 @@ export function RecordDetailScenePanel({
           primaryLabel={primaryLabel}
           secondaryBox={secondaryBox}
           secondaryLabel={secondaryBox ? t('detail.bodyBoxLabel') : undefined}
+          onPreviewClick={record.imagePath ? onOpenFullscreen : undefined}
+          previewLabel={t('detail.previewImageLabel', {
+            name: t('detail.fullImage'),
+          })}
           className='max-h-[540px]'
         />
-        {record.imagePath && (
-          <button
-            type='button'
-            onClick={onOpenFullscreen}
-            aria-label={t('detail.previewImageLabel', {
-              name: t('detail.fullImage'),
-            })}
-            className='absolute inset-0 cursor-zoom-in bg-transparent focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
-          />
-        )}
       </div>
       <div className='mt-2 flex items-center justify-between text-[11px] text-neutral-500'>
         <span className='font-mono'>{t('detail.highlightNotice')}</span>

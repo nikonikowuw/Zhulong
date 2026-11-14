@@ -71,7 +71,14 @@
     "similarity": "Similarity",
     "confidence": "Score",
     "trackId": "Track #",
-    "viewDetail": "View Details"
+    "viewDetail": "View Details",
+    "fallbackAlarm": "Alarm Snapshot",
+    "fallbackAlarmShort": "Alarm",
+    "fallbackCapture": "Target Crop",
+    "fallbackCaptureShort": "Capture",
+    "fallbackFace": "Face Crop",
+    "fallbackFaceShort": "Face",
+    "fallbackScene": "Inspection Scene"
   },
   "detail": {
     "title": "Record Inspection",
@@ -160,6 +167,8 @@
       "30d": "Last 30 days"
     },
     "clearDateRange": "Clear Range",
+    "startTime": "Start time",
+    "endTime": "End time",
     "cancel": "Cancel",
     "apply": "Apply",
     "reset": "Reset Filters"
@@ -168,7 +177,10 @@
     "ariaLabel": "Bulk selection actions",
     "selectedCount": "{{count}} selected",
     "exportSelected": "Export Selected",
-    "clearSelection": "Clear"
+    "clearSelection": "Clear",
+    "selectAll": "Select all",
+    "selectRow": "Select row {{id}}",
+    "selectCard": "Select record {{id}}"
   },
   "export": {
     "button": "Batch Export",
@@ -217,6 +229,15 @@
     "emptySelection": "No records selected yet",
     "hardCapHint": "Even without a quota, a single export is capped at {{limit}} images",
     "progressLabel": "Export progress",
+    "progress": {
+      "preparing": "Preparing export...",
+      "fetching": "Fetching {{tab}} ({{current}}/{{total}})...",
+      "generatingCsv": "Generating {{tab}} report...",
+      "generatingCsvSingle": "Generating CSV file...",
+      "processingImages": "Processing images: {{current}} / {{total}}",
+      "zipping": "Compressing archive...",
+      "completed": "Export completed"
+    },
     "resumeHint": "Resume uses the previous task's report and image list; current filters are ignored",
     "csv": {
       "id": "ID",

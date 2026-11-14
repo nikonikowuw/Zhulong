@@ -477,4 +477,26 @@ describe('RecordDetailDialog', () => {
     // 全屏预览层不应被自动再次拉起
     expect(getByText('1 / 3').query()).toBeNull()
   })
+
+  it('keeps the scene retry button clickable when image fails to load instead of opening fullscreen', async () => {
+    const brokenRecord: Capture = {
+      ...mockCapture,
+      imagePath: 'snapshots/definitely-not-found-detail-scene-999.jpg',
+    }
+    const { getByRole, getByText } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        record={brokenRecord}
+        tab='captures'
+      />
+    )
+
+    const retryBtn = getByRole('button', { name: '重试' })
+    await expect.element(retryBtn).toBeInTheDocument()
+    await userEvent.click(retryBtn)
+
+    // 点击重试不应误打开全屏预览（若被全屏遮罩层拦截，会出现 "1 / 2" 页码）
+    expect(getByText('1 / 2').query()).toBeNull()
+  })
 })

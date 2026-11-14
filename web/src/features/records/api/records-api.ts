@@ -23,7 +23,8 @@ export const recordsApi = {
    * 获取识别记录列表
    */
   async getRecognitions(
-    params?: GetRecognitionsParams
+    params?: GetRecognitionsParams,
+    options?: { signal?: AbortSignal }
   ): Promise<RecognitionListResponse> {
     const resp = await apiClient.get<unknown>('/records/recognitions', {
       params: {
@@ -37,6 +38,7 @@ export const recordsApi = {
         startTime: params?.startTime?.trim() || undefined,
         endTime: params?.endTime?.trim() || undefined,
       },
+      ...(options?.signal ? { signal: options.signal } : {}),
     })
 
     return z
@@ -67,7 +69,10 @@ export const recordsApi = {
   /**
    * 获取告警记录列表
    */
-  async getAlarms(params?: GetAlarmsParams): Promise<AlarmListResponse> {
+  async getAlarms(
+    params?: GetAlarmsParams,
+    options?: { signal?: AbortSignal }
+  ): Promise<AlarmListResponse> {
     const resp = await apiClient.get<unknown>('/records/alarms', {
       params: {
         page: params?.page ?? 1,
@@ -77,6 +82,7 @@ export const recordsApi = {
         startTime: params?.startTime?.trim() || undefined,
         endTime: params?.endTime?.trim() || undefined,
       },
+      ...(options?.signal ? { signal: options.signal } : {}),
     })
 
     return z
@@ -107,7 +113,10 @@ export const recordsApi = {
   /**
    * 获取抓拍记录列表
    */
-  async getCaptures(params?: GetCapturesParams): Promise<CaptureListResponse> {
+  async getCaptures(
+    params?: GetCapturesParams,
+    options?: { signal?: AbortSignal }
+  ): Promise<CaptureListResponse> {
     const resp = await apiClient.get<unknown>('/records/captures', {
       params: {
         page: params?.page ?? 1,
@@ -117,6 +126,7 @@ export const recordsApi = {
         startTime: params?.startTime?.trim() || undefined,
         endTime: params?.endTime?.trim() || undefined,
       },
+      ...(options?.signal ? { signal: options.signal } : {}),
     })
 
     return z

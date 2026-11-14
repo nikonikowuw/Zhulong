@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { formatRecordTime } from '../../data/format-time'
 import { type Capture } from '../../data/schema'
+import { extractVehicleAttributes } from '../../data/vehicle-attributes'
 import { VehicleEvidence } from './vehicle-evidence'
 
 interface VehicleCaptureCardProps {
@@ -23,11 +24,9 @@ export const VehicleCaptureCard = memo(function VehicleCaptureCard({
   const formattedTime = formatRecordTime(item.capturedAt, 'MM-dd HH:mm:ss')
   const score = item.score > 0 ? `${Math.round(item.score * 100)}%` : '-'
 
-  const attrs = item.attributes as Record<string, unknown> | undefined
-  const plateNo =
-    typeof attrs?.plate_number === 'string' ? attrs.plate_number : ''
-  const plateColor =
-    typeof attrs?.plate_color === 'string' ? attrs.plate_color : ''
+  const { plateNumber: plateNo, plateColor } = extractVehicleAttributes(
+    item.attributes
+  )
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {

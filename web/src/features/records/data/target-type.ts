@@ -30,7 +30,7 @@ export function targetTypeBadgeClass(targetType?: string): string {
  */
 export function formatTargetType(t: TFunction, targetType?: string): string {
   if (!targetType || !targetType.trim()) {
-    return t('targetTypes.unknown', { defaultValue: '未知目标' })
+    return t('targetTypes.unknown')
   }
   const key = `targetTypes.${targetType}`
   return t(key, { defaultValue: targetType })

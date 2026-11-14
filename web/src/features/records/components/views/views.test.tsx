@@ -515,11 +515,44 @@ describe('Records Views', () => {
         />
       )
 
-      const rowCheckbox = getByRole('checkbox', { name: 'Select row rec-1' })
+      const rowCheckbox = getByRole('checkbox', { name: '选择记录 rec-1' })
       await expect.element(rowCheckbox).toBeInTheDocument()
       await userEvent.click(rowCheckbox)
 
-      expect(handleToggleSelect).toHaveBeenCalledWith(sampleRecognitions[0])
+      expect(handleToggleSelect).toHaveBeenCalledExactlyOnceWith(
+        sampleRecognitions[0]
+      )
+      expect(handleSelect).not.toHaveBeenCalled()
+    })
+
+    it('triggers onToggleSelect exactly once when grid card checkbox is clicked without triggering onSelect', async () => {
+      const handleToggleSelect = vi.fn()
+      const handleSelect = vi.fn()
+      const { getByRole } = await render(
+        <RecognitionsView
+          items={sampleRecognitions}
+          total={1}
+          page={1}
+          pageSize={20}
+          view='grid'
+          isLoading={false}
+          isError={false}
+          onPageChange={vi.fn()}
+          onPageSizeChange={vi.fn()}
+          onSelect={handleSelect}
+          onRetry={vi.fn()}
+          isSelected={() => false}
+          onToggleSelect={handleToggleSelect}
+        />
+      )
+
+      const cardCheckbox = getByRole('checkbox', { name: '选择记录 rec-1' })
+      await expect.element(cardCheckbox).toBeInTheDocument()
+      await userEvent.click(cardCheckbox)
+
+      expect(handleToggleSelect).toHaveBeenCalledExactlyOnceWith(
+        sampleRecognitions[0]
+      )
       expect(handleSelect).not.toHaveBeenCalled()
     })
 
@@ -542,7 +575,7 @@ describe('Records Views', () => {
         />
       )
 
-      const selectAll = getByRole('checkbox', { name: 'Select all' })
+      const selectAll = getByRole('checkbox', { name: '全选当前页' })
       await userEvent.click(selectAll)
 
       expect(handleToggleSelectAll).toHaveBeenCalled()

@@ -28,9 +28,9 @@ export function buildRecognitionColumns(
         <div className='size-10 overflow-hidden rounded-md border border-border bg-muted/40'>
           <MediaImage
             path={row.original.faceImagePath || row.original.imagePath}
-            alt={row.original.personName || 'Face'}
+            alt={row.original.personName || t('card.fallbackFaceShort')}
             className='size-full'
-            fallbackText='Face'
+            fallbackText={t('card.fallbackFaceShort')}
           />
         </div>
       ),

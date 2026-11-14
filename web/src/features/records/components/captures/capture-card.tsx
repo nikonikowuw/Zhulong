@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, type KeyboardEvent } from 'react'
 import { Camera, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { categoryBadgeClass } from '@/lib/category-palette'
@@ -9,6 +9,7 @@ import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { formatRecordTime } from '../../data/format-time'
 import { type Capture } from '../../data/schema'
 import { formatTargetType, targetTypeBadgeClass } from '../../data/target-type'
+import { extractVehicleAttributes } from '../../data/vehicle-attributes'
 import { MediaImage } from '../common/media-image'
 
 interface CaptureCardProps {
@@ -25,23 +26,32 @@ export const CaptureCard = memo(function CaptureCard({
   const { t } = useTranslation('records')
   const formattedTime = formatRecordTime(item.capturedAt, 'MM-dd HH:mm:ss')
   const scorePercent = Math.round((item.score || 0) * 100)
+  const { plateNumber } = extractVehicleAttributes(item.attributes)
+  const targetLabel = formatTargetType(t, item.targetType)
 
-  const attrs = item.attributes as Record<string, unknown> | undefined
-  const plateNo =
-    typeof attrs?.plate_number === 'string' ? attrs.plate_number : ''
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onSelect(item)
+    }
+  }
 
   return (
     <Card
+      role='button'
+      tabIndex={0}
+      aria-label={`${targetLabel} - ${t('card.viewDetail')}`}
       onClick={() => onSelect(item)}
-      className='group relative cursor-pointer overflow-hidden border-border bg-card transition-all hover:border-primary/40 hover:shadow-md'
+      onKeyDown={handleKeyDown}
+      className='group relative cursor-pointer overflow-hidden border-border bg-card transition-all hover:border-primary/40 hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden'
     >
       <div className='relative aspect-square w-full overflow-hidden bg-muted/40'>
         <MediaImage
           path={item.cropPath || item.imagePath}
-          alt={formatTargetType(t, item.targetType)}
+          alt={targetLabel}
           className='size-full transition-transform duration-300 group-hover:scale-105'
           imageClassName='object-contain p-2'
-          fallbackText='Target Crop'
+          fallbackText={t('card.fallbackCapture')}
         />
 
         {/* 顶部目标类型 Badge */}
@@ -54,7 +64,7 @@ export const CaptureCard = memo(function CaptureCard({
             )}
           >
             <Camera className='size-3' />
-            {formatTargetType(t, item.targetType)}
+            {targetLabel}
           </Badge>
         </div>
 
@@ -76,14 +86,14 @@ export const CaptureCard = memo(function CaptureCard({
       <CardContent className='space-y-1.5 p-3'>
         <div className='flex items-center justify-between text-xs'>
           <span className='max-w-[120px] truncate font-semibold text-foreground capitalize'>
-            {formatTargetType(t, item.targetType)}
+            {targetLabel}
           </span>
           <span className='font-mono text-[11px] text-muted-foreground'>
             {formattedTime}
           </span>
         </div>
 
-        {plateNo && (
+        {plateNumber && (
           <div className='flex items-center justify-between gap-2'>
             <span
               className={cn(
@@ -91,7 +101,7 @@ export const CaptureCard = memo(function CaptureCard({
                 categoryBadgeClass('blue')
               )}
             >
-              {plateNo}
+              {plateNumber}
             </span>
           </div>
         )}
