@@ -45,9 +45,7 @@ export function Gb28181ConfigFields({
       <div className='space-y-4 rounded-xl border border-border/80 bg-card/60 p-4 shadow-2xs'>
         <div className='flex items-center gap-2 border-b border-border/50 pb-2.5 text-xs font-semibold text-foreground'>
           <RadioTower className='size-4 text-primary' />
-          <span>
-            {t('groups.signalling', { defaultValue: 'SIP 信令与服务端身份' })}
-          </span>
+          <span>{t('groups.signalling')}</span>
         </div>
 
         <div className='grid gap-4 md:grid-cols-2'>
@@ -162,7 +160,7 @@ export function Gb28181ConfigFields({
       <div className='space-y-4 rounded-xl border border-border/80 bg-card/60 p-4 shadow-2xs'>
         <div className='flex items-center gap-2 border-b border-border/50 pb-2.5 text-xs font-semibold text-foreground'>
           <Video className='size-4 text-primary' />
-          <span>{t('groups.media', { defaultValue: '媒体传输与端口池' })}</span>
+          <span>{t('groups.media')}</span>
         </div>
 
         <div className='grid gap-4 md:grid-cols-2'>
@@ -238,9 +236,7 @@ export function Gb28181ConfigFields({
                   />
                 </FormControl>
                 <FormDescription className='text-xs leading-relaxed'>
-                  {t('config.rtpPortMinDesc', {
-                    defaultValue: 'RTP/RTCP 媒体流接收起始端口',
-                  })}
+                  {t('config.rtpPortMinDesc')}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -267,9 +263,7 @@ export function Gb28181ConfigFields({
                   />
                 </FormControl>
                 <FormDescription className='text-xs leading-relaxed'>
-                  {t('config.rtpPortMaxDesc', {
-                    defaultValue: 'RTP/RTCP 媒体流接收结束端口',
-                  })}
+                  {t('config.rtpPortMaxDesc')}
                 </FormDescription>
                 <FormMessage />
               </FormItem>

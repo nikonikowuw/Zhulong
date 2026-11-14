@@ -124,7 +124,6 @@
     "deleteDesc": "This removes the device and its unbound catalog channels. Channels linked to cameras must be unbound first.",
     "deleteConfirm": "Delete device",
     "deleteSuccess": "Device {{deviceId}} deleted",
-    "viewChannels": "View channels",
     "channelsCount": "Channels ({{count}})",
     "columns": {
       "deviceId": "Device ID",

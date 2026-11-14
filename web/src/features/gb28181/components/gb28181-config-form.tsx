@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Info, Lock, RotateCcw, Save } from 'lucide-react'
@@ -49,7 +49,7 @@ interface Gb28181ConfigFormProps {
  * 仍使用启动时加载的 `runtime.startupConfig`。因此面板同时展示两者差异，
  * 且只有 `restartRequired` 被运行时报告时才宣称需要重启。
  */
-export function Gb28181ConfigForm({
+export const Gb28181ConfigForm = memo(function Gb28181ConfigForm({
   config,
   runtime,
   isSaving,
@@ -79,11 +79,14 @@ export function Gb28181ConfigForm({
       form.reset(toGb28181ConfigFormValues(saved.config))
       toast.success(t('config.saved'))
     } catch (error: unknown) {
-      handleFormError(form, error, {
+      const result = handleFormError(form, error, {
         onUnhandled: () => {
           toast.error(describeGb28181Error(error, t))
         },
       })
+      if (!result.isAxiosError) {
+        toast.error(describeGb28181Error(error, t))
+      }
     }
   }
 
@@ -210,4 +213,4 @@ export function Gb28181ConfigForm({
       </Form>
     </section>
   )
-}
+})

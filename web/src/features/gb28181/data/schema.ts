@@ -209,6 +209,15 @@ export const syncCatalogResponseSchema = z.object({
 
 export type SyncCatalogResponse = z.infer<typeof syncCatalogResponseSchema>
 
+export const addChannelAsCameraResponseSchema = z.looseObject({
+  id: z.string(),
+  name: z.string(),
+})
+
+export type AddChannelAsCameraResponse = z.infer<
+  typeof addChannelAsCameraResponseSchema
+>
+
 /** `PUT /gb28181/devices/:deviceId` 的请求体。缺省字段保持已存值。 */
 export interface UpsertGb28181DeviceRequest {
   name?: string

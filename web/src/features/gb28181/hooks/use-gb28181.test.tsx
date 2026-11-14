@@ -1,12 +1,18 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  MutationCache,
+  QueryClient,
+  QueryClientProvider,
+} from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 import { renderHook } from 'vitest-browser-react'
 import { gb28181Api } from '../api/gb28181-api'
 import { type Gb28181Config, type Gb28181ConfigResponse } from '../data/schema'
 import {
   GB28181_QUERY_KEYS,
+  useAddGb28181ChannelCamera,
   useDeleteGb28181Device,
   useGb28181Config,
+  useSyncGb28181Catalog,
   useUpdateGb28181Config,
 } from './use-gb28181'
 
@@ -18,6 +24,8 @@ vi.mock('../api/gb28181-api', () => ({
     listDevices: vi.fn(),
     upsertDevice: vi.fn(),
     deleteDevice: vi.fn(),
+    syncCatalog: vi.fn(),
+    addChannelAsCamera: vi.fn(),
   },
 }))
 
@@ -182,5 +190,55 @@ describe('useUpdateGb28181Config', () => {
     })
 
     expect(result.current.error?.message).toBe('boom')
+  })
+})
+
+describe('channel drawer mutations', () => {
+  it('marks useSyncGb28181Catalog and useAddGb28181ChannelCamera with suppressGlobalToast so MutationCache does not double-toast', async () => {
+    const globalErrorSpy = vi.fn()
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+      mutationCache: new MutationCache({
+        onError: (_error, _vars, _ctx, mutation) => {
+          if (mutation.meta?.suppressGlobalToast) return
+          globalErrorSpy()
+        },
+      }),
+    })
+
+    vi.mocked(gb28181Api.syncCatalog).mockRejectedValueOnce(new Error('sync'))
+    vi.mocked(gb28181Api.addChannelAsCamera).mockRejectedValueOnce(
+      new Error('bind')
+    )
+
+    const syncHook = await renderHook(() => useSyncGb28181Catalog(), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    const addHook = await renderHook(() => useAddGb28181ChannelCamera(), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await syncHook.act(async () => {
+      await expect(
+        syncHook.result.current.mutateAsync('34020000001320000001')
+      ).rejects.toThrow('sync')
+    })
+    await addHook.act(async () => {
+      await expect(
+        addHook.result.current.mutateAsync({
+          deviceId: '34020000001320000001',
+          channelId: '34020000001310000001',
+        })
+      ).rejects.toThrow('bind')
+    })
+
+    expect(globalErrorSpy).not.toHaveBeenCalled()
   })
 })

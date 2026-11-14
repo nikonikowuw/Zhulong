@@ -82,11 +82,14 @@ export function Gb28181DeviceFormFields({
       )
       onClose()
     } catch (error: unknown) {
-      handleFormError(form, error, {
+      const result = handleFormError(form, error, {
         onUnhandled: () => {
           toast.error(describeGb28181Error(error, t))
         },
       })
+      if (!result.isAxiosError) {
+        toast.error(describeGb28181Error(error, t))
+      }
     }
   }
 

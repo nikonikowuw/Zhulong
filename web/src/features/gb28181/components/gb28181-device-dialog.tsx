@@ -61,8 +61,9 @@ export function Gb28181DeviceDialog({
           <DialogDescription>{t('devices.dialogDesc')}</DialogDescription>
         </DialogHeader>
 
-        {/* 关闭时 Radix 卸载内容，重开即用最新的 defaultValues，无需 useEffect 重置。 */}
+        {/* 关闭时 Radix 卸载内容，配合 key 确保切换设备时表单状态完全重置。 */}
         <Gb28181DeviceFormFields
+          key={device?.deviceId ?? 'create'}
           device={device}
           isPending={isPending}
           formId={FORM_ID}

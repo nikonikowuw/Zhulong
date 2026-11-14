@@ -1,11 +1,13 @@
 import { apiClient, type ApiResponse } from '@/lib/api-client'
 import {
+  addChannelAsCameraResponseSchema,
   gb28181ChannelListSchema,
   gb28181ConfigResponseSchema,
   gb28181DeviceListSchema,
   gb28181DeviceSchema,
   gb28181RuntimeSnapshotStatusSchema,
   syncCatalogResponseSchema,
+  type AddChannelAsCameraResponse,
   type Gb28181Channel,
   type Gb28181Config,
   type Gb28181ConfigResponse,
@@ -108,11 +110,11 @@ export const gb28181Api = {
   async addChannelAsCamera(
     deviceId: string,
     channelId: string
-  ): Promise<unknown> {
-    const resp = await apiClient.post<ApiResponse<unknown>>(
+  ): Promise<AddChannelAsCameraResponse> {
+    const resp = await apiClient.post<ApiResponse<AddChannelAsCameraResponse>>(
       `/gb28181/devices/${encodeURIComponent(deviceId)}/channels/${encodeURIComponent(channelId)}/camera`,
       {}
     )
-    return resp.data.data
+    return addChannelAsCameraResponseSchema.parse(resp.data.data)
   },
 }

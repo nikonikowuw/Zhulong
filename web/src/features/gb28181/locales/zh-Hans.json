@@ -124,7 +124,6 @@
     "deleteDesc": "删除后将移除此设备及其未绑定摄像机的通道目录。已关联摄像机的通道必须先解绑。",
     "deleteConfirm": "删除设备",
     "deleteSuccess": "设备 {{deviceId}} 已删除",
-    "viewChannels": "查看通道",
     "channelsCount": "通道 ({{count}})",
     "columns": {
       "deviceId": "设备编号",

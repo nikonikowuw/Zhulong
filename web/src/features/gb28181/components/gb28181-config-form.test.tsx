@@ -1,3 +1,4 @@
+import { toast } from 'sonner'
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
@@ -137,5 +138,26 @@ describe('Gb28181ConfigForm', () => {
     await expect.element(getByLabelText('媒体通告地址')).toBeDisabled()
     await expect.element(getByLabelText('RTP 起始端口')).toBeDisabled()
     await expect.element(getByLabelText('RTP 结束端口')).toBeDisabled()
+  })
+
+  it('shows an error toast when onSave rejects with a non-Axios error', async () => {
+    const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => '')
+    const onSave = vi.fn().mockRejectedValueOnce(new Error('unexpected parse'))
+
+    const { getByRole } = await render(
+      <Gb28181ConfigForm
+        config={startupConfig}
+        runtime={runningRuntime}
+        isSaving={false}
+        onSave={onSave}
+      />
+    )
+
+    await userEvent.click(getByRole('button', { name: /保存配置/ }))
+
+    await vi.waitFor(() => {
+      expect(errorSpy).toHaveBeenCalledWith('unexpected parse')
+    })
+    errorSpy.mockRestore()
   })
 })

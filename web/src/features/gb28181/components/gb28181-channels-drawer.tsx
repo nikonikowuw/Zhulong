@@ -30,6 +30,7 @@ import {
   useSyncGb28181Catalog,
 } from '../hooks/use-gb28181'
 import { describeGb28181Error } from '../utils/error-message'
+import { EMPTY_PLACEHOLDER } from '../utils/format'
 
 interface Gb28181ChannelsDrawerProps {
   device: Gb28181Device | null
@@ -43,7 +44,9 @@ export function Gb28181ChannelsDrawer({
   onOpenChange,
 }: Gb28181ChannelsDrawerProps) {
   const { t } = useTranslation('gb28181')
-  const [addingChannelId, setAddingChannelId] = useState<string | null>(null)
+  const [addingChannelIds, setAddingChannelIds] = useState<Set<string>>(
+    () => new Set()
+  )
 
   const channelsQuery = useGb28181Channels(
     open && device ? device.deviceId : null
@@ -60,13 +63,17 @@ export function Gb28181ChannelsDrawer({
       const res = await syncMutation.mutateAsync(device.deviceId)
       toast.success(t('channels.syncSuccess', { count: res.total }))
     } catch (err) {
-      toast.error(describeGb28181Error(err, t) || t('channels.syncFailed'))
+      toast.error(describeGb28181Error(err, t))
     }
   }
 
   const handleAddAsCamera = async (channelId: string) => {
-    if (!device) return
-    setAddingChannelId(channelId)
+    if (!device || addingChannelIds.has(channelId)) return
+    setAddingChannelIds((prev) => {
+      const next = new Set(prev)
+      next.add(channelId)
+      return next
+    })
     try {
       await addCameraMutation.mutateAsync({
         deviceId: device.deviceId,
@@ -74,9 +81,14 @@ export function Gb28181ChannelsDrawer({
       })
       toast.success(t('channels.addSuccess', { channelId }))
     } catch (err) {
-      toast.error(describeGb28181Error(err, t) || t('channels.addFailed'))
+      toast.error(describeGb28181Error(err, t))
     } finally {
-      setAddingChannelId(null)
+      setAddingChannelIds((prev) => {
+        if (!prev.has(channelId)) return prev
+        const next = new Set(prev)
+        next.delete(channelId)
+        return next
+      })
     }
   }
 
@@ -87,7 +99,7 @@ export function Gb28181ChannelsDrawer({
         className='flex w-full flex-col sm:max-w-xl md:max-w-2xl'
       >
         <SheetHeader className='border-b pb-4'>
-          <div className='flex items-center justify-between pr-6'>
+          <div className='flex items-center justify-between pe-6'>
             <div className='flex items-center gap-2'>
               <Layers className='size-5 text-muted-foreground' />
               <SheetTitle>{t('channels.title')}</SheetTitle>
@@ -170,7 +182,7 @@ export function Gb28181ChannelsDrawer({
                     <TableHead className='w-[100px]'>
                       {t('channels.columns.resolution')}
                     </TableHead>
-                    <TableHead className='w-[120px] text-right'>
+                    <TableHead className='w-[120px] text-end'>
                       {t('channels.columns.actions')}
                     </TableHead>
                   </TableRow>
@@ -178,11 +190,11 @@ export function Gb28181ChannelsDrawer({
                 <TableBody>
                   {channels.map((ch) => {
                     const hasCamera = !!ch.cameraId
-                    const isAdding = addingChannelId === ch.channelId
+                    const isAdding = addingChannelIds.has(ch.channelId)
                     const resolution =
                       ch.resolutionWidth && ch.resolutionHeight
                         ? `${ch.resolutionWidth}x${ch.resolutionHeight}`
-                        : '-'
+                        : EMPTY_PLACEHOLDER
 
                     return (
                       <TableRow key={ch.channelId}>
@@ -195,7 +207,7 @@ export function Gb28181ChannelsDrawer({
                         <TableCell className='text-xs text-muted-foreground'>
                           {resolution}
                         </TableCell>
-                        <TableCell className='text-right'>
+                        <TableCell className='text-end'>
                           {hasCamera ? (
                             <Badge
                               variant='outline'

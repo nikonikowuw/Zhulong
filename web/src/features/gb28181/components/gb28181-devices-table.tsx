@@ -137,6 +137,7 @@ export function Gb28181DevicesTable({
       <DataTableToolbar
         table={table}
         searchPlaceholder={t('devices.searchPlaceholder')}
+        debounceMs={150}
         filters={[
           {
             columnId: 'state',

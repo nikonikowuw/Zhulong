@@ -124,7 +124,6 @@
     "deleteDesc": "刪除後將移除此裝置及其未關聯攝影機的通道目錄。已關聯攝影機的通道必須先解除關聯。",
     "deleteConfirm": "刪除裝置",
     "deleteSuccess": "裝置 {{deviceId}} 已刪除",
-    "viewChannels": "查看通道",
     "channelsCount": "通道 ({{count}})",
     "columns": {
       "deviceId": "裝置編號",

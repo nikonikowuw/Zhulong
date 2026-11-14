@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-query'
 import { gb28181Api } from '../api/gb28181-api'
 import {
+  type AddChannelAsCameraResponse,
   type Gb28181Channel,
   type Gb28181Config,
   type Gb28181ConfigResponse,
@@ -35,7 +36,7 @@ export function useGb28181Config(): UseQueryResult<
     queryFn: () => gb28181Api.getConfig(),
     refetchInterval: 5000,
     refetchIntervalInBackground: false,
-    staleTime: 10_000,
+    staleTime: 0,
   })
 }
 
@@ -125,7 +126,7 @@ export function useGb28181Channels(
   })
 }
 
-/** 手动触发目录同步指令。 */
+/** 手动触发目录同步指令。错误提示由抽屉组件接管。 */
 export function useSyncGb28181Catalog(): UseMutationResult<
   SyncCatalogResponse,
   Error,
@@ -134,6 +135,7 @@ export function useSyncGb28181Catalog(): UseMutationResult<
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (deviceId: string) => gb28181Api.syncCatalog(deviceId),
+    meta: { suppressGlobalToast: true },
     onSuccess: (_data, deviceId) => {
       void queryClient.invalidateQueries({
         queryKey: GB28181_QUERY_KEYS.channels(deviceId),
@@ -145,9 +147,9 @@ export function useSyncGb28181Catalog(): UseMutationResult<
   })
 }
 
-/** 将指定通道显式添加为系统摄像机。 */
+/** 将指定通道显式添加为系统摄像机。错误提示由抽屉组件接管。 */
 export function useAddGb28181ChannelCamera(): UseMutationResult<
-  unknown,
+  AddChannelAsCameraResponse,
   Error,
   { deviceId: string; channelId: string }
 > {
@@ -155,6 +157,7 @@ export function useAddGb28181ChannelCamera(): UseMutationResult<
   return useMutation({
     mutationFn: ({ deviceId, channelId }) =>
       gb28181Api.addChannelAsCamera(deviceId, channelId),
+    meta: { suppressGlobalToast: true },
     onSuccess: (_data, { deviceId }) => {
       void queryClient.invalidateQueries({
         queryKey: GB28181_QUERY_KEYS.channels(deviceId),

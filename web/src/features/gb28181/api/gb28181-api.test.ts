@@ -212,6 +212,19 @@ describe('gb28181Api', () => {
     )
   })
 
+  it('addChannelAsCamera rejects malformed response payloads', async () => {
+    vi.spyOn(apiClient, 'post').mockResolvedValueOnce(
+      mockResponse({ unexpected: true })
+    )
+
+    await expect(
+      gb28181Api.addChannelAsCamera(
+        '34020000001320000001',
+        '34020000001310000001'
+      )
+    ).rejects.toThrow()
+  })
+
   it('deleteDevice deletes the device', async () => {
     vi.spyOn(apiClient, 'delete').mockResolvedValueOnce(
       mockResponse({ deleted: true })

@@ -180,7 +180,7 @@ describe('Gb28181ChannelsDrawer', () => {
     vi.spyOn(gb28181Api, 'listChannels').mockResolvedValueOnce([
       sampleChannels[0],
     ])
-    addCameraMutateAsync.mockResolvedValueOnce({ id: 'cam_new' })
+    addCameraMutateAsync.mockResolvedValueOnce({ id: 'cam_new', name: 'Cam' })
 
     const { getByRole } = await renderDrawer()
 
@@ -191,6 +191,61 @@ describe('Gb28181ChannelsDrawer', () => {
         deviceId: onlineDevice.deviceId,
         channelId: sampleChannels[0].channelId,
       })
+    })
+  })
+
+  it('tracks concurrent add-as-camera requests per channel without clearing sibling state', async () => {
+    const channelA = sampleChannels[0]
+    const channelB: Gb28181Channel = {
+      ...sampleChannels[1],
+      cameraId: null,
+      resolutionWidth: null,
+      resolutionHeight: null,
+    }
+    vi.spyOn(gb28181Api, 'listChannels').mockResolvedValueOnce([
+      channelA,
+      channelB,
+    ])
+
+    let resolveA!: (value: { id: string; name: string }) => void
+    let resolveB!: (value: { id: string; name: string }) => void
+    addCameraMutateAsync
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveB = resolve
+          })
+      )
+
+    const { getByRole, getByText } = await renderDrawer()
+
+    await expect.element(getByText('—')).toBeInTheDocument()
+
+    const addButtons = getByRole('button', { name: '添加为摄像机' })
+    await userEvent.click(addButtons.nth(0))
+    await userEvent.click(getByRole('button', { name: '添加为摄像机' }))
+
+    const pendingButtons = getByRole('button', { name: '正在添加...' }).all()
+    expect(pendingButtons).toHaveLength(2)
+    await expect.element(pendingButtons[0]).toBeDisabled()
+    await expect.element(pendingButtons[1]).toBeDisabled()
+
+    resolveA({ id: 'cam_a', name: channelA.name })
+
+    await vi.waitFor(() => {
+      expect(getByRole('button', { name: '正在添加...' }).all()).toHaveLength(1)
+    })
+
+    resolveB({ id: 'cam_b', name: channelB.name })
+
+    await vi.waitFor(() => {
+      expect(getByRole('button', { name: '正在添加...' }).all()).toHaveLength(0)
     })
   })
 })
