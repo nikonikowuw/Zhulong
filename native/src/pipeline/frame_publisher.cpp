@@ -21,7 +21,12 @@ FramePublisher::FramePublisher(std::shared_ptr<Stream> stream, ipc::FrameBroker*
     : stream_(std::move(stream)), broker_(broker), crop_(std::move(crop)) {}
 
 FramePublisher::~FramePublisher() {
-    stop();
+    // 析构函数隐式 noexcept：thread::join 理论上可抛 system_error，在此收口
+    try {
+        stop();
+    } catch (...) {
+        ZL_LOGE(stream_ ? stream_->id : 0, "pipeline.frame_publisher", "frame_publisher_stop_exception");
+    }
 }
 
 void FramePublisher::start() {
@@ -45,14 +50,21 @@ void FramePublisher::stop() {
     // ⚠️ 必须释放快照帧引用：即使 worker 已汇合，若这里不清空，
     // HardwareFrame 引用仍持有解码器 buffer，停流时会拖到宽限期超时。
     // ⚠️ 丢弃对象的析构必须在互斥锁外执行，防止 release_fn 触发外部闭包时形成潜在死锁（.trellis/spec/native/pipeline-guidelines.md §3）。
-    std::deque<HardwareFrame::ConstPtr> frames_to_drop;
-    {
-        std::lock_guard<std::mutex> lock(latest_mutex_);
-        frames_to_drop = std::move(history_frames_);
-        history_frames_.clear();
-        published_pts_records_.clear();
+    // ⚠️ 本函数会被析构函数调用（隐式 noexcept），因此逐帧摘出、锁外释放，**不**构造临时
+    //    std::deque —— libstdc++ 的 deque 默认构造即分配，OOM 时会直接 std::terminate。
+    for (;;) {
+        HardwareFrame::ConstPtr victim;
+        {
+            std::lock_guard<std::mutex> lock(latest_mutex_);
+            if (history_frames_.empty()) {
+                published_pts_records_.clear();
+                break;
+            }
+            victim = std::move(history_frames_.front());
+            history_frames_.pop_front();
+        }
+        // victim 在此处（锁外）析构
     }
-    frames_to_drop.clear();
     motion_detector_.reset();
 }
 

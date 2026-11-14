@@ -63,6 +63,12 @@ struct QueuedPacket {
     int32_t time_base_den{90000};          /**< 时间基分母 */
     int32_t codec{0};                      /**< 视频编码格式 */
     bool key_frame{false};                 /**< 是否为关键帧 / IDR 帧 */
+    /**
+     * 源时间轴在本包处（或在它之前被丢弃的包处）发生了不连续。
+     * 解码线程据此清空「原始 PTS → pts_us」映射：相机重启后原始 PTS 会从头重来，
+     * 沿用旧映射会把新帧错配到跳变前的 pts_us。
+     */
+    bool discontinuity{false};
 };
 
 /**
@@ -164,6 +170,11 @@ private:
     std::atomic<bool> active_{true};
     /** 初始即等待关键帧：会话可能在 GOP 中途创建，禁止把孤立 P 帧喂入解码器 */
     std::atomic<bool> waiting_keyframe_{true};
+    /**
+     * 已丢弃（门控/拥塞）但尚未转交解码线程的不连续标记。
+     * ⚠️ 只由 push_packet 的单一生产者（拉流线程）读写，因此无需原子。
+     */
+    bool pending_discontinuity_{false};
 
     std::mutex pool_mutex_;
     std::vector<std::vector<uint8_t>> buffer_pool_;
@@ -198,7 +209,10 @@ struct Stream {
     const std::string url;                      /**< 规范化后的 RTSP URL */
     const Options options;                      /**< 传输与超时配置 */
 
-    // consumers 容器与 expiry 时间点仅在持有 Engine::control 互斥锁时访问
+    // ⚠️ 跨对象锁归属：consumers 容器与 expiry 时间点由 **Engine::control** 保护（不是本对象的
+    //    mutex）。原因是消费者计数与流池、broker 池必须在同一临界区里原子变更；
+    //    任何读写都必须先持有 Engine::control，Stream 自身的方法不得触碰它们（has_ai_consumer /
+    //    sync_decode_pipeline 例外，其前置条件同样是调用方持有 control）。
     std::map<uint64_t, int32_t> consumers;      /**< 当前复用该流的消费者映射 (consumer_id -> kind) */
     Clock::time_point expiry = Clock::time_point::max(); /**< 宽限期到期时间点，默认不过期 */
 
@@ -389,7 +403,13 @@ struct Stream {
     void get_view(ViewRect *out_rect, int64_t *out_since_ms) const;
 
 private:
-    /** @brief 取一次单调递增的发布时钟（只增不减）。 */
+    /**
+     * @brief 取一次**严格**递增的发布时钟。
+     *
+     * capture_time_ms 是结果回传时反查 pts_us 的唯一帧键（FramePublisher::resolve_pts_us），
+     * 同一毫秒内连发的两帧（解码器 drain 成批出帧）若拿到相同值，就会把较新帧的 pts_us
+     * 错配给较旧帧的结果。因此至少 +1，偶发超前墙钟几毫秒会随后自动收敛。
+     */
     int64_t advance_capture_locked();
     /** @brief 推进视图生效起点；同时推进 last_capture，保证改窗后的第一帧落在新时间戳。 */
     int64_t advance_since_locked();

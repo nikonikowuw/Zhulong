@@ -124,6 +124,25 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet, bool has_norm
     }
 
     const bool is_key = (packet.key_frame != 0);
+    // 不连续标记必须送达解码线程：本包若被丢弃，标记暂存到下一个真正入队的包上
+    if ((packet.pkt_flags & ZHULONG_PKT_FLAG_DISCONTINUITY) != 0) {
+        pending_discontinuity_ = true;
+    }
+
+    // 积压包被整体丢弃时，其中携带的不连续标记同样要转交给后续入队的包
+    auto discard_backlog = [this]() noexcept {
+        try {
+            auto backlog = packet_queue_.drain();
+            for (const auto &queued : backlog) {
+                if (queued.discontinuity) pending_discontinuity_ = true;
+            }
+            recycle_packets(std::move(backlog));
+        } catch (...) {
+            // drain() 构造临时 deque 可能 bad_alloc：积压随队列下一次 drain/析构释放。
+            // 保守地视为发生过不连续，宁可多清一次映射也不错配 pts_us。
+            pending_discontinuity_ = true;
+        }
+    };
 
     // 拥塞重同步机制：若正处于等待关键帧状态，丢弃一切非关键帧直至收到完整 IDR/关键帧
     if (waiting_keyframe_.load(std::memory_order_relaxed)) {
@@ -134,7 +153,7 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet, bool has_norm
         waiting_keyframe_.store(false, std::memory_order_relaxed);
         // 新的关键帧到达：清空此前积压的旧包队列 (仅清空元素，不改变取消标记)，
         // 积压包的缓冲回收进复用池——拥塞恰恰是最需要复用的时刻
-        recycle_packets(packet_queue_.drain());
+        discard_backlog();
     }
 
     QueuedPacket qp;
@@ -155,14 +174,16 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet, bool has_norm
     qp.time_base_den = packet.time_base_den > 0 ? packet.time_base_den : time_base_den_.load(std::memory_order_relaxed);
     qp.codec = packet.codec;
     qp.key_frame = is_key;
+    qp.discontinuity = pending_discontinuity_;
 
     if (!packet_queue_.push(std::move(qp))) {
-        // drop_newest 拒收时 qp 未被移动（push_internal 在 push_back 前就返回），缓冲仍可回收
+        // drop_newest 拒收时 qp 未被移动（push_internal 在 push_back 前就返回），缓冲仍可回收；
+        // pending_discontinuity_ 保持原值，由下一个成功入队的包携带
         recycle_buffer(std::move(qp.data));
         // 队列已满溢出：立即丢弃全部积压并等待下一个关键帧重同步。
         // 否则 AI 将长期消费一条落后约一个队列深度 (60 包) 的陈旧画面，延迟无法自愈。
         const bool already_waiting = waiting_keyframe_.exchange(true, std::memory_order_relaxed);
-        recycle_packets(packet_queue_.drain());
+        discard_backlog();
         // 仅在队列未被取消时计数：停机竞态下的 push 失败不是拥塞，不污染统计
         if (!packet_queue_.is_cancelled()) {
             congestion_resyncs_.fetch_add(1, std::memory_order_relaxed);
@@ -172,6 +193,7 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet, bool has_norm
         }
         return false;
     }
+    pending_discontinuity_ = false;
     return true;
 }
 
@@ -388,6 +410,12 @@ void DecodeSession::decode_loop_body() {
 
         if (!active_.load(std::memory_order_relaxed) || packet_queue_.is_cancelled()) {
             break;
+        }
+
+        // 源时间轴不连续（相机重启 / 会话重建）：原始 PTS 从头起算，旧映射会把新帧
+        // 错配到跳变前的 pts_us。须在关键帧门控之前清空——门控丢掉的正是跳变后的首批包。
+        if (pkt.discontinuity) {
+            reset_pts_us_history();
         }
 
         // 编码类型或参数集变化：旧解码器不再适用，丢弃并按新元数据重建
@@ -829,17 +857,28 @@ void Stream::capture() noexcept {
         ZL_LOGE(id, "pipeline.stream", "capture_failed rc=%d", static_cast<int>(error));
     }
 
-    std::lock_guard<std::mutex> lock(mutex);
-    // C ABI 只有 STARTING/RUNNING/FAILED 三态，没有 STOPPED：正常停机在这里统一表达为
-    // FAILED + Zhulong_ERR_CANCELLED，调用方靠 error 区分「被停机」与「真故障」（见 engine.h）。
-    // ⚠️ 但熔断（on_decode_fatal_error，来自解码线程）先记录的真实故障必须保留：它随后会
-    //    request_stop()，让本线程以 ERR_CANCELLED 收尾；若无条件覆盖，FAILED + CANCELLED
-    //    会被读成「受控停机」，硬件故障就此静默。
-    const bool fatal_error_recorded = status.state == Zhulong_STREAM_FAILED &&
-                                      status.error != Zhulong_OK &&
-                                      status.error != Zhulong_ERR_CANCELLED;
-    if (!fatal_error_recorded) {
-        status = {Zhulong_STREAM_FAILED, error == Zhulong_OK ? Zhulong_ERR_CANCELLED : error};
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        // C ABI 只有 STARTING/RUNNING/FAILED 三态，没有 STOPPED：正常停机在这里统一表达为
+        // FAILED + Zhulong_ERR_CANCELLED，调用方靠 error 区分「被停机」与「真故障」（见 engine.h）。
+        // ⚠️ 但熔断（on_decode_fatal_error，来自解码线程）先记录的真实故障必须保留：它随后会
+        //    request_stop()，让本线程以 ERR_CANCELLED 收尾；若无条件覆盖，FAILED + CANCELLED
+        //    会被读成「受控停机」，硬件故障就此静默。
+        const bool fatal_error_recorded = status.state == Zhulong_STREAM_FAILED &&
+                                          status.error != Zhulong_OK &&
+                                          status.error != Zhulong_ERR_CANCELLED;
+        if (!fatal_error_recorded) {
+            status = {Zhulong_STREAM_FAILED, error == Zhulong_OK ? Zhulong_ERR_CANCELLED : error};
+        }
+    }
+    // FAILED 是终态：不再有包喂给解码器，立即取消解码会话，让解码线程退出并归还解码器
+    // （MPP 会话 / 软解上下文）。Engine::decode_sessions_in_use_locked 依赖「FAILED ⇒ 解码
+    // 资源已释放」这一不变量，否则一条死流会一直占着解码容量直到消费者释放。
+    // ⚠️ 必须在 mutex 外调用：request_stop() 自己会取同一把锁。
+    try {
+        request_stop();
+    } catch (...) {
+        ZL_LOGE(id, "pipeline.stream", "capture_request_stop_exception");
     }
 }
 
@@ -855,7 +894,7 @@ int64_t system_now_ms() noexcept {
 } // namespace
 
 int64_t Stream::advance_capture_locked() {
-    last_capture_ms_ = std::max(system_now_ms(), last_capture_ms_);
+    last_capture_ms_ = std::max(system_now_ms(), last_capture_ms_ + 1);
     return last_capture_ms_;
 }
 

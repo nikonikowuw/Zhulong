@@ -22,7 +22,10 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
   - ⚠️ **无活跃会话时必须阻塞满 timeout 再返回 false**：会话熔断/取消后 `decode_session_` 仍非空，而已取消队列的 `pop` 会立即返回。若 `acquire_frame` 也立即返回，`FramePublisher` 这类轮询消费者会 100% CPU 空转直到 AI 消费者被释放。判据是 `DecodeSession::is_active()`。
   - ⚠️ `BoundedQueue::pop` 取消后**不交出残余元素**，且出队元素先移入局部暂存、解锁后才赋给 `item`——调用方复用的旧句柄在队列锁外析构。
 - **新建流必须携带全局解码策略**：`Stream::start(policy)` 由 `Engine::acquire` 传入 `decode_policy_`。用默认值会把「仅 MPP、禁止软解回退」静默降级为 AUTO，绕过 fail-closed。
-- **FAILED 流不复用**：`Engine::acquire` 按 URL 查找时跳过 `status.state == FAILED` 的流（终态，拉流线程已退出）。否则只要另一消费者仍持有死流，Go 侧「acquire → 发现 FAILED → Close → 重试」会永远拿回同一条死流。旧流随其消费者释放后经宽限期回收。
+- **FAILED 流不复用**：`Engine::acquire` 按 URL 查找时跳过 `status.state == FAILED` 的流（终态，拉流线程已退出）。否则只要另一消费者仍持有死流，Go 侧「acquire → 发现 FAILED → Close → 重试」会永远拿回同一条死流。
+  - ⚠️ **FAILED 流随最后一个消费者释放立即退役**（`detach_consumer_locked` 走 `stream_to_stop`），不等宽限期——它不可能再被复用，等宽限期只是白占连接与内存。
+  - ⚠️ **FAILED ⇒ 解码资源已释放**：熔断路径自带 `request_stop()`，`Stream::capture` 收尾也必须 `request_stop()`（在 `Stream::mutex` 外）取消解码会话。`Engine::decode_sessions_in_use_locked()` 依赖这一不变量，把「FAILED 且仍有 AI 消费者」的流从 `active_decode_sessions_` 中扣除，容量门控（`check_decode_capacity_locked`）与 `get_decode_stats` 都只看真实占用，一条死流不会让同 URL 重建撞上 `CAPACITY_EXCEEDED`。
+- **解码线程的 pts_us 映射随源时间轴不连续清空**：`QueuedPacket::discontinuity` 携带 `ZHULONG_PKT_FLAG_DISCONTINUITY`；被门控/拥塞丢弃的包上的标记经 `pending_discontinuity_` 转交下一个入队包。解码线程在**关键帧门控之前**清空「原始 PTS → pts_us」映射，否则相机重启后重复的原始 PTS 会错配到跳变前的 pts_us。
 - **单流确定性线程模型与双后端自适应路由**：
   - 解码节点通过 `IDecodeNode::create` 统一抽象，提供 `DecoderBackend::automatic`、`DecoderBackend::ffmpeg_sw` 与 `DecoderBackend::mpp_hw` 三种分流策略。
   - 在 `automatic` 模式下，系统动态探测硬件加速能力（`MppDecodeNode::is_supported()`），若支持且码流为 H.264/H.265 则自动启用 MPP 硬件解码并直出 DMA-BUF；环境不支持或解码异常时透明回退至 FFmpeg 软解。
@@ -121,6 +124,9 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 - ⚠️ **`noexcept` 热路径不得用 `make_unique` 兜底**：`MotionDetector` 的 DMA-BUF 读取守卫用 `std::optional<ScopedFdSync>` 就地构造，而非 `unique_ptr` —— 后者在 OOM 时抛 `bad_alloc` 穿出 `noexcept`，把「读不到像素就 fail-open」变成进程崩溃。
 - ⚠️ **退役资源统一走 `RetiredResources`**：`release()` 与 `acquire()` 回滚共用 `Engine::detach_consumer_locked`，锁内只把 publisher/broker/会话/流摘进 `RetiredResources`，锁外 `finish()` 按 publisher → broker → 会话 → 流 的顺序停机。该对象必须声明在 control 锁守卫**之前**（析构兜底 `finish()` 含 join），且持有 Stream 的 `keepalive`——`DecodeSession` 熔断回调捕获的是 Stream 裸 `this`，会话汇合前 Stream 不得被 Reaper 析构。
 - ⚠️ **Broker 锁外启动**：`FrameBroker::start` 会阻塞获取与 Go 侧清扫互斥的目录锁并申请槽位内存，**不得**在 `Engine::control` 内执行。`acquire` 在锁外 `start_frame_broker`、锁内 `commit_frame_broker_locked`；同一流共用 shm 名与 socket 路径，故用 `brokers_pending` + `broker_settled` 保证同时只有一个启动者，`stop()` 必须广播 `broker_settled`。结果回调必须在 `start` **之前**登记（`set_on_result` 不加锁）。
+- ⚠️ **新 broker 必须等旧 broker 退役完毕**：旧实例的 `stop()` 会 `unlink` 同名 socket 并 `shm_unlink`；若同一流上新的 AI `acquire` 抢在它之前启动，新实例的资源会被旧实例删掉，runner 连接 `ENOENT`、整路 AI 静默停摆。因此 `detach_consumer_locked` 摘下 broker 时同时登记 `brokers_retiring`（`RetiredResources::retiring_owner/retiring_id`），`finish()` 停完 broker 后持 `control` 注销并广播 `broker_settled`；`claim_broker_start_locked` 必须同时等 `brokers_pending` **与** `brokers_retiring` 清空。不要改成给资源名加后缀——Go 侧清扫按 `zhulong_broker_` / `zhulong_shm_` 前缀解析流 ID。
+- ⚠️ **查找表读写分离（`registry_mutex`）**：`brokers`（`shared_ptr`）与 `publishers` 的写入必须**先持 `control` 再持 `registry_mutex`**；只读路径（`dispatch_ai_result`、`find_frame`、`set_publish_rate`、`get_broker_path`、`broker_client_stats`、`broadcast_ai_message`）只拿 `registry_mutex`，锁内只拷贝 `shared_ptr`，socket 写与回调都在**全部锁外**。`running` 因此是 `std::atomic<bool>`（写入仍只在持 `control` 时）。反例：旧实现 `broadcast_ai_message` 持 `control` 写 socket，一个慢 runner 会把全部流的 AI 结果派发与 acquire/release/status 一起卡住。
+- ⚠️ **`Engine::stop` 锁内只摘出**：`control` 内只把 `streams` 与 publisher/broker 池整体 `swap` 出来，`request_stop()`（取消队列 → 析构残余帧 → `release_fn`）在锁外进行；Reaper 必须先于流的二次 `join()` 汇合。`stop()` 由析构调用，只用 `std::map`（默认构造不分配）的 `swap`、AI 订阅逐个摘出排空，不构造会在 OOM 时抛出的临时 `vector`/`deque`（`FramePublisher::stop` 同理逐帧摘出历史帧）。
 - ⚠️ **`BoundedQueue` 析构不得调用 `cancel()`**：`cancel()` 托管残余元素用的 `std::deque` 默认构造会分配，析构函数隐式 `noexcept`。析构只置位取消并广播，残余元素随成员析构。`cancel()` 本身两阶段：先置位并广播（不抛），再 `swap` 移出残余元素。
 
 ---
@@ -165,6 +171,9 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - **边界时钟**：窗口切换推进 `effective_since_ms`（同毫秒内改窗 `+1`）。消费侧按
      「结果的 `capture_time_ms` < since → 旧窗口」选择 E；`StreamHub` 只保留当前与上一代两代，
      因此不要在窗口上做「隔两代才生效」的优化。
+   - ⚠️ **`capture_time_ms` 严格递增**（`max(now, last + 1)`）：它是 `FramePublisher::resolve_pts_us`
+     反查 pts_us 的唯一帧键。只做「不递减」时，解码器 drain 成批出帧会让同一毫秒的两帧共用一个值，
+     较新帧的 pts_us 被注入到较旧帧的结果里（预览叠框错位）。由 `decoder_test.cpp` 15.1 守护。
    - **清除必须发生在释放流之前**：`ReleaseAIStreamSubscriber` 先 `SetView(NULL)` 再 `Close`，
      否则流交回引擎池被无 crop 的相机复用时，会继承上一任窗口且完全静默。
    - **`has_motion` 是窗口内语义**：运动检测器只采样窗口内部；窗口外运动不再触发整帧放行。

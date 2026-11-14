@@ -1098,6 +1098,134 @@ int main() {
             CHECK(saw_not_running);
         }
 
+        // ====================================================================
+        // 15. Engine 生命周期回归：broker 同名资源互斥 / capture_time 唯一 / FAILED 流
+        // ====================================================================
+        {
+            // 15.1 capture_time_ms 必须严格递增：它是结果回传反查 pts_us 的唯一帧键，
+            //      同一毫秒内连发的两帧若拿到相同值，较新帧的 pts_us 会被错配给较旧帧的结果。
+            zhulong::Stream clock_stream(9001, "rtsp://127.0.0.1/clock", zhulong::Options{});
+            int64_t previous_capture = 0;
+            for (int i = 0; i < 64; ++i) {
+                const auto snap = clock_stream.view_snapshot(1280, 720);
+                CHECK(snap.capture_time_ms > previous_capture);
+                previous_capture = snap.capture_time_ms;
+            }
+        }
+        {
+            // 15.2 注销最后一个 AI 消费者时 broker 必须登记「退役中」，finish() 停完后注销。
+            zhulong::Engine engine;
+            engine.running = true;
+            auto stream = std::make_shared<zhulong::Stream>(9002, "rtsp://127.0.0.1/retire", zhulong::Options{});
+            stream->consumers.emplace(1, Zhulong_CONSUMER_AI);
+            engine.streams.emplace(9002, stream);
+            engine.brokers.emplace(9002, std::make_shared<zhulong::ipc::FrameBroker>()); // 未启动，stop() 幂等
+
+            zhulong::RetiredResources retired;
+            {
+                std::lock_guard<std::mutex> lock(engine.control);
+                engine.detach_consumer_locked(stream, 1, false, retired);
+                CHECK(engine.brokers.empty());
+                CHECK(engine.brokers_retiring.count(9002) == 1);
+                CHECK(retired.retiring_owner == &engine);
+                CHECK(retired.broker != nullptr);
+            }
+            retired.finish();
+            CHECK(engine.brokers_retiring.empty());
+
+            engine.streams.clear();
+            engine.running = false;
+        }
+        {
+            // 15.3 同一流的新 broker 必须等旧 broker 退役完毕才能启动：旧实例 stop() 会 unlink
+            //      同名 socket 与 shm，抢先启动的新实例会被删掉资源，整路 AI 静默停摆。
+            zhulong::Engine engine;
+            engine.running = true;
+            auto stream = std::make_shared<zhulong::Stream>(9003, "rtsp://127.0.0.1/reclaim", zhulong::Options{});
+            stream->consumers.emplace(7, Zhulong_CONSUMER_AI);
+            engine.streams.emplace(9003, stream);
+            engine.brokers_retiring.insert(9003);
+
+            std::atomic<bool> claimed{false};
+            std::atomic<bool> finished{false};
+            std::thread claimer([&] {
+                zhulong::RetiredResources rollback; // 声明在锁之前（与 acquire 一致）
+                std::shared_ptr<zhulong::DecodeSession> session_to_stop;
+                std::string base_dir;
+                std::unique_lock<std::mutex> operation(engine.control);
+                claimed = engine.claim_broker_start_locked(operation, stream, 7, false,
+                                                           session_to_stop, base_dir, rollback);
+                finished = true;
+            });
+
+            std::this_thread::sleep_for(100ms);
+            CHECK(!finished.load()); // 退役未完成时必须等待
+
+            {
+                zhulong::RetiredResources retiring;
+                retiring.retiring_owner = &engine;
+                retiring.retiring_id = 9003;
+                retiring.finish(); // 注销退役标记并广播 broker_settled
+            }
+            claimer.join();
+            CHECK(finished.load());
+            CHECK(claimed.load());
+            {
+                std::lock_guard<std::mutex> lock(engine.control);
+                CHECK(engine.brokers_pending.count(9003) == 1);
+                CHECK(engine.brokers_retiring.empty());
+                engine.brokers_pending.clear();
+            }
+            engine.streams.clear();
+            engine.running = false;
+        }
+        {
+            // 15.4 FAILED 流：不占解码容量，且最后一个消费者释放时立即退役（不等宽限期）。
+            zhulong::Engine engine;
+            engine.running = true;
+            engine.decode_policy_.max_sessions = 1;
+            auto dead = std::make_shared<zhulong::Stream>(9004, "rtsp://127.0.0.1/dead", zhulong::Options{});
+            dead->consumers.emplace(1, Zhulong_CONSUMER_AI);
+            dead->status = {Zhulong_STREAM_FAILED, Zhulong_ERR_HARDWARE_UNAVAILABLE};
+            engine.streams.emplace(9004, dead);
+            engine.active_decode_sessions_.store(1);
+
+            zhulong::RetiredResources retired;
+            {
+                std::lock_guard<std::mutex> lock(engine.control);
+                CHECK(engine.decode_sessions_in_use_locked() == 0);
+                bool rejected = false;
+                try {
+                    engine.check_decode_capacity_locked(0, "test");
+                } catch (const zhulong::Failure &) {
+                    rejected = true;
+                }
+                CHECK(!rejected); // 死流不得挤占同 URL 重建所需的解码名额
+
+                engine.detach_consumer_locked(dead, 1, false, retired);
+                CHECK(engine.streams.count(9004) == 0);
+                CHECK(retired.stream_to_stop == dead);
+                CHECK(engine.active_decode_sessions_.load() == 0);
+            }
+            retired.finish();
+            engine.running = false;
+        }
+        {
+            // 15.5 FramePublisher::stop() 必须清空抓拍历史（逐帧锁外释放）
+            auto stream = std::make_shared<zhulong::Stream>(9005, "rtsp://127.0.0.1/history", zhulong::Options{});
+            zhulong::FramePublisher publisher(stream, nullptr);
+            for (int i = 0; i < 6; ++i) {
+                auto frame = std::make_shared<zhulong::HardwareFrame>();
+                frame->has_pts = true;
+                frame->pts = 100 + i;
+                publisher.push_frame(frame);
+            }
+            CHECK(publisher.latest_frame() != nullptr);
+            CHECK(publisher.latest_frame()->pts == 105);
+            publisher.stop();
+            CHECK(publisher.latest_frame() == nullptr);
+        }
+
         // 7. Stream::view_snapshot 分辨率热切换在清除视图后仍跟踪解码帧尺寸
         {
             zhulong::Stream view_stream(2001, "rtsp://127.0.0.1/view", zhulong::Options{});

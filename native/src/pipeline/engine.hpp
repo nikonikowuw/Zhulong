@@ -5,18 +5,22 @@
  * 核心机制与架构契约：
  * 1. 锁分层与锁外汇合禁令（R15）：
  *    - lifecycle 锁仅串行化 start() / stop() 状态流转；
- *    - control 锁保护物理流池容器、FrameBroker 与消费者映射的快速修改；
- *    - ⚠️ 严禁在持有 control 互斥锁时调用 thread::join() 或同步排空（drain），
- *      以防单路流的阻塞等待引起 status、acquire 等全局控制操作死锁；
+ *    - control 锁保护物理流池容器、消费者映射与 broker 启停协调（pending / retiring）；
+ *    - registry_mutex 只保护 brokers / publishers 两张表的**查找**：写入方必须先持 control
+ *      再持 registry（顺序 control → registry → broker 内部锁），只读路径（AI 结果派发、
+ *      抓拍、广播、统计）只拿 registry，不与 acquire/release 争用 control；
+ *    - ⚠️ 严禁在持有 control 或 registry 互斥锁时调用 thread::join()、同步排空（drain）
+ *      或 socket 写，以防单路流的阻塞等待引起 status、acquire 等全局控制操作停摆；
  * 2. 8 秒宽限期机制（Grace Period）：
  *    - 当物理流的所有消费者释放后，流进入 8 秒宽限期；
  *    - 宽限期内新消费者接入可直接零等待复用已有 RTSP 连接，超时后由后台 Reaper 线程回收；
- * 3. 5 步优雅停机顺序（5-Step Graceful Shutdown）：
- *    - 第一步：置位 running=false，向所有流发出 request_stop() 停止拉流；
- *    - 第二步：唤醒并等待 Reaper 线程安全汇合；
- *    - 第三步：停止发布线程与 FrameBroker；
- *    - 第四步：同步排空所有 AI 结果订阅（AISubscription）；
- *    - 第五步：汇合所有物理流工作线程并排空在途 Probe 探测任务。
+ *    - FAILED 流是终态、不可复用，最后一个消费者释放时立即退役，不等宽限期；
+ * 3. 优雅停机顺序（stop()）：
+ *    - 第一步：control 锁内置位 running=false，并把流池、publisher/broker 池整体摘出；
+ *    - 第二步：锁外向所有流发出 request_stop()（取消队列、析构残余帧都不在锁内）并唤醒 Reaper；
+ *    - 第三步：停止发布线程，再停止 FrameBroker；
+ *    - 第四步：同步排空所有 AI 结果订阅（AISubscription），取消在途 Probe；
+ *    - 第五步：汇合 Reaper，再汇合所有物理流工作线程，最后等待在途 Probe 排空。
  */
 
 #pragma once
@@ -39,6 +43,8 @@
 
 namespace zhulong {
 
+struct Engine;
+
 /**
  * @brief 在 control 锁内摘下、锁外停止的退役资源包
  *
@@ -51,12 +57,21 @@ namespace zhulong {
  *    保证异常路径上也是先解锁、后汇合。
  */
 struct RetiredResources {
-    std::unique_ptr<ipc::FrameBroker> broker;      /**< 待停止的 FrameBroker */
+    std::shared_ptr<ipc::FrameBroker> broker;      /**< 待停止的 FrameBroker */
     std::shared_ptr<FramePublisher> publisher;     /**< 待停止的发布线程（持有 broker 裸指针） */
     std::shared_ptr<DecodeSession> session;        /**< 待汇合的解码会话 */
     std::shared_ptr<Stream> stream_to_stop;        /**< 已从池中移除、需立即停止并汇合的流 */
     /** 会话汇合前 Stream 不得析构：DecodeSession 的熔断回调捕获的是 Stream 裸 this */
     std::shared_ptr<Stream> keepalive;
+    /**
+     * 非空时表示 broker 已登记在 `Engine::brokers_retiring` 中：finish() 停完 broker
+     * （socket 与 shm 名已 unlink）后须持 control 注销并广播 `broker_settled`，
+     * 同一流的新 broker 才能用同名资源启动。
+     */
+    Engine *retiring_owner{nullptr};
+    Zhulong_stream_id retiring_id{0};
+    /** 非空时 finish() 汇合 stream_to_stop 后广播 `stream_retired` */
+    Engine *stream_owner{nullptr};
 
     RetiredResources() = default;
     ~RetiredResources();
@@ -85,20 +100,37 @@ struct Engine {
     // 当流从 streams 中彻底移除并 join 完毕后触发，用于唤醒等待旧连接关闭的 acquire 调用
     std::condition_variable stream_retired;
 
-    bool running = false;                       /**< 引擎运行状态 */
+    /**
+     * 引擎运行状态。写入只发生在持有 control 时；原子化是为了让只拿 registry_mutex 的
+     * 只读路径（AI 结果派发、抓拍、广播、统计）也能无数据竞争地检查它。
+     */
+    std::atomic<bool> running{false};
     uint64_t next_stream = 1;                   /**< 物理流 ID 生成器 */
     uint64_t next_subscription = 1;             /**< 订阅 ID 生成器 */
     std::map<Zhulong_stream_id, std::shared_ptr<Stream>> streams; /**< 物理流池 (ID -> Stream) */
 
-    // per-stream FrameBroker 与 FramePublisher 池 (受 control 互斥锁保护)
-    std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>> brokers; /**< AI 帧分发 Broker 实例池 */
+    /**
+     * brokers / publishers 查找表锁。
+     * ⚠️ 写入（插入/删除/整体摘出）必须**先持 control 再持本锁**；只读查找只持本锁。
+     *    本锁内只允许拷贝 shared_ptr 或做原子读写，**严禁** socket 写、join 或回调。
+     */
+    mutable std::mutex registry_mutex;
+    // per-stream FrameBroker 与 FramePublisher 池（写：control + registry_mutex；读：任一）
+    // broker 用 shared_ptr：只读路径在 registry 锁内拷一份引用，锁外广播/统计
+    std::map<Zhulong_stream_id, std::shared_ptr<ipc::FrameBroker>> brokers; /**< AI 帧分发 Broker 实例池 */
     std::map<Zhulong_stream_id, std::shared_ptr<FramePublisher>> publishers; /**< AI 帧发布线程池 */
     /**
      * 正在锁外启动 broker 的流 ID（受 control 保护）。同一流的 broker 共用 shm 名与 socket 路径，
      * 并发启动第二个会与第一个争抢同名资源，因此后到者在 broker_settled 上等待前者落定。
      */
     std::set<Zhulong_stream_id> brokers_pending;
-    std::condition_variable broker_settled;     /**< brokers_pending 变化或引擎停机时广播 */
+    /**
+     * 已从池中摘下、正在锁外停机的 broker 所属流 ID（受 control 保护）。
+     * 旧 broker 的 stop() 会 unlink 同名 socket 与 shm；新 broker 若抢在它之前启动，
+     * 资源就会被旧实例删掉，runner 连不上、整路 AI 静默停摆。因此启动方须等它清空。
+     */
+    std::set<Zhulong_stream_id> brokers_retiring;
+    std::condition_variable broker_settled;     /**< brokers_pending / brokers_retiring 变化或引擎停机时广播 */
     std::string broker_base_dir{"/tmp"};        /**< Broker socket 存放目录 (读取环境变量覆写) */
     std::shared_ptr<WindowCrop> window_crop{std::make_shared<WindowCrop>()}; /**< 宿主侧窗口物化器（与 publisher 共享） */
 
@@ -149,11 +181,54 @@ struct Engine {
     /** @brief 唤醒清理线程重新计算最近到期时间 (可在持有 control 时调用，不会反向加锁) */
     void wake_reaper();
 
-    /** @brief 根据流 ID 查找物理流对象（必须在 running 为 true 时调用） */
+    /**
+     * @brief 根据流 ID 查找物理流对象
+     *
+     * ⚠️ 调用方**必须持有 control**（读 streams 容器）；`running == false` 时抛
+     *    Zhulong_ERR_NOT_RUNNING，未找到抛 Zhulong_ERR_NOT_FOUND。
+     */
     std::shared_ptr<Stream> find_stream(Zhulong_stream_id id);
 
     /** @brief 获取或复用物理流（支持按 URL 与 Options 匹配） */
     Zhulong_stream_id acquire(const std::string &url, const Options &options, uint64_t consumer, int32_t kind);
+
+    /**
+     * @brief 当前实际占用解码资源的会话数（持 control 调用）
+     *
+     * 在 `active_decode_sessions_` 的基础上扣除已熔断（FAILED）却仍被消费者持有的流：
+     * 它们的解码线程已退出、硬件已归还，但计数要等消费者释放才回落。若照算，
+     * 一条死流就能让同 URL 的重建撞上 Zhulong_ERR_CAPACITY_EXCEEDED。
+     */
+    uint32_t decode_sessions_in_use_locked() const;
+
+    /** @brief 新增一个解码会话前的容量门控（持 control 调用；超限计数并抛 CAPACITY_EXCEEDED） */
+    void check_decode_capacity_locked(Zhulong_stream_id log_id, const char *path);
+
+    /**
+     * @brief acquire 第一阶段：把消费者挂到可复用流上，或新建并启动一条流（持 control 调用）
+     *
+     * @param operation       已加锁的 control；新建流启动失败时会被解锁后再汇合并抛出
+     * @param[out] created    是否新建了流（回滚时据此决定立即退役还是进入宽限期）
+     * @param[out] session_to_stop 需在锁外停止的旧解码会话
+     * @return 已登记本消费者的流
+     */
+    std::shared_ptr<Stream> attach_consumer_locked(std::unique_lock<std::mutex> &operation,
+                                                   const std::string &url, const Options &options,
+                                                   uint64_t consumer, int32_t kind, bool &created,
+                                                   std::shared_ptr<DecodeSession> &session_to_stop);
+
+    /**
+     * @brief acquire 第二阶段：判断本 AI 消费者是否需要亲自启动 broker（持 control 调用）
+     *
+     * 等待同一流上在途的启动者（brokers_pending）与退役者（brokers_retiring）落定。
+     * 返回 true 时已登记 brokers_pending 并写好 base_dir，调用方必须在锁外启动 broker 后
+     * 再持锁注销。停机或本消费者被并发注销时解锁、停止 session_to_stop 并抛出；
+     * 登记失败时经 rollback 回滚本消费者后抛出。
+     */
+    bool claim_broker_start_locked(std::unique_lock<std::mutex> &operation,
+                                   const std::shared_ptr<Stream> &stream, uint64_t consumer,
+                                   bool created, std::shared_ptr<DecodeSession> &session_to_stop,
+                                   std::string &base_dir, RetiredResources &rollback);
 
     /** @brief 释放消费者对物理流的引用，若无消费者则启动宽限期计时 */
     void release(Zhulong_stream_id id, uint64_t consumer);
@@ -197,29 +272,30 @@ struct Engine {
      *
      * @return 启动成功的 broker；失败返回空指针（已记录日志）
      */
-    std::unique_ptr<ipc::FrameBroker> start_frame_broker(Zhulong_stream_id id, const std::string &base_dir);
+    std::shared_ptr<ipc::FrameBroker> start_frame_broker(Zhulong_stream_id id, const std::string &base_dir);
 
     /**
      * @brief 持 control 锁把已启动的 broker 连同新建的 FramePublisher 提交进池
      *
-     * @param[in,out] broker  成功时被移入池；失败时移入 discard
+     * @param[in,out] broker  成功时所有权移交给池（本引用被置空）；失败时移入 discard
      * @param[out]    discard 失败时需在锁外停止的 publisher/broker
      * @return 提交成功返回 true
      *
-     * ⚠️ 必须在持有 control 锁时调用；失败时 brokers/publishers 保持调用前状态。
+     * ⚠️ 必须在持有 control 锁时调用（内部再取 registry_mutex）；失败时 brokers/publishers
+     *    保持调用前状态。
      */
     bool commit_frame_broker_locked(const std::shared_ptr<Stream> &stream,
-                                    std::unique_ptr<ipc::FrameBroker> &broker,
+                                    std::shared_ptr<ipc::FrameBroker> &broker,
                                     RetiredResources &discard);
 
     /**
      * @brief 持 control 锁注销一个消费者，并把因此退役的资源摘入 out
      *
      * 统一 release() 与 acquire() 回滚两条路径：解码计数、解码会话、无 AI 消费者时的
-     * publisher/broker、以及流空闲后的宽限期（或立即退役）。
+     * publisher/broker（broker 同时登记进 brokers_retiring）、以及流空闲后的宽限期（或立即退役）。
      *
      * @param retire_immediately 流变为无消费者时立即从池中移除并停止（用于新建流的回滚），
-     *                           否则进入宽限期等待 Reaper
+     *                           否则进入宽限期等待 Reaper；FAILED 流无论如何都立即退役
      * ⚠️ 必须在持有 control 锁时调用；out 必须在锁外 finish()。
      */
     void detach_consumer_locked(const std::shared_ptr<Stream> &stream, uint64_t consumer,
@@ -231,8 +307,8 @@ struct Engine {
     /**
      * @brief 采集指定流 FrameBroker 的客户端投递统计快照
      *
-     * 只读快照，内部短暂持有 control 锁与 broker 自身的互斥锁；两层锁顺序与
-     * broadcast_ai_message 一致（control → broker），不会与发布/回调路径形成环。
+     * 只读快照：在 registry_mutex 内拷一份 broker 引用，锁外读取 broker 自身状态，
+     * 不持有 control。
      *
      * @param id       物理流 ID
      * @param[out] out 调用方提供的数组，可为空（`capacity == 0` 时仅查询数量）
@@ -259,6 +335,11 @@ struct Engine {
 
     /**
      * @brief 向指定流（或所有活跃流）关联的 FrameBroker 广播下行控制消息
+     *
+     * registry_mutex 内只拷贝目标 broker 的 shared_ptr，socket 写在**全部锁外**进行：
+     * 慢 runner 让 write_all 等满超时，也不会卡住 control（acquire/release/status）
+     * 与 broker 收包线程上的 AI 结果派发。
+     *
      * @param stream_id 目标流 ID（为 0 表示向所有包含 Broker 的活跃流广播）
      * @param msg_type 消息类型（如 MSG_GALLERY_*）
      * @param payload 负载数据
@@ -274,7 +355,7 @@ struct Engine {
      * 返回的 shared_ptr 持有期间底层解码 buffer 不会被复用，因此调用方必须尽快完成
      * 像素拷贝（典型耗时 < 5ms）并释放。
      *
-     * ⚠️ 本方法内部会短暂持有 control 锁取 publisher 指针，但**在锁外**读取最新帧，
+     * ⚠️ 本方法内部只在 registry_mutex 内取 publisher 指针，**在锁外**读取最新帧，
      * 因此与解码/发布线程之间无锁竞争。严禁在回调上下文调用。
      *
      * @param id 物理流 ID

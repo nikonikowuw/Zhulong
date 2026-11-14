@@ -9,11 +9,16 @@
  * 2. 唤醒纪元（wake_epoch）：
  *    - 维护 wake_epoch 单调递增计数器。每当有消费者释放并启动宽限期时递增并广播 timer_wakeup，
  *      配合 1 秒兜底超时，确保 Reaper 线程绝不会因条件变量时序丢失唤醒；
- * 3. 严格五步停机编排：
- *    - 生产者停止 ➔ 唤醒 Reaper ➔ 停止发布与 Broker ➔ 同步排空 AI 订阅 ➔ 汇合拉流线程与探测排空。
- * 4. Broker 锁外启动：
+ * 3. 停机编排：
+ *    - 锁内摘出流池与 publisher/broker 池 ➔ 锁外停止拉流并唤醒 Reaper ➔ 停止发布与 Broker ➔
+ *      同步排空 AI 订阅 ➔ 汇合 Reaper 与拉流线程 ➔ 排空探测。
+ * 4. Broker 锁外启动与同名资源互斥：
  *    - broker 启动会阻塞拿目录锁并申请槽位内存，acquire 在 control 锁外完成启动、锁内提交；
- *      brokers_pending 保证同一流同时只有一个启动者（共用 shm 名与 socket 路径）。
+ *    - brokers_pending 保证同一流同时只有一个启动者，brokers_retiring 保证新 broker 不会抢在
+ *      旧 broker 停机（unlink 同名 socket / shm）之前启动（共用 shm 名与 socket 路径）。
+ * 5. 查找表读写分离：
+ *    - brokers / publishers 的只读查找只拿 registry_mutex，socket 写与结果派发都在锁外，
+ *      不与 acquire/release 争用 control。
  */
 
 #include "common/log.hpp"
@@ -32,7 +37,12 @@
 namespace zhulong {
 
 Engine::~Engine() {
-    stop();
+    // 析构函数隐式 noexcept：stop() 里的 join / 条件变量等待理论上可抛 system_error
+    try {
+        stop();
+    } catch (...) {
+        ZL_LOGE(0, "pipeline.engine", "engine_stop_exception");
+    }
 }
 
 void Engine::start() {
@@ -60,25 +70,33 @@ void Engine::start() {
 
 void Engine::stop() {
     std::lock_guard<std::mutex> transition(lifecycle);
+    // ⚠️ 本函数会被析构函数调用：只用 std::map（默认构造不分配）的 swap 摘出资源，
+    //    AI 订阅逐个摘出排空，不构造任何会在 OOM 时抛出的临时容器。
     std::map<Zhulong_stream_id, std::shared_ptr<FramePublisher>> publishers_to_stop;
-    std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>> brokers_to_stop;
+    std::map<Zhulong_stream_id, std::shared_ptr<ipc::FrameBroker>> brokers_to_stop;
+    std::map<Zhulong_stream_id, std::shared_ptr<Stream>> retired;
     {
         std::lock_guard<std::mutex> lock(control);
         running = false;
         reaper_stop.store(true);
-        for (const auto &entry : streams) {
-            entry.second->request_stop();
-        }
+        // 第一步：锁内只摘出，不停止。request_stop() 会取消解码队列并析构残余帧
+        // （release_fn → mpp_buffer_put / av_frame_unref），这些都不该发生在 control 内。
+        retired.swap(streams);
+        std::lock_guard<std::mutex> registry(registry_mutex);
         publishers_to_stop.swap(publishers);
         brokers_to_stop.swap(brokers);
     }
 
+    // 第二步：锁外停止拉流并唤醒所有等待者
+    for (const auto &entry : retired) {
+        entry.second->request_stop();
+    }
     wake_reaper();
     stream_retired.notify_all();
     // 唤醒等待同流 broker 落定的 acquire：它们会看到 running == false 并退出
     broker_settled.notify_all();
 
-    // 锁外停止 publisher 和 broker（在 join stream 之前，严格符合五步停机顺序）
+    // 第三步：停止 publisher 和 broker（在 join stream 之前；publisher 持有 broker 裸指针，先停它）
     for (auto &entry : publishers_to_stop) {
         entry.second->stop();
     }
@@ -89,15 +107,16 @@ void Engine::stop() {
     }
     brokers_to_stop.clear();
 
-    std::vector<std::shared_ptr<AISubscription>> ai_subs_to_drain;
-    {
-        std::lock_guard<std::mutex> lock(ai_sub_mutex);
-        for (auto &entry : ai_subscriptions) {
-            ai_subs_to_drain.push_back(entry.second);
+    // 第四步：逐个摘出并同步排空 AI 结果订阅（排空在 ai_sub_mutex 外，回调可能仍在执行）
+    for (;;) {
+        std::shared_ptr<AISubscription> sub;
+        {
+            std::lock_guard<std::mutex> lock(ai_sub_mutex);
+            if (ai_subscriptions.empty()) break;
+            auto first = ai_subscriptions.begin();
+            sub = std::move(first->second);
+            ai_subscriptions.erase(first);
         }
-        ai_subscriptions.clear();
-    }
-    for (auto &sub : ai_subs_to_drain) {
         sub->disable_and_drain();
     }
 
@@ -108,18 +127,16 @@ void Engine::stop() {
         }
     }
 
+    // 第五步：汇合 Reaper（它可能正在汇合某条过期流，必须先于下面的二次 join 完成），
+    // 再汇合全部拉流线程
     if (reaper.joinable()) {
         reaper.join();
     }
 
-    std::map<Zhulong_stream_id, std::shared_ptr<Stream>> retired;
-    {
-        std::lock_guard<std::mutex> lock(control);
-        retired.swap(streams);
-    }
     for (const auto &entry : retired) {
         entry.second->join();
     }
+    retired.clear();
 
     std::unique_lock<std::mutex> lock(probe_mutex);
     probes_drained.wait(lock, [this] { return probes.empty(); });
@@ -138,7 +155,7 @@ void Engine::get_decode_stats(Zhulong_decode_stats_t &out_stats) {
     // 硬件探测首次会 dlopen MPP 库：放在 control 锁外，避免拖住全部控制操作
     const int32_t hardware_available = MppDecodeNode::is_supported() ? 1 : 0;
     std::lock_guard<std::mutex> operation(control);
-    out_stats.active_sessions = static_cast<int32_t>(active_decode_sessions_.load());
+    out_stats.active_sessions = static_cast<int32_t>(decode_sessions_in_use_locked());
     out_stats.max_sessions = decode_policy_.max_sessions;
     out_stats.rejected_requests = static_cast<int32_t>(rejected_requests_.load());
     out_stats.hardware_available = hardware_available;
@@ -241,6 +258,30 @@ bool stream_failed(const Stream &stream) {
 
 } // namespace
 
+uint32_t Engine::decode_sessions_in_use_locked() const {
+    // FAILED 流的解码会话已被 request_stop（熔断或拉流收尾），解码线程随即退出并释放解码器；
+    // 只是计数要等其 AI 消费者释放才回落。这里扣掉它们，容量门控只看真实占用。
+    uint32_t stale = 0;
+    for (const auto &entry : streams) {
+        const Stream &stream = *entry.second;
+        if (stream.has_ai_consumer() && stream_failed(stream)) {
+            ++stale;
+        }
+    }
+    const uint32_t active = active_decode_sessions_.load();
+    return active > stale ? active - stale : 0;
+}
+
+void Engine::check_decode_capacity_locked(Zhulong_stream_id log_id, const char *path) {
+    if (decode_policy_.max_sessions <= 0) return;
+    const uint32_t in_use = decode_sessions_in_use_locked();
+    if (in_use < static_cast<uint32_t>(decode_policy_.max_sessions)) return;
+    rejected_requests_.fetch_add(1, std::memory_order_relaxed);
+    ZL_LOGW(log_id, "pipeline.engine", "decode_capacity_exceeded %s active=%u max=%d",
+            path, in_use, decode_policy_.max_sessions);
+    throw Failure{Zhulong_ERR_CAPACITY_EXCEEDED};
+}
+
 RetiredResources::~RetiredResources() {
     try {
         finish();
@@ -256,8 +297,19 @@ void RetiredResources::finish() {
         publisher.reset();
     }
     if (broker) {
+        // stop() 幂等：只读路径可能仍持有一份引用，对象随最后一个引用析构
         broker->stop();
         broker.reset();
+    }
+    // broker 的 socket 与 shm 名已 unlink：放行同一流上等待启动新 broker 的 acquire
+    if (retiring_owner != nullptr) {
+        Engine *owner = retiring_owner;
+        retiring_owner = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(owner->control);
+            owner->brokers_retiring.erase(retiring_id);
+        }
+        owner->broker_settled.notify_all();
     }
     Stream::stop_decode_session(std::move(session));
     session.reset();
@@ -265,7 +317,11 @@ void RetiredResources::finish() {
         stream_to_stop->request_stop();
         stream_to_stop->join();
         stream_to_stop.reset();
+        if (stream_owner != nullptr) {
+            stream_owner->stream_retired.notify_all();
+        }
     }
+    stream_owner = nullptr;
     // 最后才放开保活引用：此时本次退役的解码线程均已汇合
     keepalive.reset();
 }
@@ -290,161 +346,31 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
         throw Failure{Zhulong_ERR_HARDWARE_UNAVAILABLE};
     }
 
+    // 2. 登记消费者（复用或新建流）
     std::unique_lock<std::mutex> operation(control);
-    std::shared_ptr<Stream> stream;
     bool created = false;
-
-    for (;;) {
-        if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
-
-        std::shared_ptr<Stream> existing;
-        for (const auto &entry : streams) {
-            if (entry.second->url != url) continue;
-            // FAILED 是终态：拉流线程已退出（或熔断后正在退出）。复用它只会把新消费者挂到一条
-            // 死流上；若另一消费者仍持有它，重新 acquire 的一方会反复拿到同一条死流。
-            // 跳过它另建新流，旧流随其消费者全部释放后经宽限期回收。
-            if (stream_failed(*entry.second)) continue;
-            existing = entry.second;
-            break;
-        }
-
-        if (!existing) break;
-
-        if (existing->consumers.empty() && Clock::now() >= existing->expiry) {
-            const auto id = existing->id;
-            stream_retired.wait(operation, [this, id] {
-                return !running || !streams.count(id);
-            });
-            continue;
-        }
-
-        if (!(existing->options == options)) throw Failure{Zhulong_ERR_CONFIG_CONFLICT};
-
-        const bool was_decoding = existing->has_ai_consumer();
-        const bool will_start_decode = (kind == Zhulong_CONSUMER_AI && !was_decoding);
-
-        if (will_start_decode) {
-            if (decode_policy_.max_sessions > 0 && active_decode_sessions_.load() >= static_cast<uint32_t>(decode_policy_.max_sessions)) {
-                rejected_requests_.fetch_add(1, std::memory_order_relaxed);
-                ZL_LOGW(existing->id, "pipeline.engine", "decode_capacity_exceeded upgrade active=%u max=%d",
-                        active_decode_sessions_.load(), decode_policy_.max_sessions);
-                throw Failure{Zhulong_ERR_CAPACITY_EXCEEDED};
-            }
-            active_decode_sessions_.fetch_add(1, std::memory_order_relaxed);
-        }
-
-        if (!existing->consumers.emplace(consumer, kind).second) {
-            if (will_start_decode) {
-                active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
-            }
-            throw Failure{Zhulong_ERR_DUPLICATE};
-        }
-
-        const auto previous_expiry = existing->expiry;
-        existing->expiry = Clock::time_point::max();
-        // 动态同步解码节点状态 (若新加入 AI 消费者则拉起解码器)
-        try {
-            session_to_stop = existing->sync_decode_pipeline(decode_policy_);
-        } catch (...) {
-            existing->consumers.erase(consumer);
-            // 恢复宽限期：否则无消费者的流 expiry 停在 max，永远不会被 Reaper 回收
-            existing->expiry = previous_expiry;
-            if (will_start_decode) {
-                active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
-            }
-            throw;
-        }
-        stream = existing;
-        break;
-    }
-
-    if (!stream) {
-        const bool is_new_decode = (kind == Zhulong_CONSUMER_AI);
-        if (is_new_decode) {
-            if (decode_policy_.max_sessions > 0 && active_decode_sessions_.load() >= static_cast<uint32_t>(decode_policy_.max_sessions)) {
-                rejected_requests_.fetch_add(1, std::memory_order_relaxed);
-                ZL_LOGW(0, "pipeline.engine", "decode_capacity_exceeded new_stream active=%u max=%d",
-                        active_decode_sessions_.load(), decode_policy_.max_sessions);
-                throw Failure{Zhulong_ERR_CAPACITY_EXCEEDED};
-            }
-        }
-
-        if (!next_stream) {
-            throw Failure{Zhulong_ERR_INTERNAL};
-        }
-        auto fresh = std::make_shared<Stream>(next_stream++, url, options);
-        fresh->consumers.emplace(consumer, kind);
-        streams.emplace(fresh->id, fresh);
-
-        if (is_new_decode) {
-            active_decode_sessions_.fetch_add(1, std::memory_order_relaxed);
-        }
-        try {
-            // ⚠️ 必须传入全局解码策略：默认值会把「仅 MPP」静默降级为 AUTO，绕过 fail-closed
-            fresh->start(decode_policy_);
-        } catch (...) {
-            ZL_LOGE(fresh->id, "pipeline.engine", "stream_start_failed");
-            streams.erase(fresh->id);
-            if (is_new_decode) active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
-            operation.unlock();
-            fresh->request_stop();
-            fresh->join();
-            throw;
-        }
-        stream = std::move(fresh);
-        created = true;
-    }
-
+    const auto stream = attach_consumer_locked(operation, url, options, consumer, kind, created, session_to_stop);
     const auto id = stream->id;
 
-    // 2. AI 消费者按需建立 FrameBroker。broker 启动要阻塞拿目录锁、申请槽位内存，
-    //    只能在 control 锁外进行；同一流同时只允许一个启动者（brokers_pending），
-    //    后到者等待前者落定后复查。
-    bool start_broker = false;
+    // 3. AI 消费者按需建立 FrameBroker。broker 启动要阻塞拿目录锁、申请槽位内存，
+    //    只能在 control 锁外进行。
     std::string base_dir;
-    if (kind == Zhulong_CONSUMER_AI) {
-        for (;;) {
-            if (!running) {
-                operation.unlock();
-                Stream::stop_decode_session(std::move(session_to_stop));
-                throw Failure{Zhulong_ERR_NOT_RUNNING};
-            }
-            const auto found = stream->consumers.find(consumer);
-            if (found == stream->consumers.end()) {
-                // 等待期间本消费者已被（违约的并发 release）注销，无需回滚
-                operation.unlock();
-                Stream::stop_decode_session(std::move(session_to_stop));
-                throw Failure{Zhulong_ERR_NOT_FOUND};
-            }
-            if (brokers.count(id)) break;                 // 已有 broker（先行者已提交）
-            if (!brokers_pending.count(id)) {
-                start_broker = true;
-                break;
-            }
-            broker_settled.wait(operation);
-        }
-    }
-
-    if (!start_broker) {
+    if (kind != Zhulong_CONSUMER_AI ||
+        !claim_broker_start_locked(operation, stream, consumer, created, session_to_stop, base_dir, rollback)) {
         operation.unlock();
         Stream::stop_decode_session(std::move(session_to_stop));
         return id;
     }
-
-    try {
-        brokers_pending.insert(id);
-    } catch (...) {
-        detach_consumer_locked(stream, consumer, created, rollback);
-        operation.unlock();
-        Stream::stop_decode_session(std::move(session_to_stop));
-        rollback.finish();
-        throw;
-    }
-    base_dir = broker_base_dir;
     operation.unlock();
-    Stream::stop_decode_session(std::move(session_to_stop));
 
-    std::unique_ptr<ipc::FrameBroker> broker = start_frame_broker(id, base_dir);
+    // ⚠️ 从这里到重新加锁之间登记着 brokers_pending：任何异常都不能逃出，
+    //    否则同一流的后续 AI acquire 会永远等在 broker_settled 上。
+    try {
+        Stream::stop_decode_session(std::move(session_to_stop));
+    } catch (...) {
+        ZL_LOGE(id, "pipeline.engine", "decode_session_stop_exception");
+    }
+    std::shared_ptr<ipc::FrameBroker> broker = start_frame_broker(id, base_dir);
 
     operation.lock();
     brokers_pending.erase(id);
@@ -483,9 +409,138 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
     return id;
 }
 
-std::unique_ptr<ipc::FrameBroker> Engine::start_frame_broker(Zhulong_stream_id id, const std::string &base_dir) {
+std::shared_ptr<Stream> Engine::attach_consumer_locked(std::unique_lock<std::mutex> &operation,
+                                                       const std::string &url, const Options &options,
+                                                       uint64_t consumer, int32_t kind, bool &created,
+                                                       std::shared_ptr<DecodeSession> &session_to_stop) {
+    created = false;
+    for (;;) {
+        if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
+
+        std::shared_ptr<Stream> existing;
+        for (const auto &entry : streams) {
+            if (entry.second->url != url) continue;
+            // FAILED 是终态：拉流线程已退出（或熔断后正在退出）。复用它只会把新消费者挂到一条
+            // 死流上；若另一消费者仍持有它，重新 acquire 的一方会反复拿到同一条死流。
+            // 跳过它另建新流，旧流随其最后一个消费者释放立即退役。
+            if (stream_failed(*entry.second)) continue;
+            existing = entry.second;
+            break;
+        }
+
+        if (!existing) break;
+
+        if (existing->consumers.empty() && Clock::now() >= existing->expiry) {
+            const auto id = existing->id;
+            stream_retired.wait(operation, [this, id] {
+                return !running || !streams.count(id);
+            });
+            continue;
+        }
+
+        if (!(existing->options == options)) throw Failure{Zhulong_ERR_CONFIG_CONFLICT};
+
+        const bool will_start_decode = (kind == Zhulong_CONSUMER_AI && !existing->has_ai_consumer());
+        if (will_start_decode) {
+            check_decode_capacity_locked(existing->id, "upgrade");
+            active_decode_sessions_.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        if (!existing->consumers.emplace(consumer, kind).second) {
+            if (will_start_decode) {
+                active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
+            }
+            throw Failure{Zhulong_ERR_DUPLICATE};
+        }
+
+        const auto previous_expiry = existing->expiry;
+        existing->expiry = Clock::time_point::max();
+        // 动态同步解码节点状态 (若新加入 AI 消费者则拉起解码器)
+        try {
+            session_to_stop = existing->sync_decode_pipeline(decode_policy_);
+        } catch (...) {
+            existing->consumers.erase(consumer);
+            // 恢复宽限期：否则无消费者的流 expiry 停在 max，永远不会被 Reaper 回收
+            existing->expiry = previous_expiry;
+            if (will_start_decode) {
+                active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
+            }
+            throw;
+        }
+        return existing;
+    }
+
+    const bool is_new_decode = (kind == Zhulong_CONSUMER_AI);
+    if (is_new_decode) {
+        check_decode_capacity_locked(0, "new_stream");
+    }
+
+    if (!next_stream) {
+        throw Failure{Zhulong_ERR_INTERNAL};
+    }
+    auto fresh = std::make_shared<Stream>(next_stream++, url, options);
+    fresh->consumers.emplace(consumer, kind);
+    streams.emplace(fresh->id, fresh);
+
+    if (is_new_decode) {
+        active_decode_sessions_.fetch_add(1, std::memory_order_relaxed);
+    }
     try {
-        auto broker = std::make_unique<ipc::FrameBroker>();
+        // ⚠️ 必须传入全局解码策略：默认值会把「仅 MPP」静默降级为 AUTO，绕过 fail-closed
+        fresh->start(decode_policy_);
+    } catch (...) {
+        ZL_LOGE(fresh->id, "pipeline.engine", "stream_start_failed");
+        streams.erase(fresh->id);
+        if (is_new_decode) active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
+        operation.unlock();
+        fresh->request_stop();
+        fresh->join();
+        throw;
+    }
+    created = true;
+    return fresh;
+}
+
+bool Engine::claim_broker_start_locked(std::unique_lock<std::mutex> &operation,
+                                       const std::shared_ptr<Stream> &stream, uint64_t consumer,
+                                       bool created, std::shared_ptr<DecodeSession> &session_to_stop,
+                                       std::string &base_dir, RetiredResources &rollback) {
+    const auto id = stream->id;
+    // 同一流同时只允许一个启动者（brokers_pending），且必须等上一任 broker 停机
+    // （brokers_retiring）——它的 stop() 会 unlink 同名 socket 与 shm。
+    for (;;) {
+        if (!running) {
+            operation.unlock();
+            Stream::stop_decode_session(std::move(session_to_stop));
+            throw Failure{Zhulong_ERR_NOT_RUNNING};
+        }
+        if (!stream->consumers.count(consumer)) {
+            // 等待期间本消费者已被（违约的并发 release）注销，无需回滚
+            operation.unlock();
+            Stream::stop_decode_session(std::move(session_to_stop));
+            throw Failure{Zhulong_ERR_NOT_FOUND};
+        }
+        if (brokers.count(id)) return false;          // 已有 broker（先行者已提交）
+        if (!brokers_pending.count(id) && !brokers_retiring.count(id)) break;
+        broker_settled.wait(operation);
+    }
+
+    try {
+        base_dir = broker_base_dir;
+        brokers_pending.insert(id);
+    } catch (...) {
+        detach_consumer_locked(stream, consumer, created, rollback);
+        operation.unlock();
+        Stream::stop_decode_session(std::move(session_to_stop));
+        rollback.finish();
+        throw;
+    }
+    return true;
+}
+
+std::shared_ptr<ipc::FrameBroker> Engine::start_frame_broker(Zhulong_stream_id id, const std::string &base_dir) {
+    try {
+        auto broker = std::make_shared<ipc::FrameBroker>();
         // 结果回调在 start 之前登记：set_on_result 本身不加锁，start 后再写会与 broker 收包线程竞争
         broker->set_on_result([this](uint64_t stream_id, uint32_t /*client_id*/, const uint8_t* payload, size_t size) {
             this->dispatch_ai_result(stream_id, reinterpret_cast<const char*>(payload), size);
@@ -503,7 +558,7 @@ std::unique_ptr<ipc::FrameBroker> Engine::start_frame_broker(Zhulong_stream_id i
 }
 
 bool Engine::commit_frame_broker_locked(const std::shared_ptr<Stream> &stream,
-                                        std::unique_ptr<ipc::FrameBroker> &broker,
+                                        std::shared_ptr<ipc::FrameBroker> &broker,
                                         RetiredResources &discard) {
     const auto id = stream->id;
     // ⚠️ publisher 持有 broker 的**裸指针**：任何失败路径都把二者交给 discard，
@@ -525,9 +580,10 @@ bool Engine::commit_frame_broker_locked(const std::shared_ptr<Stream> &stream,
         return false;
     }
 
+    std::lock_guard<std::mutex> registry(registry_mutex);
     try {
-        // map 节点分配失败时实参尚未被移动，broker 仍由局部持有
-        brokers.emplace(id, std::move(broker));
+        // 拷贝 shared_ptr 不抛；map 节点分配失败时局部 broker 仍持有所有权
+        brokers.emplace(id, broker);
     } catch (...) {
         ZL_LOGE(id, "pipeline.engine", "broker_map_insert_failed");
         discard.publisher = std::move(publisher);
@@ -540,13 +596,11 @@ bool Engine::commit_frame_broker_locked(const std::shared_ptr<Stream> &stream,
     } catch (...) {
         ZL_LOGE(id, "pipeline.engine", "broker_map_insert_failed");
         discard.publisher = std::move(publisher);
-        auto brk_it = brokers.find(id);
-        if (brk_it != brokers.end()) {
-            discard.broker = std::move(brk_it->second);
-            brokers.erase(brk_it);
-        }
+        brokers.erase(id);
+        discard.broker = std::move(broker);
         return false;
     }
+    broker.reset(); // 所有权已移交给池
     return true;
 }
 
@@ -565,6 +619,7 @@ void Engine::detach_consumer_locked(const std::shared_ptr<Stream> &stream, uint6
 
     // 当该流的全部 AI 消费者均已注销时，摘下其 FramePublisher 与 FrameBroker
     if (!stream->has_ai_consumer()) {
+        std::lock_guard<std::mutex> registry(registry_mutex);
         auto pub_it = publishers.find(id);
         if (pub_it != publishers.end()) {
             out.publisher = std::move(pub_it->second);
@@ -574,13 +629,24 @@ void Engine::detach_consumer_locked(const std::shared_ptr<Stream> &stream, uint6
         if (brk_it != brokers.end()) {
             out.broker = std::move(brk_it->second);
             brokers.erase(brk_it);
+            // 登记「退役中」：finish() 停完 broker（unlink 同名资源）前，同一流不得启动新 broker
+            try {
+                brokers_retiring.insert(id);
+                out.retiring_owner = this;
+                out.retiring_id = id;
+            } catch (...) {
+                // 登记失败只退化为旧行为（不等待退役），不阻断注销
+                ZL_LOGW(id, "pipeline.engine", "broker_retiring_mark_failed");
+            }
         }
     }
 
     if (stream->consumers.empty()) {
-        if (retire_immediately) {
+        // FAILED 是终态、不会被 acquire 复用：等满宽限期只是白占连接与内存
+        if (retire_immediately || stream_failed(*stream)) {
             streams.erase(id);
             out.stream_to_stop = stream;
+            out.stream_owner = this;
         } else {
             stream->expiry = Clock::now() + get_stream_grace_period();
             ZL_LOGI(id, "pipeline.engine", "stream_idle");
@@ -955,7 +1021,8 @@ void Engine::dispatch_ai_result(Zhulong_stream_id stream_id, const char* payload
 
     std::shared_ptr<FramePublisher> publisher;
     {
-        std::lock_guard<std::mutex> lock(control);
+        // 只拿查找表锁：本函数跑在 broker 收包线程上、每条结果一次，不得与 control 争用
+        std::lock_guard<std::mutex> lock(registry_mutex);
         const auto pub_it = publishers.find(stream_id);
         if (pub_it != publishers.end()) {
             publisher = pub_it->second;
@@ -1023,28 +1090,41 @@ Video Engine::probe(const std::string &url, const Options &options) {
     return read_rtsp(url, options, *cancellation);
 }
 
-std::string Engine::get_broker_path(Zhulong_stream_id id) {
-    std::lock_guard<std::mutex> lock(control);
-    if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
-    auto it = brokers.find(id);
-    if (it == brokers.end() || !it->second || !it->second->is_running()) {
-        throw Failure{Zhulong_ERR_NOT_FOUND};
+namespace {
+
+/** @brief 在 registry 锁内取一份运行中的 broker 引用；不存在或已停止返回空 */
+std::shared_ptr<ipc::FrameBroker> find_running_broker(
+    std::mutex &registry_mutex,
+    const std::map<Zhulong_stream_id, std::shared_ptr<ipc::FrameBroker>> &brokers,
+    Zhulong_stream_id id) {
+    std::shared_ptr<ipc::FrameBroker> broker;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex);
+        const auto it = brokers.find(id);
+        if (it != brokers.end()) broker = it->second;
     }
-    return it->second->socket_path();
+    if (!broker || !broker->is_running()) return nullptr;
+    return broker;
+}
+
+} // namespace
+
+std::string Engine::get_broker_path(Zhulong_stream_id id) {
+    if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
+    const auto broker = find_running_broker(registry_mutex, brokers, id);
+    if (!broker) throw Failure{Zhulong_ERR_NOT_FOUND};
+    return broker->socket_path();
 }
 
 uint32_t Engine::broker_client_stats(Zhulong_stream_id id, Zhulong_broker_client_stats *out,
                                    uint32_t capacity) {
-    std::lock_guard<std::mutex> lock(control);
     if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
-    auto it = brokers.find(id);
-    if (it == brokers.end() || !it->second || !it->second->is_running()) {
-        throw Failure{Zhulong_ERR_NOT_FOUND};
-    }
+    const auto broker = find_running_broker(registry_mutex, brokers, id);
+    if (!broker) throw Failure{Zhulong_ERR_NOT_FOUND};
 
-    const ipc::FrameBroker &broker = *it->second;
-    const std::vector<ipc::ClientInfo> snapshot = broker.clients_snapshot();
-    const uint32_t max_in_flight = broker.max_in_flight_per_client();
+    // 锁外读取：broker 由 shared_ptr 保活，其内部短锁与 control / registry 无关
+    const std::vector<ipc::ClientInfo> snapshot = broker->clients_snapshot();
+    const uint32_t max_in_flight = broker->max_in_flight_per_client();
 
     // 防御：out == nullptr 时即使 capacity > 0 也不得写（契约只保证 capacity == 0 时可空）
     if (out == nullptr) {
@@ -1069,13 +1149,17 @@ uint32_t Engine::broker_client_stats(Zhulong_stream_id id, Zhulong_broker_client
 }
 
 void Engine::set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps) {
-    std::lock_guard<std::mutex> lock(control);
     if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
-    auto it = publishers.find(id);
-    if (it == publishers.end() || !it->second) {
+    std::shared_ptr<FramePublisher> publisher;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex);
+        auto it = publishers.find(id);
+        if (it != publishers.end()) publisher = it->second;
+    }
+    if (!publisher) {
         throw Failure{Zhulong_ERR_NOT_FOUND};
     }
-    it->second->set_max_sample_fps(max_sample_fps);
+    publisher->set_max_sample_fps(max_sample_fps);
 }
 
 void Engine::set_view(Zhulong_stream_id id, bool clear, const ViewRect &rect,
@@ -1106,38 +1190,46 @@ HardwareFrame::ConstPtr Engine::latest_frame(Zhulong_stream_id id) {
 }
 
 HardwareFrame::ConstPtr Engine::find_frame(Zhulong_stream_id id, int64_t pts) {
+    if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
     std::shared_ptr<FramePublisher> publisher;
     {
-        std::lock_guard<std::mutex> lock(control);
-        if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
+        std::lock_guard<std::mutex> lock(registry_mutex);
         auto it = publishers.find(id);
-        if (it == publishers.end() || !it->second) {
-            // 无 AI 消费者就没有 FramePublisher，也就没有已解码的帧可供抓拍。
-            // 不自行拉起拉流：那是 acquire() 的职责，默默拉流会引来无法解释的带宽消耗。
-            throw Failure{Zhulong_ERR_NOT_FOUND};
-        }
-        publisher = it->second;
+        if (it != publishers.end()) publisher = it->second;
     }
-    // 锁外读取：publisher 由 shared_ptr 保活，其内部短锁与 control 无关
+    if (!publisher) {
+        // 无 AI 消费者就没有 FramePublisher，也就没有已解码的帧可供抓拍。
+        // 不自行拉起拉流：那是 acquire() 的职责，默默拉流会引来无法解释的带宽消耗。
+        throw Failure{Zhulong_ERR_NOT_FOUND};
+    }
+    // 锁外读取：publisher 由 shared_ptr 保活，其内部短锁与 control / registry 无关
     return publisher->find_frame(pts);
 }
 
 Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type, const void* payload, size_t payload_size) {
-    std::lock_guard<std::mutex> lock(control);
     if (!running) return Zhulong_ERR_NOT_RUNNING;
 
     if (stream_id != 0) {
-        auto it = brokers.find(stream_id);
-        if (it == brokers.end() || !it->second || !it->second->is_running()) {
+        const auto broker = find_running_broker(registry_mutex, brokers, stream_id);
+        if (!broker) {
             return Zhulong_ERR_NOT_FOUND;
         }
-        it->second->broadcast_message(msg_type, payload, payload_size);
+        // ⚠️ socket 写在全部锁外：慢 runner 只会拖慢本调用，不会卡住 control 与结果派发
+        broker->broadcast_message(msg_type, payload, payload_size);
         return Zhulong_OK;
     }
 
-    // stream_id == 0: 广播给所有活跃流的 Broker
-    for (auto& [id, broker] : brokers) {
-        if (broker && broker->is_running()) {
+    // stream_id == 0: 广播给所有活跃流的 Broker（锁内只拷引用）
+    std::vector<std::shared_ptr<ipc::FrameBroker>> targets;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex);
+        targets.reserve(brokers.size());
+        for (const auto &entry : brokers) {
+            if (entry.second) targets.push_back(entry.second);
+        }
+    }
+    for (const auto &broker : targets) {
+        if (broker->is_running()) {
             broker->broadcast_message(msg_type, payload, payload_size);
         }
     }

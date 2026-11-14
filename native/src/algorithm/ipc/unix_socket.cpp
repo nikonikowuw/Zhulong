@@ -38,12 +38,13 @@ enum class ReadStatus {
  *
  * ⚠️ EAGAIN 语义：服务端为客户端 socket 设置了 SO_SNDTIMEO(50ms)，因此阻塞 socket 上的
  * EAGAIN 表示「本次 send 超时」而非「稍后重试」。此处必须走 poll(POLLOUT) 有界等待，
- * 绝不可 continue 自旋 —— 调用链上游是 FramePublisher 线程与持 Engine::control 锁的
- * broadcast_ai_message，无界自旋会把「对端不读」升级为「整个引擎控制面挂死」。
+ * 绝不可 continue 自旋 —— 调用链上游是 FramePublisher 线程与 Go 侧调用的
+ * broadcast_ai_message，无界自旋会把「对端不读」升级为发布线程与 Go 调用方永久挂死。
+ * （broadcast_ai_message 已改为在 Engine 全部锁外写 socket，但有界等待仍是硬约束。）
  *
  * 调用链：write_all ← write_msg_with_fd ← UnixSocketServer::send_msg_with_fd
  *         ← FrameBroker::publish_frame / FrameBroker::broadcast_message
- *         ← Engine::broadcast_ai_message（持 Engine::control 锁）。
+ *         ← Engine::broadcast_ai_message（registry 锁内只拷 broker 引用，锁外发送）。
  *
  * @param timeout_ms 单次 poll 等待上限；每次 EAGAIN 给一次有界 poll 机会（与
  *                   write_msg_with_fd 的既有行为一致），超时或 poll 失败即返回 false。
