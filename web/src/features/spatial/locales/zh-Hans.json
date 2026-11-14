@@ -35,6 +35,8 @@
     "unassignedTitle": "待标定摄像机",
     "unassignedTip": "拖拽摄像机到底图，或点击摄像机后在底图上单击落点",
     "allAssigned": "所有启用的摄像头均已完成标定",
+    "noCameras": "暂无可用摄像机，请先在摄像机管理中添加设备",
+    "noMatchingCameras": "未找到匹配的摄像机",
     "unassignedSection": "待分配",
     "assignedSection": "已标定",
     "searchPlaceholder": "搜索摄像机...",
@@ -103,6 +105,7 @@
     "rangeRequired": "请选择时间范围",
     "mapNameRequired": "请输入底图名称",
     "mapNameMax": "底图名称不能超过 64 个字符",
-    "mapFileRequired": "请选择底图图片文件"
+    "mapFileRequired": "请选择底图图片文件",
+    "mapFileType": "仅支持 PNG、JPG、WebP 或 SVG 图片格式"
   }
 }

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
-import { Loader2, MapPin, Route, Save, Undo2, Video } from 'lucide-react'
+import { Loader2, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { LanguageSwitch } from '@/components/language-switch'
 import { Header } from '@/components/layout/header'
@@ -24,27 +23,24 @@ import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { useAllCameras } from '@/features/cameras/contract'
-import { useAllPersons } from '@/features/persons/contract'
-import { type StampingCamera } from './components/canvas/spatial-canvas'
-import { SpatialCanvasViewport } from './components/canvas/spatial-canvas-viewport'
+import {
+  SpatialCanvasViewport,
+  type TrajectoryPlaybackState,
+} from './components/canvas/spatial-canvas-viewport'
 import { UnassignedCamerasPanel } from './components/sidebar/unassigned-cameras-panel'
-import { MapSwitcher } from './components/toolbar/map-switcher'
 import { MapUploadDialog } from './components/toolbar/map-upload-dialog'
+import { SpatialWorkbenchHeader } from './components/toolbar/spatial-workbench-header'
 import { TrajectorySearchToolbar } from './components/toolbar/trajectory-search-toolbar'
 import {
-  type CameraPositionInfo,
   type TrajectoryQueryParams,
   type TrajectoryResponse,
 } from './data/schema'
-import {
-  useCameraPositions,
-  useSaveCameraPositions,
-} from './hooks/use-camera-positions'
+import { useCalibrationDraft } from './hooks/use-calibration-draft'
+import { useCameraPositions } from './hooks/use-camera-positions'
 import { useSpatialMaps } from './hooks/use-spatial-maps'
 import { useTrajectory } from './hooks/use-trajectory'
+import { useTrajectoryPlayback } from './hooks/use-trajectory-playback'
 import { resolveTimeRange } from './utils/format'
-
-export type SpatialMode = 'trajectory' | 'calibration'
 
 const route = getRouteApi('/_authenticated/spatial/')
 
@@ -56,140 +52,81 @@ export function Spatial() {
   const maps = mapsQuery.data ?? []
   const [selectedMapId, setSelectedMapId] = useState<string | null>(null)
 
-  // 派生当前有效底图：优先用户显式选择，否则取第一张（按创建时间升序）。
-  const effectiveMapId = selectedMapId ?? maps[0]?.id ?? null
+  const deepLinkMapId =
+    search.mapId && maps.some((map) => map.id === search.mapId)
+      ? search.mapId
+      : null
+
+  // 派生当前有效底图：用户显式选择 > 深链接指定底图 > 第一张底图。
+  const effectiveMapId = selectedMapId ?? deepLinkMapId ?? maps[0]?.id ?? null
   const currentMap = maps.find((map) => map.id === effectiveMapId) ?? null
 
   const camerasQuery = useAllCameras()
   const allCameras = camerasQuery.data?.items ?? []
 
-  const { data: personsData } = useAllPersons()
-  const hasAutoSearchedRef = useRef(false)
-
   const positionsQuery = useCameraPositions(effectiveMapId)
   const serverPositions = positionsQuery.data ?? []
 
-  /** 工作台模式：轨迹分析 vs 点位标定 */
-  const [mode, setMode] = useState<SpatialMode>('trajectory')
-  const [pendingMode, setPendingMode] = useState<SpatialMode | null>(null)
-  const [discardDialogOpen, setDiscardDialogOpen] = useState(false)
-
-  const isCalibrating = mode === 'calibration'
-
-  /** 本地编辑中的点位；null 表示未修改，直接展示服务端数据。 */
-  const [customPositions, setCustomPositions] = useState<
-    CameraPositionInfo[] | null
-  >(null)
-  const [stampingCamera, setStampingCamera] = useState<StampingCamera | null>(
-    null
-  )
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
 
-  const displayedPositions = customPositions ?? serverPositions
-  const hasUnsavedChanges = customPositions !== null
-  const savePositionsMutation = useSaveCameraPositions()
+  const draft = useCalibrationDraft({
+    mapId: effectiveMapId,
+    serverPositions,
+  })
 
-  const trajectoryMutation = useTrajectory()
+  const { mutateAsync: queryTrajectory, isPending: isSearchingTrajectory } =
+    useTrajectory()
   const [trajectory, setTrajectory] = useState<TrajectoryResponse | null>(null)
+  const totalTrajectoryNodes = trajectory?.nodes.length ?? 0
 
-  const handleSelectMapId = (id: string | null) => {
-    setSelectedMapId(id)
-    setCustomPositions(null)
-    setStampingCamera(null)
-    setTrajectory(null)
-  }
+  const {
+    activeNodeIndex,
+    isPlaying,
+    playbackSpeed,
+    segmentDurationMs,
+    goToNode,
+    resetPlayback,
+    setIsPlaying,
+    setPlaybackSpeed,
+  } = useTrajectoryPlayback({ totalNodes: totalTrajectoryNodes })
 
-  const handleRequestMode = (nextMode: SpatialMode) => {
-    if (mode === nextMode) return
-    if (mode === 'calibration' && hasUnsavedChanges) {
-      setPendingMode(nextMode)
-      setDiscardDialogOpen(true)
-      return
-    }
-    setStampingCamera(null)
-    setMode(nextMode)
-  }
+  const playbackState: TrajectoryPlaybackState = useMemo(
+    () => ({
+      activeNodeIndex,
+      isPlaying,
+      playbackSpeed,
+      segmentDurationMs,
+      goToNode,
+      setIsPlaying,
+      setPlaybackSpeed,
+    }),
+    [
+      activeNodeIndex,
+      isPlaying,
+      playbackSpeed,
+      segmentDurationMs,
+      goToNode,
+      setIsPlaying,
+      setPlaybackSpeed,
+    ]
+  )
 
-  const handleConfirmDiscard = () => {
-    setCustomPositions(null)
-    setStampingCamera(null)
-    setDiscardDialogOpen(false)
-    if (pendingMode) {
-      setMode(pendingMode)
-      setPendingMode(null)
-    } else {
-      setMode('trajectory')
-    }
-  }
-
-  const applyPositions = (
-    updater: (base: CameraPositionInfo[]) => CameraPositionInfo[]
-  ) => {
-    setCustomPositions((prev) => updater(prev ?? serverPositions))
-  }
-
-  const handleDropCamera = (
-    cameraId: string,
-    cameraName: string,
-    x: number,
-    y: number
-  ) => {
-    applyPositions((base) => [
-      ...base.filter((pos) => pos.cameraId !== cameraId),
-      { cameraId, cameraName, x, y, angle: 90 },
-    ])
-    setStampingCamera(null)
-  }
-
-  const handleStampCamera = (x: number, y: number) => {
-    if (!stampingCamera) return
-    handleDropCamera(stampingCamera.cameraId, stampingCamera.cameraName, x, y)
-  }
-
-  const handleMoveCamera = (cameraId: string, x: number, y: number) => {
-    applyPositions((base) =>
-      base.map((pos) => (pos.cameraId === cameraId ? { ...pos, x, y } : pos))
-    )
-  }
-
-  const handleAngleChangeCamera = (cameraId: string, angle: number) => {
-    applyPositions((base) =>
-      base.map((pos) => (pos.cameraId === cameraId ? { ...pos, angle } : pos))
-    )
-  }
-
-  const handleRemoveCamera = (cameraId: string) => {
-    applyPositions((base) => base.filter((pos) => pos.cameraId !== cameraId))
-  }
-
-  const handleSavePositions = async () => {
-    if (!effectiveMapId || !customPositions) return
-    try {
-      await savePositionsMutation.mutateAsync({
-        mapId: effectiveMapId,
-        positions: customPositions.map((pos) => ({
-          cameraId: pos.cameraId,
-          x: pos.x,
-          y: pos.y,
-          angle: pos.angle,
-        })),
-      })
-      setCustomPositions(null)
-      toast.success(t('calibration.saveSuccess'))
-    } catch (err: unknown) {
-      toast.error(
-        err instanceof Error && err.message
-          ? err.message
-          : t('calibration.saveFailed')
-      )
-    }
-  }
+  const handleSelectMapId = useCallback(
+    (id: string | null) => {
+      setSelectedMapId(id)
+      draft.resetDraft()
+      setTrajectory(null)
+      resetPlayback()
+    },
+    [draft, resetPlayback]
+  )
 
   const handleSearchTrajectory = useCallback(
     async (params: TrajectoryQueryParams) => {
       try {
-        const response = await trajectoryMutation.mutateAsync(params)
+        const response = await queryTrajectory(params)
         setTrajectory(response)
+        resetPlayback()
         if (response.nodes.length === 0) {
           toast.info(t('trajectory.noResults'))
         } else {
@@ -205,49 +142,44 @@ export function Spatial() {
         )
       }
     },
-    [t, trajectoryMutation]
+    [t, queryTrajectory, resetPlayback]
   )
 
-  // 深链接自动查询：当 URL 携带目标人员且地图和人员底库就绪时，自动按今天范围检索一次
+  const lastAutoSearchKeyRef = useRef<string | null>(null)
+
+  // 深链接自动查询：URL 携带目标人员且底图就绪时自动检索一次，换目标或底图时允许重查。
   useEffect(() => {
-    if (hasAutoSearchedRef.current) return
-    if (
-      search.targetType === 'person' &&
-      search.personId &&
-      effectiveMapId &&
-      personsData
-    ) {
-      hasAutoSearchedRef.current = true
-      const { startTime, endTime } = resolveTimeRange('today')
-      const params: TrajectoryQueryParams = {
-        mapId: effectiveMapId,
-        targetType: 'person',
-        personId: search.personId,
-        startTime,
-        endTime,
-      }
-      const timer = setTimeout(() => {
-        void handleSearchTrajectory(params)
-      }, 0)
-      return () => clearTimeout(timer)
+    if (search.targetType !== 'person' || !search.personId || !effectiveMapId) {
+      return
     }
+    const searchKey = `${search.targetType}:${search.personId}:${effectiveMapId}`
+    if (lastAutoSearchKeyRef.current === searchKey) return
+    lastAutoSearchKeyRef.current = searchKey
+
+    const { startTime, endTime } = resolveTimeRange('today')
+    void handleSearchTrajectory({
+      mapId: effectiveMapId,
+      targetType: 'person',
+      personId: search.personId,
+      startTime,
+      endTime,
+    })
   }, [
     search.targetType,
     search.personId,
     effectiveMapId,
-    personsData,
     handleSearchTrajectory,
   ])
 
-  const handleClearTrajectory = () => {
+  const handleClearTrajectory = useCallback(() => {
     setTrajectory(null)
-  }
+    resetPlayback()
+  }, [resetPlayback])
 
-  const hasTrajectory = (trajectory?.nodes.length ?? 0) > 0
+  const hasTrajectory = totalTrajectoryNodes > 0
 
   return (
     <>
-      {/* ===== 统一标准 Header (对齐全站规范) ===== */}
       <Header fixed>
         <Search className='me-auto' />
         <LanguageSwitch />
@@ -256,90 +188,28 @@ export function Spatial() {
         <ProfileDropdown />
       </Header>
 
-      {/* ===== 主工作区 ===== */}
       <Main
         fixed
         className='flex flex-1 flex-col gap-2.5 overflow-hidden p-2 sm:p-3 md:p-4'
       >
-        {/* 页面标题与主操作区 (对齐 Live / Records / Cameras) */}
-        <div className='flex flex-wrap items-center justify-between gap-2 sm:gap-4'>
-          <div className='flex flex-wrap items-center gap-3 sm:gap-4'>
-            <div>
-              <h2 className='text-xl font-bold tracking-tight sm:text-2xl'>
-                {t('title')}
-              </h2>
-              <p className='text-xs text-muted-foreground'>{t('subtitle')}</p>
-            </div>
+        <SpatialWorkbenchHeader
+          hasCurrentMap={Boolean(currentMap)}
+          selectedMapId={effectiveMapId}
+          mode={draft.mode}
+          isCalibrating={draft.isCalibrating}
+          hasUnsavedChanges={draft.hasUnsavedChanges}
+          isSavingPositions={draft.isSavingPositions}
+          onSelectMapId={handleSelectMapId}
+          onOpenUpload={() => setUploadDialogOpen(true)}
+          onRequestMode={draft.handleRequestMode}
+          onSavePositions={() => void draft.handleSavePositions()}
+          onResetDraft={draft.resetDraft}
+        />
 
-            <MapSwitcher
-              selectedMapId={effectiveMapId}
-              onSelectMapId={handleSelectMapId}
-              onOpenUpload={() => setUploadDialogOpen(true)}
-              disabled={isCalibrating && hasUnsavedChanges}
-            />
-          </div>
-
-          <div className='flex items-center gap-2'>
-            {currentMap && (
-              <Tabs
-                value={mode}
-                onValueChange={(val) => handleRequestMode(val as SpatialMode)}
-              >
-                <TabsList className='h-9'>
-                  <TabsTrigger value='trajectory' className='gap-1.5 text-xs'>
-                    <Route className='h-3.5 w-3.5' />
-                    {t('workbench.modeTrajectory')}
-                  </TabsTrigger>
-                  <TabsTrigger value='calibration' className='gap-1.5 text-xs'>
-                    <MapPin className='h-3.5 w-3.5' />
-                    {t('calibration.enter')}
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-            )}
-
-            {isCalibrating && (
-              <>
-                <Button
-                  size='sm'
-                  className='h-9 gap-1.5'
-                  onClick={() => void handleSavePositions()}
-                  disabled={
-                    !hasUnsavedChanges || savePositionsMutation.isPending
-                  }
-                >
-                  {savePositionsMutation.isPending ? (
-                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                  ) : (
-                    <Save className='h-3.5 w-3.5' />
-                  )}
-                  {t('calibration.save')}
-                </Button>
-
-                {hasUnsavedChanges && (
-                  <Button
-                    variant='outline'
-                    size='sm'
-                    className='h-9 gap-1 text-muted-foreground'
-                    onClick={() => {
-                      setCustomPositions(null)
-                      setStampingCamera(null)
-                    }}
-                  >
-                    <Undo2 className='h-3.5 w-3.5' />
-                    {t('calibration.reset')}
-                  </Button>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* 顶部工具栏 / 状态提示区 */}
-        {mode === 'trajectory' && (
+        {draft.mode === 'trajectory' && (
           <TrajectorySearchToolbar
             mapId={effectiveMapId}
-            isSearching={trajectoryMutation.isPending}
+            isSearching={isSearchingTrajectory}
             hasResults={hasTrajectory}
             onSearch={(params) => void handleSearchTrajectory(params)}
             onClear={handleClearTrajectory}
@@ -349,13 +219,13 @@ export function Spatial() {
           />
         )}
 
-        {isCalibrating && stampingCamera && (
+        {draft.isCalibrating && draft.stampingCamera && (
           <div className='flex items-center justify-between rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs text-primary shadow-2xs'>
             <div className='flex items-center gap-2'>
               <Video className='h-3.5 w-3.5' />
               <span>
                 {t('calibration.stampingHint', {
-                  name: stampingCamera.cameraName,
+                  name: draft.stampingCamera.cameraName,
                 })}
               </span>
             </div>
@@ -363,27 +233,27 @@ export function Spatial() {
               variant='ghost'
               size='sm'
               className='h-6 px-2 text-xs hover:bg-primary/20 hover:text-primary'
-              onClick={() => setStampingCamera(null)}
+              onClick={() => draft.setStampingCamera(null)}
             >
-              {t('common:actions.cancel', '取消')}
+              {t('common:actions.cancel')}
             </Button>
           </div>
         )}
 
-        {/* 核心工作区两栏容器 (Master-Detail 现代风格，对齐 Live 监控大盘) */}
         <div className='flex min-h-0 flex-1 gap-2.5 overflow-hidden sm:gap-4'>
-          {isCalibrating && (
+          {draft.isCalibrating && (
             <UnassignedCamerasPanel
               cameras={allCameras}
-              positions={displayedPositions}
-              selectedCameraId={stampingCamera?.cameraId ?? null}
+              positions={draft.displayedPositions}
+              selectedCameraId={draft.stampingCamera?.cameraId ?? null}
               onSelectCamera={(camera) =>
-                setStampingCamera({
+                draft.setStampingCamera({
                   cameraId: camera.id,
                   cameraName: camera.name,
                 })
               }
-              onRemovePosition={handleRemoveCamera}
+              onCancelStamp={() => draft.setStampingCamera(null)}
+              onRemovePosition={draft.handleRemoveCamera}
             />
           )}
 
@@ -430,17 +300,18 @@ export function Spatial() {
 
                 <SpatialCanvasViewport
                   currentMap={currentMap}
-                  positions={displayedPositions}
+                  positions={draft.displayedPositions}
                   trajectory={trajectory}
-                  isCalibrating={isCalibrating}
-                  stampingCamera={stampingCamera}
+                  playback={playbackState}
+                  isCalibrating={draft.isCalibrating}
+                  stampingCamera={draft.stampingCamera}
                   onUploadMap={() => setUploadDialogOpen(true)}
                   onClearTrajectory={handleClearTrajectory}
-                  onDropCamera={handleDropCamera}
-                  onStampCamera={handleStampCamera}
-                  onMoveCamera={handleMoveCamera}
-                  onAngleChangeCamera={handleAngleChangeCamera}
-                  onRemoveCamera={handleRemoveCamera}
+                  onDropCamera={draft.handleDropCamera}
+                  onStampCamera={draft.handleStampCamera}
+                  onMoveCamera={draft.handleMoveCamera}
+                  onAngleChangeCamera={draft.handleAngleChangeCamera}
+                  onRemoveCamera={draft.handleRemoveCamera}
                 />
               </>
             )}
@@ -448,7 +319,10 @@ export function Spatial() {
         </div>
       </Main>
 
-      <AlertDialog open={discardDialogOpen} onOpenChange={setDiscardDialogOpen}>
+      <AlertDialog
+        open={draft.discardDialogOpen}
+        onOpenChange={draft.handleDiscardDialogOpenChange}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
@@ -459,15 +333,10 @@ export function Spatial() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => {
-                setPendingMode(null)
-                setDiscardDialogOpen(false)
-              }}
-            >
-              {t('common:actions.cancel', '取消')}
+            <AlertDialogCancel onClick={draft.handleCancelDiscard}>
+              {t('common:actions.cancel')}
             </AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmDiscard}>
+            <AlertDialogAction onClick={draft.handleConfirmDiscard}>
               {t('calibration.reset')}
             </AlertDialogAction>
           </AlertDialogFooter>

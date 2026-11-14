@@ -1,4 +1,4 @@
-import { Map as MapIcon, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Loader2, Map as MapIcon, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import useDialogState from '@/hooks/use-dialog-state'
@@ -72,7 +72,10 @@ export function MapSwitcher({
           onValueChange={(val) => onSelectMapId(val || null)}
           disabled={disabled || isLoading || maps.length === 0}
         >
-          <SelectTrigger className='h-9'>
+          <SelectTrigger
+            className='h-9'
+            aria-label={t('map.selectPlaceholder')}
+          >
             <div className='flex items-center gap-2 truncate'>
               <MapIcon className='h-4 w-4 shrink-0 text-muted-foreground' />
               <SelectValue placeholder={t('map.selectPlaceholder')} />
@@ -126,11 +129,13 @@ export function MapSwitcher({
         </>
       )}
 
-      <MapUploadDialog
-        open={openDialog === 'upload'}
-        onOpenChange={(open) => setOpenDialog(open ? 'upload' : null)}
-        onSuccess={(newId) => onSelectMapId(newId)}
-      />
+      {!onOpenUpload && (
+        <MapUploadDialog
+          open={openDialog === 'upload'}
+          onOpenChange={(open) => setOpenDialog(open ? 'upload' : null)}
+          onSuccess={(newId) => onSelectMapId(newId)}
+        />
+      )}
 
       {currentMap && (
         <MapRenameDialog
@@ -143,7 +148,11 @@ export function MapSwitcher({
 
       <AlertDialog
         open={openDialog === 'delete'}
-        onOpenChange={(open) => setOpenDialog(open ? 'delete' : null)}
+        onOpenChange={(open) => {
+          if (!deleteMutation.isPending) {
+            setOpenDialog(open ? 'delete' : null)
+          }
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -153,11 +162,20 @@ export function MapSwitcher({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t('common:actions.cancel')}</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t('common:actions.cancel')}
+            </AlertDialogCancel>
             <AlertDialogAction
               className='text-destructive-foreground bg-destructive hover:bg-destructive/90'
-              onClick={() => void handleDelete()}
+              disabled={deleteMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDelete()
+              }}
             >
+              {deleteMutation.isPending && (
+                <Loader2 className='me-2 h-4 w-4 animate-spin' />
+              )}
               {t('map.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>

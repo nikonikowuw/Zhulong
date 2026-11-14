@@ -35,6 +35,8 @@
     "unassignedTitle": "待標定攝影機",
     "unassignedTip": "拖曳攝影機到底圖，或點擊攝影機後在底圖上單擊落點",
     "allAssigned": "所有啟用的攝影機均已完成標定",
+    "noCameras": "暫無可用攝影機，請先在攝影機管理中新增設備",
+    "noMatchingCameras": "未找到符合的攝影機",
     "unassignedSection": "待分配",
     "assignedSection": "已標定",
     "searchPlaceholder": "搜尋攝影機...",
@@ -103,6 +105,7 @@
     "rangeRequired": "請選擇時間範圍",
     "mapNameRequired": "請輸入底圖名稱",
     "mapNameMax": "底圖名稱不能超過 64 個字元",
-    "mapFileRequired": "請選擇底圖圖片檔案"
+    "mapFileRequired": "請選擇底圖圖片檔案",
+    "mapFileType": "僅支援 PNG、JPG、WebP 或 SVG 圖片格式"
   }
 }

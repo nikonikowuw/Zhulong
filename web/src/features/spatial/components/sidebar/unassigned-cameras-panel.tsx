@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusTextClass } from '@/lib/status-palette'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,6 +31,7 @@ interface UnassignedCamerasPanelProps {
   /** 当前进入准星模式的摄像头；点选后到画布上单击落点。 */
   selectedCameraId: string | null
   onSelectCamera: (camera: Camera) => void
+  onCancelStamp?: () => void
   onRemovePosition: (cameraId: string) => void
 }
 
@@ -38,6 +40,7 @@ export function UnassignedCamerasPanel({
   positions,
   selectedCameraId,
   onSelectCamera,
+  onCancelStamp,
   onRemovePosition,
 }: UnassignedCamerasPanelProps) {
   const { t } = useTranslation('spatial')
@@ -45,20 +48,22 @@ export function UnassignedCamerasPanel({
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [previewCameraId, setPreviewCameraId] = useState<string | null>(null)
 
+  const trimmedKeyword = search.toLowerCase().trim()
   const { unassigned, assigned, positionByCameraId } = useMemo(() => {
     const byCameraId = new Map(
       positions.map((position) => [position.cameraId, position])
     )
-    const keyword = search.toLowerCase().trim()
-    const filtered = keyword
-      ? cameras.filter((camera) => camera.name.toLowerCase().includes(keyword))
+    const filtered = trimmedKeyword
+      ? cameras.filter((camera) =>
+          camera.name.toLowerCase().includes(trimmedKeyword)
+        )
       : cameras
     return {
       unassigned: filtered.filter((camera) => !byCameraId.has(camera.id)),
       assigned: filtered.filter((camera) => byCameraId.has(camera.id)),
       positionByCameraId: byCameraId,
     }
-  }, [cameras, positions, search])
+  }, [cameras, positions, trimmedKeyword])
 
   const handleDragStart = (e: React.DragEvent, camera: Camera) => {
     e.dataTransfer.setData('application/zhulong-camera-id', camera.id)
@@ -80,6 +85,7 @@ export function UnassignedCamerasPanel({
               size='icon'
               className='h-8 w-8 text-muted-foreground hover:text-foreground'
               onClick={() => setIsCollapsed(false)}
+              aria-label={t('workbench.togglePanel')}
             >
               <ChevronRight className='h-4 w-4' />
             </Button>
@@ -106,6 +112,13 @@ export function UnassignedCamerasPanel({
     )
   }
 
+  const hasNoCameras = cameras.length === 0
+  const isFilterEmpty =
+    !hasNoCameras &&
+    trimmedKeyword !== '' &&
+    unassigned.length === 0 &&
+    assigned.length === 0
+
   return (
     <div className='flex h-full w-64 shrink-0 flex-col rounded-xl border border-border bg-card shadow-xs sm:w-72'>
       {/* 侧栏顶栏 */}
@@ -122,6 +135,7 @@ export function UnassignedCamerasPanel({
           size='icon'
           className='h-7 w-7 text-muted-foreground hover:text-foreground'
           onClick={() => setIsCollapsed(true)}
+          aria-label={t('workbench.togglePanel')}
           title={t('workbench.togglePanel')}
         >
           <ChevronLeft className='h-4 w-4' />
@@ -159,8 +173,26 @@ export function UnassignedCamerasPanel({
               <span className='font-mono'>({unassigned.length})</span>
             </div>
 
-            {unassigned.length === 0 ? (
-              <p className='rounded-lg border border-dashed border-border py-4 text-center text-xs text-muted-foreground'>
+            {hasNoCameras ? (
+              <p className='rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground'>
+                {t('calibration.noCameras')}
+              </p>
+            ) : isFilterEmpty ? (
+              <div className='flex flex-col items-center gap-2 rounded-lg border border-dashed border-border px-3 py-4 text-center'>
+                <p className='text-xs text-muted-foreground'>
+                  {t('calibration.noMatchingCameras')}
+                </p>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  className='h-7 text-xs'
+                  onClick={() => setSearch('')}
+                >
+                  {t('common:filter.clearFilters')}
+                </Button>
+              </div>
+            ) : unassigned.length === 0 ? (
+              <p className='rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground'>
                 {t('calibration.allAssigned')}
               </p>
             ) : (
@@ -168,6 +200,9 @@ export function UnassignedCamerasPanel({
                 const isSelected = camera.id === selectedCameraId
                 const isPreviewOpen =
                   isSelected || previewCameraId === camera.id
+                const previewActionLabel = isPreviewOpen
+                  ? t('calibration.closeCameraPreview')
+                  : t('calibration.cameraPreview')
 
                 return (
                   <div
@@ -197,11 +232,8 @@ export function UnassignedCamerasPanel({
                             e.stopPropagation()
                             togglePreview(camera.id)
                           }}
-                          title={
-                            isPreviewOpen
-                              ? t('calibration.closeCameraPreview')
-                              : t('calibration.cameraPreview')
-                          }
+                          aria-label={previewActionLabel}
+                          title={previewActionLabel}
                         >
                           {isPreviewOpen ? (
                             <EyeOff className='h-3.5 w-3.5 text-primary' />
@@ -214,7 +246,13 @@ export function UnassignedCamerasPanel({
                           variant={isSelected ? 'default' : 'secondary'}
                           size='sm'
                           className='h-6 px-2 text-[11px]'
-                          onClick={() => onSelectCamera(camera)}
+                          onClick={() => {
+                            if (isSelected && onCancelStamp) {
+                              onCancelStamp()
+                              return
+                            }
+                            onSelectCamera(camera)
+                          }}
                         >
                           {isSelected
                             ? t('calibration.stampingActive')
@@ -256,7 +294,9 @@ export function UnassignedCamerasPanel({
                     className='group flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-xs'
                   >
                     <div className='flex min-w-0 items-center gap-1.5'>
-                      <CheckCircle2 className='h-3.5 w-3.5 shrink-0 text-emerald-500' />
+                      <CheckCircle2
+                        className={`h-3.5 w-3.5 shrink-0 ${statusTextClass('active')}`}
+                      />
                       <span className='truncate text-xs font-medium'>
                         {camera.name}
                       </span>
@@ -274,6 +314,7 @@ export function UnassignedCamerasPanel({
                         size='icon'
                         className='h-6 w-6 text-muted-foreground hover:text-destructive'
                         onClick={() => onRemovePosition(camera.id)}
+                        aria-label={t('calibration.removePoint')}
                         title={t('calibration.removePoint')}
                       >
                         <X className='h-3.5 w-3.5' />

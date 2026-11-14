@@ -147,16 +147,34 @@ export const spatialSearchSchema = z.object({
 
 export type SpatialSearchParams = z.infer<typeof spatialSearchSchema>
 
+const ACCEPTED_MAP_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/svg+xml',
+] as const
+
+export const ACCEPTED_MAP_TYPES = ACCEPTED_MAP_MIME_TYPES.join(',')
+
+const ACCEPTED_MAP_MIME_SET = new Set<string>(ACCEPTED_MAP_MIME_TYPES)
+
 /**
  * 底图上传表单的校验 schema 工厂。
  */
 export function createMapUploadFormSchema(t?: TFunction) {
   return z.object({
     name: mapNameField(t),
-    file: z.custom<File>(
-      (value) => value instanceof File,
-      t ? t('validation.mapFileRequired') : '请选择底图图片文件'
-    ),
+    file: z
+      .custom<File>(
+        (value) => value instanceof File,
+        t ? t('validation.mapFileRequired') : '请选择底图图片文件'
+      )
+      .refine(
+        (file) => ACCEPTED_MAP_MIME_SET.has(file.type),
+        t
+          ? t('validation.mapFileType')
+          : '仅支持 PNG、JPG、WebP 或 SVG 图片格式'
+      ),
   })
 }
 

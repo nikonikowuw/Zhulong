@@ -35,6 +35,8 @@
     "unassignedTitle": "Cameras to calibrate",
     "unassignedTip": "Drag a camera onto the map, or click a camera and then click a spot on the map",
     "allAssigned": "Every enabled camera has been calibrated",
+    "noCameras": "No cameras available yet. Add cameras first.",
+    "noMatchingCameras": "No matching cameras found",
     "unassignedSection": "Unassigned",
     "assignedSection": "Calibrated",
     "searchPlaceholder": "Search cameras...",
@@ -103,6 +105,7 @@
     "rangeRequired": "Select a time range",
     "mapNameRequired": "A map name is required",
     "mapNameMax": "The map name must not exceed 64 characters",
-    "mapFileRequired": "Select a map image file"
+    "mapFileRequired": "Select a map image file",
+    "mapFileType": "Only PNG, JPG, WebP, or SVG image files are supported"
   }
 }

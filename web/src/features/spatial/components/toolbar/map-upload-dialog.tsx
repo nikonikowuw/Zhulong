@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import {
+  ACCEPTED_MAP_TYPES,
   createMapUploadFormSchema,
   type MapUploadFormValues,
 } from '../../data/schema'
@@ -34,8 +35,6 @@ interface MapUploadDialogProps {
   onOpenChange: (open: boolean) => void
   onSuccess: (mapId: string) => void
 }
-
-const ACCEPTED_MAP_TYPES = 'image/png,image/jpeg,image/webp,image/svg+xml'
 
 /**
  * 初始值：`file` 是必填项却没有默认值，只能以类型断言表达「尚未选择」。
@@ -70,10 +69,20 @@ export function MapUploadDialog({
     }
   }, [previewUrl])
 
+  useEffect(() => {
+    if (!open && fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [open])
+
+  const resetFormState = () => {
+    form.reset(emptyUploadValues())
+    setPreviewUrl(null)
+  }
+
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
-      form.reset(emptyUploadValues())
-      setPreviewUrl(null)
+      resetFormState()
     }
     onOpenChange(nextOpen)
   }
@@ -99,8 +108,7 @@ export function MapUploadDialog({
         file: values.file,
       })
       toast.success(t('map.uploadSuccess'))
-      form.reset(emptyUploadValues())
-      setPreviewUrl(null)
+      resetFormState()
       onOpenChange(false)
       onSuccess(created.id)
     } catch (err: unknown) {
@@ -149,8 +157,17 @@ export function MapUploadDialog({
                   <FormItem>
                     <FormLabel>{t('map.file')}</FormLabel>
                     <div
-                      className='flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border p-6 transition-colors hover:bg-muted/50'
+                      role='button'
+                      tabIndex={0}
+                      aria-label={t('map.dragDropTip')}
+                      className='flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border p-6 transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden'
                       onClick={() => fileInputRef.current?.click()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          fileInputRef.current?.click()
+                        }
+                      }}
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => {
                         e.preventDefault()

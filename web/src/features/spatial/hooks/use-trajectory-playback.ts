@@ -11,7 +11,7 @@ export function useTrajectoryPlayback({
   totalNodes,
 }: UseTrajectoryPlaybackOptions) {
   const [activeNodeIndex, setActiveNodeIndex] = useState(0)
-  const [isPlaying, setIsPlaying] = useState(false)
+  const [isPlaying, setIsPlayingState] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1)
 
   const activeNodeIndexRef = useRef(0)
@@ -21,8 +21,25 @@ export function useTrajectoryPlayback({
     setActiveNodeIndex(next)
   }, [])
 
+  const setIsPlaying = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        setIsPlayingState(false)
+        return
+      }
+      if (totalNodes < 2) {
+        return
+      }
+      if (activeNodeIndexRef.current >= totalNodes - 1) {
+        goToNode(0)
+      }
+      setIsPlayingState(true)
+    },
+    [totalNodes, goToNode]
+  )
+
   const resetPlayback = useCallback(() => {
-    setIsPlaying(false)
+    setIsPlayingState(false)
     setPlaybackSpeed(1)
     goToNode(0)
   }, [goToNode])
@@ -35,11 +52,15 @@ export function useTrajectoryPlayback({
 
     const interval = window.setInterval(() => {
       const current = activeNodeIndexRef.current
-      if (current >= totalNodes - 1) {
-        setIsPlaying(false)
+      const next = current + 1
+      if (next >= totalNodes) {
+        setIsPlayingState(false)
         return
       }
-      goToNode(current + 1)
+      goToNode(next)
+      if (next >= totalNodes - 1) {
+        setIsPlayingState(false)
+      }
     }, SEGMENT_DURATION_MS / playbackSpeed)
 
     return () => window.clearInterval(interval)

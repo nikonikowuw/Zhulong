@@ -51,6 +51,8 @@ const MAX_SCALE = 6
 /** 滚轮与缩放按钮各自的倍率；两者手感不同，故意分开。 */
 const WHEEL_ZOOM_STEP = 1.1
 const BUTTON_ZOOM_STEP = 1.2
+/** 点位反向缩放的分母下限，防止极小缩放比例下点位过度放大重叠。 */
+const MARKER_INV_MIN_SCALE = 0.15
 
 function clampScale(scale: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale))
@@ -86,6 +88,7 @@ export function SpatialCanvas({
   const { t } = useTranslation('spatial')
   const viewportRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  const transformWrapperRef = useRef<HTMLDivElement>(null)
 
   const [scale, setScale] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -95,6 +98,18 @@ export function SpatialCanvas({
   const [reloadKey, setReloadKey] = useState(0)
 
   const panStartRef = useRef({ x: 0, y: 0, initialPanX: 0, initialPanY: 0 })
+  const panRef = useRef({ x: 0, y: 0 })
+  const scaleRef = useRef(1)
+  const fittedMapIdRef = useRef<string | null>(null)
+  const hasUserTransformedRef = useRef(false)
+
+  useEffect(() => {
+    panRef.current = pan
+  }, [pan])
+
+  useEffect(() => {
+    scaleRef.current = scale
+  }, [scale])
 
   const mapWidth = currentMap?.width || 1200
   const mapHeight = currentMap?.height || 800
@@ -112,6 +127,9 @@ export function SpatialCanvas({
   const fitView = useCallback(() => {
     const viewport = viewportRef.current
     if (!viewport || !currentMap) {
+      scaleRef.current = 1
+      panRef.current = { x: 0, y: 0 }
+      fittedMapIdRef.current = null
       setScale(1)
       setPan({ x: 0, y: 0 })
       return
@@ -124,37 +142,48 @@ export function SpatialCanvas({
     const padding = 32
     const availableW = Math.max(100, vw - padding * 2)
     const availableH = Math.max(100, vh - padding * 2)
-    const fitRatio = Math.min(
-      availableW / mapWidth,
-      availableH / mapHeight,
-      1.0
+    const fitRatio = clampScale(
+      Math.min(availableW / mapWidth, availableH / mapHeight, 1.0)
     )
 
-    setScale(clampScale(fitRatio))
+    scaleRef.current = fitRatio
+    panRef.current = { x: 0, y: 0 }
+    fittedMapIdRef.current = currentMap.id
+    hasUserTransformedRef.current = false
+    setScale(fitRatio)
     setPan({ x: 0, y: 0 })
   }, [currentMap, mapWidth, mapHeight])
 
-  // 视口尺寸变化监听（侧边栏折叠/窗口缩放等随时保证居中自适应）
+  // 切换底图或用户尚未手动缩放/平移时自适应容器变化（如展开/折叠左侧标定栏）；
+  // 一旦用户手动缩放或平移过，则保留其当前视口位置。
   useEffect(() => {
     const el = viewportRef.current
     if (!el) return
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
-          fitView()
+          const targetId = currentMap?.id ?? null
+          if (
+            fittedMapIdRef.current !== targetId ||
+            !hasUserTransformedRef.current
+          ) {
+            fitView()
+          }
         }
       }
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [fitView])
+  }, [currentMap?.id, fitView])
 
   const handleWheel = (e: React.WheelEvent) => {
+    hasUserTransformedRef.current = true
     const zoomFactor = e.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP
     setScale((prev) => clampScale(prev * zoomFactor))
   }
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return
     // 点位与悬浮工具条自己处理指针事件，画布只接管空白区域。
     if ((e.target as HTMLElement).closest('[data-no-pan]')) return
     if (stampingCamera) return
@@ -162,23 +191,30 @@ export function SpatialCanvas({
     panStartRef.current = {
       x: e.clientX,
       y: e.clientY,
-      initialPanX: pan.x,
-      initialPanY: pan.y,
+      initialPanX: panRef.current.x,
+      initialPanY: panRef.current.y,
     }
     e.currentTarget.setPointerCapture(e.pointerId)
   }
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!isPanning) return
-    setPan({
-      x: panStartRef.current.initialPanX + (e.clientX - panStartRef.current.x),
-      y: panStartRef.current.initialPanY + (e.clientY - panStartRef.current.y),
-    })
+    hasUserTransformedRef.current = true
+    const nextX =
+      panStartRef.current.initialPanX + (e.clientX - panStartRef.current.x)
+    const nextY =
+      panStartRef.current.initialPanY + (e.clientY - panStartRef.current.y)
+    panRef.current = { x: nextX, y: nextY }
+    // 平移拖拽期间直接写 DOM transform，避免每帧触发 React 重渲染整张画布
+    if (transformWrapperRef.current) {
+      transformWrapperRef.current.style.transform = `translate(${nextX}px, ${nextY}px) scale(${scaleRef.current})`
+    }
   }
 
   const handlePointerUp = (e: React.PointerEvent) => {
     if (!isPanning) return
     setIsPanning(false)
+    setPan(panRef.current)
     try {
       e.currentTarget.releasePointerCapture(e.pointerId)
     } catch {
@@ -227,6 +263,7 @@ export function SpatialCanvas({
   }
 
   const zoomBy = (factor: number) => {
+    hasUserTransformedRef.current = true
     setScale((prev) => clampScale(prev * factor))
   }
 
@@ -244,6 +281,8 @@ export function SpatialCanvas({
       ? trajectoryNodes[activeTrajectoryNodeIndex]?.cameraId
       : undefined
 
+  const markerScale = 1 / Math.max(scale, MARKER_INV_MIN_SCALE)
+
   return (
     <div
       ref={viewportRef}
@@ -251,6 +290,7 @@ export function SpatialCanvas({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       className={`relative flex h-full w-full items-center justify-center overflow-hidden bg-muted/20 select-none ${cursorClass(
@@ -259,6 +299,7 @@ export function SpatialCanvas({
       )}`}
     >
       <div
+        ref={transformWrapperRef}
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
           transformOrigin: 'center center',
@@ -285,7 +326,9 @@ export function SpatialCanvas({
               draggable={false}
               onLoad={() => {
                 if (currentKey) setLoadedMapKey(currentKey)
-                fitView()
+                if (fittedMapIdRef.current !== currentMap.id) {
+                  fitView()
+                }
               }}
               onError={() => {
                 if (currentKey) setFailedMapKey(currentKey)
@@ -339,16 +382,13 @@ export function SpatialCanvas({
                   <CameraMarker
                     position={pos}
                     isCalibrating={isCalibrating}
+                    markerScale={markerScale}
                     trajectorySeq={node?.seq}
                     trajectoryNode={node}
                     isActiveWaypoint={pos.cameraId === activeWaypointCameraId}
-                    onMove={(newX, newY) =>
-                      onMoveCamera(pos.cameraId, newX, newY)
-                    }
-                    onAngleChange={(angle) =>
-                      onAngleChangeCamera(pos.cameraId, angle)
-                    }
-                    onRemove={() => onRemoveCamera(pos.cameraId)}
+                    onMove={onMoveCamera}
+                    onAngleChange={onAngleChangeCamera}
+                    onRemove={onRemoveCamera}
                   />
                 </div>
               )

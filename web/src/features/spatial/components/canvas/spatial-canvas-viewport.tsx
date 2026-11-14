@@ -1,17 +1,26 @@
-import { useEffect } from 'react'
 import {
   type CameraPositionInfo,
   type CanvasMap,
   type TrajectoryResponse,
 } from '../../data/schema'
-import { useTrajectoryPlayback } from '../../hooks/use-trajectory-playback'
 import { TrajectoryTimelinePlayer } from '../playback/trajectory-timeline-player'
 import { SpatialCanvas, type StampingCamera } from './spatial-canvas'
+
+export interface TrajectoryPlaybackState {
+  activeNodeIndex: number
+  isPlaying: boolean
+  playbackSpeed: number
+  segmentDurationMs: number
+  goToNode: (index: number) => void
+  setIsPlaying: (playing: boolean) => void
+  setPlaybackSpeed: (speed: number) => void
+}
 
 interface SpatialCanvasViewportProps {
   currentMap: CanvasMap | null
   positions: CameraPositionInfo[]
   trajectory: TrajectoryResponse | null
+  playback: TrajectoryPlaybackState
   isCalibrating: boolean
   stampingCamera: StampingCamera | null
   onUploadMap?: () => void
@@ -32,6 +41,7 @@ export function SpatialCanvasViewport({
   currentMap,
   positions,
   trajectory,
+  playback,
   isCalibrating,
   stampingCamera,
   onUploadMap,
@@ -45,22 +55,6 @@ export function SpatialCanvasViewport({
   const trajectoryNodes = trajectory?.nodes ?? []
   const hasTrajectory = trajectoryNodes.length > 0
 
-  const {
-    activeNodeIndex,
-    isPlaying,
-    playbackSpeed,
-    segmentDurationMs,
-    goToNode,
-    resetPlayback,
-    setIsPlaying,
-    setPlaybackSpeed,
-  } = useTrajectoryPlayback({ totalNodes: trajectoryNodes.length })
-
-  // 轨迹结果变更或清空时，自动重置播放时钟到起始点
-  useEffect(() => {
-    resetPlayback()
-  }, [trajectory, resetPlayback])
-
   return (
     <>
       <SpatialCanvas
@@ -68,10 +62,10 @@ export function SpatialCanvasViewport({
         positions={positions}
         trajectoryNodes={trajectoryNodes}
         activeTrajectoryNodeIndex={
-          hasTrajectory && !isCalibrating ? activeNodeIndex : undefined
+          hasTrajectory && !isCalibrating ? playback.activeNodeIndex : undefined
         }
-        segmentDurationMs={segmentDurationMs}
-        isPlayingTrajectory={isPlaying && !isCalibrating}
+        segmentDurationMs={playback.segmentDurationMs}
+        isPlayingTrajectory={playback.isPlaying && !isCalibrating}
         isCalibrating={isCalibrating}
         stampingCamera={stampingCamera}
         onUploadMap={onUploadMap}
@@ -87,12 +81,12 @@ export function SpatialCanvasViewport({
           <div className='pointer-events-auto w-full max-w-2xl'>
             <TrajectoryTimelinePlayer
               nodes={trajectoryNodes}
-              currentNodeIndex={activeNodeIndex}
-              isPlaying={isPlaying}
-              speed={playbackSpeed}
-              onNodeIndexChange={goToNode}
-              onPlayingChange={setIsPlaying}
-              onSpeedChange={setPlaybackSpeed}
+              currentNodeIndex={playback.activeNodeIndex}
+              isPlaying={playback.isPlaying}
+              speed={playback.playbackSpeed}
+              onNodeIndexChange={playback.goToNode}
+              onPlayingChange={playback.setIsPlaying}
+              onSpeedChange={playback.setPlaybackSpeed}
               onClose={onClearTrajectory}
             />
           </div>

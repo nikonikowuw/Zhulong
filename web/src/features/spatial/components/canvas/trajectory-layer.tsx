@@ -1,3 +1,4 @@
+import { memo, useId } from 'react'
 import { type TrajectoryNodeInfo } from '../../data/schema'
 
 interface TrajectoryLayerProps {
@@ -10,7 +11,7 @@ interface TrajectoryLayerProps {
   height: number
   /** 播放中时沿高亮线段移动的光标周期（毫秒）。 */
   segmentDurationMs?: number
-  /** 播放中为 true；暂停时保留静态连线，不跑光标动画。 */
+  /** 播放中为 true；暂停时保留静态连线，不跑光标与流光动画。 */
   isPlaying?: boolean
 }
 
@@ -38,7 +39,7 @@ function buildSegments(nodes: TrajectoryNodeInfo[]): TrajectorySegment[] {
  * 颜色一律走语义 token（`stroke-primary` / `stroke-muted-foreground`）：
  * amber/teal 在本仓是状态语义的专属色相，不能用来说明「这一段是当前段」。
  */
-export function TrajectoryLayer({
+export const TrajectoryLayer = memo(function TrajectoryLayer({
   nodes,
   activeNodeIndex,
   width,
@@ -46,6 +47,10 @@ export function TrajectoryLayer({
   segmentDurationMs = 2000,
   isPlaying = false,
 }: TrajectoryLayerProps) {
+  const uid = useId()
+  const arrowId = `trajectory-arrow-${uid}`
+  const activeArrowId = `trajectory-arrow-active-${uid}`
+
   if (nodes.length < 2) {
     return null
   }
@@ -66,7 +71,7 @@ export function TrajectoryLayer({
     >
       <defs>
         <marker
-          id='trajectory-arrow'
+          id={arrowId}
           viewBox='0 0 12 12'
           refX='9'
           refY='6'
@@ -78,7 +83,7 @@ export function TrajectoryLayer({
           <path d='M 1 2 L 10 6 L 1 10 z' fill='currentColor' />
         </marker>
         <marker
-          id='trajectory-arrow-active'
+          id={activeArrowId}
           viewBox='0 0 12 12'
           refX='9'
           refY='6'
@@ -89,15 +94,6 @@ export function TrajectoryLayer({
         >
           <path d='M 1 2 L 10 6 L 1 10 z' fill='currentColor' />
         </marker>
-        <style>{`
-          @keyframes trajectoryFlow {
-            from { stroke-dashoffset: 28; }
-            to { stroke-dashoffset: 0; }
-          }
-          .animate-trajectory-flow {
-            animation: trajectoryFlow 1s linear infinite;
-          }
-        `}</style>
       </defs>
 
       {segments.map(({ node, next }, index) => {
@@ -127,16 +123,14 @@ export function TrajectoryLayer({
               y2={y2}
               className={
                 isActiveSegment
-                  ? 'animate-trajectory-flow stroke-primary'
-                  : 'animate-trajectory-flow stroke-muted-foreground/70'
+                  ? `${isPlaying ? 'animate-trajectory-flow' : ''}stroke-primary`
+                  : 'stroke-muted-foreground/70'
               }
               strokeWidth={isActiveSegment ? '4' : '3'}
               strokeDasharray='8 6'
               strokeLinecap='round'
               markerEnd={
-                isActiveSegment
-                  ? 'url(#trajectory-arrow-active)'
-                  : 'url(#trajectory-arrow)'
+                isActiveSegment ? `url(#${activeArrowId})` : `url(#${arrowId})`
               }
             />
           </g>
@@ -161,4 +155,4 @@ export function TrajectoryLayer({
       )}
     </svg>
   )
-}
+})

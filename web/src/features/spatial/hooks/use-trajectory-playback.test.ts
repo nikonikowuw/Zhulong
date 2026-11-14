@@ -25,7 +25,7 @@ describe('useTrajectoryPlayback', () => {
     expect(result.current.segmentDurationMs).toBe(SEGMENT_DURATION_MS)
   })
 
-  it('steps through nodes on timer tick when playing', async () => {
+  it('steps through nodes on timer tick and pauses upon reaching the last node', async () => {
     const { result, act } = await renderHook(() =>
       useTrajectoryPlayback({ totalNodes: 3 })
     )
@@ -41,19 +41,45 @@ describe('useTrajectoryPlayback', () => {
       await vi.advanceTimersByTimeAsync(SEGMENT_DURATION_MS)
     })
     expect(result.current.activeNodeIndex).toBe(1)
+    expect(result.current.isPlaying).toBe(true)
 
-    // Advance 2nd segment duration
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(SEGMENT_DURATION_MS)
-    })
-    expect(result.current.activeNodeIndex).toBe(2)
-
-    // At the end of the trajectory, should pause
+    // Advance 2nd segment duration: reaches the last node and pauses immediately
     await act(async () => {
       await vi.advanceTimersByTimeAsync(SEGMENT_DURATION_MS)
     })
     expect(result.current.activeNodeIndex).toBe(2)
     expect(result.current.isPlaying).toBe(false)
+  })
+
+  it('does not start playing when fewer than 2 nodes exist', async () => {
+    const { result, act } = await renderHook(() =>
+      useTrajectoryPlayback({ totalNodes: 1 })
+    )
+
+    await act(() => {
+      result.current.setIsPlaying(true)
+    })
+
+    expect(result.current.isPlaying).toBe(false)
+    expect(result.current.activeNodeIndex).toBe(0)
+  })
+
+  it('restarts from node 0 when play is pressed at the end of trajectory', async () => {
+    const { result, act } = await renderHook(() =>
+      useTrajectoryPlayback({ totalNodes: 3 })
+    )
+
+    await act(() => {
+      result.current.goToNode(2)
+    })
+    expect(result.current.activeNodeIndex).toBe(2)
+
+    await act(() => {
+      result.current.setIsPlaying(true)
+    })
+
+    expect(result.current.activeNodeIndex).toBe(0)
+    expect(result.current.isPlaying).toBe(true)
   })
 
   it('resets playback to 0 and stops playing', async () => {

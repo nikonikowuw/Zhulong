@@ -50,7 +50,7 @@ export function TrajectoryTimelinePlayer({
   }
 
   return (
-    <div className='absolute start-1/2 bottom-4 z-30 w-11/12 max-w-2xl -translate-x-1/2 space-y-3 rounded-xl border border-border bg-background/95 p-3 shadow-2xl backdrop-blur-md'>
+    <div className='w-full space-y-3 rounded-xl border border-border bg-background/95 p-3 shadow-2xl backdrop-blur-md'>
       {currentNode && (
         <div className='flex items-center justify-between gap-3 rounded-lg bg-muted/40 p-2'>
           <div className='flex min-w-0 items-center gap-3'>
@@ -125,6 +125,7 @@ export function TrajectoryTimelinePlayer({
             variant='default'
             size='icon'
             className='h-9 w-9 rounded-full shadow-md'
+            disabled={nodes.length < 2}
             onClick={() => onPlayingChange(!isPlaying)}
             aria-label={
               isPlaying ? t('trajectory.pause') : t('trajectory.play')

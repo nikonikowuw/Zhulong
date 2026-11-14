@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { memo, useRef, useState } from 'react'
 import { Video } from 'lucide-react'
 import {
   Popover,
@@ -14,14 +14,16 @@ import { CameraLivePopover } from '../preview/camera-live-popover'
 interface CameraMarkerProps {
   position: CameraPositionInfo
   isCalibrating: boolean
+  /** 反向缩放补偿，避免高分底图缩小后点位过小或放大后过大。 */
+  markerScale?: number
   trajectorySeq?: number
   /** 该摄像头在本次轨迹查询中的节点（用于浮窗里展示抓拍与时间戳）。 */
   trajectoryNode?: TrajectoryNodeInfo
   /** 播放器当前途经高亮。 */
   isActiveWaypoint?: boolean
-  onMove?: (newX: number, newY: number) => void
-  onAngleChange?: (newAngle: number) => void
-  onRemove?: () => void
+  onMove?: (cameraId: string, newX: number, newY: number) => void
+  onAngleChange?: (cameraId: string, newAngle: number) => void
+  onRemove?: (cameraId: string) => void
 }
 
 /** 视场角扇形张角（度）。 */
@@ -47,9 +49,10 @@ function markerToneClass(
   return 'border-border bg-card/90 text-foreground backdrop-blur-sm hover:scale-110'
 }
 
-export function CameraMarker({
+export const CameraMarker = memo(function CameraMarker({
   position,
   isCalibrating,
+  markerScale = 1,
   trajectorySeq,
   trajectoryNode,
   isActiveWaypoint,
@@ -77,7 +80,7 @@ export function CameraMarker({
   const fovPath = `M 0 0 L ${x1} ${y1} A ${coneRadius} ${coneRadius} 0 0 1 ${x2} ${y2} Z`
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (!isCalibrating || !onMove) return
+    if (!isCalibrating || !onMove || e.button !== 0) return
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
     isDraggingRef.current = true
@@ -133,7 +136,7 @@ export function CameraMarker({
     }
 
     if (dragPosRef.current && dragMovedRef.current) {
-      onMove?.(dragPosRef.current.x, dragPosRef.current.y)
+      onMove?.(position.cameraId, dragPosRef.current.x, dragPosRef.current.y)
     }
     dragPosRef.current = null
     setDragPos(null)
@@ -161,22 +164,32 @@ export function CameraMarker({
     }
   }
 
+  const handleClick = (e: React.MouseEvent) => {
+    // 阻止点位点击事件冒泡到底图内容容器，防止准星模式下误触发重复落点
+    e.stopPropagation()
+  }
+
   const currentX = dragPos?.x ?? position.x
   const currentY = dragPos?.y ?? position.y
+  const label = position.cameraName || position.cameraId
 
   return (
     <div
       style={{
         left: `${currentX * 100}%`,
         top: `${currentY * 100}%`,
+        transform: `translate(-50%, -50%) scale(${markerScale})`,
       }}
-      className='group absolute z-20 -translate-x-1/2 -translate-y-1/2 cursor-pointer select-none'
+      className='group absolute z-20 select-none'
       onClickCapture={handleClickCapture}
+      onClick={handleClick}
     >
       <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
         <PopoverTrigger asChild>
-          <div
-            className='relative flex items-center justify-center'
+          <button
+            type='button'
+            aria-label={label}
+            className='relative flex cursor-pointer items-center justify-center rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden'
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
@@ -193,7 +206,7 @@ export function CameraMarker({
               />
             </svg>
 
-            <div
+            <span
               className={`relative flex h-8 w-8 items-center justify-center rounded-full border-2 shadow-lg transition-transform ${markerToneClass(
                 Boolean(isActiveWaypoint),
                 hasTrajectoryNode,
@@ -207,12 +220,13 @@ export function CameraMarker({
               ) : (
                 <Video className='h-4 w-4' />
               )}
-            </div>
+            </span>
 
-            <div className='pointer-events-none absolute start-1/2 top-9 -translate-x-1/2 rounded border border-border bg-background/90 px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-foreground opacity-80 shadow-sm backdrop-blur-sm transition-opacity group-hover:opacity-100'>
-              {position.cameraName || position.cameraId}
-            </div>
-          </div>
+            {/* 以对称圆形徽标物理中心对齐，避免 RTL 下 start-1/2 + -translate-x-1/2 左偏 */}
+            <span className='pointer-events-none absolute top-9 left-1/2 -translate-x-1/2 rounded border border-border bg-background/90 px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-foreground opacity-80 shadow-sm backdrop-blur-sm transition-opacity group-hover:opacity-100'>
+              {label}
+            </span>
+          </button>
         </PopoverTrigger>
 
         <PopoverContent
@@ -226,8 +240,14 @@ export function CameraMarker({
               position={position}
               isCalibrating={isCalibrating}
               trajectoryNode={trajectoryNode}
-              onAngleChange={onAngleChange}
-              onRemove={onRemove}
+              onAngleChange={
+                onAngleChange
+                  ? (angle) => onAngleChange(position.cameraId, angle)
+                  : undefined
+              }
+              onRemove={
+                onRemove ? () => onRemove(position.cameraId) : undefined
+              }
               onClose={() => setPopoverOpen(false)}
             />
           )}
@@ -235,4 +255,4 @@ export function CameraMarker({
       </Popover>
     </div>
   )
-}
+})

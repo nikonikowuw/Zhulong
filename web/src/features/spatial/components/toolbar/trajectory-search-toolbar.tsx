@@ -72,7 +72,14 @@ export function TrajectorySearchToolbar({
     },
   })
 
-  // 同步外部传入的深链接初始参数
+  const targetType = useWatch({ control: form.control, name: 'targetType' })
+  const { data: personsData } = useAllPersons()
+  const enrolledPersons = useMemo(
+    () => personsData?.items ?? [],
+    [personsData?.items]
+  )
+
+  // 同步外部传入的深链接初始参数（若 URL 传入外部工号，兼容映射到内部 person.id）
   useEffect(() => {
     if (
       initialTargetType &&
@@ -80,14 +87,16 @@ export function TrajectorySearchToolbar({
     ) {
       form.setValue('targetType', initialTargetType)
     }
-    if (initialPersonId && form.getValues('personId') !== initialPersonId) {
-      form.setValue('personId', initialPersonId)
+    if (initialPersonId) {
+      const matched = enrolledPersons.find(
+        (p) => p.id === initialPersonId || p.personId === initialPersonId
+      )
+      const resolvedId = matched ? matched.id : initialPersonId
+      if (form.getValues('personId') !== resolvedId) {
+        form.setValue('personId', resolvedId)
+      }
     }
-  }, [initialTargetType, initialPersonId, form])
-
-  const targetType = useWatch({ control: form.control, name: 'targetType' })
-  const { data: personsData } = useAllPersons()
-  const enrolledPersons = personsData?.items ?? []
+  }, [initialTargetType, initialPersonId, enrolledPersons, form])
 
   const onSubmit = (values: TrajectorySearchFormValues) => {
     if (!mapId) return
@@ -186,10 +195,7 @@ export function TrajectorySearchToolbar({
                     </FormControl>
                     <SelectContent>
                       {enrolledPersons.map((person) => (
-                        <SelectItem
-                          key={person.id}
-                          value={person.personId || person.id}
-                        >
+                        <SelectItem key={person.id} value={person.id}>
                           {person.name}
                           {person.personId ? ` (${person.personId})` : ''}
                         </SelectItem>

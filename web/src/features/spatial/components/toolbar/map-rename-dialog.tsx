@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
@@ -49,8 +49,14 @@ export function MapRenameDialog({
 
   const form = useForm<MapRenameFormValues>({
     resolver: zodResolver(schema),
-    values: { name: currentName },
+    defaultValues: { name: currentName },
   })
+
+  useEffect(() => {
+    if (open) {
+      form.reset({ name: currentName })
+    }
+  }, [open, currentName, form])
 
   const onSubmit = async (values: MapRenameFormValues) => {
     try {
