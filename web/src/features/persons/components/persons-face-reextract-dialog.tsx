@@ -19,7 +19,7 @@ import {
   useFaceReextractJob,
 } from '../hooks/use-persons'
 import { FaceJobProgressPanel } from './face-job-progress-panel'
-import { usePersonsContext, usePersonsState } from './persons-provider'
+import { usePersonsContext } from './persons-provider'
 
 const STATUS_LABEL_KEYS = {
   PENDING: 'faceReextract.statusPending',
@@ -41,8 +41,9 @@ const STATUS_BADGE_KEYS = {
 
 export function PersonsFaceReextractDialog() {
   const { t } = useTranslation('persons')
-  const { open, reextractTarget } = usePersonsState()
   const {
+    open,
+    reextractTarget,
     setOpen,
     faceReextractJobId: activeJobId,
     setFaceReextractJobId,
@@ -53,7 +54,8 @@ export function PersonsFaceReextractDialog() {
   const cancelMutation = useCancelFaceReextractJob()
   const isOpen = open === 'reextract-faces'
 
-  const jobQuery = useFaceReextractJob(activeJobId, true)
+  // 轮询间隔由 Provider 统一驱动；这里仅订阅共享 query 缓存，避免双份定时器。
+  const jobQuery = useFaceReextractJob(activeJobId, true, { poll: false })
   const job = jobQuery.data ?? null
 
   const isTerminal =

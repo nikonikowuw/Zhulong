@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Copy,
   Edit2,
@@ -25,6 +25,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { type Face, type Person } from '../data/schema'
 import { useFaceBatchUpload } from '../hooks/use-face-batch-upload'
 import {
   useDeleteFace,
@@ -38,22 +39,29 @@ import {
   primaryFaceIdOf,
 } from '../persons-helpers'
 import { FaceCard } from './persons-face-card'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions, usePersonsState } from './persons-provider'
+
+const EMPTY_FACES: Face[] = []
 
 export function PersonsFacesDialog() {
+  const { open, currentRow } = usePersonsState()
+  if (open !== 'faces' || !currentRow) return null
+
+  return <PersonsFacesDialogContent currentRow={currentRow} />
+}
+
+function PersonsFacesDialogContent({ currentRow }: { currentRow: Person }) {
   const { t } = useTranslation('persons')
-  const { open, setOpen, currentRow, setCurrentRow, setPreviewImage } =
-    usePersonsContext()
+  const { setOpen, setCurrentRow, setPreviewImage } = usePersonsActions()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [settingPrimaryId, setSettingPrimaryId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const isOpen = open === 'faces' && Boolean(currentRow)
-  const personId = currentRow?.id
+  const personId = currentRow.id
 
   // 订阅详情 query：删除主脸、设主脸或修改姓名后，后端可能自动顺延主图或变更
   // 展示字段，仅靠列表打开时的 `currentRow` 快照会导致显示过期甚至 404。
-  const { data: personDetail } = usePerson(isOpen ? personId : undefined)
+  const { data: personDetail } = usePerson(personId)
   const activePerson = personDetail ?? currentRow
 
   const {
@@ -61,12 +69,19 @@ export function PersonsFacesDialog() {
     isLoading: isLoadingFaces,
     isError: isFacesError,
     refetch: refetchFaces,
-  } = usePersonFaces(isOpen ? personId : undefined)
-  const faces = facePage?.items ?? []
+  } = usePersonFaces(personId)
+  const faces = facePage?.items ?? EMPTY_FACES
   const faceTotal = facePage?.total ?? 0
 
   const deleteFaceMutation = useDeleteFace({ suppressGlobalToast: true })
   const setPrimaryMutation = useSetPrimaryFace({ suppressGlobalToast: true })
+
+  const facesRef = useRef(faces)
+  const primaryFaceIdRef = useRef(activePerson.primaryFaceId)
+  useEffect(() => {
+    facesRef.current = faces
+    primaryFaceIdRef.current = activePerson.primaryFaceId
+  }, [faces, activePerson.primaryFaceId])
 
   const handleFirstFaceEnrolled = useCallback(
     (faceId: string) => {
@@ -113,42 +128,56 @@ export function PersonsFacesDialog() {
     }
   }
 
-  const handleSetPrimary = async (faceId: string) => {
-    if (!personId) return
-    setSettingPrimaryId(faceId)
-    try {
-      await setPrimaryMutation.mutateAsync({ personId, faceId })
-      setCurrentRow((prev) =>
-        prev ? { ...prev, primaryFaceId: faceId } : prev
-      )
-      toast.success(t('notifications.setPrimarySuccess'))
-    } catch (err: unknown) {
-      toast.error(errorMessageOf(err))
-    } finally {
-      setSettingPrimaryId(null)
-    }
-  }
+  const { mutateAsync: setPrimaryMutate } = setPrimaryMutation
+  const { mutateAsync: deleteFaceMutate } = deleteFaceMutation
 
-  const handleDeleteFace = async (faceId: string) => {
-    if (!personId) return
-    setDeletingId(faceId)
-    try {
-      await deleteFaceMutation.mutateAsync({ personId, faceId })
-      // 若删掉的是当前主人脸，在详情 refetch 完成前先同步回落到剩余第一张或清空，
-      // 防止抽屉顶部头像继续用已删除 ID 发请求产生 404。
-      if (activePerson?.primaryFaceId === faceId) {
-        const nextFaceId = faces.find((f) => f.id !== faceId)?.id ?? null
-        setCurrentRow((prev) =>
-          prev ? { ...prev, primaryFaceId: nextFaceId } : prev
-        )
-      }
-      toast.success(t('notifications.deleteFaceSuccess'))
-    } catch (err: unknown) {
-      toast.error(errorMessageOf(err))
-    } finally {
-      setDeletingId(null)
-    }
-  }
+  const handleSetPrimary = useCallback(
+    (faceId: string) => {
+      if (!personId) return
+      void (async () => {
+        setSettingPrimaryId(faceId)
+        try {
+          await setPrimaryMutate({ personId, faceId })
+          setCurrentRow((prev) =>
+            prev ? { ...prev, primaryFaceId: faceId } : prev
+          )
+          toast.success(t('notifications.setPrimarySuccess'))
+        } catch (err: unknown) {
+          toast.error(errorMessageOf(err))
+        } finally {
+          setSettingPrimaryId(null)
+        }
+      })()
+    },
+    [personId, setPrimaryMutate, setCurrentRow, t]
+  )
+
+  const handleDeleteFace = useCallback(
+    (faceId: string) => {
+      if (!personId) return
+      void (async () => {
+        setDeletingId(faceId)
+        try {
+          await deleteFaceMutate({ personId, faceId })
+          // 若删掉的是当前主人脸，在详情 refetch 完成前先同步回落到剩余第一张或清空，
+          // 防止抽屉顶部头像继续用已删除 ID 发请求产生 404。
+          if (primaryFaceIdRef.current === faceId) {
+            const nextFaceId =
+              facesRef.current.find((f) => f.id !== faceId)?.id ?? null
+            setCurrentRow((prev) =>
+              prev ? { ...prev, primaryFaceId: nextFaceId } : prev
+            )
+          }
+          toast.success(t('notifications.deleteFaceSuccess'))
+        } catch (err: unknown) {
+          toast.error(errorMessageOf(err))
+        } finally {
+          setDeletingId(null)
+        }
+      })()
+    },
+    [personId, deleteFaceMutate, setCurrentRow, t]
+  )
 
   const handlePreview = useCallback(
     (url: string, title: string) => {
@@ -158,26 +187,24 @@ export function PersonsFacesDialog() {
   )
 
   const handleClose = () => {
-    if (isUploadingBatch || deletingId) return
+    if (isUploadingBatch || deletingId || settingPrimaryId) return
     setOpen(null)
   }
 
   // 主人脸 ID：faces 加载完后校验 `primaryFaceId` 是否仍在当前集合内，避免
   // 快照残留已删 ID；加载中回落人员快照字段。
   const effectivePrimaryFaceId = isLoadingFaces
-    ? activePerson
-      ? primaryFaceIdOf(activePerson)
-      : undefined
-    : activePerson?.primaryFaceId &&
+    ? primaryFaceIdOf(activePerson)
+    : activePerson.primaryFaceId &&
         faces.some((f) => f.id === activePerson.primaryFaceId)
       ? activePerson.primaryFaceId
       : faces[0]?.id
 
   const avatarUrl = getGalleryImageUrl(personId, effectivePrimaryFaceId)
-  const fallbackChar = initialOf(activePerson?.name)
+  const fallbackChar = initialOf(activePerson.name)
 
   return (
-    <Sheet open={isOpen} onOpenChange={(v) => !v && handleClose()}>
+    <Sheet open onOpenChange={(v) => !v && handleClose()}>
       <SheetContent
         side='right'
         className='flex h-full w-full flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl'
@@ -370,12 +397,12 @@ export function PersonsFacesDialog() {
                 <FaceCard
                   key={face.id}
                   face={face}
-                  personId={personId || ''}
+                  personId={personId}
                   isPrimary={face.id === effectivePrimaryFaceId}
                   isDeleting={deletingId === face.id}
                   isSettingPrimary={settingPrimaryId === face.id}
-                  onDelete={(id) => void handleDeleteFace(id)}
-                  onSetPrimary={(id) => void handleSetPrimary(id)}
+                  onDelete={handleDeleteFace}
+                  onSetPrimary={handleSetPrimary}
                   onPreview={handlePreview}
                 />
               ))}

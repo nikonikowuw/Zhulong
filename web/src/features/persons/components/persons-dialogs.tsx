@@ -24,14 +24,14 @@ const PersonsFaceReextractDialog = lazy(() =>
 )
 
 export function PersonsDialogs() {
-  const { open } = usePersonsState()
+  const { open, previewImage } = usePersonsState()
 
   return (
     <>
-      <PersonsActionDialog />
-      <PersonsFacesDialog />
-      <PersonsDeleteDialog />
-      <PersonsImagePreviewDialog />
+      {(open === 'create' || open === 'edit') && <PersonsActionDialog />}
+      {open === 'faces' && <PersonsFacesDialog />}
+      {open === 'delete' && <PersonsDeleteDialog />}
+      {Boolean(previewImage) && <PersonsImagePreviewDialog />}
 
       <Suspense fallback={null}>
         {open === 'import' && <PersonsImportDialog />}

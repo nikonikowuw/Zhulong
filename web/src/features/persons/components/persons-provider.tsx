@@ -72,6 +72,7 @@ const PersonsStateContext = createContext<PersonsStateContextType | null>(null)
 const PersonsActionsContext = createContext<PersonsActionsContextType | null>(
   null
 )
+const PersonsReextractRunningContext = createContext<boolean>(false)
 
 export function PersonsProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useDialogState<PersonsDialogType>(null)
@@ -174,12 +175,19 @@ export function PersonsProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <PersonsActionsContext.Provider value={actionsValue}>
-      <PersonsStateContext.Provider value={stateValue}>
-        {children}
-      </PersonsStateContext.Provider>
+      <PersonsReextractRunningContext.Provider value={isFaceReextractRunning}>
+        <PersonsStateContext.Provider value={stateValue}>
+          {children}
+        </PersonsStateContext.Provider>
+      </PersonsReextractRunningContext.Provider>
     </PersonsActionsContext.Provider>
   )
 }
+
+/** 仅订阅特征重提任务是否运行中（避免工具栏因弹窗/行切换重渲染） */
+// eslint-disable-next-line react-refresh/only-export-components
+export const useIsFaceReextractRunning = () =>
+  useContext(PersonsReextractRunningContext)
 
 /** 仅订阅动作调度（引用恒定，弹窗切换或行变化时绝不触发重渲染） */
 // eslint-disable-next-line react-refresh/only-export-components

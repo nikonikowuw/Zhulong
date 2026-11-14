@@ -16,7 +16,7 @@ import {
 import { personsApi } from '../api/persons-api'
 import { useCreateFaceImportJob, useFaceImportJob } from '../hooks/use-persons'
 import { FaceJobProgressPanel } from './face-job-progress-panel'
-import { usePersonsContext, usePersonsState } from './persons-provider'
+import { usePersonsContext } from './persons-provider'
 
 /** 状态 → 本地化文案 key。查表而不是链式三元：新增状态时不会漏一个分支。 */
 const STATUS_LABEL_KEYS = {
@@ -45,8 +45,8 @@ function downloadManifestTemplate() {
 
 export function PersonsFaceImportDialog() {
   const { t } = useTranslation('persons')
-  const { open } = usePersonsState()
   const {
+    open,
     setOpen,
     faceImportJobId: activeJobId,
     setFaceImportJobId,
@@ -56,9 +56,8 @@ export function PersonsFaceImportDialog() {
   const createMutation = useCreateFaceImportJob()
   const isOpen = open === 'import-faces'
 
-  // 任务 id 与轮询都挂在 Provider 上：弹窗关闭（组件卸载）期间任务照常推进，
-  // 完成后由 Provider 统一刷新列表。这里只读状态。
-  const jobQuery = useFaceImportJob(activeJobId, true)
+  // 轮询间隔由 Provider 统一驱动；这里仅订阅共享 query 缓存，避免双份定时器。
+  const jobQuery = useFaceImportJob(activeJobId, true, { poll: false })
   const job = jobQuery.data ?? null
 
   const isTerminal =

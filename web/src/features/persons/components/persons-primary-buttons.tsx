@@ -22,7 +22,10 @@ import {
   PERSONS_QUERY_KEY,
   useExportPersonsManifest,
 } from '../hooks/use-persons'
-import { usePersonsActions, usePersonsState } from './persons-provider'
+import {
+  useIsFaceReextractRunning,
+  usePersonsActions,
+} from './persons-provider'
 
 interface PersonsPrimaryButtonsProps {
   /** 当前 URL 搜索关键词，导出时保持一致，避免「看到的」和「导出的」不是同一批人。 */
@@ -36,7 +39,7 @@ export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
   faceStatus,
 }: PersonsPrimaryButtonsProps) {
   const { t } = useTranslation('persons')
-  const { isFaceReextractRunning } = usePersonsState()
+  const isFaceReextractRunning = useIsFaceReextractRunning()
   const { setOpen, setCurrentRow, openFaceReextract } = usePersonsActions()
   const queryClient = useQueryClient()
   const exportMutation = useExportPersonsManifest()

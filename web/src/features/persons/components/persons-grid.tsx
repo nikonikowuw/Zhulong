@@ -241,11 +241,15 @@ export function PersonsGrid({
   const { setOpen } = usePersonsActions()
 
   const rows = table.getRowModel().rows
+  const skeletonCount = Math.min(
+    12,
+    Math.max(1, table.getState().pagination.pageSize)
+  )
 
   if (isLoading) {
     return (
       <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6'>
-        {Array.from({ length: 8 }).map((_, i) => (
+        {Array.from({ length: skeletonCount }).map((_, i) => (
           <div
             key={`grid-skeleton-${i}`}
             className='flex flex-col overflow-hidden rounded-xl border border-border bg-card'

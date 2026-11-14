@@ -351,17 +351,24 @@ const FACE_IMPORT_TERMINAL_STATUSES = new Set<FaceImportJobStatus>([
  * 轮询间隔随进度收敛：刚开始 1s 一次，任务进入中后段后 2s 一次即可，
  * 完成后立刻停表。
  */
-export function useFaceImportJob(jobId: string | null, enabled: boolean) {
+export function useFaceImportJob(
+  jobId: string | null,
+  enabled: boolean,
+  options?: { poll?: boolean }
+) {
+  const poll = options?.poll ?? true
   return useQuery({
     queryKey: faceImportJobQueryKey(jobId),
     queryFn: () => (jobId ? personsApi.getFaceImportJob(jobId) : null),
     enabled: Boolean(jobId && enabled),
-    refetchInterval: (query) => {
-      const data = query.state.data
-      if (!data) return 1000
-      if (FACE_IMPORT_TERMINAL_STATUSES.has(data.status)) return false
-      return data.processed >= data.total / 2 ? 2000 : 1000
-    },
+    refetchInterval: poll
+      ? (query) => {
+          const data = query.state.data
+          if (!data) return 1000
+          if (FACE_IMPORT_TERMINAL_STATUSES.has(data.status)) return false
+          return data.processed >= data.total / 2 ? 2000 : 1000
+        }
+      : false,
   })
 }
 
@@ -396,7 +403,12 @@ export function useLatestFaceReextractJob(enabled = true) {
 /**
  * 轮询/查询人脸特征重新提取任务状态
  */
-export function useFaceReextractJob(jobId: string | null, enabled: boolean) {
+export function useFaceReextractJob(
+  jobId: string | null,
+  enabled: boolean,
+  options?: { poll?: boolean }
+) {
+  const poll = options?.poll ?? true
   return useQuery({
     queryKey: faceReextractJobQueryKey(jobId),
     queryFn: () => {
@@ -406,12 +418,14 @@ export function useFaceReextractJob(jobId: string | null, enabled: boolean) {
       return personsApi.getFaceReextractJob(jobId)
     },
     enabled: Boolean(jobId && enabled),
-    refetchInterval: (query) => {
-      const data = query.state.data
-      if (!data) return 1000
-      if (FACE_IMPORT_TERMINAL_STATUSES.has(data.status)) return false
-      return data.processed >= data.total / 2 ? 2000 : 1000
-    },
+    refetchInterval: poll
+      ? (query) => {
+          const data = query.state.data
+          if (!data) return 1000
+          if (FACE_IMPORT_TERMINAL_STATUSES.has(data.status)) return false
+          return data.processed >= data.total / 2 ? 2000 : 1000
+        }
+      : false,
   })
 }
 

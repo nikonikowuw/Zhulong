@@ -14,20 +14,28 @@ import { Button } from '@/components/ui/button'
 import { usePersonsActions, usePersonsState } from './persons-provider'
 
 export function PersonsImagePreviewDialog() {
-  const { t } = useTranslation('persons')
   const { previewImage } = usePersonsState()
+  if (!previewImage) return null
+
+  return (
+    <PersonsImagePreviewDialogContent
+      key={previewImage.url}
+      previewImage={previewImage}
+    />
+  )
+}
+
+function PersonsImagePreviewDialogContent({
+  previewImage,
+}: {
+  previewImage: { url: string; title: string }
+}) {
+  const { t } = useTranslation('persons')
   const { setPreviewImage } = usePersonsActions()
   const containerRef = useRef<HTMLDivElement>(null)
 
   const [scale, setScale] = useState(1)
-  const [prevImage, setPrevImage] = useState(previewImage)
   const [isFullscreen, setIsFullscreen] = useState(false)
-
-  // 当预览图片切换或打开时，在渲染阶段重置缩放比例
-  if (previewImage !== prevImage) {
-    setPrevImage(previewImage)
-    setScale(1)
-  }
 
   // 监听原生全屏状态变化
   useEffect(() => {
@@ -83,13 +91,8 @@ export function PersonsImagePreviewDialog() {
     setScale((s) => (s > 1 ? 1 : 2))
   }
 
-  if (!previewImage) return null
-
   return (
-    <DialogPrimitive.Root
-      open={Boolean(previewImage)}
-      onOpenChange={(v) => !v && handleClose()}
-    >
+    <DialogPrimitive.Root open onOpenChange={(v) => !v && handleClose()}>
       <DialogPrimitive.Portal>
         {/* 全屏黑色遮罩 */}
         <DialogPrimitive.Overlay className='fixed inset-0 z-50 bg-black/95 backdrop-blur-md transition-opacity data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0' />

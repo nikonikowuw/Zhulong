@@ -27,7 +27,11 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { makePersonFormSchema, type PersonFormValues } from '../data/schema'
+import {
+  makePersonFormSchema,
+  type Person,
+  type PersonFormValues,
+} from '../data/schema'
 import {
   useAddFace,
   useCreatePerson,
@@ -37,19 +41,29 @@ import { FACE_IMAGE_ACCEPT, validateFaceImageFile } from '../persons-helpers'
 import { usePersonsActions, usePersonsState } from './persons-provider'
 
 export function PersonsActionDialog() {
-  const { t } = useTranslation('persons')
   const { open, currentRow } = usePersonsState()
+  if (open !== 'create' && open !== 'edit') return null
+
+  const isEdit = open === 'edit' && Boolean(currentRow)
+  return (
+    <PersonsActionDialogContent
+      key={isEdit ? `edit-${currentRow?.id}` : 'create'}
+      isEdit={isEdit}
+      currentRow={currentRow}
+    />
+  )
+}
+
+function PersonsActionDialogContent({
+  isEdit,
+  currentRow,
+}: {
+  isEdit: boolean
+  currentRow: Person | null
+}) {
+  const { t } = useTranslation('persons')
   const { setOpen } = usePersonsActions()
 
-  const isOpen = open === 'create' || open === 'edit'
-  const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create')
-  if (isOpen) {
-    const nextMode = open === 'edit' && Boolean(currentRow) ? 'edit' : 'create'
-    if (nextMode !== dialogMode) {
-      setDialogMode(nextMode)
-    }
-  }
-  const isEdit = dialogMode === 'edit' && Boolean(currentRow)
   const isPersonIdBound = Boolean(
     isEdit && currentRow?.personId && currentRow.personId.trim()
   )
@@ -89,17 +103,19 @@ export function PersonsActionDialog() {
 
   const form = useForm<PersonFormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { name: '', personId: '' },
+    defaultValues:
+      isEdit && currentRow
+        ? { name: currentRow.name, personId: currentRow.personId || '' }
+        : { name: '', personId: '' },
   })
 
   useEffect(() => {
-    if (!isOpen) return
     form.reset(
       isEdit && currentRow
         ? { name: currentRow.name, personId: currentRow.personId || '' }
         : { name: '', personId: '' }
     )
-  }, [isOpen, isEdit, currentRow, form])
+  }, [isEdit, currentRow, form])
 
   const handleFaceSelect = (file: File) => {
     const problem = validateFaceImageFile(file)
@@ -189,7 +205,7 @@ export function PersonsActionDialog() {
 
   return (
     <Dialog
-      open={isOpen}
+      open
       onOpenChange={(v) => {
         if (!v) {
           setOpen(null)

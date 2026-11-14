@@ -42,6 +42,18 @@ const viewModeOptions = [
 /** 骨架屏行数。列数不再写死：列定义增长时硬编码的 5 个单元格会横向错位。 */
 const SKELETON_ROWS = 5
 
+const PERSONS_PAGINATION_CONFIG = {
+  defaultPage: 1,
+  defaultPageSize: 10,
+  maxPageSize: 100,
+}
+
+const PERSONS_GLOBAL_FILTER_CONFIG = { enabled: true, key: 'search' }
+
+const PERSONS_COLUMN_FILTERS = [
+  { columnId: 'faces', searchKey: 'faceStatus', type: 'string' as const },
+]
+
 interface PersonsTableProps {
   data: Person[]
   total: number
@@ -89,11 +101,9 @@ export function PersonsTable({
   } = useTableUrlState({
     search,
     navigate,
-    pagination: { defaultPage: 1, defaultPageSize: 10, maxPageSize: 100 },
-    globalFilter: { enabled: true, key: 'search' },
-    columnFilters: [
-      { columnId: 'faces', searchKey: 'faceStatus', type: 'string' },
-    ],
+    pagination: PERSONS_PAGINATION_CONFIG,
+    globalFilter: PERSONS_GLOBAL_FILTER_CONFIG,
+    columnFilters: PERSONS_COLUMN_FILTERS,
   })
 
   // eslint-disable-next-line react-hooks/incompatible-library
