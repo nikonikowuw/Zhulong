@@ -3,7 +3,6 @@ package mediafile
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,13 +111,23 @@ func TestService_RejectsDirectoryAsNotAFile(t *testing.T) {
 	svc := newFixtureService(t, &stubRootProvider{root: fixture.path}, recordingInspector())
 
 	_, err := svc.GetEntry(context.Background(), "recordings/cam-01")
-	assertAppErrorCode(t, err, "MEDIA_NOT_A_FILE", apperr.KindInvalid)
+	assertAppErrorCode(
+		t,
+		err,
+		"MEDIA_NOT_A_FILE",
+		apperr.KindInvalid,
+	)
 
 	file, _, err := svc.OpenContent(context.Background(), "recordings/cam-01")
 	if file != nil {
-		file.Close()
+		closeFileBestEffort(file)
 	}
-	assertAppErrorCode(t, err, "MEDIA_NOT_A_FILE", apperr.KindInvalid)
+	assertAppErrorCode(
+		t,
+		err,
+		"MEDIA_NOT_A_FILE",
+		apperr.KindInvalid,
+	)
 }
 
 func TestService_OpenContentReturnsSeekableFile(t *testing.T) {
@@ -152,7 +161,12 @@ func TestService_MissingRootIsUnavailable(t *testing.T) {
 	svc := newFixtureService(t, &stubRootProvider{}, recordingInspector())
 
 	_, err := svc.GetEntry(context.Background(), "exports/task-1.mp4")
-	assertAppErrorCode(t, err, "MEDIA_ROOT_UNAVAILABLE", apperr.KindInternal)
+	assertAppErrorCode(
+		t,
+		err,
+		"MEDIA_ROOT_UNAVAILABLE",
+		apperr.KindInternal,
+	)
 }
 
 func TestService_ProviderFailureIsUnavailable(t *testing.T) {
@@ -160,7 +174,12 @@ func TestService_ProviderFailureIsUnavailable(t *testing.T) {
 	svc := newFixtureService(t, provider, recordingInspector())
 
 	_, err := svc.GetEntry(context.Background(), "exports/task-1.mp4")
-	assertAppErrorCode(t, err, "MEDIA_ROOT_UNAVAILABLE", apperr.KindInternal)
+	assertAppErrorCode(
+		t,
+		err,
+		"MEDIA_ROOT_UNAVAILABLE",
+		apperr.KindInternal,
+	)
 }
 
 // realDeviceID returns the device the fixture actually lives on. The resolver
@@ -253,7 +272,12 @@ func TestService_FallthroughDetection(t *testing.T) {
 
 			_, err := svc.GetEntry(context.Background(), "exports/task-1.mp4")
 			if tc.wantRefused {
-				assertAppErrorCode(t, err, "MEDIA_ROOT_UNAVAILABLE", apperr.KindInternal)
+				assertAppErrorCode(
+					t,
+					err,
+					"MEDIA_ROOT_UNAVAILABLE",
+					apperr.KindInternal,
+				)
 				return
 			}
 			if err != nil {
@@ -300,7 +324,7 @@ func TestService_FallthroughCheckIsNotOnTheRequestPath(t *testing.T) {
 	svc := newFixtureService(t, &stubRootProvider{root: fixture.path}, inspector)
 
 	const requests = 25
-	for i := 0; i < requests; i++ {
+	for i := range requests {
 		if _, _, err := svc.OpenContent(context.Background(), "exports/task-1.mp4"); err != nil {
 			t.Fatalf("request %d: %v", i, err)
 		}
@@ -314,7 +338,12 @@ func TestService_FallthroughCheckIsNotOnTheRequestPath(t *testing.T) {
 func TestService_HotSwitchUsesTheNewRoot(t *testing.T) {
 	first := newFixtureRoot(t)
 	second := t.TempDir()
-	writeFixtureFile(t, second, "exports/other.mp4", "second-root-bytes")
+	writeFixtureFile(
+		t,
+		second,
+		"exports/other.mp4",
+		"second-root-bytes",
+	)
 
 	provider := &stubRootProvider{root: first.path}
 	svc := newFixtureService(t, provider, recordingInspector())
@@ -328,7 +357,12 @@ func TestService_HotSwitchUsesTheNewRoot(t *testing.T) {
 	// The old root's files are no longer reachable: the switch is a pointer
 	// swap, not a migration.
 	_, err := svc.GetEntry(context.Background(), "exports/task-1.mp4")
-	assertAppErrorCode(t, err, "MEDIA_ENTRY_NOT_FOUND", apperr.KindNotFound)
+	assertAppErrorCode(
+		t,
+		err,
+		"MEDIA_ENTRY_NOT_FOUND",
+		apperr.KindNotFound,
+	)
 
 	if _, err := svc.GetEntry(context.Background(), "exports/other.mp4"); err != nil {
 		t.Fatalf("second root: %v", err)
@@ -343,7 +377,12 @@ func TestService_ConcurrentOpenDuringHotSwitch(t *testing.T) {
 	roots := make([]string, 4)
 	for i := range roots {
 		roots[i] = t.TempDir()
-		writeFixtureFile(t, roots[i], "exports/task-1.mp4", strings.Repeat("x", 64))
+		writeFixtureFile(
+			t,
+			roots[i],
+			"exports/task-1.mp4",
+			strings.Repeat("x", 64),
+		)
 	}
 
 	provider := &stubRootProvider{root: roots[0]}
@@ -355,7 +394,7 @@ func TestService_ConcurrentOpenDuringHotSwitch(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Readers continuously open and read while the root changes underneath.
-	for reader := 0; reader < 8; reader++ {
+	for range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -368,7 +407,7 @@ func TestService_ConcurrentOpenDuringHotSwitch(t *testing.T) {
 				if _, err := file.Read(buf); err != nil {
 					t.Errorf("read while switching roots: %v", err)
 				}
-				file.Close()
+				closeFileBestEffort(file)
 			}
 		}()
 	}
@@ -385,12 +424,14 @@ func TestService_ConcurrentOpenDuringHotSwitch(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; ctx.Err() == nil && i < 200; i++ {
-			_, _ = svc.GetRootInfo(ctx)
+			if _, err := svc.GetRootInfo(ctx); err != nil {
+				// Root info may transiently fail during rapid hot-switches; ignore in race test.
+			}
 		}
 	}()
 
 	// Let the goroutines interleave, then stop them.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		provider.set(roots[i%len(roots)])
 	}
 	cancel()
@@ -467,11 +508,11 @@ func TestService_ConcurrentGetEntryIsRaceFree(t *testing.T) {
 	svc := newFixtureService(t, &stubRootProvider{root: fixture.path}, recordingInspector())
 
 	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			path := fmt.Sprintf("exports/task-1.mp4")
+			path := "exports/task-1.mp4"
 			if _, err := svc.GetEntry(context.Background(), path); err != nil {
 				t.Errorf("goroutine %d: %v", i, err)
 			}
@@ -480,7 +521,12 @@ func TestService_ConcurrentGetEntryIsRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
-func assertAppErrorCode(t *testing.T, err error, code string, kind apperr.Kind) {
+func assertAppErrorCode(
+	t *testing.T,
+	err error,
+	code string,
+	kind apperr.Kind,
+) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("expected error with code %s, got nil", code)

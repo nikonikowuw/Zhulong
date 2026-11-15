@@ -37,21 +37,41 @@ func newFixtureRoot(t *testing.T) fixtureRoot {
 		}
 	}
 
-	writeFixtureFile(t, root, "recordings/cam-01/2026-01-01/10-00-00.mp4", "recording-bytes")
-	writeFixtureFile(t, root, "snapshots/cam-01/2026-01-01/evt-1.jpg", "snapshot-bytes")
-	writeFixtureFile(t, root, "exports/task-1.mp4", "export-bytes")
+	writeFixtureFile(
+		t,
+		root,
+		"recordings/cam-01/2026-01-01/10-00-00.mp4",
+		"recording-bytes",
+	)
+	writeFixtureFile(
+		t,
+		root,
+		"snapshots/cam-01/2026-01-01/evt-1.jpg",
+		"snapshot-bytes",
+	)
+	writeFixtureFile(
+		t,
+		root,
+		"exports/task-1.mp4",
+		"export-bytes",
+	)
 
 	return fixtureRoot{path: root}
 }
 
-func writeFixtureFile(t *testing.T, root, relPath, content string) {
+func writeFixtureFile(
+	t *testing.T,
+	root string,
+	relPath string,
+	content string,
+) {
 	t.Helper()
 	target := filepath.Join(root, filepath.FromSlash(relPath))
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		t.Fatalf("create parent of %s: %v", relPath, err)
+		t.Fatalf("create parent of %q: %v", relPath, err)
 	}
 	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
-		t.Fatalf("write fixture %s: %v", relPath, err)
+		t.Fatalf("write fixture %q: %v", relPath, err)
 	}
 }
 
@@ -214,7 +234,11 @@ func TestResolver_SymlinkPolicy(t *testing.T) {
 	symlinkOrSkip(t, "rel-file.mp4", filepath.Join(root, "recordings", "chain.mp4"))
 
 	// Absolute target even though it lands inside the root: rejected.
-	symlinkOrSkip(t, filepath.Join(root, "recordings", "cam-01", "2026-01-01", "10-00-00.mp4"), filepath.Join(root, "recordings", "abs-inside.mp4"))
+	symlinkOrSkip(
+		t,
+		filepath.Join(root, "recordings", "cam-01", "2026-01-01", "10-00-00.mp4"),
+		filepath.Join(root, "recordings", "abs-inside.mp4"),
+	)
 
 	// Escaping links. These sit under a whitelisted top-level directory on
 	// purpose: an unknown top-level name is refused by the kind whitelist
@@ -377,7 +401,8 @@ func TestResolver_NoDirectoryScanning(t *testing.T) {
 		t.Fatalf("read package dir: %v", err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+		isTestOrNonGo := !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go")
+		if entry.IsDir() || isTestOrNonGo {
 			continue
 		}
 		source, err := os.ReadFile(entry.Name())

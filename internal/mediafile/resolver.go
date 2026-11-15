@@ -73,12 +73,12 @@ func newResolver(rootPath string, inspector DeviceInspector) (*resolver, error) 
 
 	selfDev, err := deviceIDOf(root)
 	if err != nil {
-		root.Close()
+		closeRootBestEffort(root)
 		return nil, apperr.Internal("MEDIA_ROOT_UNAVAILABLE", "Media root is unavailable", err)
 	}
 
 	if err := verifyNotFallenThrough(inspector, rootPath, selfDev); err != nil {
-		root.Close()
+		closeRootBestEffort(root)
 		return nil, err
 	}
 

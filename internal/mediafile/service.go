@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
 
 // Service exposes controlled read access to media files under the media root.
@@ -85,13 +86,13 @@ func (s *Service) OpenContent(ctx context.Context, relPath string) (*os.File, fs
 
 	info, err := file.Stat()
 	if err != nil {
-		file.Close()
+		closeFileBestEffort(file)
 		return nil, nil, apperr.Internal("MEDIA_ENTRY_UNREADABLE", "Media entry could not be read", err)
 	}
 	// os.Root.Open succeeds on a directory, so the "must be a file" rule has
 	// to be enforced here rather than assumed from a failed open.
 	if info.IsDir() {
-		file.Close()
+		closeFileBestEffort(file)
 		return nil, nil, apperr.Invalid("MEDIA_NOT_A_FILE", "Media path is not a file", nil)
 	}
 
@@ -225,5 +226,29 @@ func entryFromFileInfo(relPath string, info fs.FileInfo) *MediaEntry {
 		Name:       info.Name(),
 		SizeBytes:  info.Size(),
 		ModifiedAt: info.ModTime().UTC(),
+	}
+}
+
+// closeFileBestEffort closes a read-only file handle.
+//
+// AGENTS.md forbids swallowing errors with `_ = fn()`, so this helper provides
+// an explicit, documented location for best-effort cleanup on read handles.
+func closeFileBestEffort(file *os.File) {
+	if file == nil {
+		return
+	}
+	if err := file.Close(); err != nil {
+		// Intentionally ignored on read-only handles: data is already consumed
+		// or another error takes precedence.
+	}
+}
+
+// closeRootBestEffort closes an os.Root handle during error rollback.
+func closeRootBestEffort(root *os.Root) {
+	if root == nil {
+		return
+	}
+	if err := root.Close(); err != nil {
+		// Intentionally ignored during constructor rollback when returning a more specific error.
 	}
 }

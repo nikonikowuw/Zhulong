@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
@@ -76,7 +77,11 @@ func writeMediaError(c *gin.Context, err error) {
 	var appErr *apperr.Error
 	if errors.As(err, &appErr) && appErr.Code == "MEDIA_ROOT_UNAVAILABLE" {
 		httputil.WriteError(c, httputil.NewError(
-			http.StatusServiceUnavailable, appErr.Code, appErr.Message, appErr.Err))
+			http.StatusServiceUnavailable,
+			appErr.Code,
+			appErr.Message,
+			appErr.Err,
+		))
 		return
 	}
 	httputil.WriteError(c, err)
@@ -132,7 +137,7 @@ func (h *Handler) ServeContent(c *gin.Context, relPath string) {
 		writeMediaError(c, err)
 		return
 	}
-	defer file.Close()
+	defer closeFileBestEffort(file)
 
 	contentType := contentTypeForPath(info.Name())
 	c.Header("Content-Type", contentType)

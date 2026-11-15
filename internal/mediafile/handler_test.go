@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
@@ -25,9 +26,24 @@ func newFixtureHandler(t *testing.T) (*gin.Engine, string) {
 	gin.SetMode(gin.TestMode)
 
 	root := t.TempDir()
-	writeFixtureFile(t, root, "recordings/cam-01/2026-01-01/10-00-00.mp4", handlerFixtureContent)
-	writeFixtureFile(t, root, "snapshots/cam-01/2026-01-01/evt-1.jpg", "jpeg-bytes")
-	writeFixtureFile(t, root, "exports/task-1.unknown", "unknown-bytes")
+	writeFixtureFile(
+		t,
+		root,
+		"recordings/cam-01/2026-01-01/10-00-00.mp4",
+		handlerFixtureContent,
+	)
+	writeFixtureFile(
+		t,
+		root,
+		"snapshots/cam-01/2026-01-01/evt-1.jpg",
+		"jpeg-bytes",
+	)
+	writeFixtureFile(
+		t,
+		root,
+		"exports/task-1.unknown",
+		"unknown-bytes",
+	)
 
 	svc := NewService(&stubRootProvider{root: root}, recordingInspector(), nil)
 	handler := NewHandler(svc)
@@ -37,7 +53,12 @@ func newFixtureHandler(t *testing.T) (*gin.Engine, string) {
 	return router, root
 }
 
-func doRequest(router *gin.Engine, method, target string, headers map[string]string) *httptest.ResponseRecorder {
+func doRequest(
+	router *gin.Engine,
+	method string,
+	target string,
+	headers map[string]string,
+) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, nil)
 	for key, value := range headers {
 		req.Header.Set(key, value)
@@ -99,7 +120,12 @@ func TestHandler_RouteTableHasNoListingEndpoint(t *testing.T) {
 func TestHandler_GetEntryReturnsEnvelope(t *testing.T) {
 	router, _ := newFixtureHandler(t)
 
-	recorder := doRequest(router, http.MethodGet, "/api/v1/media/entries/snapshots/cam-01/2026-01-01/evt-1.jpg", nil)
+	recorder := doRequest(
+		router,
+		http.MethodGet,
+		"/api/v1/media/entries/snapshots/cam-01/2026-01-01/evt-1.jpg",
+		nil,
+	)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", recorder.Code, recorder.Body.String())
 	}
@@ -175,7 +201,12 @@ func TestHandler_ErrorContract(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			recorder := doRequest(router, http.MethodGet, tc.target, nil)
+			recorder := doRequest(
+				router,
+				http.MethodGet,
+				tc.target,
+				nil,
+			)
 			if recorder.Code != tc.wantStatus {
 				t.Fatalf("expected %d, got %d (%s)", tc.wantStatus, recorder.Code, recorder.Body.String())
 			}
@@ -332,7 +363,12 @@ func TestHandler_RangeSemantics(t *testing.T) {
 				headers["If-Range"] = tc.ifRange
 			}
 
-			recorder := doRequest(router, http.MethodGet, target, headers)
+			recorder := doRequest(
+				router,
+				http.MethodGet,
+				target,
+				headers,
+			)
 			if recorder.Code != tc.wantStatus {
 				t.Fatalf("expected %d, got %d (body %q)", tc.wantStatus, recorder.Code, recorder.Body.String())
 			}
@@ -357,7 +393,12 @@ func TestHandler_HeadRequestHasNoBody(t *testing.T) {
 	router, _ := newFixtureHandler(t)
 	target := "/api/v1/media/content/exports/task-1.unknown"
 
-	recorder := doRequest(router, http.MethodHead, target, nil)
+	recorder := doRequest(
+		router,
+		http.MethodHead,
+		target,
+		nil,
+	)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", recorder.Code)
 	}
@@ -386,7 +427,12 @@ func TestHandler_ContentTypeByExtension(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.wantContent, func(t *testing.T) {
-			recorder := doRequest(router, http.MethodGet, tc.target, nil)
+			recorder := doRequest(
+				router,
+				http.MethodGet,
+				tc.target,
+				nil,
+			)
 			if recorder.Code != http.StatusOK {
 				t.Fatalf("expected 200, got %d", recorder.Code)
 			}
@@ -404,9 +450,12 @@ func TestHandler_ContentTypeByExtension(t *testing.T) {
 func TestHandler_MultiRangeUsesMultipart(t *testing.T) {
 	router, _ := newFixtureHandler(t)
 
-	recorder := doRequest(router, http.MethodGet,
+	recorder := doRequest(
+		router,
+		http.MethodGet,
 		"/api/v1/media/content/exports/task-1.unknown",
-		map[string]string{"Range": "bytes=0-1,5-6"})
+		map[string]string{"Range": "bytes=0-1,5-6"},
+	)
 
 	if recorder.Code != http.StatusPartialContent {
 		t.Fatalf("expected 206, got %d", recorder.Code)
@@ -420,7 +469,12 @@ func TestHandler_DeletedFileReturnsNotFound(t *testing.T) {
 	router, root := newFixtureHandler(t)
 
 	target := "/api/v1/media/content/exports/task-1.unknown"
-	if recorder := doRequest(router, http.MethodGet, target, nil); recorder.Code != http.StatusOK {
+	if recorder := doRequest(
+		router,
+		http.MethodGet,
+		target,
+		nil,
+	); recorder.Code != http.StatusOK {
 		t.Fatalf("expected the fixture to be readable first, got %d", recorder.Code)
 	}
 
@@ -428,7 +482,12 @@ func TestHandler_DeletedFileReturnsNotFound(t *testing.T) {
 	// normal contract, not a fault.
 	removeFixtureFile(t, root, "exports/task-1.unknown")
 
-	recorder := doRequest(router, http.MethodGet, target, nil)
+	recorder := doRequest(
+		router,
+		http.MethodGet,
+		target,
+		nil,
+	)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 after the file was pruned, got %d", recorder.Code)
 	}
@@ -458,7 +517,12 @@ func TestHandler_ContentErrorsNeverReachServeContent(t *testing.T) {
 
 	for _, target := range cases {
 		t.Run(target, func(t *testing.T) {
-			recorder := doRequest(router, http.MethodGet, target, nil)
+			recorder := doRequest(
+				router,
+				http.MethodGet,
+				target,
+				nil,
+			)
 			if recorder.Code < 400 {
 				t.Fatalf("expected an error status, got %d", recorder.Code)
 			}
@@ -477,7 +541,12 @@ func TestHandler_ContentErrorsNeverReachServeContent(t *testing.T) {
 func TestHandler_RootsEndpoint(t *testing.T) {
 	router, root := newFixtureHandler(t)
 
-	recorder := doRequest(router, http.MethodGet, "/api/v1/media/roots", nil)
+	recorder := doRequest(
+		router,
+		http.MethodGet,
+		"/api/v1/media/roots",
+		nil,
+	)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", recorder.Code, recorder.Body.String())
 	}
@@ -508,7 +577,12 @@ func TestHandler_UnavailableRootIsServiceUnavailable(t *testing.T) {
 	router := gin.New()
 	handler.RegisterRoutes(router.Group("/api/v1"))
 
-	recorder := doRequest(router, http.MethodGet, "/api/v1/media/entries/exports/task-1.mp4", nil)
+	recorder := doRequest(
+		router,
+		http.MethodGet,
+		"/api/v1/media/entries/exports/task-1.mp4",
+		nil,
+	)
 
 	// 503 rather than 500: the root is temporarily unusable, and the standard
 	// library's status mapping has no 503 branch, so this asserts the handler
@@ -585,11 +659,11 @@ func TestHandler_ServiceErrorCodesHaveLocalizedMessages(t *testing.T) {
 		t.Run(code, func(t *testing.T) {
 			for _, locale := range locales {
 				recorder := httptest.NewRecorder()
-				context, _ := gin.CreateTestContext(recorder)
-				context.Request = httptest.NewRequest(http.MethodGet, "/", nil)
-				context.Request.Header.Set("Accept-Language", locale)
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+				c.Request.Header.Set("Accept-Language", locale)
 
-				httputil.WriteError(context, apperr.Invalid(code, "fallback message", errors.New("cause")))
+				httputil.WriteError(c, apperr.Invalid(code, "fallback message", errors.New("cause")))
 
 				var envelope struct {
 					Code    string `json:"code"`
@@ -650,7 +724,12 @@ func TestHandler_RequiresSessionCookie(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	root := t.TempDir()
-	writeFixtureFile(t, root, "exports/task-1.mp4", handlerFixtureContent)
+	writeFixtureFile(
+		t,
+		root,
+		"exports/task-1.mp4",
+		handlerFixtureContent,
+	)
 
 	svc := NewService(&stubRootProvider{root: root}, recordingInspector(), nil)
 	handler := NewHandler(svc)
@@ -667,7 +746,12 @@ func TestHandler_RequiresSessionCookie(t *testing.T) {
 		"/api/v1/media/content/exports/task-1.mp4",
 	} {
 		t.Run(target, func(t *testing.T) {
-			recorder := doRequest(router, http.MethodGet, target, nil)
+			recorder := doRequest(
+				router,
+				http.MethodGet,
+				target,
+				nil,
+			)
 			if recorder.Code != http.StatusUnauthorized {
 				t.Fatalf("expected 401 without a session cookie, got %d", recorder.Code)
 			}
