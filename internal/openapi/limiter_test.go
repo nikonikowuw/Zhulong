@@ -1,15 +1,16 @@
 package openapi
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
 )
 
@@ -34,12 +35,16 @@ func newLimiterRouter(limiter *UploadLimiter, hold time.Duration) *gin.Engine {
 }
 
 // fire runs n concurrent requests through router and counts the status codes.
-func fire(router *gin.Engine, n int, tokenFor func(i int) string) (ok, limited int32, headers []http.Header) {
+func fire(
+	router *gin.Engine,
+	n int,
+	tokenFor func(i int) string,
+) (ok, limited int32, headers []http.Header) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	headers = make([]http.Header, 0, n)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -79,7 +84,9 @@ func TestUploadLimiter_GlobalAndTokenConcurrency(t *testing.T) {
 	}
 
 	// 2. Three distinct tokens: the global cap of 2 is the binding one.
-	ok, limited, _ = fire(router, 3, func(i int) string { return fmt.Sprintf("token-%d", i) })
+	ok, limited, _ = fire(router, 3, func(i int) string {
+		return "token-" + strconv.Itoa(i)
+	})
 	if ok != 2 || limited != 1 {
 		t.Fatalf("distinct tokens: ok=%d limited=%d, want 2/1", ok, limited)
 	}
@@ -132,8 +139,10 @@ func TestUploadLimiter_ForgetsIdleTokens(t *testing.T) {
 	router := newLimiterRouter(limiter, 0)
 
 	const tokens = 50
-	for i := 0; i < tokens; i++ {
-		ok, limited, _ := fire(router, 1, func(int) string { return fmt.Sprintf("token-%d", i) })
+	for i := range tokens {
+		ok, limited, _ := fire(router, 1, func(int) string {
+			return "token-" + strconv.Itoa(i)
+		})
 		if ok != 1 || limited != 0 {
 			t.Fatalf("token %d: ok=%d limited=%d, want 1/0", i, ok, limited)
 		}

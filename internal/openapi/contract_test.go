@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/nikonikowuw/Zhulong/internal/apidocs"
 	"github.com/swaggo/swag"
+
+	_ "github.com/nikonikowuw/Zhulong/internal/apidocs"
 )
 
 // swaggerSpec is the subset of the generated spec this contract test reads. Parsing the
@@ -53,7 +54,10 @@ func openAPIRoutes(t *testing.T, env *openAPITestEnv) map[route]bool {
 		if !strings.HasPrefix(path, "/openapi/") {
 			continue
 		}
-		routes[route{method: registered.Method, path: path}] = true
+		routes[route{
+			method: registered.Method,
+			path:   path,
+		}] = true
 	}
 	return routes
 }
@@ -78,7 +82,10 @@ func swaggerOpenAPIRoutes(t *testing.T) (string, map[route]bool) {
 			continue
 		}
 		for method := range operations {
-			routes[route{method: strings.ToUpper(method), path: path}] = true
+			routes[route{
+				method: strings.ToUpper(method),
+				path:   path,
+			}] = true
 		}
 	}
 	return parsed.BasePath, routes
@@ -179,7 +186,10 @@ func TestContract_DocsMatchImplementation(t *testing.T) {
 		}
 	}
 	if len(found) == 0 {
-		t.Fatalf("no /openapi paths found in %s; the contract check is not looking at the guides", guideDir)
+		t.Fatalf(
+			"no /openapi paths found in %s; the contract check is not looking at the guides",
+			guideDir,
+		)
 	}
 
 	// Each mounted route has to appear in at least one guide, or a caller cannot discover it.
@@ -212,7 +222,7 @@ func extractOpenAPIPaths(guide string) []route {
 		"DELETE": true,
 	}
 
-	var routes []route
+	routes := []route{}
 	seen := make(map[route]bool)
 	for _, line := range strings.Split(guide, "\n") {
 		fields := strings.FieldsFunc(line, func(r rune) bool {
@@ -234,7 +244,10 @@ func extractOpenAPIPaths(guide string) []route {
 			if idx := strings.Index(path, "/openapi/"); idx >= 0 {
 				path = path[idx:]
 			}
-			candidate := route{method: method, path: path}
+			candidate := route{
+				method: method,
+				path:   path,
+			}
 			if !seen[candidate] {
 				seen[candidate] = true
 				routes = append(routes, candidate)
@@ -334,7 +347,8 @@ func requireFields(t *testing.T, label string, obj map[string]any, want []string
 	}
 	sort.Strings(got)
 
-	expected := append([]string(nil), want...)
+	expected := make([]string, len(want))
+	copy(expected, want)
 	sort.Strings(expected)
 
 	if strings.Join(got, ",") != strings.Join(expected, ",") {

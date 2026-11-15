@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
@@ -72,7 +73,10 @@ func (l *UploadLimiter) acquireToken(tokenID string) (*tokenSlot, bool) {
 
 	slot, ok := l.tokenSems[tokenID]
 	if !ok {
-		slot = &tokenSlot{sem: make(chan struct{}, l.tokenCap)}
+		slot = &tokenSlot{
+			sem:  make(chan struct{}, l.tokenCap),
+			refs: 0,
+		}
 		l.tokenSems[tokenID] = slot
 	}
 	slot.refs++

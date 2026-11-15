@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/person"
-	"go.uber.org/zap"
 )
 
 // mockExtractor satisfies person.Extractor with a valid-dimension feature vector. The
@@ -35,7 +36,8 @@ type mockStatusProvider struct {
 
 func (m *mockStatusProvider) DeviceStatus(_ context.Context) (DeviceStatusResponse, error) {
 	if m.err != nil {
-		return DeviceStatusResponse{}, m.err
+		var zero DeviceStatusResponse
+		return zero, m.err
 	}
 	return m.resp, nil
 }
@@ -147,7 +149,10 @@ func (e *openAPITestEnv) do(t *testing.T, req *http.Request) *httptest.ResponseR
 	return rec
 }
 
-func (e *openAPITestEnv) doJSON(t *testing.T, method, path, body string) *httptest.ResponseRecorder {
+func (e *openAPITestEnv) doJSON(
+	t *testing.T,
+	method, path, body string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -195,7 +200,11 @@ func (e *openAPITestEnv) uploadFace(
 		t.Fatalf("close multipart writer: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/openapi/persons/"+personID+"/faces"+query, body)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/openapi/persons/"+personID+"/faces"+query,
+		body,
+	)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return e.do(t, req)
 }
@@ -302,7 +311,14 @@ func TestOpenAPI_UpsertPerson(t *testing.T) {
 func TestOpenAPI_UpsertPerson_AnswersFullProjection(t *testing.T) {
 	env := newOpenAPITestEnv(t)
 	env.createPerson(t, "EMP-PROJ", "Projection")
-	if rec := env.uploadFace(t, "EMP-PROJ", "", "a.jpg", mockJPEGBytes); rec.Code != http.StatusCreated {
+	rec := env.uploadFace(
+		t,
+		"EMP-PROJ",
+		"",
+		"a.jpg",
+		mockJPEGBytes,
+	)
+	if rec.Code != http.StatusCreated {
 		t.Fatalf("upload face: got %d: %s", rec.Code, rec.Body.String())
 	}
 
@@ -392,7 +408,8 @@ func TestOpenAPI_ReplaceFlag(t *testing.T) {
 				if code := decodeEnvelope(t, rec).Code; code != "REPLACE_INVALID" {
 					t.Fatalf("code = %q, want REPLACE_INVALID", code)
 				}
-			} else {
+			}
+			if tt.wantStatus == http.StatusCreated {
 				var uploaded FaceUploadResponse
 				decodeData(t, rec, &uploaded)
 				if uploaded.Replaced != tt.wantReplaced {
@@ -400,7 +417,12 @@ func TestOpenAPI_ReplaceFlag(t *testing.T) {
 				}
 			}
 
-			getRec := env.do(t, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/persons/EMP-REPLACE", nil))
+			getReq := httptest.NewRequest(
+				http.MethodGet,
+				"/api/v1/openapi/persons/EMP-REPLACE",
+				nil,
+			)
+			getRec := env.do(t, getReq)
 			if getRec.Code != http.StatusOK {
 				t.Fatalf("get person: got %d: %s", getRec.Code, getRec.Body.String())
 			}
@@ -550,7 +572,11 @@ func newUploadRequest(
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close writer: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/openapi/persons/"+personID+"/faces"+query, body)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/openapi/persons/"+personID+"/faces"+query,
+		body,
+	)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req
 }
@@ -642,7 +668,12 @@ func TestOpenAPI_PersonLifecycle(t *testing.T) {
 	}
 
 	// 5. Clear the remaining face.
-	clearRec := env.do(t, httptest.NewRequest(http.MethodDelete, "/api/v1/openapi/persons/EMP-FACE/faces", nil))
+	clearReq := httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v1/openapi/persons/EMP-FACE/faces",
+		nil,
+	)
+	clearRec := env.do(t, clearReq)
 	if clearRec.Code != http.StatusOK {
 		t.Fatalf("clear faces: got %d: %s", clearRec.Code, clearRec.Body.String())
 	}
@@ -652,7 +683,12 @@ func TestOpenAPI_PersonLifecycle(t *testing.T) {
 		t.Errorf("cleared = %d, want 1", cleared.Cleared)
 	}
 
-	getClearedRec := env.do(t, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/persons/EMP-FACE", nil))
+	getClearedReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/openapi/persons/EMP-FACE",
+		nil,
+	)
+	getClearedRec := env.do(t, getClearedReq)
 	var afterClear PersonProvisionResponse
 	decodeData(t, getClearedRec, &afterClear)
 	if len(afterClear.Faces) != 0 || afterClear.PrimaryFaceID != nil {
@@ -660,7 +696,12 @@ func TestOpenAPI_PersonLifecycle(t *testing.T) {
 	}
 
 	// 6. Delete the person and confirm it is gone.
-	deleteRec := env.do(t, httptest.NewRequest(http.MethodDelete, "/api/v1/openapi/persons/EMP-FACE", nil))
+	deleteReq := httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v1/openapi/persons/EMP-FACE",
+		nil,
+	)
+	deleteRec := env.do(t, deleteReq)
 	if deleteRec.Code != http.StatusOK {
 		t.Fatalf("delete person: got %d: %s", deleteRec.Code, deleteRec.Body.String())
 	}
@@ -703,11 +744,18 @@ func TestOpenAPI_TimestampsAreUTC(t *testing.T) {
 func TestOpenAPI_ResponsesOmitInternalPaths(t *testing.T) {
 	env := newOpenAPITestEnv(t)
 	env.createPerson(t, "EMP-PATH", "Path")
-	if rec := env.uploadFace(t, "EMP-PATH", "", "a.jpg", mockJPEGBytes); rec.Code != http.StatusCreated {
+	rec := env.uploadFace(
+		t,
+		"EMP-PATH",
+		"",
+		"a.jpg",
+		mockJPEGBytes,
+	)
+	if rec.Code != http.StatusCreated {
 		t.Fatalf("upload: got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	rec := env.do(t, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/persons/EMP-PATH", nil))
+	rec = env.do(t, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/persons/EMP-PATH", nil))
 	if strings.Contains(rec.Body.String(), "imagePath") {
 		t.Fatalf("response leaks the internal image path: %s", rec.Body.String())
 	}
@@ -746,7 +794,11 @@ func TestOpenAPI_GetStatus_ReadyDegradedAndLimiterIsolation(t *testing.T) {
 
 	rec := env.do(t, httptest.NewRequest(http.MethodGet, "/api/v1/openapi/status", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /openapi/status while upload limiter full: got %d, want 200: %s", rec.Code, rec.Body.String())
+		t.Fatalf(
+			"GET /openapi/status while upload limiter full: got %d, want 200: %s",
+			rec.Code,
+			rec.Body.String(),
+		)
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", cc)
@@ -757,7 +809,9 @@ func TestOpenAPI_GetStatus_ReadyDegradedAndLimiterIsolation(t *testing.T) {
 
 	var ready DeviceStatusResponse
 	decodeData(t, rec, &ready)
-	readyOK := ready.DeviceID == "edge-box-test-01" && ready.Status == "ready" && len(ready.Reasons) == 0
+	readyOK := ready.DeviceID == "edge-box-test-01" &&
+		ready.Status == "ready" &&
+		len(ready.Reasons) == 0
 	if !readyOK {
 		t.Fatalf("unexpected ready status payload: %+v", ready)
 	}

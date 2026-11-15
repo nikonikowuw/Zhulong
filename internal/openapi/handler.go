@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
@@ -91,8 +92,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 
 // GetStatus returns a sanitized point-in-time liveness and workload snapshot.
 // @Summary      Get device health and workload status
-// @Description  Returns a sanitized point-in-time liveness, resource, storage, and workload snapshot for this host.
-// @Description  Degraded subsystems still return HTTP 200 with status="degraded" and machine-readable reasons.
+// @Description  Returns a sanitized point-in-time liveness, resource,
+// @Description  storage, and workload snapshot for this host.
+// @Description  Degraded subsystems still return HTTP 200 with status="degraded"
+// @Description  and machine-readable reasons.
 // @Tags         OpenAPI
 // @Produce      json
 // @Security     BearerAuth
@@ -136,7 +139,8 @@ func (h *Handler) GetStatus(c *gin.Context) {
 
 // UpsertPerson creates or updates a person by external personId.
 // @Summary      Create or update person
-// @Description  Provisions a person by their external personId. Returns 201 on creation and 200 on update.
+// @Description  Provisions a person by their external personId.
+// @Description  Returns 201 on creation and 200 on update.
 // @Tags         OpenAPI
 // @Accept       json
 // @Produce      json
@@ -279,11 +283,15 @@ func (h *Handler) UploadFace(c *gin.Context) {
 	}
 	defer src.Close()
 
-	enrollment, err := h.personService.AddFaceByExternalID(c.Request.Context(), personID, person.FaceUpload{
-		Filename: file.Filename,
-		Content:  src,
-		Replace:  replace,
-	})
+	enrollment, err := h.personService.AddFaceByExternalID(
+		c.Request.Context(),
+		personID,
+		person.FaceUpload{
+			Filename: file.Filename,
+			Content:  src,
+			Replace:  replace,
+		},
+	)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -337,7 +345,11 @@ func (h *Handler) ClearFaces(c *gin.Context) {
 func (h *Handler) DeleteFace(c *gin.Context) {
 	personID := c.Param("personId")
 	faceID := c.Param("faceId")
-	if err := h.personService.DeleteFaceByExternalID(c.Request.Context(), personID, faceID); err != nil {
+	if err := h.personService.DeleteFaceByExternalID(
+		c.Request.Context(),
+		personID,
+		faceID,
+	); err != nil {
 		httputil.WriteError(c, err)
 		return
 	}

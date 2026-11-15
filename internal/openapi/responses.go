@@ -17,7 +17,8 @@ type PersonFaceInfo struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// PersonProvisionResponse describes the complete state of a provisioned person and their enrolled faces.
+// PersonProvisionResponse describes the complete state of a provisioned person
+// and their enrolled faces.
 type PersonProvisionResponse struct {
 	PersonID      string           `json:"personId"`
 	Name          string           `json:"name"`
@@ -123,7 +124,7 @@ type DeviceWorkloadInfo struct {
 // stored location is whatever the driver hands back, and an offset-bearing timestamp
 // would silently break clients parsing the documented RFC3339 UTC form.
 func newPersonProvisionResponse(p *person.Person) PersonProvisionResponse {
-	personKey := ""
+	var personKey string
 	if p.PersonID != nil {
 		personKey = *p.PersonID
 	}
