@@ -14,7 +14,11 @@ import (
 // expired to retry immediately instead of treating the password as wrong.
 func (i *sipIngress) challenge(req *sip.Request, tx sip.ServerTransaction, stale bool) {
 	nonce := i.nonces.Issue()
-	value := fmt.Sprintf(`Digest realm="%s", nonce="%s", algorithm=MD5, qop="auth"`, i.cfg.SIPRealm, nonce)
+	value := fmt.Sprintf(
+		`Digest realm="%s", nonce="%s", algorithm=MD5, qop="auth"`,
+		i.cfg.SIPRealm,
+		nonce,
+	)
 	if stale {
 		value += ", stale=true"
 	}

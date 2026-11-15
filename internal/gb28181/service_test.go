@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
-	"go.uber.org/zap"
 )
 
 // bindFailStore keeps the memory store's behaviour except for the binding write, which
@@ -20,7 +21,12 @@ type bindFailStore struct {
 	*memoryChannelStore
 }
 
-func (s *bindFailStore) BindChannelCamera(ctx context.Context, deviceID, channelID, cameraID string) error {
+func (s *bindFailStore) BindChannelCamera(
+	ctx context.Context,
+	deviceID string,
+	channelID string,
+	cameraID string,
+) error {
 	return errors.New("simulated bind failure")
 }
 
@@ -31,7 +37,10 @@ type serializedCreator struct {
 	calls int
 }
 
-func (c *serializedCreator) CreateGB28181Camera(ctx context.Context, params camera.CreateGB28181CameraParams) (*camera.CameraResponse, error) {
+func (c *serializedCreator) CreateGB28181Camera(
+	ctx context.Context,
+	params camera.CreateGB28181CameraParams,
+) (*camera.CameraResponse, error) {
 	c.mu.Lock()
 	c.calls++
 	id := fmt.Sprintf("cam_%02d", c.calls)
@@ -85,7 +94,11 @@ func TestAddChannelAsCameraRollsBackCameraWhenBindingFails(t *testing.T) {
 	// A camera that exists without a binding can never be added again (the channel
 	// looks free) and never shows up in the channel drawer, so the rollback must run.
 	if len(creator.deleted) != 1 || creator.deleted[0] != creator.createdID {
-		t.Fatalf("expected the created camera %q to be rolled back, got %v", creator.createdID, creator.deleted)
+		t.Fatalf(
+			"expected the created camera %q to be rolled back, got %v",
+			creator.createdID,
+			creator.deleted,
+		)
 	}
 }
 
@@ -113,7 +126,7 @@ func TestAddChannelAsCameraIsSerializedPerChannel(t *testing.T) {
 		others []error
 	)
 	start := make(chan struct{})
-	for i := 0; i < callers; i++ {
+	for range callers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -159,7 +172,8 @@ func TestSyncCatalogRecordsRuntimeCounters(t *testing.T) {
 	ctx := context.Background()
 	const deviceID = "34020000001180000001"
 	password := "testpass"
-	if _, err := store.UpsertDevice(ctx, DeviceUpsert{DeviceID: deviceID, Password: &password}); err != nil {
+	upd := DeviceUpsert{DeviceID: deviceID, Password: &password}
+	if _, err := store.UpsertDevice(ctx, upd); err != nil {
 		t.Fatalf("provision device: %v", err)
 	}
 	if err := store.dbProvider.DB().Model(&Device{}).
@@ -234,7 +248,8 @@ func TestSyncCatalogCountsOneAttemptPerExchange(t *testing.T) {
 	ctx := context.Background()
 	const deviceID = "34020000001180000002"
 	password := "testpass"
-	if _, err := store.UpsertDevice(ctx, DeviceUpsert{DeviceID: deviceID, Password: &password}); err != nil {
+	upd := DeviceUpsert{DeviceID: deviceID, Password: &password}
+	if _, err := store.UpsertDevice(ctx, upd); err != nil {
 		t.Fatalf("provision device: %v", err)
 	}
 	if err := store.dbProvider.DB().Model(&Device{}).
@@ -258,7 +273,7 @@ func TestSyncCatalogCountsOneAttemptPerExchange(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		go func() {
 			defer wg.Done()
 			if _, err := service.SyncCatalog(ctx, deviceID); err != nil {

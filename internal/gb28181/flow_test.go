@@ -23,6 +23,17 @@ func writeChunks(t *testing.T, conn *framedConn, chunks ...string) error {
 	return nil
 }
 
+func safeClose(t *testing.T, c io.Closer) {
+	t.Helper()
+	if c != nil {
+		if err := c.Close(); err != nil &&
+			!errors.Is(err, net.ErrClosed) &&
+			!errors.Is(err, io.ErrClosedPipe) {
+			t.Logf("close error: %v", err)
+		}
+	}
+}
+
 func newFramedConn(max int) *framedConn {
 	return &framedConn{max: max}
 }
@@ -108,7 +119,7 @@ func TestIngressListenerCapsConnections(t *testing.T) {
 		MaxMessageBytes: 1024,
 		Logger:          zap.NewNop(),
 	})
-	defer func() { _ = listener.Close() }()
+	defer safeClose(t, listener)
 
 	accepted := make(chan net.Conn, 4)
 	go func() {
@@ -125,10 +136,10 @@ func TestIngressListenerCapsConnections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial first: %v", err)
 	}
-	defer func() { _ = first.Close() }()
+	defer safeClose(t, first)
 	select {
 	case conn := <-accepted:
-		defer func() { _ = conn.Close() }()
+		defer safeClose(t, conn)
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected the first connection to be accepted immediately")
 	}
@@ -137,7 +148,7 @@ func TestIngressListenerCapsConnections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial second: %v", err)
 	}
-	defer func() { _ = second.Close() }()
+	defer safeClose(t, second)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for listener.Rejected() == 0 && time.Now().Before(deadline) {
@@ -147,7 +158,9 @@ func TestIngressListenerCapsConnections(t *testing.T) {
 		t.Fatalf("expected the over-cap connection to be dropped, dropped=%d", listener.Rejected())
 	}
 	// The overflowing connection is closed without ever being served.
-	_ = second.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := second.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Logf("SetReadDeadline error: %v", err)
+	}
 	if _, readErr := second.Read(make([]byte, 1)); readErr == nil {
 		t.Fatal("expected the over-cap connection to be closed")
 	}
@@ -155,12 +168,16 @@ func TestIngressListenerCapsConnections(t *testing.T) {
 
 func TestGuardedConnReleasesSlotOnClose(t *testing.T) {
 	server, client := net.Pipe()
-	defer func() { _ = client.Close() }()
+	defer safeClose(t, client)
 
 	released := 0
 	conn := &guardedConn{Conn: server, release: func() { released++ }}
-	_ = conn.Close()
-	_ = conn.Close()
+	if err := conn.Close(); err != nil {
+		t.Fatalf("first close error: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("second close error: %v", err)
+	}
 	if released != 1 {
 		t.Fatalf("expected the slot to be released exactly once, got %d", released)
 	}
@@ -174,10 +191,10 @@ func TestGuardedConnReleasesSlotOnClose(t *testing.T) {
 // nobody writes to can be never. The deadline is what makes the slot table self-heal.
 func TestFramedConnDropsASilentPeer(t *testing.T) {
 	server, client := net.Pipe()
-	defer func() { _ = client.Close() }()
+	defer safeClose(t, client)
 
 	conn := &framedConn{Conn: server, max: 1024, idle: 20 * time.Millisecond}
-	defer func() { _ = conn.Close() }()
+	defer safeClose(t, conn)
 
 	done := make(chan error, 1)
 	go func() {
@@ -202,17 +219,19 @@ func TestFramedConnDropsASilentPeer(t *testing.T) {
 func TestFramedConnKeepsReadingWhileThePeerIsAlive(t *testing.T) {
 	server, client := net.Pipe()
 	conn := &framedConn{Conn: server, max: 1024, idle: 100 * time.Millisecond}
-	defer func() { _ = conn.Close() }()
+	defer safeClose(t, conn)
 	go func() {
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			time.Sleep(30 * time.Millisecond)
-			_, _ = client.Write([]byte("\r\n"))
+			if _, err := client.Write([]byte("\r\n")); err != nil {
+				return
+			}
 		}
-		_ = client.Close()
+		safeClose(t, client)
 	}()
 
 	buf := make([]byte, 16)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := conn.Read(buf); err != nil {
 			t.Fatalf("read %d failed although the peer was alive: %v", i, err)
 		}
@@ -234,7 +253,7 @@ func TestIngressListenerCapsConnectionsPerSource(t *testing.T) {
 		IdleTimeout:     time.Minute,
 		Logger:          zap.NewNop(),
 	})
-	defer func() { _ = listener.Close() }()
+	defer safeClose(t, listener)
 
 	accepted := make(chan net.Conn, 4)
 	go func() {
@@ -251,10 +270,10 @@ func TestIngressListenerCapsConnectionsPerSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial first: %v", err)
 	}
-	defer func() { _ = first.Close() }()
+	defer safeClose(t, first)
 	select {
 	case conn := <-accepted:
-		defer func() { _ = conn.Close() }()
+		defer safeClose(t, conn)
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected the first connection from the source to be accepted")
 	}
@@ -263,14 +282,17 @@ func TestIngressListenerCapsConnectionsPerSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial second: %v", err)
 	}
-	defer func() { _ = second.Close() }()
+	defer safeClose(t, second)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for listener.Rejected() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if listener.Rejected() != 1 {
-		t.Fatalf("expected the second connection from the same address to be dropped, rejected=%d", listener.Rejected())
+		t.Fatalf(
+			"expected the second connection from the same address to be dropped, rejected=%d",
+			listener.Rejected(),
+		)
 	}
 	if active := listener.Active(); active != 1 {
 		t.Fatalf("expected exactly one held slot, got %d", active)

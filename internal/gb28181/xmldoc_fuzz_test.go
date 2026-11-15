@@ -19,7 +19,8 @@ func FuzzDecodeXML(f *testing.F) {
 	f.Add([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Notify><CmdType>Keepalive</CmdType>" +
 		"<SN>1</SN><DeviceID>34020000001320000001</DeviceID><Status>OK</Status></Notify>"))
 	f.Add([]byte("<Notify><CmdType>Keepalive</CmdType><SN>2</SN></Notify>"))
-	f.Add([]byte(`<?xml version="1.0"?><!DOCTYPE Notify [<!ENTITY x SYSTEM "file:///etc/passwd">]><Notify/>`))
+	f.Add([]byte(`<?xml version="1.0"?>` +
+		`<!DOCTYPE Notify [<!ENTITY x SYSTEM "file:///etc/passwd">]><Notify/>`))
 	f.Add([]byte("<Notify><A><B><C><D><E><F><G><H><I/></H>/</G></F></E></D></C></B></A></Notify>"))
 	f.Add([]byte("<Notify>"))
 	f.Add([]byte{})

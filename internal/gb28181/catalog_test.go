@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
 
 type mockSipSender struct {
@@ -50,7 +51,11 @@ func newMemoryChannelStore() *memoryChannelStore {
 
 // SyncChannels mirrors the store contract: upsert by channel ID and drop rows the
 // device no longer reports, keeping anything bound to a camera.
-func (m *memoryChannelStore) SyncChannels(ctx context.Context, deviceID string, channels []Channel) error {
+func (m *memoryChannelStore) SyncChannels(
+	ctx context.Context,
+	deviceID string,
+	channels []Channel,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.channels == nil {
@@ -85,7 +90,11 @@ func (m *memoryChannelStore) ListChannels(ctx context.Context, deviceID string) 
 	return m.channels[deviceID], nil
 }
 
-func (m *memoryChannelStore) GetChannel(ctx context.Context, deviceID, channelID string) (*Channel, error) {
+func (m *memoryChannelStore) GetChannel(
+	ctx context.Context,
+	deviceID string,
+	channelID string,
+) (*Channel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, ch := range m.channels[deviceID] {
@@ -96,7 +105,12 @@ func (m *memoryChannelStore) GetChannel(ctx context.Context, deviceID, channelID
 	return nil, apperr.NotFound(CodeChannelNotFound, "not found", nil)
 }
 
-func (m *memoryChannelStore) BindChannelCamera(ctx context.Context, deviceID, channelID, cameraID string) error {
+func (m *memoryChannelStore) BindChannelCamera(
+	ctx context.Context,
+	deviceID string,
+	channelID string,
+	cameraID string,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range m.channels[deviceID] {
@@ -131,7 +145,9 @@ func TestCatalogSyncSingleFragment(t *testing.T) {
 				{DeviceID: "34020000001310000002", Name: "Channel 2"},
 			},
 		}
-		_ = cm.HandleResponse(context.Background(), device.DeviceID, resp)
+		if err := cm.HandleResponse(context.Background(), device.DeviceID, resp); err != nil {
+			t.Errorf("HandleResponse error: %v", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -156,7 +172,11 @@ func TestCatalogSyncMultiFragmentReorderedAndDeduplicated(t *testing.T) {
 
 	devID := "34020000001180000001"
 	sender.onSend = func(device Device, body []byte) {
-		msg, _ := decodeXML(body)
+		msg, err := decodeXML(body)
+		if err != nil {
+			t.Errorf("decodeXML error: %v", err)
+			return
+		}
 
 		// Fragment 1: arrives with item 2 and item 3
 		resp1 := gbCatalogResponse{
@@ -169,7 +189,9 @@ func TestCatalogSyncMultiFragmentReorderedAndDeduplicated(t *testing.T) {
 				{DeviceID: "34020000001310000003", Name: "Channel 3"},
 			},
 		}
-		_ = cm.HandleResponse(context.Background(), device.DeviceID, resp1)
+		if err := cm.HandleResponse(context.Background(), device.DeviceID, resp1); err != nil {
+			t.Errorf("HandleResponse fragment 1 error: %v", err)
+		}
 
 		// Fragment 2: arrives with item 1 and duplicate item 2
 		resp2 := gbCatalogResponse{
@@ -182,7 +204,9 @@ func TestCatalogSyncMultiFragmentReorderedAndDeduplicated(t *testing.T) {
 				{DeviceID: "34020000001310000002", Name: "Channel 2 Duplicate"},
 			},
 		}
-		_ = cm.HandleResponse(context.Background(), device.DeviceID, resp2)
+		if err := cm.HandleResponse(context.Background(), device.DeviceID, resp2); err != nil {
+			t.Errorf("HandleResponse fragment 2 error: %v", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -204,14 +228,20 @@ func TestCatalogSyncEmptyList(t *testing.T) {
 
 	devID := "34020000001180000001"
 	sender.onSend = func(device Device, body []byte) {
-		msg, _ := decodeXML(body)
+		msg, err := decodeXML(body)
+		if err != nil {
+			t.Errorf("decodeXML error: %v", err)
+			return
+		}
 		resp := gbCatalogResponse{
 			CmdType:  "Catalog",
 			SN:       msg.SN,
 			DeviceID: devID,
 			SumNum:   0,
 		}
-		_ = cm.HandleResponse(context.Background(), device.DeviceID, resp)
+		if err := cm.HandleResponse(context.Background(), device.DeviceID, resp); err != nil {
+			t.Errorf("HandleResponse error: %v", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -233,7 +263,11 @@ func TestCatalogSyncTimeout(t *testing.T) {
 
 	devID := "34020000001180000001"
 	sender.onSend = func(device Device, body []byte) {
-		msg, _ := decodeXML(body)
+		msg, err := decodeXML(body)
+		if err != nil {
+			t.Errorf("decodeXML error: %v", err)
+			return
+		}
 		// Send incomplete fragment (SumNum=5, but only send 1 item)
 		resp := gbCatalogResponse{
 			CmdType:  "Catalog",
@@ -244,7 +278,9 @@ func TestCatalogSyncTimeout(t *testing.T) {
 				{DeviceID: "34020000001310000001", Name: "Channel 1"},
 			},
 		}
-		_ = cm.HandleResponse(context.Background(), device.DeviceID, resp)
+		if err := cm.HandleResponse(context.Background(), device.DeviceID, resp); err != nil {
+			t.Errorf("HandleResponse error: %v", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -267,7 +303,11 @@ func TestCatalogSyncRetryOnSendFailure(t *testing.T) {
 
 	devID := "34020000001180000001"
 	sender.onSend = func(device Device, body []byte) {
-		msg, _ := decodeXML(body)
+		msg, err := decodeXML(body)
+		if err != nil {
+			t.Errorf("decodeXML error: %v", err)
+			return
+		}
 		resp := gbCatalogResponse{
 			CmdType:  "Catalog",
 			SN:       msg.SN,
@@ -277,7 +317,9 @@ func TestCatalogSyncRetryOnSendFailure(t *testing.T) {
 				{DeviceID: "34020000001310000001", Name: "Channel 1"},
 			},
 		}
-		_ = cm.HandleResponse(context.Background(), device.DeviceID, resp)
+		if err := cm.HandleResponse(context.Background(), device.DeviceID, resp); err != nil {
+			t.Errorf("HandleResponse error: %v", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -341,7 +383,11 @@ func TestCatalogSyncRejectsMalformedChannelIDs(t *testing.T) {
 
 	devID := "34020000001180000001"
 	sender.onSend = func(device Device, body []byte) {
-		msg, _ := decodeXML(body)
+		msg, err := decodeXML(body)
+		if err != nil {
+			t.Errorf("decodeXML error: %v", err)
+			return
+		}
 		resp := gbCatalogResponse{
 			CmdType:  "Catalog",
 			SN:       msg.SN,
@@ -353,7 +399,9 @@ func TestCatalogSyncRejectsMalformedChannelIDs(t *testing.T) {
 				{DeviceID: "", Name: "Empty"},
 			},
 		}
-		_ = cm.HandleResponse(context.Background(), device.DeviceID, resp)
+		if err := cm.HandleResponse(context.Background(), device.DeviceID, resp); err != nil {
+			t.Errorf("HandleResponse error: %v", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -383,7 +431,11 @@ func TestCatalogSyncPrunesStaleChannelsButKeepsBoundOnes(t *testing.T) {
 	cm := NewCatalogManager(sender, store, zap.NewNop())
 	devID := "34020000001180000001"
 	sender.onSend = func(device Device, body []byte) {
-		msg, _ := decodeXML(body)
+		msg, err := decodeXML(body)
+		if err != nil {
+			t.Errorf("decodeXML error: %v", err)
+			return
+		}
 		resp := gbCatalogResponse{
 			CmdType:  "Catalog",
 			SN:       msg.SN,
@@ -394,7 +446,9 @@ func TestCatalogSyncPrunesStaleChannelsButKeepsBoundOnes(t *testing.T) {
 				{DeviceID: "34020000001310000002", Name: "New"},
 			},
 		}
-		_ = cm.HandleResponse(context.Background(), device.DeviceID, resp)
+		if err := cm.HandleResponse(context.Background(), device.DeviceID, resp); err != nil {
+			t.Errorf("HandleResponse error: %v", err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

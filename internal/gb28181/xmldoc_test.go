@@ -10,8 +10,9 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
-// The fixtures below are synthetic: they follow the GB/T 28181 Notify shape
-// (<Notify><CmdType>Keepalive</CmdType><SN>..</SN><DeviceID>..</DeviceID><Status>OK</Status></Notify>)
+// The fixtures below are synthetic: they follow the GB/T 28181 Notify shape:
+// (<Notify><CmdType>Keepalive</CmdType><SN>..</SN>
+// <DeviceID>..</DeviceID><Status>OK</Status></Notify>)
 // and are not captured from a vendor device. Vendor compatibility is verified in S4.
 
 func TestDecodeXMLAcceptsUTF8Keepalive(t *testing.T) {
@@ -88,7 +89,9 @@ func TestDecodeXMLRejectsHostileDocuments(t *testing.T) {
 		},
 		{
 			name: "unsupported declared charset",
-			body: []byte(`<?xml version="1.0" encoding="UTF-16"?><Notify><CmdType>Keepalive</CmdType></Notify>`),
+			body: []byte(
+				`<?xml version="1.0" encoding="UTF-16"?><Notify><CmdType>Keepalive</CmdType></Notify>`,
+			),
 			want: ErrXMLUnsupported,
 		},
 		{
@@ -197,7 +200,8 @@ func TestCatalogXML(t *testing.T) {
 	if ch1.PTZType == nil || *ch1.PTZType != 1 {
 		t.Errorf("expected PTZType=1, got %v", ch1.PTZType)
 	}
-	if ch1.ResolutionWidth == nil || *ch1.ResolutionWidth != 1920 || ch1.ResolutionHeight == nil || *ch1.ResolutionHeight != 1080 {
+	if ch1.ResolutionWidth == nil || *ch1.ResolutionWidth != 1920 ||
+		ch1.ResolutionHeight == nil || *ch1.ResolutionHeight != 1080 {
 		t.Errorf("expected 1920x1080, got %v x %v", ch1.ResolutionWidth, ch1.ResolutionHeight)
 	}
 
@@ -208,7 +212,8 @@ func TestCatalogXML(t *testing.T) {
 	if ch2.PTZType == nil || *ch2.PTZType != 2 {
 		t.Errorf("expected PtzType=2, got %v", ch2.PTZType)
 	}
-	if ch2.ResolutionWidth == nil || *ch2.ResolutionWidth != 2560 || ch2.ResolutionHeight == nil || *ch2.ResolutionHeight != 1440 {
+	if ch2.ResolutionWidth == nil || *ch2.ResolutionWidth != 2560 ||
+		ch2.ResolutionHeight == nil || *ch2.ResolutionHeight != 1440 {
 		t.Errorf("expected 2560x1440, got %v x %v", ch2.ResolutionWidth, ch2.ResolutionHeight)
 	}
 }

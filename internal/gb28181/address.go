@@ -76,13 +76,21 @@ func resolveAdvertisedIP(bindAddress, advertised string, candidates []net.IP) (s
 			"mediaAdvertisedIp is empty and no non-loopback IPv4 address was found", nil)
 	case 1:
 		if !bindIP.IsUnspecified() && !bindIP.Equal(usable[0]) {
-			return "", apperr.Invalid(CodeAddressUnresolvable,
-				"mediaBindAddress does not match the host's only non-loopback IPv4 address; set mediaAdvertisedIp explicitly", nil)
+			return "", apperr.Invalid(
+				CodeAddressUnresolvable,
+				"mediaBindAddress does not match the host's only non-loopback IPv4 address; "+
+					"set mediaAdvertisedIp explicitly",
+				nil,
+			)
 		}
 		return usable[0].String(), nil
 	default:
-		return "", apperr.Invalid(CodeAddressUnresolvable,
-			"mediaAdvertisedIp is empty and the host has multiple IPv4 addresses; set it explicitly", nil)
+		return "", apperr.Invalid(
+			CodeAddressUnresolvable,
+			"mediaAdvertisedIp is empty and the host has multiple IPv4 addresses; "+
+				"set it explicitly",
+			nil,
+		)
 	}
 }
 

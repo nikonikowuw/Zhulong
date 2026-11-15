@@ -165,7 +165,8 @@ func (m *LifecycleManager) Start(ctx context.Context) error {
 		if cleanupErr := m.ingress.Stop(ctx); cleanupErr != nil {
 			return errors.Join(
 				fmt.Errorf("start gb28181 ingress: %w", startErr),
-				fmt.Errorf("rollback partially started gb28181 ingress: %w", cleanupErr))
+				fmt.Errorf("rollback partially started gb28181 ingress: %w", cleanupErr),
+			)
 		}
 		m.started = false
 		return fmt.Errorf("start gb28181 ingress: %w", startErr)

@@ -10,10 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 // fakeCipher keeps the store tests independent of the camera package: the store
@@ -56,7 +57,9 @@ func setupStore(t *testing.T) (*Store, database.DBProvider, func()) {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 	return NewStore(dbStore, fakeCipher{}), dbStore, func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore close error: %v", err)
+		}
 	}
 }
 
@@ -212,7 +215,8 @@ func TestStoreUpsertDeviceEncryptsAndRedacts(t *testing.T) {
 	if string(stored) == password {
 		t.Fatal("password was persisted in plaintext")
 	}
-	if got, want := string(stored), fakeCipherPrefix+deviceCredentialsAAD(device.DeviceID)+"|"+password; got != want {
+	want := fakeCipherPrefix + deviceCredentialsAAD(device.DeviceID) + "|" + password
+	if got := string(stored); got != want {
 		t.Fatalf("expected ciphertext bound to the device AAD, got %q", got)
 	}
 
@@ -329,7 +333,11 @@ func TestStoreEncryptionFailureAbortsProvisioning(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	defer func() { _ = dbStore.Close() }()
+	defer func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore close error: %v", err)
+		}
+	}()
 
 	store := NewStore(dbStore, failingCipher{})
 	password := "secret"
@@ -501,7 +509,9 @@ func TestChannelStoreOperations(t *testing.T) {
 	// 4. Bind Channel to Camera (insert into cameras table first to satisfy foreign key)
 	camID := "cam_01JTEST0000000000000000"
 	db := store.dbProvider.DB()
-	if err := db.Exec("INSERT INTO cameras (id, name, revision, created_at, updated_at) VALUES (?, 'Test Cam', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", camID).Error; err != nil {
+	const insertCameraSQL = "INSERT INTO cameras (id, name, revision, created_at, updated_at) " +
+		"VALUES (?, 'Test Cam', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+	if err := db.Exec(insertCameraSQL, camID).Error; err != nil {
 		t.Fatalf("insert test camera: %v", err)
 	}
 
@@ -579,17 +589,20 @@ func TestChannelStoreOperations(t *testing.T) {
 	// 7. 1600 channels (100 devices x 16) through the batch path. The budget is recorded,
 	// not asserted: a wall-clock threshold in a unit test turns a slow CI disk into a red
 	// run without saying anything about the code.
-	for d := 0; d < 100; d++ {
+	const insertDevSQL = "INSERT OR IGNORE INTO gb_devices " +
+		"(device_id, name, transport, expires_seconds, state, created_at, updated_at) " +
+		"VALUES (?, 'Dev', 'udp', 3600, 'online', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+	for d := range 100 {
 		curDev := fmt.Sprintf("3402000000118%07d", d)
-		if err := db.Exec("INSERT OR IGNORE INTO gb_devices (device_id, name, transport, expires_seconds, state, created_at, updated_at) VALUES (?, 'Dev', 'udp', 3600, 'online', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", curDev).Error; err != nil {
+		if err := db.Exec(insertDevSQL, curDev).Error; err != nil {
 			t.Fatalf("insert test dev %s: %v", curDev, err)
 		}
 	}
 
 	bulkChannels := make([]Channel, 0, 1600)
-	for d := 0; d < 100; d++ {
+	for d := range 100 {
 		curDev := fmt.Sprintf("3402000000118%07d", d)
-		for c := 0; c < 16; c++ {
+		for c := range 16 {
 			bulkChannels = append(bulkChannels, Channel{
 				DeviceID:         curDev,
 				ChannelID:        fmt.Sprintf("3402000000131%04d%03d", d, c),
@@ -601,7 +614,7 @@ func TestChannelStoreOperations(t *testing.T) {
 	}
 
 	start := time.Now()
-	for d := 0; d < 100; d++ {
+	for d := range 100 {
 		curDev := fmt.Sprintf("3402000000118%07d", d)
 		devChannels := bulkChannels[d*16 : (d+1)*16]
 		if err := store.SyncChannels(ctx, curDev, devChannels); err != nil {
@@ -630,16 +643,17 @@ func TestStoreDeleteDeviceSerializesWithChannelBinding(t *testing.T) {
 		cameraID  = "cam_01JTEST0000000000000001"
 	)
 	password := "secret"
-	if _, err := store.UpsertDevice(ctx, DeviceUpsert{DeviceID: deviceID, Password: &password}); err != nil {
+	upd := DeviceUpsert{DeviceID: deviceID, Password: &password}
+	if _, err := store.UpsertDevice(ctx, upd); err != nil {
 		t.Fatalf("provision device: %v", err)
 	}
-	if err := store.SyncChannels(ctx, deviceID, []Channel{{DeviceID: deviceID, ChannelID: channelID}}); err != nil {
+	channels := []Channel{{DeviceID: deviceID, ChannelID: channelID}}
+	if err := store.SyncChannels(ctx, deviceID, channels); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
-	if err := store.dbProvider.DB().Exec(
-		"INSERT INTO cameras (id, name, revision, created_at, updated_at) VALUES (?, 'Test Cam', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-		cameraID,
-	).Error; err != nil {
+	const insertCamSQL = "INSERT INTO cameras (id, name, revision, created_at, updated_at) " +
+		"VALUES (?, 'Test Cam', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+	if err := store.dbProvider.DB().Exec(insertCamSQL, cameraID).Error; err != nil {
 		t.Fatalf("insert camera: %v", err)
 	}
 
@@ -647,14 +661,18 @@ func TestStoreDeleteDeviceSerializesWithChannelBinding(t *testing.T) {
 	countReached := make(chan struct{})
 	resumeCount := make(chan struct{})
 	var countOnce sync.Once
-	if err := db.Callback().Query().Before("gorm:query").Register("test:block_delete_device_count", func(tx *gorm.DB) {
+	queryCallback := func(tx *gorm.DB) {
 		if tx.Statement.Table == "gb_channels" {
 			countOnce.Do(func() {
 				close(countReached)
 				<-resumeCount
 			})
 		}
-	}); err != nil {
+	}
+	if err := db.Callback().Query().Before("gorm:query").Register(
+		"test:block_delete_device_count",
+		queryCallback,
+	); err != nil {
 		t.Fatalf("register query callback: %v", err)
 	}
 
@@ -714,7 +732,9 @@ func TestStoreDeleteDeviceSerializesWithChannelBinding(t *testing.T) {
 	}
 
 	var channelCount int64
-	if err := db.Model(&Channel{}).Where("device_id = ?", deviceID).Count(&channelCount).Error; err != nil {
+	if err := db.Model(&Channel{}).
+		Where("device_id = ?", deviceID).
+		Count(&channelCount).Error; err != nil {
 		t.Fatalf("count remaining channels: %v", err)
 	}
 	if channelCount != 0 {

@@ -15,8 +15,9 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
 
 // upperUDP is TransportUDP normalised the way outbound requests need it: sipgo wants
@@ -109,12 +110,22 @@ func (i *sipIngress) Stats() IngressStats {
 
 // newSIPIngress constructs the ingress. It performs no I/O: sockets are bound in
 // Start, which the host calls from its lifecycle.
-func newSIPIngress(store *Store, runtime *Runtime, logger *zap.Logger, limits ingressLimits) *sipIngress {
+func newSIPIngress(
+	store *Store,
+	runtime *Runtime,
+	logger *zap.Logger,
+	limits ingressLimits,
+) *sipIngress {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	limits = limits.withDefaults()
-	ingress := &sipIngress{store: store, runtime: runtime, logger: logger, limits: limits}
+	ingress := &sipIngress{
+		store:   store,
+		runtime: runtime,
+		logger:  logger,
+		limits:  limits,
+	}
 	ingress.catalogs = NewCatalogManager(ingress, store, logger)
 	return ingress
 }
@@ -132,8 +143,11 @@ func (i *sipIngress) Start(ctx context.Context, cfg Config, advertisedIP string)
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.started {
-		return apperr.Precondition(CodeRuntimeNotReady,
-			"gb28181 sip ingress is already running; restart the process to apply a new configuration", nil)
+		return apperr.Precondition(
+			CodeRuntimeNotReady,
+			"gb28181 sip ingress is already running; restart the process to apply a new configuration",
+			nil,
+		)
 	}
 	if i.store == nil {
 		return errors.New("gb28181 ingress requires a device store")
@@ -566,8 +580,11 @@ func (i *sipIngress) SendMessage(ctx context.Context, device Device, body []byte
 		// P0 does not authenticate outbound requests. Reporting this as a generic
 		// send failure would send the operator looking at the network instead of at
 		// the device's platform-credential requirement.
-		return apperr.Precondition(CodeDeviceChallenged,
-			fmt.Sprintf("device challenged the platform request with status %d", res.StatusCode), nil)
+		return apperr.Precondition(
+			CodeDeviceChallenged,
+			fmt.Sprintf("device challenged the platform request with status %d", res.StatusCode),
+			nil,
+		)
 	default:
 		return fmt.Errorf("sip message rejected with status %d: %s", res.StatusCode, res.Reason)
 	}

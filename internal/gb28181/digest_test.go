@@ -11,7 +11,17 @@ import (
 
 // testDigest is an independent oracle for the digest formula, so the production
 // implementation is never compared against itself.
-func testDigest(username, realm, password, method, uri, nonce, nc, cnonce, qop string) string {
+func testDigest(
+	username string,
+	realm string,
+	password string,
+	method string,
+	uri string,
+	nonce string,
+	nc string,
+	cnonce string,
+	qop string,
+) string {
 	md5Hex := func(data string) string {
 		sum := md5.Sum([]byte(data))
 		return hex.EncodeToString(sum[:])
@@ -97,7 +107,10 @@ func TestParseDigestCredentials(t *testing.T) {
 	if _, err := parseDigestCredentials(""); !errors.Is(err, ErrDigestMissing) {
 		t.Errorf("expected a missing error for an empty header, got %v", err)
 	}
-	if _, err := parseDigestCredentials(`Digest username="a", realm="b"`); !errors.Is(err, ErrDigestMalformed) {
+	if _, err := parseDigestCredentials(`Digest username="a", realm="b"`); !errors.Is(
+		err,
+		ErrDigestMalformed,
+	) {
 		t.Errorf("expected a malformed error for missing fields, got %v", err)
 	}
 }
@@ -133,7 +146,9 @@ func TestVerifyDigestResponse(t *testing.T) {
 			name: "qop auth",
 			mutate: func(c *digestCredentials) {
 				c.QOP, c.Nc, c.CNonce = "auth", "00000001", "0a4f"
-				c.Response = testDigest(username, realm, password, method, uri, nonce, "00000001", "0a4f", "auth")
+				c.Response = testDigest(
+					username, realm, password, method, uri, nonce, "00000001", "0a4f", "auth",
+				)
 			},
 		},
 		{
@@ -175,7 +190,9 @@ func TestVerifyDigestResponse(t *testing.T) {
 		{
 			name: "uppercase response is accepted",
 			mutate: func(c *digestCredentials) {
-				c.Response = strings.ToUpper(testDigest(username, realm, password, method, uri, nonce, "", "", ""))
+				c.Response = strings.ToUpper(
+					testDigest(username, realm, password, method, uri, nonce, "", "", ""),
+				)
 			},
 		},
 	}
@@ -252,7 +269,11 @@ func TestVerifyDigestResponseBindsTheURIToTheRequestTarget(t *testing.T) {
 		{name: "port dropped", uri: "sip:34020000002000000001@3402000000:5060"},
 		{name: "user dropped", uri: "sip:3402000000"},
 		// A digest pointing at another target is a replay against a different identity.
-		{name: "different user", uri: "sip:34020000009999999999@3402000000", wantErr: ErrDigestUserMismatch},
+		{
+			name:    "different user",
+			uri:     "sip:34020000009999999999@3402000000",
+			wantErr: ErrDigestUserMismatch,
+		},
 		{name: "unparsable", uri: "not a uri", wantErr: ErrDigestMalformed},
 	}
 

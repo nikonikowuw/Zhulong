@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
-	"gorm.io/gorm"
 )
 
 type configEnvelope struct {
@@ -30,7 +31,10 @@ func newTestRouter(t *testing.T) (*gin.Engine, *Runtime, *Store, func()) {
 	return newTestRouterWithAddrs(t, fixedAddrs("192.168.1.10"))
 }
 
-func newTestRouterWithAddrs(t *testing.T, addrs InterfaceAddrs) (*gin.Engine, *Runtime, *Store, func()) {
+func newTestRouterWithAddrs(
+	t *testing.T,
+	addrs InterfaceAddrs,
+) (*gin.Engine, *Runtime, *Store, func()) {
 	t.Helper()
 
 	dbStore := database.New(t.TempDir(), zap.NewNop())
@@ -55,12 +59,22 @@ func newTestRouterWithAddrs(t *testing.T, addrs InterfaceAddrs) (*gin.Engine, *R
 	comp.ProtectedRoutes.RegisterRoutes(router.Group("/api/v1"))
 
 	return router, comp.Runtime, comp.Store, func() {
-		_ = comp.Lifecycle.Stop(context.Background())
-		_ = dbStore.Close()
+		if err := comp.Lifecycle.Stop(context.Background()); err != nil {
+			t.Logf("lifecycle stop error: %v", err)
+		}
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore close error: %v", err)
+		}
 	}
 }
 
-func doJSON(t *testing.T, router *gin.Engine, method, path, body string) *httptest.ResponseRecorder {
+func doJSON(
+	t *testing.T,
+	router *gin.Engine,
+	method string,
+	path string,
+	body string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *bytes.Reader
 	if body == "" {
@@ -108,7 +122,10 @@ func TestHandlerGetConfigDefaults(t *testing.T) {
 		t.Error("expected no restart requirement right after boot")
 	}
 	if env.Data.Runtime.MediaCapacity != 50 {
-		t.Errorf("expected 50 playback pairs for the default range, got %d", env.Data.Runtime.MediaCapacity)
+		t.Errorf(
+			"expected 50 playback pairs for the default range, got %d",
+			env.Data.Runtime.MediaCapacity,
+		)
 	}
 }
 
@@ -159,7 +176,18 @@ func TestHandlerUpdateConfigRequiresExplicitAddressWhenInferenceIsAmbiguous(t *t
 	router, _, _, cleanup := newTestRouterWithAddrs(t, fixedAddrs("192.168.1.10", "10.0.0.5"))
 	defer cleanup()
 
-	body := `{"enabled":true,"sipId":"34020000002000000001","sipListen":"0.0.0.0:5060","sipTransport":"both","securityProfile":"standard","mediaBindAddress":"192.168.1.10","mediaAdvertisedIp":"","rtpPortMin":30000,"rtpPortMax":30100,"requireRegisteredDevice":true}`
+	body := `{
+		"enabled": true,
+		"sipId": "34020000002000000001",
+		"sipListen": "0.0.0.0:5060",
+		"sipTransport": "both",
+		"securityProfile": "standard",
+		"mediaBindAddress": "192.168.1.10",
+		"mediaAdvertisedIp": "",
+		"rtpPortMin": 30000,
+		"rtpPortMax": 30100,
+		"requireRegisteredDevice": true
+	}`
 	w := doJSON(t, router, http.MethodPut, "/api/v1/gb28181/config", body)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d (%s)", w.Code, w.Body.String())
@@ -176,18 +204,21 @@ func TestHandlerUpdateConfigRejectsInvalidInput(t *testing.T) {
 		wantCode string
 	}{
 		{
-			name:     "reversed port range is a domain error",
-			body:     `{"enabled": true, "sipId": "3402", "rtpPortMin": 30100, "rtpPortMax": 30000, "requireRegisteredDevice": true}`,
+			name: "reversed port range is a domain error",
+			body: `{"enabled": true, "sipId": "3402", "rtpPortMin": 30100, ` +
+				`"rtpPortMax": 30000, "requireRegisteredDevice": true}`,
 			wantCode: CodePortRangeInvalid,
 		},
 		{
-			name:     "single port range cannot hold a pair",
-			body:     `{"enabled": true, "sipId": "3402", "rtpPortMin": 30000, "rtpPortMax": 30000, "requireRegisteredDevice": true}`,
+			name: "single port range cannot hold a pair",
+			body: `{"enabled": true, "sipId": "3402", "rtpPortMin": 30000, ` +
+				`"rtpPortMax": 30000, "requireRegisteredDevice": true}`,
 			wantCode: CodePortRangeInvalid,
 		},
 		{
-			name:     "unsupported security profile is stopped by binding",
-			body:     `{"enabled": true, "sipId": "3402", "rtpPortMin": 30000, "rtpPortMax": 30100, "securityProfile": "high", "requireRegisteredDevice": true}`,
+			name: "unsupported security profile is stopped by binding",
+			body: `{"enabled": true, "sipId": "3402", "rtpPortMin": 30000, ` +
+				`"rtpPortMax": 30100, "securityProfile": "high", "requireRegisteredDevice": true}`,
 			wantCode: "VALIDATION_FAILED",
 		},
 		{
@@ -196,13 +227,15 @@ func TestHandlerUpdateConfigRejectsInvalidInput(t *testing.T) {
 			wantCode: "VALIDATION_FAILED",
 		},
 		{
-			name:     "enabled without identity is a domain error",
-			body:     `{"enabled": true, "rtpPortMin": 30000, "rtpPortMax": 30100, "requireRegisteredDevice": true}`,
+			name: "enabled without identity is a domain error",
+			body: `{"enabled": true, "rtpPortMin": 30000, "rtpPortMax": 30100, ` +
+				`"requireRegisteredDevice": true}`,
 			wantCode: CodeConfigInvalid,
 		},
 		{
-			name:     "registered-device enforcement cannot be disabled",
-			body:     `{"enabled": false, "rtpPortMin": 30000, "rtpPortMax": 30100, "requireRegisteredDevice": false}`,
+			name: "registered-device enforcement cannot be disabled",
+			body: `{"enabled": false, "rtpPortMin": 30000, "rtpPortMax": 30100, ` +
+				`"requireRegisteredDevice": false}`,
 			wantCode: CodeRegisteredDeviceRequired,
 		},
 		{
@@ -249,7 +282,13 @@ func TestHandlerUpsertDeviceRequiresPasswordAndHidesIt(t *testing.T) {
 
 	// A new device without a password is rejected: an allowlist entry nobody can
 	// authenticate against is worse than no entry at all.
-	w := doJSON(t, router, http.MethodPut, "/api/v1/gb28181/devices/34020000001320000001", `{"name":"大厅"}`)
+	w := doJSON(
+		t,
+		router,
+		http.MethodPut,
+		"/api/v1/gb28181/devices/34020000001320000001",
+		`{"name":"大厅"}`,
+	)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d (%s)", w.Code, w.Body.String())
 	}
@@ -353,7 +392,14 @@ func TestHandlerGetRuntimeCountsProvisionedDevices(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("failed to decode runtime snapshot: %v", err)
 	}
-	for _, key := range []string{"oversizedMessages", "rejectedConns", "inboundLimited", "outboundLimited", "activeConns"} {
+	keys := []string{
+		"oversizedMessages",
+		"rejectedConns",
+		"inboundLimited",
+		"outboundLimited",
+		"activeConns",
+	}
+	for _, key := range keys {
 		if _, ok := raw.Data.Ingress[key]; !ok {
 			t.Fatalf("expected %q in the ingress counters, got %v", key, raw.Data.Ingress)
 		}
@@ -379,7 +425,8 @@ func TestHandlerUpdateConfigAppliesPortDefaultsWhenBothAreZero(t *testing.T) {
 		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
 	}
 	env := decodeEnvelope(t, w)
-	if env.Data.Config.RTPPortMin != DefaultRTPPortMin || env.Data.Config.RTPPortMax != DefaultRTPPortMax {
+	if env.Data.Config.RTPPortMin != DefaultRTPPortMin ||
+		env.Data.Config.RTPPortMax != DefaultRTPPortMax {
 		t.Fatalf("expected the default port range, got %d..%d",
 			env.Data.Config.RTPPortMin, env.Data.Config.RTPPortMax)
 	}
@@ -477,7 +524,11 @@ func TestHandlerAuditRecordsConcreteDeviceTarget(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	defer func() { _ = dbStore.Close() }()
+	defer func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore close error: %v", err)
+		}
+	}()
 
 	comp := NewComponents(ComponentsOptions{
 		DBProvider: dbStore,
@@ -537,11 +588,16 @@ type mockCameraCreator struct {
 	deleted   []string
 }
 
-func (m *mockCameraCreator) CreateGB28181Camera(ctx context.Context, params camera.CreateGB28181CameraParams) (*camera.CameraResponse, error) {
+func (m *mockCameraCreator) CreateGB28181Camera(
+	ctx context.Context,
+	params camera.CreateGB28181CameraParams,
+) (*camera.CameraResponse, error) {
 	m.calls++
 	m.createdID = "cam_01JTEST0000000000000000"
 	if m.db != nil {
-		if err := m.db.Exec("INSERT INTO cameras (id, name, revision, created_at, updated_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", m.createdID, params.Name).Error; err != nil {
+		const insertSQL = "INSERT INTO cameras (id, name, revision, created_at, updated_at) " +
+			"VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+		if err := m.db.Exec(insertSQL, m.createdID, params.Name).Error; err != nil {
 			return nil, fmt.Errorf("insert camera fixture: %w", err)
 		}
 	}
@@ -588,7 +644,11 @@ func TestHandlerChannelAndCatalogEndpoints(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	defer func() { _ = dbStore.Close() }()
+	defer func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore close error: %v", err)
+		}
+	}()
 
 	camCreator := &mockCameraCreator{db: dbStore.DB()}
 	catSyncer := &mockCatalogSyncer{}
@@ -605,7 +665,11 @@ func TestHandlerChannelAndCatalogEndpoints(t *testing.T) {
 	if err := comp.Lifecycle.Start(context.Background()); err != nil {
 		t.Fatalf("lifecycle start failed: %v", err)
 	}
-	defer func() { _ = comp.Lifecycle.Stop(context.Background()) }()
+	defer func() {
+		if err := comp.Lifecycle.Stop(context.Background()); err != nil {
+			t.Logf("lifecycle stop error: %v", err)
+		}
+	}()
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -615,7 +679,13 @@ func TestHandlerChannelAndCatalogEndpoints(t *testing.T) {
 	chanID := "34020000001310000001"
 
 	// 1. Provision device
-	w := doJSON(t, router, http.MethodPut, "/api/v1/gb28181/devices/"+devID, `{"name":"Device 1","password":"secret"}`)
+	w := doJSON(
+		t,
+		router,
+		http.MethodPut,
+		"/api/v1/gb28181/devices/"+devID,
+		`{"name":"Device 1","password":"secret"}`,
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("provision device: status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -682,7 +752,9 @@ func TestHandlerChannelAndCatalogEndpoints(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("list channels: status=%d body=%s", w.Code, w.Body.String())
 	}
-	_ = json.Unmarshal(w.Body.Bytes(), &listResp)
+	if err := json.Unmarshal(w.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list channels: %v", err)
+	}
 	if len(listResp.Data.Items) != 1 || listResp.Data.Items[0].ChannelID != chanID {
 		t.Fatalf("expected channel %s, got %+v", chanID, listResp.Data.Items)
 	}
@@ -691,7 +763,8 @@ func TestHandlerChannelAndCatalogEndpoints(t *testing.T) {
 	}
 
 	// 7. Add channel as camera -> creates camera
-	w = doJSON(t, router, http.MethodPost, fmt.Sprintf("/api/v1/gb28181/devices/%s/channels/%s/camera", devID, chanID), "")
+	addURL := fmt.Sprintf("/api/v1/gb28181/devices/%s/channels/%s/camera", devID, chanID)
+	w = doJSON(t, router, http.MethodPost, addURL, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("add channel as camera: status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -700,15 +773,17 @@ func TestHandlerChannelAndCatalogEndpoints(t *testing.T) {
 	}
 
 	// 8. Add channel again -> 409 GB28181_CHANNEL_ALREADY_BOUND
-	w = doJSON(t, router, http.MethodPost, fmt.Sprintf("/api/v1/gb28181/devices/%s/channels/%s/camera", devID, chanID), "")
+	w = doJSON(t, router, http.MethodPost, addURL, "")
 	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409 conflict when adding already bound channel, got %d body=%s", w.Code, w.Body.String())
+		t.Fatalf("expected 409 conflict when adding already bound channel, got %d body=%s",
+			w.Code, w.Body.String())
 	}
 
 	// 9. Delete device with bound camera -> 409 GB28181_CAMERA_BOUND
 	w = doJSON(t, router, http.MethodDelete, "/api/v1/gb28181/devices/"+devID, "")
 	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409 conflict when deleting device with bound camera, got %d body=%s", w.Code, w.Body.String())
+		t.Fatalf("expected 409 conflict when deleting device with bound camera, got %d body=%s",
+			w.Code, w.Body.String())
 	}
 
 	// 10. Delete the camera (FK ON DELETE SET NULL clears the binding), then the device

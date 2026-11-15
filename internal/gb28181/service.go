@@ -6,15 +6,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
-	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/camera"
 )
 
 // CameraCreator encapsulates the creation of a camera entity from a GB28181 channel.
 type CameraCreator interface {
-	CreateGB28181Camera(ctx context.Context, params camera.CreateGB28181CameraParams) (*camera.CameraResponse, error)
+	CreateGB28181Camera(
+		ctx context.Context,
+		params camera.CreateGB28181CameraParams,
+	) (*camera.CameraResponse, error)
 }
 
 // CameraDeleter allows rollback if channel binding fails after camera creation.
@@ -226,7 +230,11 @@ func (s *Service) SyncCatalog(ctx context.Context, deviceID string) (*SyncCatalo
 	// checked rather than trusted so a future edit here cannot panic a request.
 	response, ok := res.(*SyncCatalogResponse)
 	if !ok {
-		return nil, apperr.Internal(CodeCatalogSyncFailed, "catalog syncer returned an unexpected result", nil)
+		return nil, apperr.Internal(
+			CodeCatalogSyncFailed,
+			"catalog syncer returned an unexpected result",
+			nil,
+		)
 	}
 	s.runtime.RecordCatalogSuccess(response.Total)
 	return response, nil
@@ -249,7 +257,11 @@ func (s *Service) ListChannels(ctx context.Context, deviceID string) (*ChannelLi
 }
 
 // AddChannelAsCamera explicitly adds an imported channel as a system camera entity.
-func (s *Service) AddChannelAsCamera(ctx context.Context, deviceID, channelID string) (*camera.CameraResponse, error) {
+func (s *Service) AddChannelAsCamera(
+	ctx context.Context,
+	deviceID string,
+	channelID string,
+) (*camera.CameraResponse, error) {
 	deviceID = strings.TrimSpace(deviceID)
 	channelID = strings.TrimSpace(channelID)
 	// Validate before touching the store: both codes are also the camera URI contract, so
@@ -277,14 +289,22 @@ func (s *Service) AddChannelAsCamera(ctx context.Context, deviceID, channelID st
 	// bug, and it must answer with a 500 instead of a panic.
 	camResp, ok := res.(*camera.CameraResponse)
 	if !ok {
-		return nil, apperr.Internal(CodeRuntimeNotReady, "camera creator returned an unexpected result", nil)
+		return nil, apperr.Internal(
+			CodeRuntimeNotReady,
+			"camera creator returned an unexpected result",
+			nil,
+		)
 	}
 	return camResp, nil
 }
 
 // addChannelAsCamera performs the read-then-write binding. Callers must go through
 // AddChannelAsCamera so the pair is serialized per channel.
-func (s *Service) addChannelAsCamera(ctx context.Context, deviceID, channelID string) (*camera.CameraResponse, error) {
+func (s *Service) addChannelAsCamera(
+	ctx context.Context,
+	deviceID string,
+	channelID string,
+) (*camera.CameraResponse, error) {
 	ch, err := s.channels.GetChannel(ctx, deviceID, channelID)
 	if err != nil {
 		return nil, storeFailure(err, "Failed to get GB28181 channel")

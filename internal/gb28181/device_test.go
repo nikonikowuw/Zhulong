@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
 
 // testClock is a settable clock. It is a pointer type because the state machine
@@ -25,7 +26,10 @@ func (c *testClock) advance(d time.Duration) { c.at = c.at.Add(d) }
 
 // newTestStateMachine wires the state machine on a migrated database with a settable
 // clock, so expiry is asserted without sleeping.
-func newTestStateMachine(t *testing.T, start time.Time) (*deviceStateMachine, *Store, *Runtime, *testClock, func()) {
+func newTestStateMachine(
+	t *testing.T,
+	start time.Time,
+) (*deviceStateMachine, *Store, *Runtime, *testClock, func()) {
 	t.Helper()
 	store, _, cleanup := setupStore(t)
 	runtime := NewRuntime()

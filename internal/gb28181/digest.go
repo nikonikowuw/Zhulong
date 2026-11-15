@@ -225,7 +225,13 @@ func missingParam(params map[string]string, names ...string) string {
 // Supported algorithms are MD5 (what GB28181 devices use) and SHA-256 from RFC 7616.
 // MD5-sess is rejected rather than half-implemented: accepting a name we compute
 // differently from the device would lock the device out with a misleading 401.
-func verifyDigestResponse(credentials digestCredentials, method, requestURI, realm, password string) error {
+func verifyDigestResponse(
+	credentials digestCredentials,
+	method string,
+	requestURI string,
+	realm string,
+	password string,
+) error {
 	if credentials.Username == "" {
 		return ErrDigestUserMismatch
 	}
@@ -263,7 +269,8 @@ func verifyDigestResponse(credentials digestCredentials, method, requestURI, rea
 	if err != nil {
 		return err
 	}
-	if subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(credentials.Response))) != 1 {
+	actual := strings.ToLower(credentials.Response)
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) != 1 {
 		return ErrDigestMismatch
 	}
 	return nil
@@ -288,9 +295,16 @@ func verifyDigestURI(digestURI, requestURI string) error {
 		// SIP layer already answered; the digest is still bound to username/realm/nonce.
 		return nil
 	}
-	if digest.User != "" && request.User != "" && digest.User != request.User {
-		return fmt.Errorf("%w: digest uri user %q, request uri user %q",
-			ErrDigestUserMismatch, digest.User, request.User)
+	hasDigestUser := digest.User != ""
+	hasRequestUser := request.User != ""
+	userMismatch := digest.User != request.User
+	if hasDigestUser && hasRequestUser && userMismatch {
+		return fmt.Errorf(
+			"%w: digest uri user %q, request uri user %q",
+			ErrDigestUserMismatch,
+			digest.User,
+			request.User,
+		)
 	}
 	return nil
 }

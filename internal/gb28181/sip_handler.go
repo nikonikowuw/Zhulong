@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"github.com/emiago/sipgo/sip"
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
 
 // handleRegister implements the REGISTER UAS with Digest authentication.
@@ -97,7 +98,13 @@ func (i *sipIngress) authorizeRegister(
 		i.rejectStoreLookup(req, tx, deviceID, err)
 		return nil, false
 	}
-	if verifyErr := i.verifyCredentials(credentials, deviceID, req.Recipient.String(), password); verifyErr != nil {
+	verifyErr := i.verifyCredentials(
+		credentials,
+		deviceID,
+		req.Recipient.String(),
+		password,
+	)
+	if verifyErr != nil {
 		stale := errors.Is(verifyErr, ErrDigestNonceStale)
 		// One 401 per attempt, never a second response on the same transaction: the
 		// challenge below *is* the answer.
@@ -117,7 +124,12 @@ func (i *sipIngress) authorizeRegister(
 }
 
 // applyRegistration persists the accepted lease, or clears it for EXPIRES=0.
-func (i *sipIngress) applyRegistration(req *sip.Request, tx sip.ServerTransaction, deviceID string, expires int) {
+func (i *sipIngress) applyRegistration(
+	req *sip.Request,
+	tx sip.ServerTransaction,
+	deviceID string,
+	expires int,
+) {
 	ctx := context.Background()
 	if expires == 0 {
 		if err := i.devices.Unregistered(ctx, deviceID); err != nil {
@@ -219,7 +231,12 @@ func (i *sipIngress) handleCatalogMessage(ctx context.Context, deviceID string, 
 // messageSenderAllowed enforces two rules: the device must be on the allowlist, and a
 // registered device is pinned to the source it registered from. Without the pinning, a
 // spoofed datagram could keep a dead device "online" by replaying keepalives.
-func (i *sipIngress) messageSenderAllowed(req *sip.Request, tx sip.ServerTransaction, deviceID, source string) bool {
+func (i *sipIngress) messageSenderAllowed(
+	req *sip.Request,
+	tx sip.ServerTransaction,
+	deviceID string,
+	source string,
+) bool {
 	device, err := i.store.GetDevice(context.Background(), deviceID)
 	if err != nil {
 		if isNotFound(err) {
@@ -229,7 +246,7 @@ func (i *sipIngress) messageSenderAllowed(req *sip.Request, tx sip.ServerTransac
 		}
 		i.reject(req, tx, sip.StatusInternalServerError, "gb28181 message from unverifiable device",
 			zap.String("device_id", deviceID), zap.Error(err))
-		return false
+			return false
 	}
 	// Ports are not compared: NAT rebinding changes them, addresses do not.
 	if device.RemoteAddr == nil {
@@ -309,12 +326,23 @@ func (i *sipIngress) verifyCredentials(
 	if credentials.Username != deviceID {
 		return ErrDigestUserMismatch
 	}
-	return verifyDigestResponse(credentials, string(sip.REGISTER), requestURI, i.cfg.SIPRealm, password)
+	return verifyDigestResponse(
+		credentials,
+		string(sip.REGISTER),
+		requestURI,
+		i.cfg.SIPRealm,
+		password,
+	)
 }
 
 // rejectStoreLookup maps a failed allowlist lookup onto a SIP status. An unknown
 // device gets 403: the allowlist is an operator decision, not a device error.
-func (i *sipIngress) rejectStoreLookup(req *sip.Request, tx sip.ServerTransaction, deviceID string, err error) {
+func (i *sipIngress) rejectStoreLookup(
+	req *sip.Request,
+	tx sip.ServerTransaction,
+	deviceID string,
+	err error,
+) {
 	if isNotFound(err) {
 		i.reject(req, tx, sip.StatusForbidden, "gb28181 request from a device that is not provisioned",
 			zap.String("device_id", deviceID),

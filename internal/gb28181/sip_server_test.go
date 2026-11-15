@@ -15,8 +15,9 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
 
 const (
@@ -263,7 +264,10 @@ func TestRegisterChallengesWithoutDecryptingTheSecret(t *testing.T) {
 		t.Fatalf("expected 401 for an unauthenticated REGISTER, got %d", response.StatusCode)
 	}
 	if cipher.decrypts != 0 {
-		t.Fatalf("an unauthenticated REGISTER must not decrypt the stored secret, got %d decryptions", cipher.decrypts)
+		t.Fatalf(
+			"an unauthenticated REGISTER must not decrypt the stored secret, got %d decryptions",
+			cipher.decrypts,
+		)
 	}
 }
 
@@ -344,7 +348,11 @@ func TestRegisterUnregisterClearsState(t *testing.T) {
 		t.Fatalf("read device: %v", err)
 	}
 	if device.State != DeviceStateOffline || device.RemoteAddr != nil {
-		t.Fatalf("expected an offline device without a remote address, got %q %v", device.State, device.RemoteAddr)
+		t.Fatalf(
+			"expected an offline device without a remote address, got %q %v",
+			device.State,
+			device.RemoteAddr,
+		)
 	}
 	if snapshot := runtime.Snapshot(); snapshot.Devices.Online != 0 {
 		t.Fatalf("expected zero online devices, got %+v", snapshot.Devices)
@@ -472,7 +480,11 @@ func TestIngressServesREGISTEROverUDP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial udp: %v", err)
 	}
-	defer func() { _ = client.Close() }()
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Logf("client close error: %v", err)
+		}
+	}()
 
 	// REGISTER from a source the server can see; the From identity is the allowlist key.
 	request := newRegisterRequest(t, testDeviceID, nil)
@@ -491,7 +503,9 @@ func TestIngressServesREGISTEROverUDP(t *testing.T) {
 	if _, err := client.Write([]byte(request.String())); err != nil {
 		t.Fatalf("send register: %v", err)
 	}
-	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := client.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Logf("SetReadDeadline error: %v", err)
+	}
 	buffer := make([]byte, 4096)
 	n, err := client.Read(buffer)
 	if err != nil {
@@ -632,14 +646,19 @@ func TestMessageCatalogResponseCannotCompleteAnotherDevicesSync(t *testing.T) {
 
 	const forgedChannelID = "34020000001310000010"
 	body := []byte(fmt.Sprintf(
-		"<Response><CmdType>Catalog</CmdType><SN>%d</SN><DeviceID>%s</DeviceID><SumNum>1</SumNum><DeviceList><Item><DeviceID>%s</DeviceID><Name>Forged</Name></Item></DeviceList></Response>",
+		"<Response><CmdType>Catalog</CmdType><SN>%d</SN><DeviceID>%s</DeviceID>"+
+			"<SumNum>1</SumNum><DeviceList><Item><DeviceID>%s</DeviceID>"+
+			"<Name>Forged</Name></Item></DeviceList></Response>",
 		sn, deviceB, forgedChannelID,
 	))
 	request := newMessageRequest(t, deviceA, body)
 	recorder := newRecordingTx()
 	ingress.handleMessage(request, recorder)
 	if response := singleResponse(t, recorder); response.StatusCode != sip.StatusOK {
-		t.Fatalf("malformedly attributed Catalog response should be acknowledged, got %d", response.StatusCode)
+		t.Fatalf(
+			"malformedly attributed Catalog response should be acknowledged, got %d",
+			response.StatusCode,
+		)
 	}
 
 	select {
@@ -732,7 +751,11 @@ func TestIngressBindFailureRollsBackPartialStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("occupy tcp port: %v", err)
 	}
-	defer func() { _ = occupied.Close() }()
+	defer func() {
+		if err := occupied.Close(); err != nil {
+			t.Logf("occupied close error: %v", err)
+		}
+	}()
 
 	cfg := enabledConfig()
 	cfg.SIPListen = occupied.Addr().String()
@@ -807,7 +830,12 @@ func TestLifecycleStartsTheRealIngress(t *testing.T) {
 		t.Fatalf("lifecycle start failed: %v", err)
 	}
 	if status := runtime.Status(); status.State != RuntimeStateRunning {
-		t.Fatalf("expected state %q, got %q (detail %q)", RuntimeStateRunning, status.State, status.Detail)
+		t.Fatalf(
+			"expected state %q, got %q (detail %q)",
+			RuntimeStateRunning,
+			status.State,
+			status.Detail,
+		)
 	}
 	if ingress.udpConn == nil {
 		t.Fatal("expected the ingress to hold a bound UDP socket")
@@ -859,20 +887,29 @@ func TestPeerDeviceRegistersOverUDP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create peer ua: %v", err)
 	}
-	defer func() { _ = ua.Close() }()
+	defer func() {
+		if err := ua.Close(); err != nil {
+			t.Logf("ua close error: %v", err)
+		}
+	}()
 	client, err := sipgo.NewClient(ua, sipgo.WithClientHostname("127.0.0.1"))
 	if err != nil {
 		t.Fatalf("create peer client: %v", err)
 	}
 
 	realm := cfg.SIPRealm
-	request := sip.NewRequest(sip.REGISTER, sip.Uri{Host: hostOnly(serverAddr), Port: portOf(t, serverAddr)})
+	targetURI := sip.Uri{
+		Host: hostOnly(serverAddr),
+		Port: portOf(t, serverAddr),
+	}
+	request := sip.NewRequest(sip.REGISTER, targetURI)
 	request.AppendHeader(&sip.FromHeader{Address: sip.Uri{User: testDeviceID, Host: realm}})
 	request.AppendHeader(&sip.ToHeader{Address: sip.Uri{User: testDeviceID, Host: realm}})
 	callID := sip.CallIDHeader("peer-register-" + testDeviceID)
 	request.AppendHeader(&callID)
 	request.AppendHeader(&sip.CSeqHeader{SeqNo: 1, MethodName: sip.REGISTER})
-	request.AppendHeader(&sip.ContactHeader{Address: sip.Uri{User: testDeviceID, Host: "127.0.0.1", Port: 50620}})
+	contactURI := sip.Uri{User: testDeviceID, Host: "127.0.0.1", Port: 50620}
+	request.AppendHeader(&sip.ContactHeader{Address: contactURI})
 	request.AppendHeader(sip.NewHeader("Expires", "3600"))
 	request.SetTransport("UDP")
 	request.SetDestination(serverAddr)
@@ -971,7 +1008,11 @@ func TestPeerDeviceRegistersOverTCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial tcp: %v", err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Logf("conn close error: %v", err)
+		}
+	}()
 
 	localPort := conn.LocalAddr().(*net.TCPAddr).Port
 	newTCPRegister := func(cseq uint32, authorization string) *sip.Request {
@@ -990,7 +1031,8 @@ func TestPeerDeviceRegistersOverTCP(t *testing.T) {
 		callID := sip.CallIDHeader("peer-tcp-" + testDeviceID)
 		request.AppendHeader(&callID)
 		request.AppendHeader(&sip.CSeqHeader{SeqNo: cseq, MethodName: sip.REGISTER})
-		request.AppendHeader(&sip.ContactHeader{Address: sip.Uri{User: testDeviceID, Host: "127.0.0.1", Port: localPort}})
+		contactURI := sip.Uri{User: testDeviceID, Host: "127.0.0.1", Port: localPort}
+		request.AppendHeader(&sip.ContactHeader{Address: contactURI})
 		request.AppendHeader(sip.NewHeader("Expires", "3600"))
 		request.AppendHeader(sip.NewHeader("Content-Length", "0"))
 		if authorization != "" {
@@ -1007,7 +1049,9 @@ func TestPeerDeviceRegistersOverTCP(t *testing.T) {
 	}
 	read := func() *sip.Response {
 		t.Helper()
-		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Logf("SetReadDeadline error: %v", err)
+		}
 		buffer := make([]byte, 0, 4096)
 		chunk := make([]byte, 4096)
 		for {
@@ -1039,7 +1083,9 @@ func TestPeerDeviceRegistersOverTCP(t *testing.T) {
 	nonce := nonceFromChallenge(t, challenge)
 
 	uri := "sip:" + cfg.SIPRealm
-	response := testDigest(testDeviceID, cfg.SIPRealm, testPassword, "REGISTER", uri, nonce, "", "", "")
+	response := testDigest(
+		testDeviceID, cfg.SIPRealm, testPassword, "REGISTER", uri, nonce, "", "", "",
+	)
 	authorization := fmt.Sprintf(
 		`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s", algorithm=MD5`,
 		testDeviceID, cfg.SIPRealm, nonce, uri, response)
@@ -1066,7 +1112,9 @@ func TestPeerDeviceRegistersOverTCP(t *testing.T) {
 	// connection is alive.
 	readRequest := func() *sip.Request {
 		t.Helper()
-		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Logf("SetReadDeadline error: %v", err)
+		}
 		buffer := make([]byte, 0, 4096)
 		chunk := make([]byte, 4096)
 		for {
@@ -1089,7 +1137,8 @@ func TestPeerDeviceRegistersOverTCP(t *testing.T) {
 
 	sendErr := make(chan error, 1)
 	go func() {
-		sendErr <- ingress.SendMessage(context.Background(), *device, []byte(buildCatalogQuery(1, testDeviceID)))
+		queryBody := []byte(buildCatalogQuery(1, testDeviceID))
+		sendErr <- ingress.SendMessage(context.Background(), *device, queryBody)
 	}()
 
 	outbound := readRequest()
@@ -1099,7 +1148,8 @@ func TestPeerDeviceRegistersOverTCP(t *testing.T) {
 	if !bytes.Contains(outbound.Body(), []byte("<CmdType>Catalog</CmdType>")) {
 		t.Fatalf("unexpected outbound catalog query body: %q", outbound.Body())
 	}
-	if _, err := conn.Write([]byte(sip.NewResponseFromRequest(outbound, sip.StatusOK, "OK", nil).String())); err != nil {
+	answer := sip.NewResponseFromRequest(outbound, sip.StatusOK, "OK", nil).String()
+	if _, err := conn.Write([]byte(answer)); err != nil {
 		t.Fatalf("answer outbound message: %v", err)
 	}
 	if err := <-sendErr; err != nil {
@@ -1223,7 +1273,14 @@ func TestBuildMessageRequestAddressesTheDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recipientURI failed: %v", err)
 	}
-	req := buildMessageRequest(device, recipient, realm, serverID, []byte{1, 2, 3, 4, 5, 6, 7, 8}, []byte("<Query/>"))
+	req := buildMessageRequest(
+		device,
+		recipient,
+		realm,
+		serverID,
+		[]byte{1, 2, 3, 4, 5, 6, 7, 8},
+		[]byte("<Query/>"),
+	)
 
 	startLine := strings.SplitN(req.String(), "\r\n", 2)[0]
 	want := "MESSAGE sip:" + testDeviceID + "@" + dest + " SIP/2.0"
@@ -1287,13 +1344,19 @@ func TestSendMessageReportsAChallengingDeviceAndLimitsOutbound(t *testing.T) {
 		case responded <- status:
 		default:
 		}
-		_ = tx.Respond(res)
+		if err := tx.Respond(res); err != nil {
+			t.Logf("tx.Respond error: %v", err)
+		}
 	})
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen peer: %v", err)
 	}
-	go func() { _ = peerServer.ServeUDP(conn) }()
+	go func() {
+		if err := peerServer.ServeUDP(conn); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Logf("peerServer.ServeUDP error: %v", err)
+		}
+	}()
 	defer func() {
 		closeQuietly(zap.NewNop(), conn, "peer udp")
 		closeQuietly(zap.NewNop(), peerUA, "peer ua")
@@ -1324,7 +1387,7 @@ func TestSendMessageReportsAChallengingDeviceAndLimitsOutbound(t *testing.T) {
 	// with a 429-shaped error instead of hammering the device.
 	phase.Store(sip.StatusOK)
 	var limited error
-	for i := 0; i < ingress.limits.OutboundBurst+2; i++ {
+	for range ingress.limits.OutboundBurst + 2 {
 		if sendErr := ingress.SendMessage(ctx, device, body); sendErr != nil {
 			limited = sendErr
 			break
@@ -1389,7 +1452,13 @@ func TestRegistrationLeaseResolution(t *testing.T) {
 		{name: "device asked", requested: 1200, provided: true, device: device, want: 1200},
 		{name: "device unregisters", requested: 0, provided: true, device: device, want: 0},
 		{name: "provisioned default", requested: 0, provided: false, device: device, want: 900},
-		{name: "no provisioned value", requested: 0, provided: false, device: &Device{}, want: DefaultExpiresSeconds},
+		{
+			name:      "no provisioned value",
+			requested: 0,
+			provided:  false,
+			device:    &Device{},
+			want:      DefaultExpiresSeconds,
+		},
 		{name: "no device", requested: 0, provided: false, device: nil, want: DefaultExpiresSeconds},
 		{
 			name: "provisioned value below the floor", requested: 0, provided: false,

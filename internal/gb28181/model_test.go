@@ -91,11 +91,20 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name: "disabled permits a half-filled draft",
-			cfg:  Config{RequireRegisteredDevice: true, SIPID: "", RTPPortMin: 30000, RTPPortMax: 30100}.Normalize(),
+			cfg: Config{
+				RequireRegisteredDevice: true,
+				SIPID:                   "",
+				RTPPortMin:              30000,
+				RTPPortMax:              30100,
+			}.Normalize(),
 		},
 		{
-			name:     "registered-device enforcement cannot be disabled",
-			cfg:      func() Config { cfg := DefaultConfig(); cfg.RequireRegisteredDevice = false; return cfg }(),
+			name: "registered-device enforcement cannot be disabled",
+			cfg: func() Config {
+				cfg := DefaultConfig()
+				cfg.RequireRegisteredDevice = false
+				return cfg
+			}(),
 			wantCode: CodeRegisteredDeviceRequired,
 		},
 		{name: "enabled minimal config is valid", cfg: enabled(nil)},

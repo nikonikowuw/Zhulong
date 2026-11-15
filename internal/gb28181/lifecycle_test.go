@@ -134,7 +134,12 @@ func TestLifecycleStartsAndStopsIngress(t *testing.T) {
 	}
 	status := runtime.Status()
 	if status.State != RuntimeStateRunning {
-		t.Fatalf("expected state %q, got %q (detail %q)", RuntimeStateRunning, status.State, status.Detail)
+		t.Fatalf(
+			"expected state %q, got %q (detail %q)",
+			RuntimeStateRunning,
+			status.State,
+			status.Detail,
+		)
 	}
 	if status.AdvertisedIP != "192.168.1.10" {
 		t.Fatalf("expected the single NIC address to be advertised, got %q", status.AdvertisedIP)
@@ -199,7 +204,8 @@ func TestLifecycleInvalidStoredConfigReportsError(t *testing.T) {
 	if ingress.started {
 		t.Fatal("an invalid configuration must not reach the ingress")
 	}
-	if status := runtime.Status(); status.State != RuntimeStateError || status.Detail != DetailConfigInvalid {
+	if status := runtime.Status(); status.State != RuntimeStateError ||
+		status.Detail != DetailConfigInvalid {
 		t.Fatalf("expected error/%s, got %q/%q", DetailConfigInvalid, status.State, status.Detail)
 	}
 }
@@ -232,7 +238,8 @@ func TestLifecycleUnreadableConfigIsReported(t *testing.T) {
 	if err := manager.Start(context.Background()); err == nil {
 		t.Fatal("expected a read failure to surface")
 	}
-	if status := runtime.Status(); status.State != RuntimeStateError || status.Detail != DetailConfigUnreadable {
+	if status := runtime.Status(); status.State != RuntimeStateError ||
+		status.Detail != DetailConfigUnreadable {
 		t.Fatalf("expected error/%s, got %q/%q", DetailConfigUnreadable, status.State, status.Detail)
 	}
 }

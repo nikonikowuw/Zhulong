@@ -4,10 +4,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // The godoc annotations below deliberately exceed the 120-column guideline: swaggo
@@ -74,7 +75,12 @@ func (h *Handler) GetConfig(c *gin.Context) {
 // @Failure      500   {object}  httputil.Response  "DATABASE_ERROR, GB28181_ADDRESS_PROBE_FAILED"
 // @Router       /gb28181/config [put]
 func (h *Handler) UpdateConfig(c *gin.Context) {
-	audithttp.Tag(c, ActionConfigUpdate, "gb28181", "Update GB28181 configuration")
+	audithttp.Tag(
+		c,
+		ActionConfigUpdate,
+		"gb28181",
+		"Update GB28181 configuration",
+	)
 
 	var req UpdateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -152,10 +158,18 @@ func (h *Handler) UpsertDevice(c *gin.Context) {
 	if deviceID != "" {
 		target = "gb28181_device:" + deviceID
 	}
-	audithttp.Tag(c, ActionDeviceUpsert, target, "Provision or update GB28181 device")
+	audithttp.Tag(
+		c,
+		ActionDeviceUpsert,
+		target,
+		"Provision or update GB28181 device",
+	)
 
 	if deviceID == "" {
-		httputil.WriteError(c, apperr.Invalid(CodeDeviceIDInvalid, "deviceId must not be empty", nil))
+		httputil.WriteError(
+			c,
+			apperr.Invalid(CodeDeviceIDInvalid, "deviceId must not be empty", nil),
+		)
 		return
 	}
 
@@ -194,7 +208,12 @@ func (h *Handler) DeleteDevice(c *gin.Context) {
 	if !ok {
 		return
 	}
-	audithttp.Tag(c, ActionDeviceDelete, deviceID, "Delete GB28181 device")
+	audithttp.Tag(
+		c,
+		ActionDeviceDelete,
+		deviceID,
+		"Delete GB28181 device",
+	)
 
 	if err := h.service.DeleteDevice(c.Request.Context(), deviceID); err != nil {
 		httputil.WriteError(c, err)
@@ -220,7 +239,12 @@ func (h *Handler) SyncCatalog(c *gin.Context) {
 	if !ok {
 		return
 	}
-	audithttp.Tag(c, ActionCatalogSync, deviceID, "Synchronize GB28181 device catalog")
+	audithttp.Tag(
+		c,
+		ActionCatalogSync,
+		deviceID,
+		"Synchronize GB28181 device catalog",
+	)
 
 	resp, err := h.service.SyncCatalog(c.Request.Context(), deviceID)
 	if err != nil {
@@ -279,7 +303,12 @@ func (h *Handler) AddChannelAsCamera(c *gin.Context) {
 		return
 	}
 	target := deviceID + "/" + channelID
-	audithttp.Tag(c, ActionChannelBindCamera, target, "Add GB28181 channel as camera")
+	audithttp.Tag(
+		c,
+		ActionChannelBindCamera,
+		target,
+		"Add GB28181 channel as camera",
+	)
 
 	resp, err := h.service.AddChannelAsCamera(c.Request.Context(), deviceID, channelID)
 	if err != nil {

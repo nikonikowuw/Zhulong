@@ -9,9 +9,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
-	"go.uber.org/zap"
 )
 
 // DefaultCatalogTimeout bounds one catalog exchange end to end.
@@ -129,12 +130,22 @@ func (cm *CatalogManager) Sync(ctx context.Context, device Device) ([]Channel, e
 	queryXML := buildCatalogQuery(sn, device.DeviceID)
 
 	var sendErr error
+	retryTimer := time.NewTimer(sendRetryBackoff)
+	defer retryTimer.Stop()
+	if !retryTimer.Stop() {
+		select {
+		case <-retryTimer.C:
+		default:
+		}
+	}
+
 	for attempt := range sendAttempts {
 		if attempt > 0 {
+			retryTimer.Reset(sendRetryBackoff)
 			select {
 			case <-ctx.Done():
 				return nil, catalogTimeoutError(sess, ctx.Err())
-			case <-time.After(sendRetryBackoff):
+			case <-retryTimer.C:
 			}
 		}
 		sendErr = cm.sender.SendMessage(ctx, device, queryXML)
@@ -154,7 +165,12 @@ func (cm *CatalogManager) Sync(ctx context.Context, device Device) ([]Channel, e
 			zap.Int("sn", sn),
 			zap.Error(sendErr),
 		)
-		return nil, apperr.New(apperr.KindInvalid, CodeCatalogSyncFailed, "failed to send catalog query", sendErr)
+		return nil, apperr.New(
+			apperr.KindInvalid,
+			CodeCatalogSyncFailed,
+			"failed to send catalog query",
+			sendErr,
+		)
 	}
 
 	select {
@@ -197,14 +213,26 @@ func catalogTimeoutError(sess *catalogSession, cause error) error {
 	if expected >= 0 {
 		progress = fmt.Sprintf("%d/%d channels received", received, expected)
 	}
-	return apperr.New(apperr.KindInvalid, CodeCatalogTimeout,
-		"catalog synchronization timed out with "+progress, cause)
+	return apperr.New(
+		apperr.KindInvalid,
+		CodeCatalogTimeout,
+		"catalog synchronization timed out with "+progress,
+		cause,
+	)
 }
 
 // HandleResponse processes an inbound Catalog response from the validated SIP sender.
-func (cm *CatalogManager) HandleResponse(ctx context.Context, senderDeviceID string, resp gbCatalogResponse) error {
+func (cm *CatalogManager) HandleResponse(
+	ctx context.Context,
+	senderDeviceID string,
+	resp gbCatalogResponse,
+) error {
 	if resp.DeviceID != senderDeviceID {
-		return fmt.Errorf("catalog response device id %q does not match SIP sender %q", resp.DeviceID, senderDeviceID)
+		return fmt.Errorf(
+			"catalog response device id %q does not match SIP sender %q",
+			resp.DeviceID,
+			senderDeviceID,
+		)
 	}
 
 	key := sessionKey(resp.DeviceID, resp.SN)

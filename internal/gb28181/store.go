@@ -9,11 +9,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // maxPasswordLength bounds the Digest secret before encryption, counted in
@@ -216,7 +217,12 @@ func validateDeviceUpsert(upd DeviceUpsert) error {
 }
 
 // upsertDeviceTx reads, merges, and writes one device inside a transaction.
-func (s *Store) upsertDeviceTx(ctx context.Context, tx *gorm.DB, upd DeviceUpsert, saved *Device) error {
+func (s *Store) upsertDeviceTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	upd DeviceUpsert,
+	saved *Device,
+) error {
 	deviceID := strings.TrimSpace(upd.DeviceID)
 	existing, exists, err := readDeviceForUpdate(ctx, tx, deviceID)
 	if err != nil {
@@ -500,7 +506,12 @@ func (s *Store) ResetOnlineStates(ctx context.Context, at time.Time) (int64, err
 // testable without waiting for wall time, and the allowlist is small enough (hundreds
 // of devices at most) that a full scan is cheaper than SQLite datetime arithmetic on
 // driver-formatted timestamps.
-func (s *Store) SweepStale(ctx context.Context, now time.Time, keepaliveTimeout, grace time.Duration) (int64, error) {
+func (s *Store) SweepStale(
+	ctx context.Context,
+	now time.Time,
+	keepaliveTimeout time.Duration,
+	grace time.Duration,
+) (int64, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return 0, err
@@ -559,7 +570,10 @@ func (s *Store) SweepStale(ctx context.Context, now time.Time, keepaliveTimeout,
 // ingress on REGISTER, and the value never leaves this package: the API returns
 // DeviceResponse, which has no field for it. The device row comes back with the
 // ciphertext cleared, because the caller only needs its provisioned lease.
-func (s *Store) deviceForAuthentication(ctx context.Context, deviceID string) (*Device, string, error) {
+func (s *Store) deviceForAuthentication(
+	ctx context.Context,
+	deviceID string,
+) (*Device, string, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, "", err
@@ -578,7 +592,11 @@ func (s *Store) deviceForAuthentication(ctx context.Context, deviceID string) (*
 		return nil, "", fmt.Errorf("read gb device %s credential: %w", deviceID, err)
 	}
 	if len(device.EncryptedPass) == 0 {
-		return nil, "", apperr.Internal(CodePasswordRequired, "GB28181 device has no Digest password", nil)
+		return nil, "", apperr.Internal(
+			CodePasswordRequired,
+			"GB28181 device has no Digest password",
+			nil,
+		)
 	}
 	plaintext, decErr := s.cipher.Decrypt(device.EncryptedPass, deviceCredentialsAAD(deviceID))
 	if decErr != nil {
@@ -691,7 +709,10 @@ func (s *Store) ListChannels(ctx context.Context, deviceID string) ([]Channel, e
 		return nil, apperr.NotFound(CodeDeviceNotFound, "GB28181 device not found", nil)
 	}
 
-	channels, err := gorm.G[Channel](db).Where("device_id = ?", deviceID).Order("channel_id ASC").Find(ctx)
+	channels, err := gorm.G[Channel](db).
+		Where("device_id = ?", deviceID).
+		Order("channel_id ASC").
+		Find(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list gb channels for %s: %w", deviceID, err)
 	}
@@ -704,7 +725,9 @@ func (s *Store) GetChannel(ctx context.Context, deviceID, channelID string) (*Ch
 	if err != nil {
 		return nil, err
 	}
-	ch, err := gorm.G[Channel](db).Where("device_id = ? AND channel_id = ?", deviceID, channelID).First(ctx)
+	ch, err := gorm.G[Channel](db).
+		Where("device_id = ? AND channel_id = ?", deviceID, channelID).
+		First(ctx)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, apperr.NotFound(CodeChannelNotFound, "GB28181 channel not found", nil)
 	}
@@ -719,7 +742,12 @@ func (s *Store) GetChannel(ctx context.Context, deviceID, channelID string) (*Ch
 // The update is conditional on the channel still being unbound: the service already
 // serialises the read-then-write, and this makes the "one camera per channel"
 // invariant hold in SQL too, instead of resting on that serialisation alone.
-func (s *Store) BindChannelCamera(ctx context.Context, deviceID, channelID, cameraID string) error {
+func (s *Store) BindChannelCamera(
+	ctx context.Context,
+	deviceID string,
+	channelID string,
+	cameraID string,
+) error {
 	db, err := s.db(ctx)
 	if err != nil {
 		return err
@@ -767,7 +795,11 @@ func (s *Store) DeleteDevice(ctx context.Context, deviceID string) error {
 			return fmt.Errorf("check bound cameras for %s: %w", deviceID, err)
 		}
 		if boundCount > 0 {
-			return apperr.Conflict(CodeCameraBound, "device has bound cameras; unbind or delete cameras first", nil)
+			return apperr.Conflict(
+				CodeCameraBound,
+				"device has bound cameras; unbind or delete cameras first",
+				nil,
+			)
 		}
 
 		rows, err := gorm.G[Device](tx).Where("device_id = ?", deviceID).Delete(ctx)

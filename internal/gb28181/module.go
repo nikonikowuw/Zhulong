@@ -2,8 +2,9 @@ package gb28181
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 // RouteRegistrar matches the host's protected_routes value-group contract.
@@ -54,11 +55,11 @@ func NewComponents(options ComponentsOptions) Components {
 			defaultIngressLimits(),
 		)
 	}
-	var syncer CatalogSyncer
-	if options.Catalog != nil {
-		syncer = options.Catalog
-	} else if cs, ok := ingress.(CatalogSyncer); ok {
-		syncer = cs
+	syncer := options.Catalog
+	if syncer == nil {
+		if cs, ok := ingress.(CatalogSyncer); ok {
+			syncer = cs
+		}
 	}
 	// Optional capabilities: a stub ingress in tests exposes neither, and both paths
 	// degrade to "no stats" / "no reset" instead of failing the wiring.
