@@ -80,8 +80,18 @@ func ReapOrphanRunners(ctx context.Context, algorithmsDir string, logger *zap.Lo
 		return report, fmt.Errorf("orphan sweep: scan /proc: %w", err)
 	}
 
-	failures := sweepOrphanProcesses(ctx, candidates, &report, logger)
-	failures = append(failures, sweepOrphanArtifacts(ctx, candidates, &report, logger)...)
+	failures := sweepOrphanProcesses(
+		ctx,
+		candidates,
+		&report,
+		logger,
+	)
+	failures = append(failures, sweepOrphanArtifacts(
+		ctx,
+		candidates,
+		&report,
+		logger,
+	)...)
 
 	logSweepOutcome(&report, logger)
 	return report, errors.Join(failures...)
@@ -176,7 +186,12 @@ func sweepOrphanArtifacts(
 	}
 	defer lock.release()
 
-	failures := sweepReapedRunnerSockets(ctx, candidates, report, logger)
+	failures := sweepReapedRunnerSockets(
+		ctx,
+		candidates,
+		report,
+		logger,
+	)
 
 	// Second pass: artefacts left by a host whose runners were already reaped by
 	// Pdeathsig (or that never got as far as spawning one). These have no live

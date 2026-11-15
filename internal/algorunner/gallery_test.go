@@ -215,8 +215,8 @@ func TestCreateGallerySyncShards_ShardBudgetHoldsForRealisticGallery(t *testing.
 		t.Fatalf("CreateGallerySyncShards failed: %v", err)
 	}
 
-	maxSize := 0
-	total := 0
+	var maxSize int
+	var total int
 	for i, s := range shards {
 		if len(s) > maxSize {
 			maxSize = len(s)

@@ -119,7 +119,10 @@ func TestMergeEnvironKeepsOneEntryPerKey(t *testing.T) {
 		}
 		seen[key]++
 	}
-	if seen["ZHULONG_ENV_PROBE"] != 1 || seen["EXTRA_ONLY"] != 1 || seen["PATH"] != 1 {
+	probeCountOK := seen["ZHULONG_ENV_PROBE"] == 1
+	extraCountOK := seen["EXTRA_ONLY"] == 1
+	pathCountOK := seen["PATH"] == 1
+	if !probeCountOK || !extraCountOK || !pathCountOK {
 		t.Fatalf("keys were duplicated or dropped: %v", seen)
 	}
 	if seen["MALFORMED_NO_EQUALS"] != 0 {
@@ -131,7 +134,7 @@ func TestMergeEnvironKeepsOneEntryPerKey(t *testing.T) {
 }
 
 func cutKeyValue(kv string) (key, value string, found bool) {
-	for i := 0; i < len(kv); i++ {
+	for i := range len(kv) {
 		if kv[i] == '=' {
 			return kv[:i], kv[i+1:], true
 		}

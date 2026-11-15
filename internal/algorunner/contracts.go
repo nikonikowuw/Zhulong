@@ -27,7 +27,11 @@ type PackageMeta struct {
 type LifecycleStore interface {
 	GetAlgorithmPackage(ctx context.Context, id string) (PackageMeta, error)
 	UpdateAlgorithmStatus(ctx context.Context, id string, status string) error
-	RollbackAlgorithmVersion(ctx context.Context, id string, targetVersion, failedVersion string) error
+	RollbackAlgorithmVersion(
+		ctx context.Context,
+		id string,
+		targetVersion, failedVersion string,
+	) error
 }
 
 // BrokerSubscriptionResolver resolves the Broker Socket paths the given package
@@ -44,7 +48,12 @@ type BrokerSubscriptionResolver interface {
 
 // AIMessageBroadcaster sends down-link control messages to runner subprocesses via Native Engine FrameBroker.
 type AIMessageBroadcaster interface {
-	BroadcastAIMessage(ctx context.Context, streamID uint64, msgType uint16, payload []byte) error
+	BroadcastAIMessage(
+		ctx context.Context,
+		streamID uint64,
+		msgType uint16,
+		payload []byte,
+	) error
 }
 
 // GallerySyncItem represents one registered face item in MSG_GALLERY_SYNC.

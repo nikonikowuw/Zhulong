@@ -124,7 +124,7 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 	if err != nil || string(value) != "injected" {
 		t.Fatalf("runner did not receive .env value: value=%q err=%v", value, err)
 	}
-	foundRedactedLine := false
+	var foundRedactedLine bool
 	for _, entry := range observed.All() {
 		fields := entry.ContextMap()
 		redactedLine := entry.Message == "runner output ignored" && fields["source"] == "stdout"
@@ -208,8 +208,7 @@ func TestPackageProcessDetectsBrokerUnavailable(t *testing.T) {
 		t.Fatal("stub process did not exit within timeout")
 	}
 
-	foundReason := false
-	foundExit5 := false
+	var foundReason, foundExit5 bool
 	for _, entry := range observed.All() {
 		fields := entry.ContextMap()
 		if fields == nil {
@@ -272,7 +271,7 @@ func TestRunnerProcessReportsDotEnvParseFailure(t *testing.T) {
 		t.Fatalf("Stop failed: %v", err)
 	}
 
-	foundWarn := false
+	var foundWarn bool
 	for _, entry := range observed.All() {
 		if entry.Level == zapcore.WarnLevel && strings.Contains(entry.Message, "failed to load runner dotenv file") {
 			foundWarn = true
@@ -682,11 +681,13 @@ func TestRunnerProcessSpawnThreadSurvivesWhileChildRuns(t *testing.T) {
 	pids := make([]int, 0, runnerCount)
 	t.Cleanup(func() {
 		for _, proc := range procs {
-			_ = proc.Stop(2 * time.Second)
+			if err := proc.Stop(2 * time.Second); err != nil {
+				// Best-effort test cleanup.
+			}
 		}
 	})
 
-	for i := 0; i < runnerCount; i++ {
+	for i := range runnerCount {
 		proc := algorunner.NewRunnerProcess(algorunner.ProcessConfig{
 			AlgorithmID:    fmt.Sprintf("thread_pin_pkg_%d", i),
 			AlgorithmName:  "thread_pin_pkg",

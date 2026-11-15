@@ -48,7 +48,12 @@ func installFakePackage(t *testing.T, id string) (root, entry string) {
 // sh exits immediately after printing the grandchild's pid.
 func startReparentedRunner(t *testing.T, runnerPath string) int {
 	t.Helper()
-	cmd := exec.Command("/bin/sh", "-c", `"$0" 300 >/dev/null 2>&1 & echo $!`, runnerPath)
+	cmd := exec.Command(
+		"/bin/sh",
+		"-c",
+		`"$0" 300 >/dev/null 2>&1 & echo $!`,
+		runnerPath,
+	)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("launch reparented runner: %v", err)
@@ -159,7 +164,12 @@ func TestReapOrphanRunners_NeverKillsSupervisedRunner(t *testing.T) {
 	// rather than the test binary, which is the harder case: the supervisor is
 	// neither this process nor init, so any "is it us?" shortcut would
 	// misclassify it.
-	supervisor := exec.Command("/bin/sh", "-c", `"$0" 300 & wait`, entry)
+	supervisor := exec.Command(
+		"/bin/sh",
+		"-c",
+		`"$0" 300 & wait`,
+		entry,
+	)
 	if err := supervisor.Start(); err != nil {
 		t.Fatalf("start supervisor: %v", err)
 	}
@@ -279,7 +289,12 @@ func TestReapOrphanRunners_IgnoresForgedArgv0(t *testing.T) {
 	// sweep must identify a package process by its executable, otherwise anyone
 	// running a binary with a package-shaped argv[0] gets killed.
 	forged := filepath.Join(root, "argv0_pkg", "1.0.0", "argv0_pkg")
-	pid := startReparentedWithArgv0(t, "/bin/sleep", forged, "300")
+	pid := startReparentedWithArgv0(
+		t,
+		"/bin/sleep",
+		forged,
+		"300",
+	)
 
 	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
 	if err != nil {
@@ -301,7 +316,12 @@ func TestReapOrphanRunners_KillsEntryEvenWithOddArgv0(t *testing.T) {
 
 	// The mirror image: a real package entry started with an arbitrary argv[0].
 	// Its executable is what the host started, so it must still be reaped.
-	pid := startReparentedWithArgv0(t, entry, "not-a-package-name", "300")
+	pid := startReparentedWithArgv0(
+		t,
+		entry,
+		"not-a-package-name",
+		"300",
+	)
 
 	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
 	if err != nil {
@@ -418,15 +438,21 @@ func fakeProcRoot(t *testing.T) string {
 }
 
 // fakeProcess creates /proc/<pid>/{maps,fd} under root.
-func fakeProcess(t *testing.T, root string, pid int, mapsLines []string, fdTargets []string) string {
+func fakeProcess(
+	t *testing.T,
+	root string,
+	pid int,
+	mapsLines []string,
+	fdTargets []string,
+) string {
 	t.Helper()
 	dir := filepath.Join(root, strconv.Itoa(pid))
 	if err := os.MkdirAll(filepath.Join(dir, "fd"), 0o755); err != nil {
 		t.Fatalf("create fake proc dir: %v", err)
 	}
-	body := ""
-	for _, line := range mapsLines {
-		body += line + "\n"
+	var body string
+	if len(mapsLines) > 0 {
+		body = strings.Join(mapsLines, "\n") + "\n"
 	}
 	if err := os.WriteFile(filepath.Join(dir, "maps"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write fake maps: %v", err)
@@ -490,7 +516,13 @@ func TestShmHoldState_DetectsMappedSegment(t *testing.T) {
 func TestShmHoldState_DetectsUnmappedButOpenSegment(t *testing.T) {
 	segment, _ := newShmSegment(t)
 	root := fakeProcRoot(t)
-	fakeProcess(t, root, 4343, nil, []string{segment})
+	fakeProcess(
+		t,
+		root,
+		4343,
+		nil,
+		[]string{segment},
+	)
 
 	state, err := shmHoldState(segment)
 	if err != nil {
@@ -530,7 +562,13 @@ func TestShmHoldState_FreeSegmentIsReclaimable(t *testing.T) {
 	root := fakeProcRoot(t)
 	// A live process that holds nothing of ours, plus one that vanished between
 	// readdir and the read (no maps/fd files at all).
-	fakeProcess(t, root, 6262, nil, []string{"/dev/null", "/tmp/unrelated.sock"})
+	fakeProcess(
+		t,
+		root,
+		6262,
+		nil,
+		[]string{"/dev/null", "/tmp/unrelated.sock"},
+	)
 	if err := os.MkdirAll(filepath.Join(root, "7272"), 0o755); err != nil {
 		t.Fatalf("create vanished pid dir: %v", err)
 	}
@@ -544,7 +582,7 @@ func TestShmHoldState_FreeSegmentIsReclaimable(t *testing.T) {
 	}
 
 	result := removeUnheldShmSegments(context.Background(), zap.NewNop())
-	found := false
+	var found bool
 	for _, removed := range result.removed {
 		if removed == segment {
 			found = true
@@ -579,7 +617,7 @@ func TestRemoveUnheldShmSegments_ReportsUnknownInsteadOfDeleting(t *testing.T) {
 	if _, statErr := os.Stat(segment); statErr != nil {
 		t.Fatalf("unverified segment disappeared: %v", statErr)
 	}
-	unverified := false
+	var unverified bool
 	for _, path := range result.unverified {
 		if path == segment {
 			unverified = true
@@ -651,7 +689,8 @@ func TestRemoveStaleBrokerSocket_UnreadableTableIsUnverified(t *testing.T) {
 	}
 
 	outcome := removeStaleBrokerSocket(sock)
-	if outcome.removed || !outcome.unverified || outcome.err != nil {
+	isUnexpectedOutcome := outcome.removed || !outcome.unverified || outcome.err != nil
+	if isUnexpectedOutcome {
 		t.Fatalf("outcome = %+v, want unverified without removal", outcome)
 	}
 	if _, statErr := os.Stat(sock); statErr != nil {
@@ -873,7 +912,11 @@ func TestIsBrokerSocketPathAcceptsOnlyHostShapedPaths(t *testing.T) {
 		{name: "wrong prefix", path: filepath.Join(brokerDir, "other_1.sock"), want: false},
 		{name: "wrong suffix", path: filepath.Join(brokerDir, "zhulong_broker_1.tmp"), want: false},
 		{name: "outside the base dir", path: filepath.Join(elsewhere, "zhulong_broker_2.sock"), want: false},
-		{name: "subdirectory of the base dir", path: filepath.Join(brokerDir, "nested", "zhulong_broker_3.sock"), want: false},
+		{
+			name: "subdirectory of the base dir",
+			path: filepath.Join(brokerDir, "nested", "zhulong_broker_3.sock"),
+			want: false,
+		},
 		{name: "empty", path: "", want: false},
 		// Fail-closed: an unresolvable base dir is passed as the empty string and
 		// must never widen the set of unlinkable paths.

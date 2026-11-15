@@ -16,7 +16,12 @@ import (
 
 // installDependencyStubPackage writes script as pkg's entry executable inside root, mirroring
 // the supervisor_helpers_test.go helpers for the white-box tests in this package.
-func installDependencyStubPackage(t *testing.T, root string, pkg PackageMeta, script string) string {
+func installDependencyStubPackage(
+	t *testing.T,
+	root string,
+	pkg PackageMeta,
+	script string,
+) string {
 	t.Helper()
 	dir := filepath.Join(root, pkg.ID, pkg.Version)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

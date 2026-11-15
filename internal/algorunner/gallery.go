@@ -60,7 +60,12 @@ const galleryShardOverheadProbeIndex = 999999
 // face_id is returned rather than silently dropping it.
 func CreateGallerySyncShards(syncID string, items []GallerySyncItem) ([][]byte, error) {
 	if len(items) == 0 {
-		payload, err := marshalGalleryShardPayload(syncID, 0, 1, []GallerySyncItem{})
+		payload, err := marshalGalleryShardPayload(
+			syncID,
+			0,
+			1,
+			[]GallerySyncItem{},
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -158,7 +163,11 @@ func marshalGalleryShards(syncID string, items []GallerySyncItem, ranges []galle
 	return shards, nil
 }
 
-func marshalGalleryShardPayload(syncID string, index, total int, items []GallerySyncItem) ([]byte, error) {
+func marshalGalleryShardPayload(
+	syncID string,
+	index, total int,
+	items []GallerySyncItem,
+) ([]byte, error) {
 	payload, err := json.Marshal(GallerySyncShardPayload{
 		SyncID:     syncID,
 		ShardIndex: index,

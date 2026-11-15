@@ -78,7 +78,7 @@ func TestConcurrentStartAlgorithmRegistersOnce(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		go func(i int) {
 			defer wg.Done()
 			<-start
@@ -89,7 +89,7 @@ func TestConcurrentStartAlgorithmRegistersOnce(t *testing.T) {
 
 	// Both goroutines must be inside the resolver before we release, so the
 	// second registration genuinely races the first (the whole point of R3).
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		select {
 		case <-resolver.entered:
 		case <-time.After(3 * time.Second):
@@ -99,8 +99,7 @@ func TestConcurrentStartAlgorithmRegistersOnce(t *testing.T) {
 	resolver.unblock()
 	wg.Wait()
 
-	successes := 0
-	alreadyRunning := 0
+	var successes, alreadyRunning int
 	for _, err := range results {
 		switch {
 		case err == nil:
@@ -136,7 +135,12 @@ func TestSupervisorResetAllowsRestartAfterCrashLoop(t *testing.T) {
 	if err := supervisor.StartAlgorithm(ctx, algo); err != nil {
 		t.Fatalf("start algorithm: %v", err)
 	}
-	waitForSupervisorStatus(t, supervisor, algo.ID, algorunner.StatusCrashLoop)
+	waitForSupervisorStatus(
+		t,
+		supervisor,
+		algo.ID,
+		algorunner.StatusCrashLoop,
+	)
 
 	if err := supervisor.ResetAlgorithm(ctx, algo.ID); err != nil {
 		t.Fatalf("reset crashed algorithm: %v", err)

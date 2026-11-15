@@ -115,7 +115,8 @@ func TestRecoveryStateMachineStableRunningReset(t *testing.T) {
 
 	// Subsequent crash should be treated as 1st crash again
 	restart, delay, broken := sm.RecordCrash(time.Now())
-	if !restart || broken || delay != 1*time.Second {
+	unexpectedState := !restart || broken || delay != 1*time.Second
+	if unexpectedState {
 		t.Errorf("expected clean 1s backoff after reset, got delay: %v", delay)
 	}
 }
@@ -191,7 +192,12 @@ func TestRecoveryOptionsNormalize(t *testing.T) {
 						t.Fatalf("NewSupervisor panicked for %s: %v", tc.name, r)
 					}
 				}()
-				supervisor = newTestSupervisor(t, store, algo, opts)
+				supervisor = newTestSupervisor(
+					t,
+					store,
+					algo,
+					opts,
+				)
 			}()
 			t.Cleanup(func() { supervisor.StopAll(time.Second) })
 

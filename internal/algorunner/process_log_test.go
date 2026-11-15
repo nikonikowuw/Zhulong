@@ -162,14 +162,18 @@ func TestReadBoundedLineDrainsAndRecovers(t *testing.T) {
 
 	line, err = readBoundedLine(reader, maxRunnerLogLine)
 	wantRecovered := `{"status":"failed","stage":"connect"}`
-	if line.oversized || string(line.data) != wantRecovered || err != nil {
+	isWrongRecoveredData := string(line.data) != wantRecovered
+	if line.oversized || isWrongRecoveredData || err != nil {
 		t.Fatalf("recovered line = (%q, %d, %v, %v)", line.data, line.bytes, line.oversized, err)
 	}
 	if line.bytes != int64(len(wantRecovered)) {
 		t.Fatalf("recovered line byte count = %d, want %d", line.bytes, len(wantRecovered))
 	}
 	line, err = readBoundedLine(reader, maxRunnerLogLine)
-	if line.oversized || string(line.data) != "final" || line.bytes != 5 || !errors.Is(err, io.EOF) {
+	isWrongData := string(line.data) != "final"
+	isWrongBytes := line.bytes != 5
+	isNotEOF := !errors.Is(err, io.EOF)
+	if line.oversized || isWrongData || isWrongBytes || isNotEOF {
 		t.Fatalf("unterminated EOF line = (%q, %d, %v, %v)", line.data, line.bytes, line.oversized, err)
 	}
 	if _, err := readBoundedLine(reader, maxRunnerLogLine); !errors.Is(err, io.EOF) {
@@ -190,8 +194,7 @@ func TestStreamLogReaderRecoversAfterOversizedLine(t *testing.T) {
 	if process.failureStage != algoipc.FailureStageBrokerConnect {
 		t.Fatalf("failure stage = %q, want broker connect", process.failureStage)
 	}
-	foundProtocol := false
-	foundOversized := false
+	var foundProtocol, foundOversized bool
 	for _, entry := range observed.All() {
 		fields := entry.ContextMap()
 		if entry.Message == "runner protocol event" && fields["stage"] == "connect" {
@@ -212,13 +215,13 @@ func TestStreamLogReaderRecoversAfterOversizedLine(t *testing.T) {
 func TestRunnerOutputRateLimitReportsDrops(t *testing.T) {
 	core, observed := observer.New(zapcore.DebugLevel)
 	process := NewRunnerProcess(ProcessConfig{Logger: zap.New(core)})
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		process.emitRunnerEvent("stdout", zapcore.DebugLevel, "runner output ignored")
 	}
 	process.reportRunnerIssues("stdout")
 
-	emitted := 0
-	dropped := uint64(0)
+	var emitted int
+	var dropped uint64
 	for _, entry := range observed.All() {
 		if entry.Message == "runner output ignored" {
 			emitted++
@@ -291,8 +294,7 @@ func TestRunnerProcessTagsStderrLogsAndCounters(t *testing.T) {
 		t.Fatal("stub process did not exit within timeout")
 	}
 
-	foundNoise := false
-	foundOversized := false
+	var foundNoise, foundOversized bool
 	for _, entry := range observed.All() {
 		fields := entry.ContextMap()
 		if fields["source"] != "stderr" {
@@ -338,7 +340,7 @@ func TestRunnerProcessTagsStderrLogsAndCounters(t *testing.T) {
 func TestRunnerOutputRateLimitUsesTheStderrSlot(t *testing.T) {
 	core, observed := observer.New(zapcore.DebugLevel)
 	process := NewRunnerProcess(ProcessConfig{Logger: zap.New(core)})
-	for i := 0; i < runnerLogRate+10; i++ {
+	for range runnerLogRate + 10 {
 		process.emitRunnerEvent("stderr", zapcore.DebugLevel, "runner output ignored")
 	}
 	process.reportRunnerIssues("stderr")

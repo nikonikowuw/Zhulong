@@ -77,7 +77,12 @@ var errNoLifecycleStore = errors.New("no lifecycle store configured")
 // SetBrokerSubscriptionResolver: the broker host lives in the native engine and derives
 // one socket per physical stream, so there is no process-wide default to fall
 // back to.
-func NewSupervisor(store LifecycleStore, rt Runtime, opts RecoveryOptions, logger *zap.Logger) *Supervisor {
+func NewSupervisor(
+	store LifecycleStore,
+	rt Runtime,
+	opts RecoveryOptions,
+	logger *zap.Logger,
+) *Supervisor {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -344,7 +349,10 @@ func IsEntryError(err error) bool {
 // logged rather than returned: every caller is a goroutine with no receiver for
 // the error. Synchronous paths (ResetAlgorithm, RestartAlgorithm) return the
 // error to their caller instead.
-func (s *Supervisor) persistStatus(ctx context.Context, algoID, status, action string) {
+func (s *Supervisor) persistStatus(
+	ctx context.Context,
+	algoID, status, action string,
+) {
 	if s.store == nil {
 		return
 	}
@@ -501,7 +509,12 @@ func (s *Supervisor) StopAlgorithm(ctx context.Context, algoID string) error {
 	// rollback/upgrade re-registered a live watcher under the same ID, the DB
 	// must keep reflecting that running process.
 	if s.retireWatcher(algoID, w) {
-		s.persistStatus(ctx, algoID, StatusDisabled, "stop")
+		s.persistStatus(
+			ctx,
+			algoID,
+			StatusDisabled,
+			"stop",
+		)
 	}
 	return stopErr
 }
@@ -645,7 +658,12 @@ func (s *Supervisor) rollbackToOld(ctx context.Context, oldAlgo PackageMeta) err
 		// The rollback target itself cannot run: the package is definitively
 		// broken, so record CRASH_LOOP instead of leaving a stale ACTIVE status.
 		w.setStatus(StatusCrashLoop)
-		s.persistStatus(ctx, oldAlgo.ID, StatusCrashLoop, "rollback_start_failure")
+		s.persistStatus(
+			ctx,
+			oldAlgo.ID,
+			StatusCrashLoop,
+			"rollback_start_failure",
+		)
 		return fmt.Errorf("rollback failed: %w", startErr)
 	}
 

@@ -98,7 +98,12 @@ func TestWatcherRespawnEndsSupervisionWhenEntryDisappears(t *testing.T) {
 	}
 	crashNow(t, trigger)
 
-	waitForSupervisorStatus(t, supervisor, algo.ID, algorunner.StatusCrashLoop)
+	waitForSupervisorStatus(
+		t,
+		supervisor,
+		algo.ID,
+		algorunner.StatusCrashLoop,
+	)
 
 	// StopAll waits for the watcher loop (bounded), so afterwards nothing can
 	// still be adding log lines.
@@ -110,7 +115,8 @@ func TestWatcherRespawnEndsSupervisionWhenEntryDisappears(t *testing.T) {
 	if got := observed.FilterMessage("package entry became unusable, giving up restart").Len(); got != 1 {
 		t.Fatalf("\"giving up restart\" was logged %d times, want exactly 1", got)
 	}
-	if got := observed.FilterMessage("algorithm entered CRASH_LOOP (circuit broken), halting auto-restart").Len(); got != 0 {
+	circuitBrokenMsg := "algorithm entered CRASH_LOOP (circuit broken), halting auto-restart"
+	if got := observed.FilterMessage(circuitBrokenMsg).Len(); got != 0 {
 		t.Fatalf("giving up on an unusable entry burned crash quota and tripped the circuit breaker")
 	}
 }
@@ -149,7 +155,7 @@ func TestWatcherRespawnKeepsSupervisingWhenStartFails(t *testing.T) {
 
 	// Two spawn failures prove the loop did not end after the first one.
 	deadline := time.Now().Add(5 * time.Second)
-	restartFailures := 0
+	var restartFailures int
 	for time.Now().Before(deadline) {
 		restartFailures = 0
 		for _, entry := range observed.All() {

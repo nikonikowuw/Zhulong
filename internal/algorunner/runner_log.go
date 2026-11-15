@@ -154,7 +154,12 @@ func (p *RunnerProcess) emitLogLine(source string, fallback zapcore.Level, line 
 	if isDependencyFailure(parsed.stage) {
 		p.setFailureStage(parsed.stage)
 	}
-	p.emitRunnerEvent(source, parsed.level, parsed.message, parsed.fields...)
+	p.emitRunnerEvent(
+		source,
+		parsed.level,
+		parsed.message,
+		parsed.fields...,
+	)
 }
 
 type parsedRunnerLine struct {
@@ -451,7 +456,12 @@ func readBoundedLine(reader *bufio.Reader, max int) (runnerLogLine, error) {
 // It owns the "source" field: callers build only event-specific fields, so the
 // stream name appears exactly once no matter which classification path produced
 // the record.
-func (p *RunnerProcess) emitRunnerEvent(source string, level zapcore.Level, message string, fields ...zap.Field) {
+func (p *RunnerProcess) emitRunnerEvent(
+	source string,
+	level zapcore.Level,
+	message string,
+	fields ...zap.Field,
+) {
 	index := runnerSourceIndex(source)
 
 	p.logRateMu.Lock()

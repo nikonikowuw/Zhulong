@@ -26,7 +26,7 @@ func TestSupervisorRollbackThenStopKeepsStatusConsistent(t *testing.T) {
 	const rounds = 6
 	ctx := context.Background()
 
-	for round := 0; round < rounds; round++ {
+	for round := range rounds {
 		store := newMockLifecycleStore()
 		algoV1 := supervisorTestPackage()
 		algoV1.Version = "1.0.0"
@@ -51,14 +51,29 @@ while true; do sleep 0.05; done
 		root := stubPackageRoot(t, algoV1, scriptContent)
 		algoV2 := algoV1
 		algoV2.Version = "2.0.0"
-		stubPackageRootAt(t, root, algoV2, scriptContent)
-		supervisor := newTestSupervisorWithRoot(t, store, root, options)
+		stubPackageRootAt(
+			t,
+			root,
+			algoV2,
+			scriptContent,
+		)
+		supervisor := newTestSupervisorWithRoot(
+			t,
+			store,
+			root,
+			options,
+		)
 
 		if err := supervisor.StartAlgorithm(ctx, algoV1); err != nil {
 			supervisor.StopAll(time.Second)
 			t.Fatalf("round %d: start v1: %v", round, err)
 		}
-		waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
+		waitForSupervisorStatus(
+			t,
+			supervisor,
+			algoV1.ID,
+			algorunner.StatusRunning,
+		)
 
 		algoV2.PreviousVersion = algoV1.Version
 		store.packages[algoV2.ID] = algoV2
@@ -72,8 +87,10 @@ while true; do sleep 0.05; done
 		stopDone := make(chan struct{})
 		go func() {
 			defer close(stopDone)
-			for i := 0; i < 30; i++ {
-				_ = supervisor.StopAlgorithm(ctx, algoV1.ID)
+			for range 30 {
+				if err := supervisor.StopAlgorithm(ctx, algoV1.ID); err != nil {
+					// Intentionally hammering concurrent stop during rollback.
+				}
 				time.Sleep(3 * time.Millisecond)
 			}
 		}()
@@ -114,7 +131,12 @@ func TestSupervisorUpgradeAlgorithmSuccess(t *testing.T) {
 	if err := supervisor.StartAlgorithm(ctx, algoV1); err != nil {
 		t.Fatalf("start v1 algorithm: %v", err)
 	}
-	waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
+	waitForSupervisorStatus(
+		t,
+		supervisor,
+		algoV1.ID,
+		algorunner.StatusRunning,
+	)
 
 	algoV2.PreviousVersion = algoV1.Version
 
@@ -152,7 +174,12 @@ while true; do sleep 0.1; done
 	root := stubPackageRoot(t, algoV1, scriptContent)
 	algoV2 := algoV1
 	algoV2.Version = "2.0.0"
-	stubPackageRootAt(t, root, algoV2, scriptContent)
+	stubPackageRootAt(
+		t,
+		root,
+		algoV2,
+		scriptContent,
+	)
 	supervisor := algorunner.NewSupervisor(
 		store,
 		algorunner.Runtime{AlgorithmsDir: root},
@@ -167,7 +194,12 @@ while true; do sleep 0.1; done
 	if err := supervisor.StartAlgorithm(ctx, algoV1); err != nil {
 		t.Fatalf("start v1 algorithm: %v", err)
 	}
-	waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
+	waitForSupervisorStatus(
+		t,
+		supervisor,
+		algoV1.ID,
+		algorunner.StatusRunning,
+	)
 
 	algoV2.PreviousVersion = algoV1.Version
 	store.packages[algoV2.ID] = algoV2
@@ -178,7 +210,7 @@ while true; do sleep 0.1; done
 
 	// Wait for automatic rollback to restore version 1.0.0 in store
 	deadline := time.Now().Add(5 * time.Second)
-	rolledBack := false
+	var rolledBack bool
 	for time.Now().Before(deadline) {
 		pkg, err := store.GetAlgorithmPackage(ctx, algoV1.ID)
 		if err == nil && pkg.Version == "1.0.0" {
@@ -192,7 +224,12 @@ while true; do sleep 0.1; done
 		t.Fatalf("expected version to be rolled back to 1.0.0, got %s", pkg.Version)
 	}
 
-	waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
+	waitForSupervisorStatus(
+		t,
+		supervisor,
+		algoV1.ID,
+		algorunner.StatusRunning,
+	)
 }
 
 func TestSupervisorStartFailsWithNoBrokerSocketsWhenResolverConfigured(t *testing.T) {
@@ -234,7 +271,12 @@ func TestSupervisorRestartWithZeroBrokersRetiresRunnerToStandby(t *testing.T) {
 	if err := supervisor.StartAlgorithm(ctx, algo); err != nil {
 		t.Fatalf("start algorithm: %v", err)
 	}
-	waitForSupervisorStatus(t, supervisor, algo.ID, algorunner.StatusRunning)
+	waitForSupervisorStatus(
+		t,
+		supervisor,
+		algo.ID,
+		algorunner.StatusRunning,
+	)
 
 	// Now remove all tasks / broker sockets
 	resolver.Set([]string{})

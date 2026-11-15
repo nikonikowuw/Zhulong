@@ -131,7 +131,12 @@ func stubPackageRoot(t *testing.T, pkg algorunner.PackageMeta, script string) st
 
 // stubPackageRootAt installs script as pkg's entry inside an existing root, for
 // multi-version scenarios where upgrade/rollback need two versions at once.
-func stubPackageRootAt(t *testing.T, root string, pkg algorunner.PackageMeta, script string) {
+func stubPackageRootAt(
+	t *testing.T,
+	root string,
+	pkg algorunner.PackageMeta,
+	script string,
+) {
 	t.Helper()
 	dir := filepath.Join(root, pkg.ID, pkg.Version)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -208,7 +213,11 @@ func waitForRecordedInvocations(t *testing.T, path string, want int) {
 	t.Fatalf("runner invocations did not reach %d; got %d", want, len(readRecordedRunnerInvocations(t, path)))
 }
 
-func waitForSupervisorStatus(t *testing.T, supervisor *algorunner.Supervisor, id, want string) {
+func waitForSupervisorStatus(
+	t *testing.T,
+	supervisor *algorunner.Supervisor,
+	id, want string,
+) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -243,8 +252,11 @@ func findRunnerPID(t *testing.T, marker string) int {
 				continue
 			}
 			// 新形态：进程名就是包 id（<root>/<id>/<version>/<id>），所以只按 id 匹配。
-			if len(fields) > 1 && filepath.Base(fields[1]) == marker {
-				return pid
+			// 桩是 shell 脚本，某些平台上 ps 输出中 argv[0] 为 /bin/sh，argv[1] 才是入口脚本。
+			for _, field := range fields[1:] {
+				if filepath.Base(field) == marker {
+					return pid
+				}
 			}
 		}
 		return 0

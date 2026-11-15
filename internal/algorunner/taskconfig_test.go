@@ -24,7 +24,12 @@ type fakeBroadcaster struct {
 	err     error
 }
 
-func (f *fakeBroadcaster) BroadcastAIMessage(_ context.Context, streamID uint64, msgType uint16, payload []byte) error {
+func (f *fakeBroadcaster) BroadcastAIMessage(
+	_ context.Context,
+	streamID uint64,
+	msgType uint16,
+	payload []byte,
+) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -201,10 +206,13 @@ func TestSupervisorPushRegionsAndUnchangedParams(t *testing.T) {
 		t.Fatalf("want region and params, got %+v", broadcaster.records)
 	}
 	for _, record := range broadcaster.records {
-		want := provider.configs[5]
-		if record.msgType == algoipc.MsgTaskRegions {
+		var want string
+		switch record.msgType {
+		case algoipc.MsgTaskRegions:
 			want = provider.regions[5]
-		} else if record.msgType != algoipc.MsgTaskConfig {
+		case algoipc.MsgTaskConfig:
+			want = provider.configs[5]
+		default:
 			t.Fatalf("unexpected type %d", record.msgType)
 		}
 		if got := string(record.payload[algoipc.TaskConfigHeaderSize:]); got != want {
