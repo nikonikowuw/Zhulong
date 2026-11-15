@@ -29,15 +29,24 @@ type StubClockDriver struct {
 // NewStubClockDriver creates a new stub clock driver with default values.
 func NewStubClockDriver() *StubClockDriver {
 	return &StubClockDriver{
-		rtcTime:       time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC),
+		rtcTime: time.Date(
+			2026,
+			10,
+			7,
+			12,
+			0,
+			0,
+			0,
+			time.UTC,
+		),
 		rtcStatus:     RTCStatusNormal,
 		timezone:      "Asia/Shanghai",
 		hasPermission: true,
 		// Initialised rather than nil so the accessors below return empty
 		// slices: a nil result trips DeepEqual-based assertions for no reason.
-		stepCalls:     make([]time.Time, 0),
-		slewCalls:     make([]time.Duration, 0),
-		rtcWriteCalls: make([]time.Time, 0),
+		stepCalls:     []time.Time{},
+		slewCalls:     []time.Duration{},
+		rtcWriteCalls: []time.Time{},
 	}
 }
 

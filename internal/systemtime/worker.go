@@ -177,26 +177,46 @@ func (s *TimeService) probeOnce(ctx context.Context) bool {
 	// safety threshold are events. Keeping the steady-state slew out of the audit
 	// trail is what stops a 15-minute heartbeat from pruning the operations an
 	// operator actually needs to trace.
-	s.logger.Debug("NTP probe ok",
+	s.logger.Debug(
+		"NTP probe ok",
 		zap.String("server", res.Server),
 		zap.Duration("offset", res.Offset),
 		zap.Duration("rtt", res.RTT),
 		zap.Uint8("stratum", res.Stratum),
-		zap.String("action", outcome.Kind.String()))
+		zap.String("action", outcome.Kind.String()),
+	)
 
 	switch outcome.Kind {
 	case ActionStepped:
-		s.recordSystem(ActionTimeClockStep, "system_time",
-			fmt.Sprintf("server=%s, step=%v, offset=%v, rtt=%v",
-				res.Server, outcome.Step, res.Offset, res.RTT), nil)
+		s.recordSystem(
+			ActionTimeClockStep,
+			"system_time",
+			fmt.Sprintf(
+				"server=%s, step=%v, offset=%v, rtt=%v",
+				res.Server,
+				outcome.Step,
+				res.Offset,
+				res.RTT,
+			),
+			nil,
+		)
 	case ActionPanicReview:
 		// A clock offset past the panic threshold is a high-risk condition. It must
 		// be audited as failed even though the probe itself succeeded, otherwise
 		// the record claims success for the exact situation that needs attention.
 		s.logger.Warn("NTP offset exceeds panic threshold", zap.Error(stepErr))
-		s.recordSystem(ActionTimeClockStep, "system_time",
-			fmt.Sprintf("server=%s, offset=%v, review=%d/%d",
-				res.Server, res.Offset, outcome.Review, PanicRequiredChecks), stepErr)
+		s.recordSystem(
+			ActionTimeClockStep,
+			"system_time",
+			fmt.Sprintf(
+				"server=%s, offset=%v, review=%d/%d",
+				res.Server,
+				res.Offset,
+				outcome.Review,
+				PanicRequiredChecks,
+			),
+			stepErr,
+		)
 	}
 
 	return true
@@ -209,7 +229,12 @@ func (s *TimeService) recordProbeFailure(detail string, probeErr error) {
 	if s.probeFailed.Swap(true) {
 		return
 	}
-	s.recordSystem(ActionTimeNTPSyncFailed, "system_time", detail, probeErr)
+	s.recordSystem(
+		ActionTimeNTPSyncFailed,
+		"system_time",
+		detail,
+		probeErr,
+	)
 }
 
 // recordProbeSuccess audits the recovery edge only: the transition back from a
@@ -218,5 +243,10 @@ func (s *TimeService) recordProbeSuccess() {
 	if !s.probeFailed.Swap(false) {
 		return
 	}
-	s.recordSystem(ActionTimeNTPRecovered, "system_time", "NTP synchronization recovered", nil)
+	s.recordSystem(
+		ActionTimeNTPRecovered,
+		"system_time",
+		"NTP synchronization recovered",
+		nil,
+	)
 }

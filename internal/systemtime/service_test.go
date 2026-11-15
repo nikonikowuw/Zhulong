@@ -225,7 +225,7 @@ func TestTimeServiceRestartAfterStop(t *testing.T) {
 	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	for cycle := 0; cycle < 3; cycle++ {
+	for cycle := range 3 {
 		if err := svc.Start(context.Background()); err != nil {
 			t.Fatalf("cycle %d: Start failed: %v", cycle, err)
 		}

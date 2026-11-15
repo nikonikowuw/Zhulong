@@ -148,5 +148,8 @@ func decodeServers(encoded string) ([]string, error) {
 	if err := json.Unmarshal([]byte(encoded), &servers); err != nil {
 		return nil, fmt.Errorf("decode ntp servers: %w", err)
 	}
+	if servers == nil {
+		servers = []string{}
+	}
 	return servers, nil
 }

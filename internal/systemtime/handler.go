@@ -70,7 +70,12 @@ func (h *Handler) GetTime(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response  "DATABASE_ERROR"
 // @Router       /system/time/config [put]
 func (h *Handler) UpdateConfig(c *gin.Context) {
-	audithttp.Tag(c, ActionTimeUpdateConfig, "system_time", "Update time configuration")
+	audithttp.Tag(
+		c,
+		ActionTimeUpdateConfig,
+		"system_time",
+		"Update time configuration",
+	)
 
 	var req UpdateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -84,8 +89,16 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		return
 	}
 	// Whitelisted summary: the request fields are non-sensitive configuration.
-	audithttp.TagDetail(c, fmt.Sprintf("mode=%s, servers=%v, interval=%ds, tz=%s",
-		req.Mode, req.NTPServers, req.SyncIntervalSeconds, req.Timezone))
+	audithttp.TagDetail(
+		c,
+		fmt.Sprintf(
+			"mode=%s, servers=%v, interval=%ds, tz=%s",
+			req.Mode,
+			req.NTPServers,
+			req.SyncIntervalSeconds,
+			req.Timezone,
+		),
+	)
 	httputil.Success(c, status)
 }
 
@@ -100,7 +113,12 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response  "DATABASE_ERROR"
 // @Router       /system/time/sync [post]
 func (h *Handler) SyncNow(c *gin.Context) {
-	audithttp.Tag(c, ActionTimeNTPSync, "system_time", "Manual NTP sync")
+	audithttp.Tag(
+		c,
+		ActionTimeNTPSync,
+		"system_time",
+		"Manual NTP sync",
+	)
 
 	status, err := h.service.SyncNow(c.Request.Context())
 	if err != nil {
@@ -131,7 +149,12 @@ func (h *Handler) SyncNow(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response  "SET_TIME_FAILED"
 // @Router       /system/time/manual [post]
 func (h *Handler) ManualSet(c *gin.Context) {
-	audithttp.Tag(c, ActionTimeManualSet, "system_time", "Set system time manually")
+	audithttp.Tag(
+		c,
+		ActionTimeManualSet,
+		"system_time",
+		"Set system time manually",
+	)
 
 	var req ManualTimeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -141,8 +164,14 @@ func (h *Handler) ManualSet(c *gin.Context) {
 
 	targetTime, err := parseTimestamp(req.TargetTime)
 	if err != nil {
-		httputil.WriteError(c, apperr.Invalid("INVALID_TIMESTAMP",
-			"Target timestamp must be a valid ISO-8601 or RFC3339 timestamp", err))
+		httputil.WriteError(
+			c,
+			apperr.Invalid(
+				"INVALID_TIMESTAMP",
+				"Target timestamp must be a valid ISO-8601 or RFC3339 timestamp",
+				err,
+			),
+		)
 		return
 	}
 

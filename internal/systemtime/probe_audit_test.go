@@ -77,9 +77,16 @@ func newProbeHarness(t *testing.T, sntp *recordingSNTPClient) *probeHarness {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 
-	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
-	})
+	auditSvc := audit.NewService(
+		audit.NewStore(dbStore),
+		zap.NewNop(),
+		audit.Config{
+			BufferSize:    100,
+			BatchSize:     10,
+			FlushInterval: 5 * time.Millisecond,
+			MaxEntries:    1000,
+		},
+	)
 	if err := auditSvc.Start(context.Background()); err != nil {
 		t.Fatalf("start audit service: %v", err)
 	}
@@ -152,7 +159,7 @@ func TestProbeSteadyStateSlewRecordsNoAudit(t *testing.T) {
 	h := newProbeHarness(t, sntp)
 
 	// Several rounds, because the defect being pinned is per-round accumulation.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if !h.probe() {
 			t.Fatalf("round %d: expected a healthy probe", i)
 		}
@@ -274,7 +281,7 @@ func TestProbeFailureTransitionRecordedOnce(t *testing.T) {
 	}
 	h := newProbeHarness(t, sntp)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if h.probe() {
 			t.Fatalf("round %d: expected the probe to report failure", i)
 		}
@@ -351,7 +358,7 @@ func TestProbeDriverFailureIsDebouncedAsOutage(t *testing.T) {
 	// That is an outage, not a healthy steady state: without the shared edge
 	// detector it would silently clear the failure state and audit nothing.
 	h.driver.SetPermission(false)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if h.probe() {
 			t.Fatalf("round %d: a refused clock step must report failure", i)
 		}

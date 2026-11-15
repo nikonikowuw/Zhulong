@@ -122,15 +122,23 @@ func (s *TimeService) GetStatus(ctx context.Context) (*SystemTimeStatus, error) 
 
 	cfg, err := s.repo.GetConfig(ctx)
 	if err != nil {
-		return nil, apperr.Internal("DATABASE_ERROR", "Database operation failed",
-			fmt.Errorf("get time config: %w", err))
+		return nil, apperr.Internal(
+			"DATABASE_ERROR",
+			"Database operation failed",
+			fmt.Errorf("get time config: %w", err),
+		)
+	}
+
+	ntpServers := cfg.NTPServers
+	if ntpServers == nil {
+		ntpServers = []string{}
 	}
 
 	return &SystemTimeStatus{
 		CurrentTime:         sysTime,
 		Timezone:            tz,
 		Mode:                cfg.Mode,
-		NTPServers:          cfg.NTPServers,
+		NTPServers:          ntpServers,
 		SyncIntervalSeconds: cfg.SyncIntervalSeconds,
 		SyncStatus:          s.sm.GetSyncStatus(),
 		RTCStatus:           s.driver.GetRTCStatus(),
@@ -141,8 +149,11 @@ func (s *TimeService) GetStatus(ctx context.Context) (*SystemTimeStatus, error) 
 // UpdateConfig updates time configuration (mode, NTP servers, interval, timezone).
 func (s *TimeService) UpdateConfig(ctx context.Context, req UpdateConfigRequest) (*SystemTimeStatus, error) {
 	if _, err := time.LoadLocation(req.Timezone); err != nil {
-		return nil, apperr.Invalid("INVALID_TIME_CONFIG", "Invalid time configuration",
-			fmt.Errorf("timezone %q: %w", req.Timezone, err))
+		return nil, apperr.Invalid(
+			"INVALID_TIME_CONFIG",
+			"Invalid time configuration",
+			fmt.Errorf("timezone %q: %w", req.Timezone, err),
+		)
 	}
 
 	// Persist before touching the system clock: a failed write must not leave the
@@ -150,15 +161,21 @@ func (s *TimeService) UpdateConfig(ctx context.Context, req UpdateConfigRequest)
 	if _, err := s.repo.UpdateConfig(ctx, TimeConfigUpdate(req)); err != nil {
 		// A failed write is a server-side fault, not a bad request: reporting it as
 		// an invalid configuration is what let SQLite text reach the client.
-		return nil, apperr.Internal("DATABASE_ERROR", "Database operation failed",
-			fmt.Errorf("update time config: %w", err))
+		return nil, apperr.Internal(
+			"DATABASE_ERROR",
+			"Database operation failed",
+			fmt.Errorf("update time config: %w", err),
+		)
 	}
 
 	// A timezone that the driver refuses is not worth failing the request: the
 	// configuration is stored and the operator sees the warning in the log.
 	if err := s.driver.ApplyTimezone(req.Timezone); err != nil {
-		s.logger.Warn("Failed to apply timezone to system",
-			zap.String("timezone", req.Timezone), zap.Error(err))
+		s.logger.Warn(
+			"Failed to apply timezone to system",
+			zap.String("timezone", req.Timezone),
+			zap.Error(err),
+		)
 	}
 
 	// Apply the new schedule (or probe immediately) without waiting an interval.
@@ -171,8 +188,11 @@ func (s *TimeService) UpdateConfig(ctx context.Context, req UpdateConfigRequest)
 func (s *TimeService) SyncNow(ctx context.Context) (*SystemTimeStatus, error) {
 	cfg, err := s.repo.GetConfig(ctx)
 	if err != nil {
-		return nil, apperr.Internal("DATABASE_ERROR", "Database operation failed",
-			fmt.Errorf("get config: %w", err))
+		return nil, apperr.Internal(
+			"DATABASE_ERROR",
+			"Database operation failed",
+			fmt.Errorf("get config: %w", err),
+		)
 	}
 
 	if cfg.Mode != ModeNTP {
@@ -213,8 +233,11 @@ func (s *TimeService) SyncNow(ctx context.Context) (*SystemTimeStatus, error) {
 func (s *TimeService) SetManualTime(ctx context.Context, targetTime time.Time) (*SystemTimeStatus, error) {
 	outcome, err := s.sm.ProcessManualTime(targetTime)
 	if err != nil {
-		return nil, apperr.Internal("SET_TIME_FAILED", "Failed to set system time",
-			fmt.Errorf("process manual time: %w", err))
+		return nil, apperr.Internal(
+			"SET_TIME_FAILED",
+			"Failed to set system time",
+			fmt.Errorf("process manual time: %w", err),
+		)
 	}
 	s.logRTCWriteFailure(outcome, "manual_set")
 
@@ -260,8 +283,12 @@ func (s *TimeService) healFromRTCOnBoot() {
 	}
 
 	s.logger.Info("Successfully restored system clock from RTC")
-	s.recordSystem(ActionTimeRTCHeal, "system_time",
-		fmt.Sprintf("restored system time to %s from RTC", rtcTime.Format(time.RFC3339)), nil)
+	s.recordSystem(
+		ActionTimeRTCHeal,
+		"system_time",
+		fmt.Sprintf("restored system time to %s from RTC", rtcTime.Format(time.RFC3339)),
+		nil,
+	)
 }
 
 func (s *TimeService) applySavedTimezoneOnBoot(ctx context.Context) {

@@ -11,7 +11,16 @@ import (
 // (2026-01-01). It is a var rather than a const because time.Date is not a
 // constant expression, and it stays unexported because it gates whether the
 // clock may be stepped: no other package needs to read or reassign it.
-var buildEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+var buildEpoch = time.Date(
+	2026,
+	1,
+	1,
+	0,
+	0,
+	0,
+	0,
+	time.UTC,
+)
 
 const (
 	// SlewThreshold is the largest offset corrected by adjtime slew instead of a
@@ -268,18 +277,29 @@ func (sm *TimeStateMachine) reviewPanicLocked(sysTime time.Time, res *SNTPResult
 
 	if sm.panicCount < PanicRequiredChecks {
 		sm.state = SyncStatePanicReview
+		sm.lastError = fmt.Sprintf(
+			"offset %v exceeds panic threshold (%v), verification %d/%d",
+			res.Offset.Round(time.Millisecond),
+			PanicThreshold,
+			sm.panicCount,
+			PanicRequiredChecks,
+		)
 		if restarted {
-			sm.lastError = fmt.Sprintf("fluctuating large offset %v, verification restarted %d/%d",
-				res.Offset.Round(time.Millisecond), sm.panicCount, PanicRequiredChecks)
-		} else {
-			sm.lastError = fmt.Sprintf("offset %v exceeds panic threshold (%v), verification %d/%d",
-				res.Offset.Round(time.Millisecond), PanicThreshold, sm.panicCount, PanicRequiredChecks)
+			sm.lastError = fmt.Sprintf(
+				"fluctuating large offset %v, verification restarted %d/%d",
+				res.Offset.Round(time.Millisecond),
+				sm.panicCount,
+				PanicRequiredChecks,
+			)
 		}
 		// Carry the outcome alongside the error: the caller must audit this as a
 		// failure. Returning only the error previously let the service fall
 		// through to a "success" record, which is the exact opposite of the truth
 		// for a 15-minute clock jump under verification.
-		return SyncOutcome{Kind: ActionPanicReview, Review: sm.panicCount}, ErrPanicReview
+		return SyncOutcome{
+			Kind:   ActionPanicReview,
+			Review: sm.panicCount,
+		}, ErrPanicReview
 	}
 
 	return sm.stepLocked(sysTime.Add(res.Offset), res)

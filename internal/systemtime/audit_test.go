@@ -34,9 +34,16 @@ func setupAuditHandler(t *testing.T, sntpErr error) (*gin.Engine, *audit.Service
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 
-	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
-	})
+	auditSvc := audit.NewService(
+		audit.NewStore(dbStore),
+		zap.NewNop(),
+		audit.Config{
+			BufferSize:    100,
+			BatchSize:     10,
+			FlushInterval: 5 * time.Millisecond,
+			MaxEntries:    1000,
+		},
+	)
 	if err := auditSvc.Start(context.Background()); err != nil {
 		t.Fatalf("start audit service: %v", err)
 	}
