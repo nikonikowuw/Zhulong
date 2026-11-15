@@ -167,7 +167,7 @@ func TestIngestRejectsOversizedBody(t *testing.T) {
 	entry["fields"] = map[string]any{"code": strings.Repeat("x", 200)}
 	// Build a body beyond 64 KiB while staying valid JSON structurally.
 	rawPayload := payload(entry)
-	content := rawPayload[len(`{"entries":[`):len(rawPayload)-len(`]}`)]
+	content := rawPayload[len(`{"entries":[`) : len(rawPayload)-len(`]}`)]
 
 	var builder strings.Builder
 	builder.WriteString(`{"entries":[`)
