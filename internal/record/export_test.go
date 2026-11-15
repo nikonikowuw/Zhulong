@@ -49,7 +49,12 @@ func (t *TargetTrackerForTest) ResolveFrame(
 			score: o.Score,
 		}
 	}
-	return t.inner.resolveFrame(b, internalObs, at, ttl)
+	return t.inner.resolveFrame(
+		b,
+		internalObs,
+		at,
+		ttl,
+	)
 }
 
 func (t *TargetTrackerForTest) Stats() TrackerStats {
@@ -65,7 +70,12 @@ type SnapshotOutputForTest struct {
 
 // NewSnapshotJobForTest 构造一个等价于内部 snapshotJob 的任务。
 func NewSnapshotJobForTest(cameraID string, boxes []engine.SnapshotBox, outputs []SnapshotOutputForTest) snapshotJob {
-	return NewSnapshotJobWithPTSForTest(cameraID, 0, boxes, outputs)
+	return NewSnapshotJobWithPTSForTest(
+		cameraID,
+		0,
+		boxes,
+		outputs,
+	)
 }
 
 // NewSnapshotJobWithPTSForTest 构造携带指定 PTS 的测试抓拍任务。
@@ -83,7 +93,12 @@ func NewSnapshotJobWithPTSForTest(
 			protected: out.Protected,
 		})
 	}
-	return snapshotJob{cameraID: cameraID, pts: pts, boxes: boxes, outputs: converted}
+	return snapshotJob{
+		cameraID: cameraID,
+		pts:      pts,
+		boxes:    boxes,
+		outputs:  converted,
+	}
 }
 
 var (

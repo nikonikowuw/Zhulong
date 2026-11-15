@@ -24,7 +24,7 @@ func NewCooldownManager(cooldown time.Duration) *CooldownManager {
 	}
 	return &CooldownManager{
 		cooldown: cooldown,
-		records:  make(map[string]time.Time),
+		records:  map[string]time.Time{},
 	}
 }
 
@@ -155,6 +155,6 @@ func (cm *CooldownManager) SetCooldown(d time.Duration) {
 func (cm *CooldownManager) Reset() {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	cm.records = make(map[string]time.Time)
+	cm.records = map[string]time.Time{}
 	cm.lastCleaned = time.Time{}
 }

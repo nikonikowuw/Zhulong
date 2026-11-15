@@ -107,9 +107,9 @@ func assertRecordRows(t *testing.T, store *record.Store, ids recordIDs, wantRec,
 	}
 
 	for name, tc := range map[string]struct{ got, want bool }{
-		"recognition": {rec != nil, wantRec},
-		"alarm":       {alarm != nil, wantAlarm},
-		"capture":     {cap != nil, wantCapture},
+		"recognition": {got: rec != nil, want: wantRec},
+		"alarm":       {got: alarm != nil, want: wantAlarm},
+		"capture":     {got: cap != nil, want: wantCapture},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s row existence = %v, want %v", name, tc.got, tc.want)
@@ -141,8 +141,18 @@ func TestRetentionPrunerDeletesRowsOnlyAfterSnapshotFilesAreRemoved(t *testing.T
 	expiredAt := now.Add(-40 * 24 * time.Hour)
 	freshAt := now.Add(-1 * time.Hour)
 
-	expired := seedRecordRows(t, store, "cam_01", expiredAt)
-	fresh := seedRecordRows(t, store, "cam_02", freshAt)
+	expired := seedRecordRows(
+		t,
+		store,
+		"cam_01",
+		expiredAt,
+	)
+	fresh := seedRecordRows(
+		t,
+		store,
+		"cam_02",
+		freshAt,
+	)
 	checker := &snapshotFileChecker{files: map[string]bool{
 		expired.recImagePath:     true,
 		expired.recFacePath:      true,
@@ -162,7 +172,14 @@ func TestRetentionPrunerDeletesRowsOnlyAfterSnapshotFilesAreRemoved(t *testing.T
 	if first.Total() != 0 {
 		t.Fatalf("existing image references must be retained and alarms untouched: %+v", first)
 	}
-	assertRecordRows(t, store, expired, true, true, true)
+	assertRecordRows(
+		t,
+		store,
+		expired,
+		true,
+		true,
+		true,
+	)
 
 	// Once storage cleanup removes both regular images, the next reconciliation
 	// removes their rows but keeps alarm metadata as high-value evidence.
@@ -175,7 +192,14 @@ func TestRetentionPrunerDeletesRowsOnlyAfterSnapshotFilesAreRemoved(t *testing.T
 	if partial.Recognitions != 0 || partial.Captures != 1 {
 		t.Fatalf("recognition must survive while its face image exists: %+v", partial)
 	}
-	assertRecordRows(t, store, expired, true, true, false)
+	assertRecordRows(
+		t,
+		store,
+		expired,
+		true,
+		true,
+		false,
+	)
 
 	checker.files[expired.recFacePath] = false
 	result, err := pruner.PruneNow(ctx)
@@ -189,8 +213,22 @@ func TestRetentionPrunerDeletesRowsOnlyAfterSnapshotFilesAreRemoved(t *testing.T
 		t.Fatalf("cutoff %v not between %v and %v", result.Cutoff, expiredAt, freshAt)
 	}
 
-	assertRecordRows(t, store, expired, false, true, false)
-	assertRecordRows(t, store, fresh, true, true, true)
+	assertRecordRows(
+		t,
+		store,
+		expired,
+		false,
+		true,
+		false,
+	)
+	assertRecordRows(
+		t,
+		store,
+		fresh,
+		true,
+		true,
+		true,
+	)
 
 	second, err := pruner.PruneNow(ctx)
 	if err != nil {
@@ -280,7 +318,14 @@ func TestRetentionPrunerDoesNotDeleteRowsWhenSnapshotCheckFails(t *testing.T) {
 	if _, err := pruner.PruneNow(ctx); !errors.Is(err, boom) {
 		t.Fatalf("expected wrapped snapshot-check error, got %v", err)
 	}
-	assertRecordRows(t, store, old, true, true, true)
+	assertRecordRows(
+		t,
+		store,
+		old,
+		true,
+		true,
+		true,
+	)
 }
 
 func TestRetentionPrunerDeletesInBatches(t *testing.T) {
@@ -311,7 +356,14 @@ func TestRetentionPrunerDeletesInBatches(t *testing.T) {
 	}
 
 	for _, rowIDs := range ids {
-		assertRecordRows(t, store, rowIDs, false, true, false)
+		assertRecordRows(
+			t,
+			store,
+			rowIDs,
+			false,
+			true,
+			false,
+		)
 	}
 }
 
@@ -352,7 +404,14 @@ func TestRetentionPrunerBackgroundLoopStops(t *testing.T) {
 		t.Fatalf("provider called %d more times after Stop", got-callsAfterStop)
 	}
 
-	assertRecordRows(t, store, expired, false, true, false)
+	assertRecordRows(
+		t,
+		store,
+		expired,
+		false,
+		true,
+		false,
+	)
 }
 
 func TestRetentionPrunerStopIsSafeWithoutStart(t *testing.T) {

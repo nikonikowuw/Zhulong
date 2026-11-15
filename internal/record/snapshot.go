@@ -206,7 +206,7 @@ func (s *SnapshotStore) Enqueue(job snapshotJob) bool {
 		return false
 	}
 
-	enqueued := false
+	var enqueued bool
 	s.enqMu.RLock()
 	if !s.stopped {
 		select {
@@ -315,10 +315,12 @@ func (s *SnapshotStore) writeOutputs(
 	for _, out := range job.outputs {
 		img, ok := byIndex[out.boxIndex]
 		if !ok {
-			s.logger.Warn("snapshot image for output not found in result",
+			s.logger.Warn(
+				"snapshot image for output not found in result",
 				zap.Int("box_index", out.boxIndex),
 				zap.String("rel_path", out.relPath),
-				zap.Int("total_images", len(byIndex)))
+				zap.Int("total_images", len(byIndex)),
+			)
 			continue
 		}
 		if s.writeOutput(job, root, out, img) {
@@ -338,8 +340,12 @@ func (s *SnapshotStore) writeOutput(
 ) bool {
 	abs := filepath.Join(root, out.relPath)
 	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
-		s.logger.Warn("create snapshot directory failed",
-			zap.String("camera_id", job.cameraID), zap.String("dir", filepath.Dir(abs)), zap.Error(err))
+		s.logger.Warn(
+			"create snapshot directory failed",
+			zap.String("camera_id", job.cameraID),
+			zap.String("dir", filepath.Dir(abs)),
+			zap.Error(err),
+		)
 		return false
 	}
 
@@ -363,13 +369,21 @@ func (s *SnapshotStore) writeOutput(
 					zap.String("path", marker), zap.Error(removeErr))
 			}
 		}
-		s.logger.Warn("write snapshot file failed",
-			zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
+		s.logger.Warn(
+			"write snapshot file failed",
+			zap.String("camera_id", job.cameraID),
+			zap.String("path", abs),
+			zap.Error(err),
+		)
 		return false
 	}
 
-	s.logger.Debug("snapshot file written successfully",
-		zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Int("bytes", len(img.JPEG)))
+	s.logger.Debug(
+		"snapshot file written successfully",
+		zap.String("camera_id", job.cameraID),
+		zap.String("path", abs),
+		zap.Int("bytes", len(img.JPEG)),
+	)
 
 	return true
 }
@@ -381,8 +395,12 @@ func (s *SnapshotStore) clearRecordPaths(job snapshotJob) {
 		return
 	}
 	if err := cleaner.ClearRecordSnapshotPaths(context.Background(), job.targetTable, job.targetID); err != nil {
-		s.logger.Warn("clear snapshot paths on failure failed",
-			zap.String("table", job.targetTable), zap.String("id", job.targetID), zap.Error(err))
+		s.logger.Warn(
+			"clear snapshot paths on failure failed",
+			zap.String("table", job.targetTable),
+			zap.String("id", job.targetID),
+			zap.Error(err),
+		)
 	}
 }
 
@@ -425,12 +443,13 @@ func (s *SnapshotStore) EnsureEvidenceLocks(ctx context.Context, relPaths []stri
 		return 0, fmt.Errorf("open media root %q: %w", rootPath, err)
 	}
 	defer func() {
-		// The root is only a handle; a close failure must not turn a completed
-		// backfill into an error.
-		_ = root.Close()
+		if err := root.Close(); err != nil {
+			// The root is only a handle; a close failure must not turn a completed
+			// backfill into an error.
+		}
 	}()
 
-	written := 0
+	var written int
 	for _, rel := range relPaths {
 		ok, err := ensureEvidenceLock(root, rel)
 		if err != nil {
@@ -464,10 +483,12 @@ func ensureEvidenceLock(root *os.Root, rel string) (bool, error) {
 	}
 
 	marker := rel + ".lock"
-	if _, err := root.Lstat(marker); err == nil {
+	_, lstatErr := root.Lstat(marker)
+	if lstatErr == nil {
 		return false, nil
-	} else if !os.IsNotExist(err) {
-		return false, fmt.Errorf("stat evidence lock %q: %w", marker, err)
+	}
+	if !os.IsNotExist(lstatErr) {
+		return false, fmt.Errorf("stat evidence lock %q: %w", marker, lstatErr)
 	}
 
 	file, err := root.OpenFile(marker, os.O_CREATE|os.O_WRONLY, 0o640)

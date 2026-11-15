@@ -462,7 +462,12 @@ func TestTrackDeduplication_CooldownKeyContract(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				k := record.VehicleCaptureCooldownKeyForTest(tt.cam, tt.trackID, tt.firstPlateNo, tt.box)
+				k := record.VehicleCaptureCooldownKeyForTest(
+					tt.cam,
+					tt.trackID,
+					tt.firstPlateNo,
+					tt.box,
+				)
 				if k != tt.expected {
 					t.Errorf("got %q, want %q", k, tt.expected)
 				}
@@ -549,15 +554,21 @@ func TestTrackDeduplication_MultiKeyContract(t *testing.T) {
 	})
 
 	t.Run("detection and alarm keys", func(t *testing.T) {
-		if got, want := record.DetectionCaptureCooldownKeyForTest("cam_01", "person", 9), "cap:cam_01:person:trk:9"; got != want {
-			t.Errorf("detection tracked key = %q, want %q", got, want)
+		gotTracked := record.DetectionCaptureCooldownKeyForTest("cam_01", "person", 9)
+		wantTracked := "cap:cam_01:person:trk:9"
+		if gotTracked != wantTracked {
+			t.Errorf("detection tracked key = %q, want %q", gotTracked, wantTracked)
 		}
 		// spec §1：无身份回落保持 cap:{camera}:{label}。
-		if got, want := record.DetectionCaptureCooldownKeyForTest("cam_01", "person", 0), "cap:cam_01:person"; got != want {
-			t.Errorf("detection fallback key = %q, want %q", got, want)
+		gotFallback := record.DetectionCaptureCooldownKeyForTest("cam_01", "person", 0)
+		wantFallback := "cap:cam_01:person"
+		if gotFallback != wantFallback {
+			t.Errorf("detection fallback key = %q, want %q", gotFallback, wantFallback)
 		}
-		if got, want := record.AlarmCooldownKeyForTest("cam_01", "smoke"), "alarm:cam_01:smoke"; got != want {
-			t.Errorf("alarm key = %q, want %q", got, want)
+		gotAlarm := record.AlarmCooldownKeyForTest("cam_01", "smoke")
+		wantAlarm := "alarm:cam_01:smoke"
+		if gotAlarm != wantAlarm {
+			t.Errorf("alarm key = %q, want %q", gotAlarm, wantAlarm)
 		}
 	})
 }
@@ -580,8 +591,8 @@ func TestTrackDeduplication_RecognitionUnmatchedToMatchedUpgrade(t *testing.T) {
 	for _, row := range []struct {
 		faceID, personID, path string
 	}{
-		{"face_alice_01", "person_alice", "faces/alice.jpg"},
-		{"face_bob_01", "person_bob", "faces/bob.jpg"},
+		{faceID: "face_alice_01", personID: "person_alice", path: "faces/alice.jpg"},
+		{faceID: "face_bob_01", personID: "person_bob", path: "faces/bob.jpg"},
 	} {
 		if err := dbStore.DB().Exec(`INSERT INTO person_faces (id, person_id, image_path, feature_vector, created_at)
 			VALUES (?, ?, ?, X'00', CURRENT_TIMESTAMP)`, row.faceID, row.personID, row.path).Error; err != nil {
@@ -593,7 +604,12 @@ func TestTrackDeduplication_RecognitionUnmatchedToMatchedUpgrade(t *testing.T) {
 	svc.SetCooldownWindow(3 * time.Second)
 	baseTime := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
 
-	sendPersonFace := func(cam string, dt time.Duration, bodyBox, faceBox [4]float64, face aitypes.FaceSubItem) {
+	sendPersonFace := func(
+		cam string,
+		dt time.Duration,
+		bodyBox, faceBox [4]float64,
+		face aitypes.FaceSubItem,
+	) {
 		t.Helper()
 		face.Box = faceBox
 		res := aitypes.InferenceResult{
@@ -620,37 +636,61 @@ func TestTrackDeduplication_RecognitionUnmatchedToMatchedUpgrade(t *testing.T) {
 	track1Face := [4]float64{0.14, 0.12, 0.26, 0.26}
 
 	// Frame 1 (t=0ms): 远距单帧未达阈值 -> 产生 1 条陌生人记录
-	sendPersonFace("cam_01", 0, track1Body, track1Face, aitypes.FaceSubItem{
-		Quality:    0.68,
-		Matched:    false,
-		Similarity: 0.48,
-	})
+	sendPersonFace(
+		"cam_01",
+		0,
+		track1Body,
+		track1Face,
+		aitypes.FaceSubItem{
+			Quality:    0.68,
+			Matched:    false,
+			Similarity: 0.48,
+		},
+	)
 	// Frame 2 (t=300ms): 跨帧特征融合后突破阈值 -> 允许升级，产生 1 条已匹配记录
-	sendPersonFace("cam_01", 300*time.Millisecond, track1Body, track1Face, aitypes.FaceSubItem{
-		Quality:       0.75,
-		Matched:       true,
-		IsFused:       true,
-		PersonID:      "person_alice",
-		PersonName:    "Alice",
-		MatchedFaceID: "face_alice_01",
-		Similarity:    0.58,
-	})
+	sendPersonFace(
+		"cam_01",
+		300*time.Millisecond,
+		track1Body,
+		track1Face,
+		aitypes.FaceSubItem{
+			Quality:       0.75,
+			Matched:       true,
+			IsFused:       true,
+			PersonID:      "person_alice",
+			PersonName:    "Alice",
+			MatchedFaceID: "face_alice_01",
+			Similarity:    0.58,
+		},
+	)
 	// Frame 3 (t=600ms): 继续命中 Alice -> 被 trk + person 冷却抑制
-	sendPersonFace("cam_01", 600*time.Millisecond, track1Body, track1Face, aitypes.FaceSubItem{
-		Quality:       0.78,
-		Matched:       true,
-		IsFused:       true,
-		PersonID:      "person_alice",
-		PersonName:    "Alice",
-		MatchedFaceID: "face_alice_01",
-		Similarity:    0.61,
-	})
+	sendPersonFace(
+		"cam_01",
+		600*time.Millisecond,
+		track1Body,
+		track1Face,
+		aitypes.FaceSubItem{
+			Quality:       0.78,
+			Matched:       true,
+			IsFused:       true,
+			PersonID:      "person_alice",
+			PersonName:    "Alice",
+			MatchedFaceID: "face_alice_01",
+			Similarity:    0.61,
+		},
+	)
 	// Frame 4 (t=900ms): 侧脸质量下降退化回 unmatched -> 已被升级顺带封锁，不补发陌生人
-	sendPersonFace("cam_01", 900*time.Millisecond, track1Body, track1Face, aitypes.FaceSubItem{
-		Quality:    0.55,
-		Matched:    false,
-		Similarity: 0.39,
-	})
+	sendPersonFace(
+		"cam_01",
+		900*time.Millisecond,
+		track1Body,
+		track1Face,
+		aitypes.FaceSubItem{
+			Quality:    0.55,
+			Matched:    false,
+			Similarity: 0.39,
+		},
+	)
 
 	recsCam1, totalCam1, err := svc.ListRecognitions(ctx, record.RecognitionFilter{CameraID: "cam_01"})
 	if err != nil || totalCam1 != 2 || len(recsCam1) != 2 {
@@ -675,20 +715,32 @@ func TestTrackDeduplication_RecognitionUnmatchedToMatchedUpgrade(t *testing.T) {
 	trackNewBody := [4]float64{0.65, 0.55, 0.85, 0.95}
 	trackNewFace := [4]float64{0.69, 0.58, 0.81, 0.72}
 	// t=1000ms: 新轨迹误判/重现为 person_alice -> 因 rec:cam_01:person:person_alice 冷却被拒
-	sendPersonFace("cam_01", 1000*time.Millisecond, trackNewBody, trackNewFace, aitypes.FaceSubItem{
-		Quality:       0.72,
-		Matched:       true,
-		PersonID:      "person_alice",
-		PersonName:    "Alice",
-		MatchedFaceID: "face_alice_01",
-		Similarity:    0.55,
-	})
+	sendPersonFace(
+		"cam_01",
+		1000*time.Millisecond,
+		trackNewBody,
+		trackNewFace,
+		aitypes.FaceSubItem{
+			Quality:       0.72,
+			Matched:       true,
+			PersonID:      "person_alice",
+			PersonName:    "Alice",
+			MatchedFaceID: "face_alice_01",
+			Similarity:    0.55,
+		},
+	)
 	// t=1100ms: 该新轨迹回落为 unmatched -> 因上一步被拒未打戳 :unmatched，本条陌生人记录必须正常落库
-	sendPersonFace("cam_01", 1100*time.Millisecond, trackNewBody, trackNewFace, aitypes.FaceSubItem{
-		Quality:    0.66,
-		Matched:    false,
-		Similarity: 0.41,
-	})
+	sendPersonFace(
+		"cam_01",
+		1100*time.Millisecond,
+		trackNewBody,
+		trackNewFace,
+		aitypes.FaceSubItem{
+			Quality:    0.66,
+			Matched:    false,
+			Similarity: 0.41,
+		},
+	)
 	recsAfterReject, totalAfterReject, err := svc.ListRecognitions(ctx, record.RecognitionFilter{CameraID: "cam_01"})
 	if err != nil || totalAfterReject != 3 || len(recsAfterReject) != 3 {
 		t.Fatalf("expected 3 recognitions after atomic rejection + unmatched on new track, got total=%d err=%v",
@@ -702,33 +754,57 @@ func TestTrackDeduplication_RecognitionUnmatchedToMatchedUpgrade(t *testing.T) {
 	// --- 场景 C & D: cam_02 上验证纯 matched->unmatched 不倒退，且纯 unmatched->unmatched 不刷屏 ---
 	bobBody := [4]float64{0.10, 0.10, 0.30, 0.60}
 	bobFace := [4]float64{0.14, 0.12, 0.26, 0.26}
-	sendPersonFace("cam_02", 0, bobBody, bobFace, aitypes.FaceSubItem{
-		Quality:       0.88,
-		Matched:       true,
-		PersonID:      "person_bob",
-		PersonName:    "Bob",
-		MatchedFaceID: "face_bob_01",
-		Similarity:    0.79,
-	})
+	sendPersonFace(
+		"cam_02",
+		0,
+		bobBody,
+		bobFace,
+		aitypes.FaceSubItem{
+			Quality:       0.88,
+			Matched:       true,
+			PersonID:      "person_bob",
+			PersonName:    "Bob",
+			MatchedFaceID: "face_bob_01",
+			Similarity:    0.79,
+		},
+	)
 	// 400ms 后侧脸退化为 unmatched -> 必须被首帧顺带打戳的 :unmatched 抑制
-	sendPersonFace("cam_02", 400*time.Millisecond, bobBody, bobFace, aitypes.FaceSubItem{
-		Quality:    0.54,
-		Matched:    false,
-		Similarity: 0.36,
-	})
+	sendPersonFace(
+		"cam_02",
+		400*time.Millisecond,
+		bobBody,
+		bobFace,
+		aitypes.FaceSubItem{
+			Quality:    0.54,
+			Matched:    false,
+			Similarity: 0.36,
+		},
+	)
 
 	strangerBody := [4]float64{0.60, 0.10, 0.80, 0.60}
 	strangerFace := [4]float64{0.64, 0.12, 0.76, 0.26}
-	sendPersonFace("cam_02", 100*time.Millisecond, strangerBody, strangerFace, aitypes.FaceSubItem{
-		Quality:    0.70,
-		Matched:    false,
-		Similarity: 0.31,
-	})
-	sendPersonFace("cam_02", 500*time.Millisecond, strangerBody, strangerFace, aitypes.FaceSubItem{
-		Quality:    0.72,
-		Matched:    false,
-		Similarity: 0.33,
-	})
+	sendPersonFace(
+		"cam_02",
+		100*time.Millisecond,
+		strangerBody,
+		strangerFace,
+		aitypes.FaceSubItem{
+			Quality:    0.70,
+			Matched:    false,
+			Similarity: 0.31,
+		},
+	)
+	sendPersonFace(
+		"cam_02",
+		500*time.Millisecond,
+		strangerBody,
+		strangerFace,
+		aitypes.FaceSubItem{
+			Quality:    0.72,
+			Matched:    false,
+			Similarity: 0.33,
+		},
+	)
 
 	recsCam2, totalCam2, err := svc.ListRecognitions(ctx, record.RecognitionFilter{CameraID: "cam_02"})
 	if err != nil || totalCam2 != 2 || len(recsCam2) != 2 {

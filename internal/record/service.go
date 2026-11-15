@@ -85,7 +85,7 @@ func NewService(store *Store, logger *zap.Logger) *Service {
 		tracker:       newTargetTracker(defaultTrackerConfig()),
 		algorithms:    NewAlgorithmResolver(store, logger.Named("record.algorithms")),
 		logger:        logger,
-		pendingAlarms: make(map[string]*pendingAlarmEntry),
+		pendingAlarms: map[string]*pendingAlarmEntry{},
 	}
 }
 
@@ -1091,7 +1091,8 @@ func (s *Service) clearJobPath(ctx context.Context, job snapshotJob) {
 		return
 	}
 	if err := s.store.ClearRecordSnapshotPaths(ctx, job.targetTable, job.targetID); err != nil {
-		s.logger.Warn("failed to clear record snapshot paths",
+		s.logger.Warn(
+			"failed to clear record snapshot paths",
 			zap.String("table", job.targetTable),
 			zap.String("id", job.targetID),
 			zap.Error(err),
@@ -1104,12 +1105,12 @@ func (s *Service) clearJobPath(ctx context.Context, job snapshotJob) {
 // 解析失败只降级不中断：记录本身是已发生事实，归属标注的完整性是次级信息。
 func (s *Service) resolveGalleryFaces(ctx context.Context, faceIDs []string) map[string]GalleryFaceRef {
 	if s.store == nil || len(faceIDs) == 0 {
-		return nil
+		return map[string]GalleryFaceRef{}
 	}
 	refs, err := s.store.ResolveGalleryFaces(ctx, faceIDs)
 	if err != nil {
 		s.logger.Error("failed to resolve gallery faces", zap.Int("faces", len(faceIDs)), zap.Error(err))
-		return nil
+		return map[string]GalleryFaceRef{}
 	}
 	return refs
 }

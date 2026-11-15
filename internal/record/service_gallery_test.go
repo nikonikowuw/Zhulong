@@ -129,14 +129,18 @@ func TestEnrichRecognitionCandidatesResolvesPersonRowID(t *testing.T) {
 	}
 
 	rec := &record.Recognition{
-		ID:             "rec_cand_enrich_1",
-		CameraID:       "cam_01",
-		AlgorithmID:    strPtr("algo_01"),
-		PTS:            100,
-		TrackID:        1,
-		Matched:        false,
-		CandidatesJSON: `[{"person_id":"","person_name":"","face_id":"face_alice_01","similarity":0.74},{"person_id":"EMP-BOB","person_name":"Bob","face_id":"face_bob_01","similarity":0.68},{"person_id":"EMP-GONE","person_name":"Ghost","face_id":"face_deleted","similarity":0.61}]`,
-		CapturedAt:     time.Date(2026, 10, 16, 16, 0, 0, 0, time.UTC),
+		ID:          "rec_cand_enrich_1",
+		CameraID:    "cam_01",
+		AlgorithmID: strPtr("algo_01"),
+		PTS:         100,
+		TrackID:     1,
+		Matched:     false,
+		CandidatesJSON: `[` +
+			`{"person_id":"","person_name":"","face_id":"face_alice_01","similarity":0.74},` +
+			`{"person_id":"EMP-BOB","person_name":"Bob","face_id":"face_bob_01","similarity":0.68},` +
+			`{"person_id":"EMP-GONE","person_name":"Ghost","face_id":"face_deleted","similarity":0.61}` +
+			`]`,
+		CapturedAt: time.Date(2026, 10, 16, 16, 0, 0, 0, time.UTC),
 	}
 	if err := store.CreateRecognition(ctx, rec); err != nil {
 		t.Fatalf("CreateRecognition: %v", err)

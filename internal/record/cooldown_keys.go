@@ -66,7 +66,7 @@ func recognitionCooldownPlan(cameraID string, trackID int64, face aitypes.FaceSu
 	if trackID > 0 && isMatchedRecognition(face) {
 		return checkKeys, []string{unmatchedTrackRecognitionCooldownKey(cameraID, trackID)}
 	}
-	return checkKeys, nil
+	return checkKeys, []string{}
 }
 
 // personRecognitionCooldownKey 是已登记人员的识别抑制键。
@@ -100,7 +100,12 @@ func vehicleCaptureCooldownKey(cameraID string, trackID int64, firstPlateNo stri
 
 // vehicleCaptureCooldownKeys 返回车辆抓拍的两级抑制键（身份 + 车牌）。
 func vehicleCaptureCooldownKeys(cameraID string, trackID int64, firstPlateNo string, box [4]float64) []string {
-	identityKey := vehicleCaptureCooldownKey(cameraID, trackID, firstPlateNo, box)
+	identityKey := vehicleCaptureCooldownKey(
+		cameraID,
+		trackID,
+		firstPlateNo,
+		box,
+	)
 	if firstPlateNo == "" {
 		return []string{identityKey}
 	}

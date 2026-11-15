@@ -179,11 +179,12 @@ func TestServiceProcessDetectionsAlarmsAndCaptures(t *testing.T) {
 
 	// Smoke alarm should have empty crop_path, while no_helmet_alarm has crop_path
 	for _, a := range alarms {
-		if a.AlarmType == "smoke_alarm" {
+		switch a.AlarmType {
+		case "smoke_alarm":
 			if a.CropPath != "" {
 				t.Errorf("expected empty crop_path for smoke alarm, got %q", a.CropPath)
 			}
-		} else if a.AlarmType == "no_helmet_alarm" {
+		case "no_helmet_alarm":
 			if a.CropPath == "" {
 				t.Errorf("expected non-empty crop_path for no_helmet_alarm")
 			}

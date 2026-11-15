@@ -53,7 +53,13 @@ func TestAlarmListenerSnapshotJobObserver(t *testing.T) {
 			{BoxIndex: 0, JPEG: []byte("crop-jpeg")},
 		},
 	}
-	snapshots := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	snapshots := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: root},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
 	snapshots.Start()
 	defer snapshots.Stop()
 
@@ -119,7 +125,13 @@ func TestAlarmListenerPartialSnapshotFailure(t *testing.T) {
 			{BoxIndex: -1, JPEG: []byte("full-jpeg")},
 		},
 	}
-	snapshots := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	snapshots := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: root},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
 	snapshots.Start()
 	defer snapshots.Stop()
 

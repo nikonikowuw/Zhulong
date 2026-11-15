@@ -298,8 +298,8 @@ func TestStoreResolveGalleryFaces(t *testing.T) {
 		t.Fatalf("insert keyed person: %v", err)
 	}
 	for _, face := range []struct{ id, personID, path string }{
-		{"face_01", "person_alice", "faces/alice.jpg"},
-		{"face_02", "person_keyed", "faces/keyed.jpg"},
+		{id: "face_01", personID: "person_alice", path: "faces/alice.jpg"},
+		{id: "face_02", personID: "person_keyed", path: "faces/keyed.jpg"},
 	} {
 		if err := dbStore.DB().Exec(
 			`INSERT INTO person_faces (id, person_id, image_path, feature_vector, created_at)

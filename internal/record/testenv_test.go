@@ -44,8 +44,8 @@ func setupTestStore(t *testing.T) (*record.Store, *database.Store, func()) {
 	db := dbStore.DB()
 
 	for _, camera := range []struct{ id, name string }{
-		{"cam_01", "Test Camera 1"},
-		{"cam_02", "Test Camera 2"},
+		{id: "cam_01", name: "Test Camera 1"},
+		{id: "cam_02", name: "Test Camera 2"},
 	} {
 		if err := db.Exec(insertCameraSQL, camera.id, camera.name).Error; err != nil {
 			t.Fatalf("insert camera %s: %v", camera.id, err)

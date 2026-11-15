@@ -588,7 +588,7 @@ func (s *Store) AlarmEvidencePaths(ctx context.Context) ([]string, error) {
 	}
 
 	const batchSize = 1000
-	seen := make(map[string]struct{})
+	seen := map[string]struct{}{}
 	paths := []string{}
 	var lastID string
 

@@ -121,7 +121,13 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 func TestSnapshotStoreWritesFullAndCrop(t *testing.T) {
 	root := t.TempDir()
 	provider := &fakeSnapshotProvider{}
-	store := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	store := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: root},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
 	store.Start()
 	defer store.Stop()
 
@@ -180,7 +186,13 @@ func TestSnapshotStoreSkipsWhenGateClosed(t *testing.T) {
 	root := t.TempDir()
 	provider := &fakeSnapshotProvider{}
 	gate := &fakeGate{allow: false}
-	store := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, gate, 85, zap.NewNop())
+	store := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: root},
+		gate,
+		85,
+		zap.NewNop(),
+	)
 	store.Start()
 	defer store.Stop()
 
@@ -201,7 +213,13 @@ func TestSnapshotStoreSkipsWhenGateClosed(t *testing.T) {
 func TestSnapshotStoreSurvivesProviderFailure(t *testing.T) {
 	root := t.TempDir()
 	provider := &fakeSnapshotProvider{err: errors.New("no active AI stream")}
-	store := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	store := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: root},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
 	store.Start()
 	defer store.Stop()
 
@@ -218,7 +236,13 @@ func TestSnapshotStoreSurvivesProviderFailure(t *testing.T) {
 func TestSnapshotStoreStopDrainsQueue(t *testing.T) {
 	root := t.TempDir()
 	provider := &fakeSnapshotProvider{delay: 30 * time.Millisecond}
-	store := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	store := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: root},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
 	store.Start()
 
 	rel := "snapshots/cam-01/2026-10-20/drained.jpg"
@@ -263,7 +287,13 @@ func TestSnapshotStoreRejectsEnqueueAfterStop(t *testing.T) {
 }
 
 func TestSnapshotStoreUnavailableWhenDependenciesMissing(t *testing.T) {
-	store := record.NewSnapshotStore(nil, nil, nil, 85, zap.NewNop())
+	store := record.NewSnapshotStore(
+		nil,
+		nil,
+		nil,
+		85,
+		zap.NewNop(),
+	)
 	if store.Available() {
 		t.Error("store with nil provider/media must report unavailable")
 	}
@@ -278,7 +308,13 @@ func TestServiceDoesNotWriteSnapshotsWhenRecordBatchInsertFails(t *testing.T) {
 	defer cleanup()
 	root := t.TempDir()
 	provider := &fakeSnapshotProvider{}
-	snapshots := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	snapshots := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: root},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
 	snapshots.Start()
 	defer snapshots.Stop()
 
@@ -317,7 +353,13 @@ func TestServiceEnqueuesSnapshotOnRecord(t *testing.T) {
 
 	root := t.TempDir()
 	provider := &fakeSnapshotProvider{}
-	snapshots := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	snapshots := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: root},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
 	snapshots.Start()
 	defer snapshots.Stop()
 
@@ -376,7 +418,13 @@ func TestSnapshotStoreClearsPathsOnSnapshotFailure(t *testing.T) {
 
 	root := t.TempDir()
 	provider := &fakeSnapshotProvider{err: errors.New("stream decoding unavailable")}
-	snapshots := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	snapshots := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: root},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
 	snapshots.SetPathCleaner(store)
 	snapshots.Start()
 	defer snapshots.Stop()

@@ -255,7 +255,13 @@ func (p *RetentionPruner) PruneNow(ctx context.Context) (PruneResult, error) {
 	}
 
 	for _, target := range targets {
-		deleted, pruneErr := p.deleteExpiredRows(ctx, target.table, cutoff, fileChecker, batch)
+		deleted, pruneErr := p.deleteExpiredRows(
+			ctx,
+			target.table,
+			cutoff,
+			fileChecker,
+			batch,
+		)
 		*target.count = deleted
 		if pruneErr != nil {
 			return result, fmt.Errorf("prune %s: %w", target.table, pruneErr)
@@ -354,7 +360,13 @@ func (p *RetentionPruner) deleteExpiredRows(
 			return total, err
 		}
 
-		rows, err := p.store.retentionCandidatesBatch(ctx, table, cutoff, cursor, batch)
+		rows, err := p.store.retentionCandidatesBatch(
+			ctx,
+			table,
+			cutoff,
+			cursor,
+			batch,
+		)
 		if err != nil {
 			return total, err
 		}
@@ -373,7 +385,12 @@ func (p *RetentionPruner) deleteExpiredRows(
 			}
 		}
 
-		deleted, err := p.store.deleteRetentionRows(ctx, table, cutoff, ids)
+		deleted, err := p.store.deleteRetentionRows(
+			ctx,
+			table,
+			cutoff,
+			ids,
+		)
 		if err != nil {
 			return total, err
 		}
@@ -471,7 +488,8 @@ func (p *RetentionPruner) sweep(parent context.Context) {
 		return
 	}
 
-	p.logger.Info("pruned expired perception records",
+	p.logger.Info(
+		"pruned expired perception records",
 		zap.Time("cutoff", result.Cutoff),
 		zap.Int64("recognitions", result.Recognitions),
 		zap.Int64("captures", result.Captures),

@@ -69,7 +69,7 @@ type targetTracker struct {
 func newTargetTracker(cfg trackerConfig) *targetTracker {
 	return &targetTracker{
 		cfg:     cfg,
-		buckets: make(map[bucketKey][]*activeTrack),
+		buckets: map[bucketKey][]*activeTrack{},
 		lastGC:  time.Now(),
 	}
 }
@@ -83,7 +83,7 @@ func (t *targetTracker) resolveFrame(b bucketKey, obs []observation, at time.Tim
 	tracks := t.buckets[b]
 
 	// 1. Monotonic guard: if at is earlier than any track's lastSeen, skip aging to avoid false deletion.
-	skipAging := false
+	var skipAging bool
 	for _, tr := range tracks {
 		if at.Before(tr.lastSeen) {
 			skipAging = true
@@ -109,7 +109,7 @@ func (t *targetTracker) resolveFrame(b bucketKey, obs []observation, at time.Tim
 		} else {
 			t.buckets[b] = tracks
 		}
-		return nil
+		return []int64{}
 	}
 
 	t.queries += int64(len(obs))
@@ -134,7 +134,7 @@ func (t *targetTracker) resolveFrame(b bucketKey, obs []observation, at time.Tim
 			}
 		}
 
-		matched := false
+		var matched bool
 		if bestIdx >= 0 && bestIoU >= t.cfg.matchIoU {
 			matched = true
 		} else {
@@ -197,7 +197,7 @@ func (t *targetTracker) Stats() TrackerStats {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	active := 0
+	var active int
 	for _, trs := range t.buckets {
 		active += len(trs)
 	}
@@ -211,21 +211,16 @@ func (t *targetTracker) Stats() TrackerStats {
 }
 
 func (t *targetTracker) lazyGCLocked(now time.Time, ttl time.Duration) {
-	totalEntries := 0
+	var totalEntries int
 	for _, trs := range t.buckets {
 		totalEntries += len(trs)
 	}
 
 	// Trigger GC if entries exceed threshold and throttled interval elapsed,
 	// or periodically (every 10 minutes) to reap empty buckets.
-	shouldGC := false
-	if totalEntries > t.cfg.gcEntryThreshold && now.Sub(t.lastGC) >= t.cfg.gcInterval {
-		shouldGC = true
-	} else if now.Sub(t.lastGC) >= 10*time.Minute {
-		shouldGC = true
-	}
-
-	if !shouldGC {
+	isThresholdExceeded := totalEntries > t.cfg.gcEntryThreshold && now.Sub(t.lastGC) >= t.cfg.gcInterval
+	isPeriodic := now.Sub(t.lastGC) >= 10*time.Minute
+	if !isThresholdExceeded && !isPeriodic {
 		return
 	}
 

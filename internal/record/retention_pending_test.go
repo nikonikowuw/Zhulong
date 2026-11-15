@@ -46,7 +46,14 @@ func TestRetentionPrunerPendingOutboxRetriesAndClears(t *testing.T) {
 	if got := pendingCount(t, dbStore); got != 2 {
 		t.Fatalf("pending rows after canceled pass = %d, want 2", got)
 	}
-	assertRecordRows(t, store, ids, true, true, true)
+	assertRecordRows(
+		t,
+		store,
+		ids,
+		true,
+		true,
+		true,
+	)
 
 	if _, err := pruner.ProcessPendingSnapshotDeletes(ctx, 0); err != nil {
 		t.Fatalf("process pending: %v", err)
@@ -54,7 +61,14 @@ func TestRetentionPrunerPendingOutboxRetriesAndClears(t *testing.T) {
 	if got := pendingCount(t, dbStore); got != 0 {
 		t.Fatalf("pending rows after success = %d, want 0", got)
 	}
-	assertRecordRows(t, store, ids, false, true, false)
+	assertRecordRows(
+		t,
+		store,
+		ids,
+		false,
+		true,
+		false,
+	)
 
 	// Replaying the same IDs is idempotent and must not touch the alarm row.
 	if _, err := pruner.EnqueueSnapshotDeletes(ctx, []string{ids.recID, ids.capID}); err != nil {
@@ -66,7 +80,14 @@ func TestRetentionPrunerPendingOutboxRetriesAndClears(t *testing.T) {
 	if got := pendingCount(t, dbStore); got != 0 {
 		t.Fatalf("pending rows after replay = %d, want 0", got)
 	}
-	assertRecordRows(t, store, ids, false, true, false)
+	assertRecordRows(
+		t,
+		store,
+		ids,
+		false,
+		true,
+		false,
+	)
 }
 
 func TestStoreExistingAlarmIDs(t *testing.T) {

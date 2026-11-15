@@ -60,7 +60,7 @@ func derefString(s *string) string {
 }
 
 func unmarshalSliceOrDefault[T any](raw string) []T {
-	fallback := make([]T, 0)
+	fallback := []T{}
 	if raw == "" {
 		return fallback
 	}
@@ -72,7 +72,7 @@ func unmarshalSliceOrDefault[T any](raw string) []T {
 }
 
 func unmarshalMapOrDefault(raw string) map[string]any {
-	fallback := make(map[string]any)
+	fallback := map[string]any{}
 	if raw == "" {
 		return fallback
 	}

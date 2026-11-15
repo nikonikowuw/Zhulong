@@ -90,7 +90,7 @@ func buildRecognitionRecordAndJob(
 		targetTable: tableRecognitions,
 		targetID:    recID,
 		boxes: []engine.SnapshotBox{
-			{face.Box[0], face.Box[1], face.Box[2], face.Box[3]},
+			engine.SnapshotBox(face.Box),
 		},
 		outputs: []snapshotOutput{
 			{boxIndex: -1, relPath: fullPath},
@@ -143,7 +143,7 @@ func buildCaptureRecordAndJob(f ingestFrame, spec captureSpec) (*Capture, snapsh
 		targetTable: tableCaptures,
 		targetID:    captureID,
 		boxes: []engine.SnapshotBox{
-			{spec.box[0], spec.box[1], spec.box[2], spec.box[3]},
+			engine.SnapshotBox(spec.box),
 		},
 		outputs: []snapshotOutput{
 			{boxIndex: -1, relPath: fullPath},
@@ -197,7 +197,7 @@ func buildAlarmRecordAndJob(f ingestFrame, spec alarmSpec) (*Alarm, snapshotJob)
 	outputs := []snapshotOutput{{boxIndex: -1, relPath: fullPath, protected: true}}
 	var boxes []engine.SnapshotBox
 	if spec.cropBox != nil {
-		boxes = append(boxes, engine.SnapshotBox{spec.cropBox[0], spec.cropBox[1], spec.cropBox[2], spec.cropBox[3]})
+		boxes = append(boxes, engine.SnapshotBox(*spec.cropBox))
 		outputs = append(outputs, snapshotOutput{boxIndex: 0, relPath: cropPath, protected: true})
 	}
 

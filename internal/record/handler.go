@@ -66,7 +66,12 @@ func (h *Handler) ListRecognitions(c *gin.Context) {
 		return
 	}
 
-	httputil.PaginatedSuccess(c, items, total, filter.Window)
+	httputil.PaginatedSuccess(
+		c,
+		items,
+		total,
+		filter.Window,
+	)
 }
 
 // GetRecognition godoc
@@ -117,7 +122,12 @@ func (h *Handler) ListAlarms(c *gin.Context) {
 		return
 	}
 
-	httputil.PaginatedSuccess(c, items, total, filter.Window)
+	httputil.PaginatedSuccess(
+		c,
+		items,
+		total,
+		filter.Window,
+	)
 }
 
 // GetAlarm godoc
@@ -168,7 +178,12 @@ func (h *Handler) ListCaptures(c *gin.Context) {
 		return
 	}
 
-	httputil.PaginatedSuccess(c, items, total, filter.Window)
+	httputil.PaginatedSuccess(
+		c,
+		items,
+		total,
+		filter.Window,
+	)
 }
 
 // GetCapture godoc
