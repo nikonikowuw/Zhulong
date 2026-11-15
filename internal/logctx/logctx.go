@@ -25,7 +25,9 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 }
 
 // RequestID returns the HTTP request identifier stored in ctx.
-func RequestID(ctx context.Context) string { return value(ctx, requestIDKey) }
+func RequestID(ctx context.Context) string {
+	return value(ctx, requestIDKey)
+}
 
 // WithTraceID adds a trace identifier to ctx.
 func WithTraceID(ctx context.Context, id string) context.Context {
@@ -36,7 +38,9 @@ func WithTraceID(ctx context.Context, id string) context.Context {
 }
 
 // TraceID returns the trace identifier stored in ctx.
-func TraceID(ctx context.Context) string { return value(ctx, traceIDKey) }
+func TraceID(ctx context.Context) string {
+	return value(ctx, traceIDKey)
+}
 
 // WithStreamID adds a long-lived stream identifier to ctx.
 func WithStreamID(ctx context.Context, id string) context.Context {
@@ -47,14 +51,8 @@ func WithStreamID(ctx context.Context, id string) context.Context {
 }
 
 // StreamID returns the long-lived stream identifier stored in ctx.
-func StreamID(ctx context.Context) string { return value(ctx, streamIDKey) }
-
-func value(ctx context.Context, key contextKey) string {
-	if ctx == nil {
-		return ""
-	}
-	id, _ := ctx.Value(key).(string)
-	return id
+func StreamID(ctx context.Context) string {
+	return value(ctx, streamIDKey)
 }
 
 // Fields returns populated correlation fields, or nil when ctx carries none.
@@ -85,4 +83,15 @@ func Logger(ctx context.Context, base *zap.Logger) *zap.Logger {
 		return base
 	}
 	return base.With(fields...)
+}
+
+func value(ctx context.Context, key contextKey) string {
+	if ctx == nil {
+		return ""
+	}
+	val, ok := ctx.Value(key).(string)
+	if !ok {
+		return ""
+	}
+	return val
 }
