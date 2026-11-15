@@ -3,12 +3,13 @@ package spatial
 import (
 	"context"
 	"errors"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 // ErrMapNotFound reports an absent canvas map as a domain condition, so the
@@ -23,6 +24,17 @@ type RawDetectionPoint struct {
 	ImagePath  string    `gorm:"column:image_path"`
 	Details    string    `gorm:"column:details"`
 	Score      float64   `gorm:"column:score"`
+}
+
+// TrajectoryFilter groups the constraints both trajectory queries share, so no
+// caller can forget the empty-camera guard or the inclusive time window.
+type TrajectoryFilter struct {
+	// CameraIDs scopes the query to the cameras calibrated on the map.
+	CameraIDs []string
+	// MatchKey is the plate substring for vehicles and the person ID for persons.
+	MatchKey string
+	Start    time.Time
+	End      time.Time
 }
 
 // Store encapsulates SQLite database operations for spatial maps and positions.
@@ -68,7 +80,7 @@ func (s *Store) FindMissingCameraIDs(ctx context.Context, cameraIDs []string) ([
 	if len(cameraIDs) == 0 {
 		return []string{}, nil
 	}
-	found := []string{}
+	var found []string
 	if err := s.db(ctx).Table("cameras").Where("id IN (?)", cameraIDs).Pluck("id", &found).Error; err != nil {
 		return nil, err
 	}
@@ -82,7 +94,7 @@ func (s *Store) FindMissingCameraIDs(ctx context.Context, cameraIDs []string) ([
 			missing = append(missing, id)
 		}
 	}
-	sort.Strings(missing)
+	slices.Sort(missing)
 	return missing, nil
 }
 
@@ -116,7 +128,10 @@ func (s *Store) GetPositionsByMap(ctx context.Context, mapID string) ([]CameraPo
 		Where("p.map_id = ?", mapID).
 		Order("COALESCE(c.name, '') ASC, p.camera_id ASC").
 		Scan(&positions).Error
-	return positions, err
+	if err != nil {
+		return nil, err
+	}
+	return positions, nil
 }
 
 // BatchSavePositions replaces all camera positions for a given map in a single transaction.
@@ -130,26 +145,6 @@ func (s *Store) BatchSavePositions(ctx context.Context, mapID string, positions 
 		}
 		return gorm.G[CameraCanvasPosition](tx).CreateInBatches(ctx, &positions, len(positions))
 	})
-}
-
-// TrajectoryFilter groups the constraints both trajectory queries share, so no
-// caller can forget the empty-camera guard or the inclusive time window.
-type TrajectoryFilter struct {
-	// CameraIDs scopes the query to the cameras calibrated on the map.
-	CameraIDs []string
-	// MatchKey is the plate substring for vehicles and the person ID for persons.
-	MatchKey string
-	Start    time.Time
-	End      time.Time
-}
-
-// escapeLike neutralises the LIKE metacharacters of a user-supplied substring.
-//
-// Without it a plate of "%" matches every vehicle capture, and "_" silently turns
-// into a single-character wildcard. The query must pair this with ESCAPE '\'.
-func escapeLike(value string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return replacer.Replace(value)
 }
 
 // QueryVehicleCaptures retrieves vehicle captures for the filtered cameras and
@@ -171,7 +166,10 @@ func (s *Store) QueryVehicleCaptures(ctx context.Context, f TrajectoryFilter) ([
 		Where(`json_extract(attributes_json, '$.plate_number') LIKE ? ESCAPE '\'`, pattern).
 		Order("captured_at ASC").
 		Scan(&points).Error
-	return points, err
+	if err != nil {
+		return nil, err
+	}
+	return points, nil
 }
 
 // QueryPersonRecognitions retrieves recognition events for the filtered cameras
@@ -197,5 +195,26 @@ func (s *Store) QueryPersonRecognitions(ctx context.Context, f TrajectoryFilter)
 		Where("matched = ?", true).
 		Order("captured_at ASC").
 		Scan(&points).Error
-	return points, err
+	if err != nil {
+		return nil, err
+	}
+	return points, nil
+}
+
+// likeReplacer neutralises SQL LIKE wildcard characters.
+var likeReplacer = strings.NewReplacer(
+	`\`,
+	`\\`,
+	`%`,
+	`\%`,
+	`_`,
+	`\_`,
+)
+
+// escapeLike neutralises the LIKE metacharacters of a user-supplied substring.
+//
+// Without it a plate of "%" matches every vehicle capture, and "_" silently turns
+// into a single-character wildcard. The query must pair this with ESCAPE '\'.
+func escapeLike(value string) string {
+	return likeReplacer.Replace(value)
 }

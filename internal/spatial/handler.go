@@ -4,15 +4,20 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // Handler handles HTTP requests for the spatial domain.
 type Handler struct {
 	service *Service
 	logger  *zap.Logger
+}
+
+type uploadRouteRegistrar struct {
+	handler *Handler
 }
 
 // NewHandler creates a new spatial Handler.
@@ -48,10 +53,6 @@ func (h *Handler) RegisterUploadRoutes(rg *gin.RouterGroup) {
 	{
 		group.POST("/maps", h.UploadMap)
 	}
-}
-
-type uploadRouteRegistrar struct {
-	handler *Handler
 }
 
 func (r *uploadRouteRegistrar) RegisterRoutes(rg *gin.RouterGroup) {

@@ -1,3 +1,5 @@
+// Package spatial provides 2D floorplan canvas management, camera calibration,
+// and spatio-temporal trajectory reconstruction.
 package spatial
 
 import (
@@ -6,8 +8,9 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 // SpatialComponents groups instantiated spatial domain services.
@@ -38,7 +41,7 @@ type spatialLifecycleImpl struct {
 // writable must surface as a start failure the runtime can report as degraded.
 func (l *spatialLifecycleImpl) Start(ctx context.Context) error {
 	if err := os.MkdirAll(l.mapsDir, 0o755); err != nil {
-		return fmt.Errorf("create canvas map directory %s: %w", l.mapsDir, err)
+		return fmt.Errorf("create canvas map directory %q: %w", l.mapsDir, err)
 	}
 	l.logger.Info("spatial service started", zap.String("maps_dir", l.mapsDir))
 	return nil

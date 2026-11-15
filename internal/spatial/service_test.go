@@ -12,11 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/spatial"
-	"go.uber.org/zap"
 )
 
 func createTestPNG(t *testing.T, width, height int) []byte {
@@ -71,19 +72,34 @@ func TestService_CreateAndGetMap(t *testing.T) {
 	pngBytes := createTestPNG(t, 800, 600)
 
 	// 1. Invalid name
-	_, err := svc.CreateMap(ctx, "   ", bytes.NewReader(pngBytes), "map.png")
+	_, err := svc.CreateMap(
+		ctx,
+		"   ",
+		bytes.NewReader(pngBytes),
+		"map.png",
+	)
 	if err == nil {
 		t.Error("expected error for empty name, got nil")
 	}
 
 	// 2. Unsupported format
-	_, err = svc.CreateMap(ctx, "测试图", bytes.NewReader(pngBytes), "map.exe")
+	_, err = svc.CreateMap(
+		ctx,
+		"测试图",
+		bytes.NewReader(pngBytes),
+		"map.exe",
+	)
 	if err == nil {
 		t.Error("expected error for invalid ext, got nil")
 	}
 
 	// 3. Valid creation
-	created, err := svc.CreateMap(ctx, "主园区平面图", bytes.NewReader(pngBytes), "map.png")
+	created, err := svc.CreateMap(
+		ctx,
+		"主园区平面图",
+		bytes.NewReader(pngBytes),
+		"map.png",
+	)
 	if err != nil {
 		t.Fatalf("CreateMap failed: %v", err)
 	}
@@ -133,7 +149,12 @@ func TestService_PositionsAndTrajectory(t *testing.T) {
 
 	// Create map
 	pngBytes := createTestPNG(t, 1920, 1080)
-	createdMap, err := svc.CreateMap(ctx, "全景图", bytes.NewReader(pngBytes), "plan.png")
+	createdMap, err := svc.CreateMap(
+		ctx,
+		"全景图",
+		bytes.NewReader(pngBytes),
+		"plan.png",
+	)
 	if err != nil {
 		t.Fatalf("CreateMap failed: %v", err)
 	}
@@ -161,7 +182,8 @@ func TestService_PositionsAndTrajectory(t *testing.T) {
 	t2 := t1.Add(10 * time.Second) // same camera, within dwell window (10s <= 30s)
 	t3 := t1.Add(2 * time.Minute)  // next camera cam_b
 
-	if err := dbProvider.DB().Exec(`
+	if err := dbProvider.DB().Exec(
+		`
 		INSERT INTO captures (
 			id, camera_id, target_type, score, crop_path,
 			image_path, attributes_json, pts, captured_at
@@ -169,7 +191,11 @@ func TestService_PositionsAndTrajectory(t *testing.T) {
 		('c1', 'cam_a', 'vehicle', 0.80, 'crops/c1.jpg', 'images/c1.jpg', '{"plate_number":"粤B88888"}', 100, ?),
 		('c2', 'cam_a', 'vehicle', 0.95, 'crops/c2.jpg', 'images/c2.jpg', '{"plate_number":"粤B88888"}', 200, ?),
 		('c3', 'cam_b', 'vehicle', 0.88, 'crops/c3.jpg', 'images/c3.jpg', '{"plate_number":"粤B88888"}', 300, ?)
-	`, t1, t2, t3).Error; err != nil {
+	`,
+		t1,
+		t2,
+		t3,
+	).Error; err != nil {
 		t.Fatalf("seed captures failed: %v", err)
 	}
 
@@ -228,7 +254,8 @@ func TestService_PositionsAndTrajectory(t *testing.T) {
 	pTime2 := pTime1.Add(15 * time.Second) // same camera within dwell
 	pTime3 := pTime1.Add(3 * time.Minute)  // cam_c
 
-	if err := dbProvider.DB().Exec(`
+	if err := dbProvider.DB().Exec(
+		`
 		INSERT INTO recognitions (
 			id, camera_id, algorithm_id, pts, person_id,
 			person_name, matched, similarity, face_image_path, image_path, captured_at
@@ -237,7 +264,12 @@ func TestService_PositionsAndTrajectory(t *testing.T) {
 		('r2', 'cam_a', 'algo_face', 2000, 'p_007', '张三', 1, 0.92, 'faces/r2.jpg', 'images/r2.jpg', ?),
 		('r3', 'cam_c', 'algo_face', 3000, 'p_007', '张三', 1, 0.89, 'faces/r3.jpg', 'images/r3.jpg', ?),
 		('r4', 'cam_b', 'algo_face', 4000, 'p_007', '张三', 0, 0.99, 'faces/r4.jpg', 'images/r4.jpg', ?)
-	`, pTime1, pTime2, pTime3, pTime3).Error; err != nil {
+	`,
+		pTime1,
+		pTime2,
+		pTime3,
+		pTime3,
+	).Error; err != nil {
 		t.Fatalf("seed recognitions failed: %v", err)
 	}
 
@@ -286,7 +318,12 @@ func TestService_CreateMapGeneratesULIDAndReadsSVGSize(t *testing.T) {
 	defer cleanup()
 
 	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900"></svg>`)
-	created, err := svc.CreateMap(ctx, "楼栋平面图", bytes.NewReader(svg), "floor.svg")
+	created, err := svc.CreateMap(
+		ctx,
+		"楼栋平面图",
+		bytes.NewReader(svg),
+		"floor.svg",
+	)
 	if err != nil {
 		t.Fatalf("CreateMap(svg) failed: %v", err)
 	}
@@ -305,7 +342,12 @@ func TestService_CreateMapRejectsUnreadableImageAndCleansUp(t *testing.T) {
 	svc, _, mapsDir, cleanup := setupTestServiceWithDir(t)
 	defer cleanup()
 
-	_, err := svc.CreateMap(ctx, "坏图", bytes.NewReader([]byte("not an image")), "broken.png")
+	_, err := svc.CreateMap(
+		ctx,
+		"坏图",
+		bytes.NewReader([]byte("not an image")),
+		"broken.png",
+	)
 	requireApperrCode(t, err, "IMAGE_SIZE_UNREADABLE")
 
 	entries, readErr := os.ReadDir(mapsDir)
@@ -326,7 +368,12 @@ func TestService_SavePositionsSemantics(t *testing.T) {
 	if err := db.DB().Exec(seedCameras).Error; err != nil {
 		t.Fatalf("seed cameras: %v", err)
 	}
-	m, err := svc.CreateMap(ctx, "园区图", bytes.NewReader(createTestPNG(t, 100, 80)), "a.png")
+	m, err := svc.CreateMap(
+		ctx,
+		"园区图",
+		bytes.NewReader(createTestPNG(t, 100, 80)),
+		"a.png",
+	)
 	if err != nil {
 		t.Fatalf("CreateMap: %v", err)
 	}
@@ -382,7 +429,12 @@ func TestService_QueryTrajectoryRejectsInvertedRange(t *testing.T) {
 	svc, _, cleanup := setupTestService(t)
 	defer cleanup()
 
-	m, err := svc.CreateMap(ctx, "园区图", bytes.NewReader(createTestPNG(t, 10, 10)), "a.png")
+	m, err := svc.CreateMap(
+		ctx,
+		"园区图",
+		bytes.NewReader(createTestPNG(t, 10, 10)),
+		"a.png",
+	)
 	if err != nil {
 		t.Fatalf("CreateMap: %v", err)
 	}
@@ -406,7 +458,12 @@ func TestService_DwellWindowIsStrictlyBelowThreshold(t *testing.T) {
 	if err := db.DB().Exec(`INSERT INTO cameras (id, name, enabled) VALUES ('cam_a', '东门', 1)`).Error; err != nil {
 		t.Fatalf("seed camera: %v", err)
 	}
-	m, err := svc.CreateMap(ctx, "园区图", bytes.NewReader(createTestPNG(t, 10, 10)), "a.png")
+	m, err := svc.CreateMap(
+		ctx,
+		"园区图",
+		bytes.NewReader(createTestPNG(t, 10, 10)),
+		"a.png",
+	)
 	if err != nil {
 		t.Fatalf("CreateMap: %v", err)
 	}

@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/spatial"
-	"go.uber.org/zap"
 )
 
 func setupTestStore(t *testing.T) (*spatial.Store, database.DBProvider, func()) {

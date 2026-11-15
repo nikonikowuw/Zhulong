@@ -83,7 +83,16 @@ func TestUTCKeepsZeroValue(t *testing.T) {
 	}
 
 	cst := time.FixedZone("CST", 8*3600)
-	shifted := time.Date(2026, 10, 29, 18, 0, 0, 0, cst)
+	shifted := time.Date(
+		2026,
+		10,
+		29,
+		18,
+		0,
+		0,
+		0,
+		cst,
+	)
 	got := utc(shifted)
 	if got.Location() != time.UTC {
 		t.Fatalf("expected UTC location, got %v", got.Location())

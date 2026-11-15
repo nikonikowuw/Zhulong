@@ -18,11 +18,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.uber.org/zap"
 	_ "golang.org/x/image/webp"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
-	"go.uber.org/zap"
 )
 
 const (
@@ -44,6 +44,12 @@ var allowedMapExtensions = map[string]struct{}{
 	".jpeg": {},
 	".webp": {},
 	".svg":  {},
+}
+
+// trajectoryWindow is the validated, UTC-normalised time range of a trajectory query.
+type trajectoryWindow struct {
+	start time.Time
+	end   time.Time
 }
 
 // Service coordinates spatial maps, camera layout calibration, and trajectory generation.
@@ -301,12 +307,6 @@ func (s *Service) QueryTrajectory(ctx context.Context, q TrajectoryQuery) (*Traj
 		TargetKey:  targetKey,
 		Nodes:      s.aggregateDetections(rawPoints, posMap),
 	}, nil
-}
-
-// trajectoryWindow is the validated, UTC-normalised time range of a trajectory query.
-type trajectoryWindow struct {
-	start time.Time
-	end   time.Time
 }
 
 // parseTrajectoryWindow normalises the query range to UTC and rejects an inverted
@@ -626,7 +626,7 @@ func decodeIntrinsicSize(r io.Reader, ext string) (int, int, bool) {
 //
 // Only the root element is considered: an inner <svg> belongs to the artwork, and
 // sizing the canvas from it would scale the map to whatever the author nested in it.
-func svgIntrinsicSize(r io.Reader) (width, height int, ok bool) {
+func svgIntrinsicSize(r io.Reader) (int, int, bool) {
 	decoder := xml.NewDecoder(r)
 	for {
 		token, err := decoder.Token()

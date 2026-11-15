@@ -12,9 +12,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/spatial"
-	"go.uber.org/zap"
 )
 
 func setupTestHandler(t *testing.T) (*gin.Engine, *spatial.Service, database.DBProvider, func()) {
@@ -110,7 +111,13 @@ func uploadMapFile(
 func uploadTestMap(t *testing.T, router *gin.Engine) string {
 	t.Helper()
 
-	w := uploadMapFile(t, router, "校验底图", "check.png", createTestPNG(t, 64, 48))
+	w := uploadMapFile(
+		t,
+		router,
+		"校验底图",
+		"check.png",
+		createTestPNG(t, 64, 48),
+	)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("upload map: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
@@ -129,7 +136,13 @@ func TestHandler_UploadListAndRenameMap(t *testing.T) {
 	router, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	w := uploadMapFile(t, router, "西区园区图", "west.png", createTestPNG(t, 1280, 720))
+	w := uploadMapFile(
+		t,
+		router,
+		"西区园区图",
+		"west.png",
+		createTestPNG(t, 1280, 720),
+	)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("upload map: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
@@ -144,7 +157,13 @@ func TestHandler_UploadListAndRenameMap(t *testing.T) {
 		t.Fatalf("unexpected upload data: %+v", uploadResp.Data)
 	}
 
-	w = doJSON(t, router, http.MethodGet, "/api/v1/spatial/maps", "")
+	w = doJSON(
+		t,
+		router,
+		http.MethodGet,
+		"/api/v1/spatial/maps",
+		"",
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("list maps: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -162,7 +181,13 @@ func TestHandler_UploadListAndRenameMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal patch body: %v", err)
 	}
-	w = doJSON(t, router, http.MethodPatch, "/api/v1/spatial/maps/"+mapID, string(patchBody))
+	w = doJSON(
+		t,
+		router,
+		http.MethodPatch,
+		"/api/v1/spatial/maps/"+mapID,
+		string(patchBody),
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("patch name: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -176,7 +201,13 @@ func TestHandler_UploadListAndRenameMap(t *testing.T) {
 		t.Fatalf("rename did not persist: %+v", patchResp.Data)
 	}
 
-	w = doJSON(t, router, http.MethodDelete, "/api/v1/spatial/maps/"+mapID, "")
+	w = doJSON(
+		t,
+		router,
+		http.MethodDelete,
+		"/api/v1/spatial/maps/"+mapID,
+		"",
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete map: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -197,7 +228,13 @@ func TestHandler_UploadRejectsMissingName(t *testing.T) {
 	router, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	w := uploadMapFile(t, router, "", "west.png", createTestPNG(t, 32, 32))
+	w := uploadMapFile(
+		t,
+		router,
+		"",
+		"west.png",
+		createTestPNG(t, 32, 32),
+	)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
 	}
@@ -220,8 +257,13 @@ func TestHandler_SaveAndGetPositions(t *testing.T) {
 	seedCamera(t, dbProvider)
 	mapID := uploadTestMap(t, router)
 
-	w := doJSON(t, router, http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions",
-		`{"positions":[{"cameraId":"cam-test","x":0.3,"y":0.4,"angle":120}]}`)
+	w := doJSON(
+		t,
+		router,
+		http.MethodPut,
+		"/api/v1/spatial/maps/"+mapID+"/positions",
+		`{"positions":[{"cameraId":"cam-test","x":0.3,"y":0.4,"angle":120}]}`,
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save positions: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -235,7 +277,13 @@ func TestHandler_SaveAndGetPositions(t *testing.T) {
 		t.Fatalf("unexpected save response: %+v", saveResp.Data)
 	}
 
-	w = doJSON(t, router, http.MethodGet, "/api/v1/spatial/maps/"+mapID+"/positions", "")
+	w = doJSON(
+		t,
+		router,
+		http.MethodGet,
+		"/api/v1/spatial/maps/"+mapID+"/positions",
+		"",
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("get positions: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -259,8 +307,13 @@ func TestHandler_QueryTrajectoryReturnsEmptyForUnknownPlate(t *testing.T) {
 
 	seedCamera(t, dbProvider)
 	mapID := uploadTestMap(t, router)
-	w := doJSON(t, router, http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions",
-		`{"positions":[{"cameraId":"cam-test","x":0.5,"y":0.5,"angle":0}]}`)
+	w := doJSON(
+		t,
+		router,
+		http.MethodPut,
+		"/api/v1/spatial/maps/"+mapID+"/positions",
+		`{"positions":[{"cameraId":"cam-test","x":0.5,"y":0.5,"angle":0}]}`,
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save positions: %d: %s", w.Code, w.Body.String())
 	}
@@ -271,7 +324,13 @@ func TestHandler_QueryTrajectoryReturnsEmptyForUnknownPlate(t *testing.T) {
 		"&startTime=" + now.Add(-time.Hour).Format(time.RFC3339) +
 		"&endTime=" + now.Format(time.RFC3339)
 
-	w = doJSON(t, router, http.MethodGet, url, "")
+	w = doJSON(
+		t,
+		router,
+		http.MethodGet,
+		url,
+		"",
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("trajectory query: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -318,7 +377,13 @@ func TestHandler_ValidationRejectsOutOfRangePositions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w := doJSON(t, router, http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions", tc.body)
+			w := doJSON(
+				t,
+				router,
+				http.MethodPut,
+				"/api/v1/spatial/maps/"+mapID+"/positions",
+				tc.body,
+			)
 			if w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
 			}
@@ -336,7 +401,13 @@ func TestHandler_SavePositionsDistinguishesAbsentFromEmpty(t *testing.T) {
 	mapID := uploadTestMap(t, router)
 	positionsURL := "/api/v1/spatial/maps/" + mapID + "/positions"
 
-	w := doJSON(t, router, http.MethodPut, positionsURL, `{}`)
+	w := doJSON(
+		t,
+		router,
+		http.MethodPut,
+		positionsURL,
+		`{}`,
+	)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("absent positions must be rejected, got %d: %s", w.Code, w.Body.String())
 	}
@@ -351,13 +422,24 @@ func TestHandler_SavePositionsDistinguishesAbsentFromEmpty(t *testing.T) {
 	}
 
 	// Save one position, then explicitly unbind everything with an empty array.
-	w = doJSON(t, router, http.MethodPut, positionsURL,
-		`{"positions":[{"cameraId":"cam-test","x":0.5,"y":0.5,"angle":90}]}`)
+	w = doJSON(
+		t,
+		router,
+		http.MethodPut,
+		positionsURL,
+		`{"positions":[{"cameraId":"cam-test","x":0.5,"y":0.5,"angle":90}]}`,
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save one position: %d: %s", w.Code, w.Body.String())
 	}
 
-	w = doJSON(t, router, http.MethodPut, positionsURL, `{"positions":[]}`)
+	w = doJSON(
+		t,
+		router,
+		http.MethodPut,
+		positionsURL,
+		`{"positions":[]}`,
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("empty array must be accepted, got %d: %s", w.Code, w.Body.String())
 	}
@@ -378,7 +460,13 @@ func TestHandler_MapImageCarriesSandboxHeaders(t *testing.T) {
 	defer cleanup()
 
 	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"></svg>`)
-	w := uploadMapFile(t, router, "矢量底图", "plan.svg", svg)
+	w := uploadMapFile(
+		t,
+		router,
+		"矢量底图",
+		"plan.svg",
+		svg,
+	)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("upload svg: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
@@ -392,7 +480,13 @@ func TestHandler_MapImageCarriesSandboxHeaders(t *testing.T) {
 		t.Fatalf("svg intrinsic size not persisted: %+v", created.Data)
 	}
 
-	w = doJSON(t, router, http.MethodGet, "/api/v1/spatial/maps/"+created.Data.ID+"/image", "")
+	w = doJSON(
+		t,
+		router,
+		http.MethodGet,
+		"/api/v1/spatial/maps/"+created.Data.ID+"/image",
+		"",
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("get image: expected 200, got %d", w.Code)
 	}
@@ -450,7 +544,13 @@ func TestHandler_TrajectoryRejectsInvertedRange(t *testing.T) {
 		"&startTime=" + now.Format(time.RFC3339) +
 		"&endTime=" + now.Add(-time.Hour).Format(time.RFC3339)
 
-	w := doJSON(t, router, http.MethodGet, url, "")
+	w := doJSON(
+		t,
+		router,
+		http.MethodGet,
+		url,
+		"",
+	)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
 	}
