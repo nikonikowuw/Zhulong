@@ -372,9 +372,10 @@ func statMount(device, mountPoint, fsType string) (StorageMountStatus, bool) {
 	freeBytes := statfs.Bavail * blockSize
 
 	var usedBytes uint64
-	if statfs.Blocks >= statfs.Bfree {
+	switch {
+	case statfs.Blocks >= statfs.Bfree:
 		usedBytes = (statfs.Blocks - statfs.Bfree) * blockSize
-	} else if totalBytes >= freeBytes {
+	case totalBytes >= freeBytes:
 		usedBytes = totalBytes - freeBytes
 	}
 
@@ -400,7 +401,7 @@ func (c *linuxCollector) collectNetwork(ctx context.Context) (map[string]rawNetw
 	// the host exposes no physical link at all (Zhulong running inside a container).
 	hidden := make(map[string]rawNetworkInterface)
 
-	pastHeader := false
+	var pastHeader bool
 	err := scanLines(ctx, "/proc/net/dev", func(line string) {
 		// /proc/net/dev opens with two header lines before the first device entry.
 		if !pastHeader {
@@ -487,7 +488,8 @@ func (c *linuxCollector) collectThermals(ctx context.Context) []TemperatureInfo 
 		milliCelsius, parseErr := strconv.ParseFloat(tempStr, 64)
 		// Zones that are not populated report 0, and a few drivers publish a
 		// sentinel around 200000; neither is a reading worth charting.
-		if parseErr != nil || milliCelsius <= 0 || milliCelsius > 150000 {
+		isInvalidReading := parseErr != nil || milliCelsius <= 0 || milliCelsius > 150000
+		if isInvalidReading {
 			continue
 		}
 

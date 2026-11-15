@@ -49,13 +49,13 @@ func TestFormatThermalLabel(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"soc_thermal", "SoC"},
-		{"cpu-thermal", "CPU"},
-		{"npu_thermal", "NPU"},
-		{"gpu-thermal", "GPU"},
-		{"tsadc_channel0", "TSADC"},
-		{"battery", "BATTERY"},
-		{"", "Thermal"},
+		{input: "soc_thermal", expected: "SoC"},
+		{input: "cpu-thermal", expected: "CPU"},
+		{input: "npu_thermal", expected: "NPU"},
+		{input: "gpu-thermal", expected: "GPU"},
+		{input: "tsadc_channel0", expected: "TSADC"},
+		{input: "battery", expected: "BATTERY"},
+		{input: "", expected: "Thermal"},
 	}
 
 	for _, tt := range tests {

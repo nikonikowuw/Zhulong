@@ -216,9 +216,9 @@ func TestService_ConcurrentReads(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// Assert inside the goroutine would race the test's own failure reporting;
-			// a non-nil error here is still caught by -race via the shared state.
-			_, _ = svc.GetHardwareStatus(context.Background())
+			if _, err := svc.GetHardwareStatus(context.Background()); err != nil {
+				t.Errorf("concurrent GetHardwareStatus: %v", err)
+			}
 		}()
 	}
 	wg.Wait()

@@ -2,9 +2,10 @@ package systeminfo
 
 import (
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // Handler handles HTTP requests for system hardware monitoring and host identity.
@@ -60,7 +61,12 @@ func (h *Handler) GetIdentity(c *gin.Context) {
 // @Failure      503      {object}  httputil.Response  "SYSTEM_IDENTITY_UNAVAILABLE"
 // @Router       /system/identity [put]
 func (h *Handler) UpdateIdentity(c *gin.Context) {
-	audithttp.Tag(c, ActionIdentityUpdate, "system", "Update host device identity")
+	audithttp.Tag(
+		c,
+		ActionIdentityUpdate,
+		"system",
+		"Update host device identity",
+	)
 
 	var req UpdateSystemIdentityRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

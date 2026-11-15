@@ -7,9 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
 
 const (

@@ -10,10 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 const (
@@ -112,7 +113,10 @@ func (s *identityStore) Save(ctx context.Context, deviceID string, auto bool) er
 		// seed was deleted by hand; insert explicitly rather than upserting.
 		return tx.Exec(
 			`INSERT INTO system_settings (id, device_id, device_id_auto, updated_at) VALUES (?, ?, ?, ?)`,
-			identitySingletonID, deviceID, auto, now,
+			identitySingletonID,
+			deviceID,
+			auto,
+			now,
 		).Error
 	})
 }

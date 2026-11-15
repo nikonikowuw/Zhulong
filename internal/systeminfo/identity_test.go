@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/zap/zaptest"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap/zaptest"
 )
 
 func newTestIdentityDB(t *testing.T) database.DBProvider {
@@ -16,7 +17,11 @@ func newTestIdentityDB(t *testing.T) database.DBProvider {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close database store: %v", err)
+		}
+	})
 	return dbStore
 }
 
@@ -109,10 +114,13 @@ func TestIdentityService_UpdateRejectsInvalidValues(t *testing.T) {
 	}
 
 	for _, raw := range cases {
-		if _, err := svc.Update(context.Background(), raw); err == nil {
+		_, err := svc.Update(context.Background(), raw)
+		if err == nil {
 			t.Fatalf("expected %q to be rejected", raw)
-		} else if appErr, ok := err.(*apperr.Error); !ok || appErr.Code != CodeIdentityInvalid {
-			t.Fatalf("expected %s, got %v", CodeIdentityInvalid, err)
+		}
+		appErr, ok := err.(*apperr.Error)
+		if !ok || appErr.Code != CodeIdentityInvalid {
+			t.Fatalf("expected %q, got %v", CodeIdentityInvalid, err)
 		}
 	}
 

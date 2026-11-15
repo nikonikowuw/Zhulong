@@ -9,15 +9,18 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap/zaptest"
+
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
 func newTestRouter(t *testing.T, identity *IdentityService) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	handler := NewHandler(NewService(&mockCollector{}, zaptest.NewLogger(t)), identity, zaptest.NewLogger(t))
+	logger := zaptest.NewLogger(t)
+	svc := NewService(&mockCollector{}, logger)
+	handler := NewHandler(svc, identity, logger)
 	router := gin.New()
 	handler.RegisterRoutes(router.Group("/api/v1"))
 	return router
