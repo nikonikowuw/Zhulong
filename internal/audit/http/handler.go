@@ -2,10 +2,11 @@ package audithttp
 
 import (
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // Handler provides HTTP endpoints for audit log inspection and maintenance.
@@ -41,7 +42,11 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 func bindQuery(c *gin.Context, target any) error {
 	if err := c.ShouldBindQuery(target); err != nil {
 		return httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-			{Field: "query", Code: "INVALID_FORMAT", Message: "query parameter is malformed"},
+			{
+				Field:   "query",
+				Code:    "INVALID_FORMAT",
+				Message: "query parameter is malformed",
+			},
 		})
 	}
 	return nil
@@ -82,7 +87,12 @@ func (h *Handler) ListLogs(c *gin.Context) {
 	}
 
 	responses := toAuditLogResponses(items)
-	httputil.PaginatedSuccess(c, responses, total, window)
+	httputil.PaginatedSuccess(
+		c,
+		responses,
+		total,
+		window,
+	)
 }
 
 // ClearLogs godoc

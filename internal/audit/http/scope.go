@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
@@ -261,7 +262,10 @@ func TagActor(c *gin.Context, username string) {
 	}
 	actor, ok := audit.FromContext(c.Request.Context())
 	if !ok {
-		actor = audit.Actor{IP: c.ClientIP(), Source: audit.SourceWeb}
+		actor = audit.Actor{
+			IP:     c.ClientIP(),
+			Source: audit.SourceWeb,
+		}
 	}
 	if username != "" {
 		actor.Username = username

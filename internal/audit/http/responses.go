@@ -24,7 +24,7 @@ type ClearLogsResponse struct {
 	Cleared int64 `json:"cleared"`
 }
 
-func toAuditLogResponse(l audit.AuditLog) AuditLogResponse {
+func toAuditLogResponse(l *audit.AuditLog) AuditLogResponse {
 	return AuditLogResponse{
 		ID:        l.ID,
 		CreatedAt: l.CreatedAt.UTC(),
@@ -43,8 +43,8 @@ func toAuditLogResponses(logs []audit.AuditLog) []AuditLogResponse {
 		return []AuditLogResponse{}
 	}
 	responses := make([]AuditLogResponse, len(logs))
-	for i, l := range logs {
-		responses[i] = toAuditLogResponse(l)
+	for i := range logs {
+		responses[i] = toAuditLogResponse(&logs[i])
 	}
 	return responses
 }

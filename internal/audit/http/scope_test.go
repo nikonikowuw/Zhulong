@@ -10,11 +10,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // harness bundles a test router with the audit service backing it.
@@ -126,7 +127,12 @@ func do(router *gin.Engine, req *http.Request) *httptest.ResponseRecorder {
 func TestMiddlewareRecordsSuccessWithClientIP(t *testing.T) {
 	h := newHarness(t, func(api *gin.RouterGroup, _ *audit.Service) {
 		api.POST("/cameras", func(c *gin.Context) {
-			Tag(c, audit.ActionCameraCreate, "camera:new", "created")
+			Tag(
+				c,
+				audit.ActionCameraCreate,
+				"camera:new",
+				"created",
+			)
 			httputil.Success(c, gin.H{"id": "new"})
 		})
 	})
@@ -180,11 +186,22 @@ func TestMiddlewareSkipsRequestsWithoutTag(t *testing.T) {
 func TestMiddlewareRecordsHTTPFailureWithSafeError(t *testing.T) {
 	h := newHarness(t, func(api *gin.RouterGroup, _ *audit.Service) {
 		api.POST("/cameras", func(c *gin.Context) {
-			Tag(c, audit.ActionCameraCreate, "camera:x", "created")
-			httputil.WriteError(c, httputil.NewError(
-				http.StatusConflict, "CAMERA_ALREADY_EXISTS", "Camera already exists",
-				// The internal cause must never reach the audit record.
-				errLeaky))
+			Tag(
+				c,
+				audit.ActionCameraCreate,
+				"camera:x",
+				"created",
+			)
+			httputil.WriteError(
+				c,
+				httputil.NewError(
+					http.StatusConflict,
+					"CAMERA_ALREADY_EXISTS",
+					"Camera already exists",
+					// The internal cause must never reach the audit record.
+					errLeaky,
+				),
+			)
 		})
 	})
 
@@ -242,7 +259,12 @@ func TestMiddlewareRecordsJSONBindFailure(t *testing.T) {
 func TestMiddlewareRecordsDomainFailureOn2xx(t *testing.T) {
 	h := newHarness(t, func(api *gin.RouterGroup, _ *audit.Service) {
 		api.POST("/system/time/sync", func(c *gin.Context) {
-			Tag(c, "time.ntp_sync", "system_time", "")
+			Tag(
+				c,
+				"time.ntp_sync",
+				"system_time",
+				"",
+			)
 			// The response stays 200, but the domain operation failed.
 			TagError(c, "NTP_SYNC_FAILED", "NTP synchronization failed")
 			httputil.Success(c, gin.H{"syncStatus": gin.H{"state": "failed"}})
@@ -339,8 +361,15 @@ func TestFailedLoginKeepsAnonymousActor(t *testing.T) {
 		api.POST("/auth/login", TagMiddleware(audit.ActionAuthLogin, "user:", ""), func(c *gin.Context) {
 			// The attempted username is only a target; the actor stays anonymous.
 			TagTarget(c, "user:intruder")
-			httputil.WriteError(c, httputil.NewError(
-				http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid credentials", nil))
+			httputil.WriteError(
+				c,
+				httputil.NewError(
+					http.StatusUnauthorized,
+					"INVALID_CREDENTIALS",
+					"Invalid credentials",
+					nil,
+				),
+			)
 		})
 	})
 
@@ -368,7 +397,12 @@ func TestFailedLoginKeepsAnonymousActor(t *testing.T) {
 func TestPanicIsRecordedAsFailure(t *testing.T) {
 	h := newHarness(t, func(api *gin.RouterGroup, _ *audit.Service) {
 		api.POST("/cameras", func(c *gin.Context) {
-			Tag(c, audit.ActionCameraCreate, "camera:panic", "created")
+			Tag(
+				c,
+				audit.ActionCameraCreate,
+				"camera:panic",
+				"created",
+			)
 			panic("boom")
 		})
 	})
@@ -420,14 +454,14 @@ func TestMiddlewareIsRaceFree(t *testing.T) {
 			// Concurrent mutation of the scope from several goroutines must be
 			// safe; the race detector is the assertion here.
 			done := make(chan struct{})
-			for i := 0; i < 4; i++ {
+			for range 4 {
 				go func() {
 					defer func() { done <- struct{}{} }()
 					TagDetail(c, "concurrent")
 					TagTarget(c, "camera:race")
 				}()
 			}
-			for i := 0; i < 4; i++ {
+			for range 4 {
 				<-done
 			}
 			httputil.Success(c, gin.H{"ok": true})
@@ -508,7 +542,12 @@ func TestChunkedBodyOverflowWithoutTagIsSkipped(t *testing.T) {
 func TestTagEmptyActionIsIgnored(t *testing.T) {
 	h := newHarness(t, func(api *gin.RouterGroup, _ *audit.Service) {
 		api.POST("/empty-tag", func(c *gin.Context) {
-			Tag(c, "", "camera:1", "ignored")
+			Tag(
+				c,
+				"",
+				"camera:1",
+				"ignored",
+			)
 			TagAction(c, "")
 			httputil.Success(c, gin.H{"ok": true})
 		})
@@ -554,7 +593,11 @@ func TestPanicObserverHandlesNilRequestAndNilInputs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Set(scopeKey, &scope{declared: true, action: audit.ActionCameraCreate, target: "camera:nilreq"})
+	c.Set(scopeKey, &scope{
+		declared: true,
+		action:   audit.ActionCameraCreate,
+		target:   "camera:nilreq",
+	})
 	observer.OnPanic(c)
 
 	if err := svc.Stop(context.Background()); err != nil {

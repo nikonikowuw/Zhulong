@@ -73,7 +73,11 @@ func parseTimeParam(field, value string) (*time.Time, error) {
 	t, err := time.Parse(time.RFC3339, value)
 	if err != nil {
 		return nil, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-			{Field: field, Code: "INVALID_FORMAT", Message: field + " must be in RFC3339 format"},
+			{
+				Field:   field,
+				Code:    "INVALID_FORMAT",
+				Message: field + " must be in RFC3339 format",
+			},
 		})
 	}
 	return &t, nil

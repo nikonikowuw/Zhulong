@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // newHandlerHarness wires the audit HTTP Handler against a live service. The
@@ -80,8 +81,11 @@ func TestHandlerListLogsPagination(t *testing.T) {
 	router, service := newHandlerHarness(t)
 
 	ctx := context.Background()
-	for i := 1; i <= 25; i++ {
-		if err := service.RecordSync(ctx, audit.Entry{Action: audit.ActionCameraCreate, Target: "camera:test"}); err != nil {
+	for range 25 {
+		if err := service.RecordSync(ctx, audit.Entry{
+			Action: audit.ActionCameraCreate,
+			Target: "camera:test",
+		}); err != nil {
 			t.Fatalf("seed audit entry: %v", err)
 		}
 	}
@@ -194,7 +198,7 @@ func TestHandlerClearLogsPersistsSelfAudit(t *testing.T) {
 	router, service := newHandlerHarness(t)
 
 	ctx := context.Background()
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := service.RecordSync(ctx, audit.Entry{Action: audit.ActionAuthLogout}); err != nil {
 			t.Fatalf("seed audit entry: %v", err)
 		}
@@ -245,7 +249,7 @@ func TestHandlerClearLogsKeepsPreviousClearRecords(t *testing.T) {
 		t.Fatalf("seed audit entry: %v", err)
 	}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/audit/logs", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
