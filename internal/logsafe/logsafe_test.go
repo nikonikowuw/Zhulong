@@ -51,10 +51,20 @@ func TestSafe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := Safe(tc.in)
 			if got != tc.want {
-				t.Fatalf("Safe(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Fatalf(
+					"Safe(%q) = %q, want %q",
+					tc.in,
+					got,
+					tc.want,
+				)
 			}
 			if len(got) > MaxSafeBytes {
-				t.Fatalf("Safe(%q) returned %d bytes, over the %d-byte bound", tc.in, len(got), MaxSafeBytes)
+				t.Fatalf(
+					"Safe(%q) returned %d bytes, over the %d-byte bound",
+					tc.in,
+					len(got),
+					MaxSafeBytes,
+				)
 			}
 			if !utf8.ValidString(got) {
 				t.Fatalf("Safe(%q) returned invalid UTF-8: %q", tc.in, got)
@@ -102,11 +112,31 @@ func TestURL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := URL(tc.in)
 			if got != tc.want {
-				t.Fatalf("URL(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Fatalf(
+					"URL(%q) = %q, want %q",
+					tc.in,
+					got,
+					tc.want,
+				)
 			}
-			for _, leak := range []string{"admin", "super_secret", "192.168.1.10", "example.com", "/live", "token=abc", "frag", "10.0.0.1"} {
+			leaks := []string{
+				"admin",
+				"super_secret",
+				"192.168.1.10",
+				"example.com",
+				"/live",
+				"token=abc",
+				"frag",
+				"10.0.0.1",
+			}
+			for _, leak := range leaks {
 				if strings.Contains(got, leak) {
-					t.Fatalf("URL(%q) leaked %q: %q", tc.in, leak, got)
+					t.Fatalf(
+						"URL(%q) leaked %q: %q",
+						tc.in,
+						leak,
+						got,
+					)
 				}
 			}
 			if tc.in != "" && len(tc.in) <= MaxSafeBytes {
@@ -134,7 +164,12 @@ func TestPath(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := Path(tc.in)
 			if got != PathMarker {
-				t.Fatalf("Path(%q) = %q, want %q", tc.in, got, PathMarker)
+				t.Fatalf(
+					"Path(%q) = %q, want %q",
+					tc.in,
+					got,
+					PathMarker,
+				)
 			}
 			if tc.in != "" && strings.Contains(got, tc.in) {
 				t.Fatalf("Path(%q) echoed the input", tc.in)
@@ -162,7 +197,12 @@ func TestPaths(t *testing.T) {
 		}
 		for i, value := range got {
 			if value != PathMarker {
-				t.Fatalf("Paths()[%d] = %q, want %q", i, value, PathMarker)
+				t.Fatalf(
+					"Paths()[%d] = %q, want %q",
+					i,
+					value,
+					PathMarker,
+				)
 			}
 		}
 	})
@@ -180,7 +220,12 @@ func TestSecret(t *testing.T) {
 	for _, in := range []string{"", "hunter2", "Bearer eyJhbGciOi", strings.Repeat("s", MaxSafeBytes*2), "a\r\nb"} {
 		got := Secret(in)
 		if got != ValueMarker {
-			t.Fatalf("Secret(%q) = %q, want %q", in, got, ValueMarker)
+			t.Fatalf(
+				"Secret(%q) = %q, want %q",
+				in,
+				got,
+				ValueMarker,
+			)
 		}
 		if in != "" && strings.Contains(got, in) {
 			t.Fatalf("Secret(%q) echoed the input", in)
@@ -212,7 +257,12 @@ func TestIP(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := IP(tc.in); got != tc.want {
-				t.Fatalf("IP(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Fatalf(
+					"IP(%q) = %q, want %q",
+					tc.in,
+					got,
+					tc.want,
+				)
 			}
 		})
 	}
@@ -328,7 +378,12 @@ func TestIPIsIdempotent(t *testing.T) {
 		once := IP(input)
 		twice := IP(once)
 		if once != twice {
-			t.Fatalf("IP is not idempotent for %q: once=%q twice=%q", input, once, twice)
+			t.Fatalf(
+				"IP is not idempotent for %q: once=%q twice=%q",
+				input,
+				once,
+				twice,
+			)
 		}
 		if once == IPMarker {
 			t.Fatalf("IP(%q) collapsed to the unparseable marker: %q", input, once)

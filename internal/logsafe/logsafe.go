@@ -86,13 +86,15 @@ func Safe(value string) string {
 	if value == "" {
 		return ""
 	}
-	if len(value) <= MaxSafeBytes && utf8.ValidString(value) && !hasUnsafeRune(value) {
+	if len(value) <= MaxSafeBytes &&
+		utf8.ValidString(value) &&
+		!hasUnsafeRune(value) {
 		return value
 	}
 
 	// Copy the clean ASCII prefix verbatim. Those bytes cannot need rewriting,
 	// so a long clean run costs one scan instead of one rune append per byte.
-	i := 0
+	var i int
 	for i < len(value) && i < MaxSafeBytes {
 		if c := value[i]; c < 0x20 || c >= utf8.RuneSelf || c == 0x7F {
 			break
@@ -110,9 +112,10 @@ func Safe(value string) string {
 		} else {
 			r, size = utf8.DecodeRuneInString(value[i:])
 		}
-		if r == utf8.RuneError && size == 1 {
+		switch {
+		case r == utf8.RuneError && size == 1:
 			// Invalid byte: keep the standard replacement rune.
-		} else if isUnsafeRune(r) {
+		case isUnsafeRune(r):
 			r = controlReplacement
 		}
 		width := utf8.RuneLen(r)
@@ -132,10 +135,7 @@ func Safe(value string) string {
 
 	// The remaining input does not fit: cut back to a rune boundary that leaves
 	// room for the marker, then mark the truncation.
-	cut := MaxSafeBytes - len(SafeTruncatedMarker)
-	if cut > len(buf) {
-		cut = len(buf)
-	}
+	cut := min(len(buf), MaxSafeBytes-len(SafeTruncatedMarker))
 	for cut > 0 && cut < len(buf) && !utf8.RuneStart(buf[cut]) {
 		cut--
 	}

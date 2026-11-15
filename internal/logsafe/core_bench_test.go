@@ -42,7 +42,7 @@ func benchRun(b *testing.B, core zapcore.Core) {
 	logger.Info("camera stream started")
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		logger.Info("camera stream started",
 			zap.String("module", "camera.stream_hub"),
 			zap.String("streamId", "01J8ZK3Q7Y8N9V0A2B3C4D5E6F"),
@@ -91,7 +91,7 @@ func newBenchEncoder() zapcore.Encoder {
 func BenchmarkMessagePlain(b *testing.B) {
 	logger := zap.New(discardCore{})
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		logger.Info("camera stream started")
 	}
 }
@@ -99,7 +99,7 @@ func BenchmarkMessagePlain(b *testing.B) {
 func BenchmarkMessageSanitizing(b *testing.B) {
 	logger := zap.New(NewSanitizingCore(discardCore{}))
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		logger.Info("camera stream started")
 	}
 }
@@ -110,7 +110,7 @@ func BenchmarkOversizedFieldSanitizing(b *testing.B) {
 	logger := zap.New(NewSanitizingCore(discardCore{}))
 	oversized := strings.Repeat("x", MaxSafeBytes*2)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		logger.Info("oversized", zap.String("payload", oversized))
 	}
 }
@@ -119,7 +119,7 @@ func BenchmarkOversizedFieldSanitizing(b *testing.B) {
 func BenchmarkWithSanitizing(b *testing.B) {
 	logger := zap.New(NewSanitizingCore(discardCore{}))
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		logger.With(
 			zap.String("module", "camera"),
 			zap.String("clientIp", "192.168.1.77"),
@@ -132,7 +132,7 @@ func BenchmarkWithSanitizing(b *testing.B) {
 func BenchmarkSensitiveKeySanitizing(b *testing.B) {
 	logger := zap.New(NewSanitizingCore(discardCore{}))
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		logger.Info("login", zap.String("password", "hunter2"))
 	}
 }
@@ -144,7 +144,7 @@ func BenchmarkOversizedFieldPlain(b *testing.B) {
 	logger := zap.New(discardCore{})
 	oversized := strings.Repeat("x", MaxSafeBytes*2)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		logger.Info("oversized", zap.String("payload", oversized))
 	}
 }

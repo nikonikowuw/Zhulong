@@ -253,7 +253,7 @@ func markerField(key, marker string) zapcore.Field { return stringField(key, mar
 // must not guess at exotic key spellings.
 func normalizeKey(key string) []byte {
 	var buf [maxNormalizedKeyLen]byte
-	n := 0
+	var n int
 	for i := 0; i < len(key); i++ {
 		c := key[i]
 		switch c {

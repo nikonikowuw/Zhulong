@@ -3,6 +3,7 @@ package logsafe
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -96,7 +97,12 @@ func TestSanitizingCoreSensitiveKeys(t *testing.T) {
 		}
 		for observedKey, value := range fields {
 			if normalizeKeyMatches(key, observedKey) && value != ValueMarker {
-				t.Fatalf("sensitive key %q (logged as %q) was not replaced: %#v", key, observedKey, value)
+				t.Fatalf(
+					"sensitive key %q (logged as %q) was not replaced: %#v",
+					key,
+					observedKey,
+					value,
+				)
 			}
 		}
 	}
@@ -170,7 +176,12 @@ func TestSanitizingCoreWithReturnsNewCoreAlsoChecksParent(t *testing.T) {
 	for _, entry := range entries {
 		for key, value := range fieldMap(entry) {
 			if value != ValueMarker {
-				t.Fatalf("%s: key %q not replaced: %#v", entry.Message, key, value)
+				t.Fatalf(
+					"%s: key %q not replaced: %#v",
+					entry.Message,
+					key,
+					value,
+				)
 			}
 		}
 	}
@@ -201,7 +212,12 @@ func TestSanitizingCoreClientIP(t *testing.T) {
 	} {
 		sanitized, changed := sanitizeField(tc.field)
 		if !changed || sanitized.Type != zapcore.StringType || sanitized.String != tc.want {
-			t.Fatalf("clientIp %v -> %v, want %q", tc.field, sanitized, tc.want)
+			t.Fatalf(
+				"clientIp %v -> %v, want %q",
+				tc.field,
+				sanitized,
+				tc.want,
+			)
 		}
 	}
 }
@@ -281,7 +297,12 @@ func TestSanitizingCoreUnsupportedTypes(t *testing.T) {
 			t.Fatalf("field %v was passed through unsanitized", field)
 		}
 		if sanitized.String != OmittedMarker {
-			t.Fatalf("field %v -> %q, want %q", field, sanitized.String, OmittedMarker)
+			t.Fatalf(
+				"field %v -> %q, want %q",
+				field,
+				sanitized.String,
+				OmittedMarker,
+			)
 		}
 	}
 	for _, field := range []zapcore.Field{
@@ -331,15 +352,19 @@ func TestSanitizingCoreDoesNotMutateCallerFields(t *testing.T) {
 		zap.String("payload", "a\r\nb"),
 		zap.Int("attempt", 1),
 	}
-	before := make([]zapcore.Field, len(fields))
-	copy(before, fields)
+	before := slices.Clone(fields)
 
 	logger.Info("write", fields...)
 	logger.With(fields...).Info("with")
 
 	for i := range fields {
 		if fields[i] != before[i] {
-			t.Fatalf("field %d mutated: %+v -> %+v", i, before[i], fields[i])
+			t.Fatalf(
+				"field %d mutated: %+v -> %+v",
+				i,
+				before[i],
+				fields[i],
+			)
 		}
 	}
 	if len(fields) != len(before) {
@@ -474,7 +499,7 @@ func (r *recordingCore) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapc
 func (r *recordingCore) Write(ent zapcore.Entry, fields []zapcore.Field) error {
 	r.recorder.writes++
 	r.recorder.lastEntry = ent
-	r.recorder.lastFields = append([]zapcore.Field(nil), fields...)
+	r.recorder.lastFields = slices.Clone(fields)
 	return nil
 }
 
@@ -523,14 +548,7 @@ func TestSensitiveKeyTableCoversSwitch(t *testing.T) {
 		"authorization", "cookie", "setcookie", "apikey",
 		"rtspurl", "url", "dsn", "path", "filepath", "socketpath",
 	} {
-		found := false
-		for _, documented := range sensitiveKeys {
-			if documented == key {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(sensitiveKeys, key) {
 			t.Fatalf("sensitive key %q is missing from sensitiveKeys", key)
 		}
 	}
@@ -549,7 +567,12 @@ func TestNormalizeKey(t *testing.T) {
 		{in: "api key", want: "apikey"},
 	} {
 		if got := string(normalizeKey(tc.in)); got != tc.want {
-			t.Fatalf("normalizeKey(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Fatalf(
+				"normalizeKey(%q) = %q, want %q",
+				tc.in,
+				got,
+				tc.want,
+			)
 		}
 	}
 	if got := normalizeKey(""); got != nil {
