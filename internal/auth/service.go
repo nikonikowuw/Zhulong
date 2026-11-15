@@ -8,8 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
 
 var (
@@ -368,6 +369,9 @@ func (s *authService) SessionTTL() time.Duration {
 
 // userResponse projects a persisted account onto the client-facing response type.
 func userResponse(user *User) UserResponse {
+	if user == nil {
+		return UserResponse{}
+	}
 	return UserResponse{
 		ID:        user.ID,
 		Username:  user.Username,

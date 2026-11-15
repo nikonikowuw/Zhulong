@@ -2,6 +2,7 @@ package auth
 
 import (
 	"github.com/go-playground/validator/v10"
+
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 

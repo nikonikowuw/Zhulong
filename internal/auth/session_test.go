@@ -111,7 +111,9 @@ func TestMemorySessionStore_Concurrency(t *testing.T) {
 			if err != nil {
 				return
 			}
-			_, _ = store.Get(token)
+			if _, ok := store.Get(token); !ok {
+				t.Errorf("session for user %d not found", id)
+			}
 			store.Delete(token)
 		}(id)
 	}

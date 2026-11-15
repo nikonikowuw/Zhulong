@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 func setupTestRouter(t *testing.T) (*gin.Engine, AuthService) {
@@ -29,7 +30,11 @@ func setupTestRouter(t *testing.T) (*gin.Engine, AuthService) {
 
 	// Add a protected test endpoint
 	api.GET("/protected", RequireAuth(svc), func(c *gin.Context) {
-		user, _ := GetCurrentUser(c)
+		user, ok := GetCurrentUser(c)
+		if !ok {
+			httputil.WriteError(c, errUnauthorized)
+			return
+		}
 		httputil.Success(c, gin.H{"hello": user.Username})
 	})
 
@@ -284,8 +289,9 @@ func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
 
 		// RequireAuth must not renew the cookie it is about to delete, otherwise the
 		// browser receives two conflicting Set-Cookie headers.
-		issued := []*http.Cookie{}
-		for _, cookie := range w.Result().Cookies() {
+		cookies := w.Result().Cookies()
+		issued := make([]*http.Cookie, 0, len(cookies))
+		for _, cookie := range cookies {
 			if cookie.Name == SessionCookieName {
 				issued = append(issued, cookie)
 			}

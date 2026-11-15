@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 var (
@@ -77,7 +78,7 @@ func (s *gormUserStore) firstUser(ctx context.Context, where string, args ...any
 		return nil, errUserNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get user where %s: %w", where, err)
+		return nil, fmt.Errorf("get user where %q: %w", where, err)
 	}
 	return &user, nil
 }

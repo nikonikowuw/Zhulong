@@ -144,11 +144,12 @@ func (h *Handler) logoutHandler(c *gin.Context) (LogoutResponse, error) {
 // sessionIdentity resolves the account name and token for the audit record.
 // RequireAuth already populated the Gin context, so ValidateSession is only used
 // as a fallback when a caller invokes the handler without the middleware.
-func (h *Handler) sessionIdentity(c *gin.Context) (username, token string) {
+func (h *Handler) sessionIdentity(c *gin.Context) (string, string) {
+	var username string
 	if user, ok := GetCurrentUser(c); ok {
 		username = user.Username
 	}
-	token = GetSessionToken(c)
+	token := GetSessionToken(c)
 	if username == "" && token != "" {
 		if session, ok := h.service.ValidateSession(token); ok && session.Username != "" {
 			username = session.Username

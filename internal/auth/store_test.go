@@ -5,9 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 func setupTestDB(t *testing.T) *database.Store {
@@ -17,7 +18,9 @@ func setupTestDB(t *testing.T) *database.Store {
 		t.Fatalf("OpenAndMigrate: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = store.Close()
+		if err := store.Close(); err != nil {
+			t.Errorf("close database store: %v", err)
+		}
 	})
 	return store
 }

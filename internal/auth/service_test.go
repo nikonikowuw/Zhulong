@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 func newTestService(t *testing.T) (AuthService, *database.Store, *RateLimiter) {
@@ -403,7 +404,12 @@ func TestAuthService_LoginAndRateLimiter(t *testing.T) {
 
 func TestAuthService_NilStoresDoNotPanic(t *testing.T) {
 	ctx := context.Background()
-	svc := NewAuthService(nil, nil, nil, nil)
+	svc := NewAuthService(
+		nil,
+		nil,
+		nil,
+		nil,
+	)
 
 	if _, err := svc.GetStatus(ctx); err == nil {
 		t.Fatal("expected error from GetStatus when userStore is nil")
