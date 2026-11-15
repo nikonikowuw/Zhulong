@@ -132,7 +132,10 @@ func TestWatchdogBootAutoRollback(t *testing.T) {
 	}
 
 	// Verify rollback took effect on provider
-	ifaces, _ := provider.ListPhysicalInterfaces(ctx)
+	ifaces, err := provider.ListPhysicalInterfaces(ctx)
+	if err != nil {
+		t.Fatalf("ListPhysicalInterfaces failed: %v", err)
+	}
 	var eth0 InterfaceInfo
 	for _, iface := range ifaces {
 		if iface.Name == "eth0" {

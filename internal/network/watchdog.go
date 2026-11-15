@@ -119,10 +119,12 @@ func (w *WatchdogManager) BeginTransaction(state TransactionState) error {
 	timeout := time.Duration(state.TimeoutSec) * time.Second
 	w.timer = time.AfterFunc(timeout, w.handleTimeout)
 
-	w.logger.Info("Network watchdog transaction armed",
+	w.logger.Info(
+		"Network watchdog transaction armed",
 		zap.String("tx_id", state.TransactionID),
 		zap.String("interface", state.InterfaceName),
-		zap.Int("timeout_sec", state.TimeoutSec))
+		zap.Int("timeout_sec", state.TimeoutSec),
+	)
 	return nil
 }
 
@@ -176,10 +178,12 @@ func (w *WatchdogManager) RollbackTransaction(ctx context.Context) error {
 	}
 
 	state := w.activeState
-	w.logger.Warn("Triggering network rollback to previous safe configuration",
+	w.logger.Warn(
+		"Triggering network rollback to previous safe configuration",
 		zap.String("tx_id", state.TransactionID),
 		zap.String("interface", state.InterfaceName),
-		zap.String("mode", state.RollbackCfg.Mode))
+		zap.String("mode", state.RollbackCfg.Mode),
+	)
 
 	applyErr := w.provider.ApplyInterfaceConfig(ctx, state.InterfaceName, state.RollbackCfg)
 
@@ -209,10 +213,12 @@ func (w *WatchdogManager) CheckPendingBootTransaction(ctx context.Context) error
 		return nil
 	}
 
-	w.logger.Warn("Discovered unconfirmed network transaction on boot, auto-rolling back to the safe configuration",
+	w.logger.Warn(
+		"Discovered unconfirmed network transaction on boot, auto-rolling back to the safe configuration",
 		zap.String("tx_id", state.TransactionID),
 		zap.String("interface", state.InterfaceName),
-		zap.Time("expires_at", state.ExpiresAt))
+		zap.Time("expires_at", state.ExpiresAt),
+	)
 
 	if err := w.provider.ApplyInterfaceConfig(ctx, state.InterfaceName, state.RollbackCfg); err != nil {
 		w.logger.Error("Failed to auto-rollback on boot", zap.Error(err))

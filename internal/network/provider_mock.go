@@ -116,10 +116,12 @@ func (p *MockProvider) ApplyInterfaceConfig(ctx context.Context, iface string, c
 	}
 
 	p.interfaces[iface] = info
-	p.logger.Info("Mock provider applied interface config",
+	p.logger.Info(
+		"Mock provider applied interface config",
 		zap.String("iface", iface),
 		zap.String("mode", cfg.Mode),
-		zap.Bool("isDefault", info.IsDefaultGW))
+		zap.Bool("isDefault", info.IsDefaultGW),
+	)
 	return nil
 }
 

@@ -58,13 +58,13 @@ func (p *ScriptProvider) ListPhysicalInterfaces(ctx context.Context) ([]Interfac
 }
 
 func (p *ScriptProvider) ApplyInterfaceConfig(ctx context.Context, iface string, cfg InterfaceConfig) error {
-	cidr := ""
+	var cidr string
 	if cfg.Mode == modeStatic {
-		var err error
-		cidr, err = CIDRFromIPAndMask(cfg.IPAddress, cfg.SubnetMask)
+		c, err := CIDRFromIPAndMask(cfg.IPAddress, cfg.SubnetMask)
 		if err != nil {
 			return fmt.Errorf("calculate CIDR: %w", err)
 		}
+		cidr = c
 	}
 
 	setDefault := "0"
@@ -98,7 +98,12 @@ func (p *ScriptProvider) ApplyInterfaceConfig(ctx context.Context, iface string,
 
 func (p *ScriptProvider) ResetInterfaceToMaintenance(ctx context.Context, iface string) error {
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, p.scriptPath, "reset", iface)
+	cmd := exec.CommandContext(
+		ctx,
+		p.scriptPath,
+		"reset",
+		iface,
+	)
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {

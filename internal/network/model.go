@@ -97,7 +97,12 @@ func CIDRFromIPAndMask(ipStr, maskStr string) (string, error) {
 	}
 
 	maskBytes := maskIP.To4()
-	mask := net.IPv4Mask(maskBytes[0], maskBytes[1], maskBytes[2], maskBytes[3])
+	mask := net.IPv4Mask(
+		maskBytes[0],
+		maskBytes[1],
+		maskBytes[2],
+		maskBytes[3],
+	)
 	ones, bits := mask.Size()
 	if bits != 32 || ones == 0 {
 		return "", fmt.Errorf("invalid IPv4 subnet mask bits: %q", maskStr)
@@ -117,13 +122,14 @@ func ParseCIDRToIPAndMask(cidr string) (string, string, error) {
 	}
 
 	mask := ipNet.Mask
-	if len(mask) == 4 {
+	switch len(mask) {
+	case 4:
 		maskStr := fmt.Sprintf("%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3])
 		return ip.String(), maskStr, nil
-	}
-	if len(mask) == 16 {
+	case 16:
 		maskStr := fmt.Sprintf("%d.%d.%d.%d", mask[12], mask[13], mask[14], mask[15])
 		return ip.String(), maskStr, nil
+	default:
+		return ip.String(), "255.255.255.0", nil
 	}
-	return ip.String(), "255.255.255.0", nil
 }

@@ -78,14 +78,15 @@ func (s *NetworkService) ListInterfaces(ctx context.Context, origin RequestOrigi
 		address  string
 		bySubnet bool
 	}{
-		{address: origin.LocalAddr},
-		{address: origin.Host},
+		{address: origin.LocalAddr, bySubnet: false},
+		{address: origin.Host, bySubnet: false},
 		{address: origin.ClientIP, bySubnet: true},
 	}
 
 	for _, candidate := range candidates {
 		ip := parseCleanIP(candidate.address)
-		if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+		isUsableIP := ip != nil && !ip.IsLoopback() && !ip.IsUnspecified()
+		if !isUsableIP {
 			continue
 		}
 
@@ -150,7 +151,12 @@ func (s *NetworkService) ApplyConfig(
 	}
 
 	if !isValidMode(cfg.Mode) {
-		return nil, apperr.New(apperr.KindInvalid, "INVALID_MODE", "Mode must be 'dhcp' or 'static'", nil)
+		return nil, apperr.New(
+			apperr.KindInvalid,
+			"INVALID_MODE",
+			"Mode must be 'dhcp' or 'static'",
+			nil,
+		)
 	}
 
 	if cfg.Mode == modeStatic {
@@ -205,7 +211,12 @@ func (s *NetworkService) ApplyConfig(
 	}
 
 	txID := fmt.Sprintf("tx_%d_%s", time.Now().Unix(), txSuffix)
-	targetURL := computeTargetURL(cfg, currentHost, s.publicPort, confirmToken)
+	targetURL := computeTargetURL(
+		cfg,
+		currentHost,
+		s.publicPort,
+		confirmToken,
+	)
 
 	txState := TransactionState{
 		TransactionID: txID,
@@ -244,8 +255,11 @@ func (s *NetworkService) scheduleApply(iface string, cfg InterfaceConfig) {
 	go func() {
 		defer cancel()
 
+		timer := time.NewTimer(applyDelay)
+		defer timer.Stop()
+
 		select {
-		case <-time.After(applyDelay):
+		case <-timer.C:
 		case <-applyCtx.Done():
 			s.logger.Info("Delayed network reconfiguration cancelled before execution",
 				zap.String("interface", iface))
@@ -399,7 +413,12 @@ func isValidMode(mode string) bool {
 func validateStaticConfig(cfg InterfaceConfig) error {
 	ip := parseIPv4(cfg.IPAddress)
 	if ip == nil {
-		return apperr.New(apperr.KindInvalid, "INVALID_IP_ADDRESS", "A valid IPv4 address is required", nil)
+		return apperr.New(
+			apperr.KindInvalid,
+			"INVALID_IP_ADDRESS",
+			"A valid IPv4 address is required",
+			nil,
+		)
 	}
 	if ip.IsLoopback() || ip.IsMulticast() {
 		return apperr.New(
@@ -412,19 +431,39 @@ func validateStaticConfig(cfg InterfaceConfig) error {
 
 	maskIP := parseIPv4(cfg.SubnetMask)
 	if maskIP == nil {
-		return apperr.New(apperr.KindInvalid, "INVALID_SUBNET_MASK", "A valid IPv4 subnet mask is required", nil)
+		return apperr.New(
+			apperr.KindInvalid,
+			"INVALID_SUBNET_MASK",
+			"A valid IPv4 subnet mask is required",
+			nil,
+		)
 	}
 
-	mask := net.IPv4Mask(maskIP[0], maskIP[1], maskIP[2], maskIP[3])
+	mask := net.IPv4Mask(
+		maskIP[0],
+		maskIP[1],
+		maskIP[2],
+		maskIP[3],
+	)
 	ones, bits := mask.Size()
 	if bits != 32 || ones == 0 {
-		return apperr.New(apperr.KindInvalid, "INVALID_SUBNET_MASK", "Invalid IPv4 subnet mask", nil)
+		return apperr.New(
+			apperr.KindInvalid,
+			"INVALID_SUBNET_MASK",
+			"Invalid IPv4 subnet mask",
+			nil,
+		)
 	}
 
 	if strings.TrimSpace(cfg.Gateway) != "" {
 		gwIP := parseIPv4(cfg.Gateway)
 		if gwIP == nil {
-			return apperr.New(apperr.KindInvalid, "INVALID_GATEWAY", "Gateway must be a valid IPv4 address", nil)
+			return apperr.New(
+				apperr.KindInvalid,
+				"INVALID_GATEWAY",
+				"Gateway must be a valid IPv4 address",
+				nil,
+			)
 		}
 
 		ipNet := net.IPNet{IP: ip.Mask(mask), Mask: mask}

@@ -118,7 +118,12 @@ func (p *SystemdNetworkdProvider) writeNetworkFile(filePath, content string) err
 func (p *SystemdNetworkdProvider) reloadNetworkd(ctx context.Context, iface string) error {
 	var stderr bytes.Buffer
 
-	reconfigure := exec.CommandContext(ctx, "networkctl", "reconfigure", iface)
+	reconfigure := exec.CommandContext(
+		ctx,
+		"networkctl",
+		"reconfigure",
+		iface,
+	)
 	reconfigure.Stderr = &stderr
 	if err := reconfigure.Run(); err == nil {
 		return nil

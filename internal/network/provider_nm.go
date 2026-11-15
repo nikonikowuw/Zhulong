@@ -55,7 +55,12 @@ func (p *NetworkManagerProvider) ApplyInterfaceConfig(ctx context.Context, iface
 		return fmt.Errorf("modify connection %s to %s: %w", connName, cfg.Mode, err)
 	}
 
-	if err := p.runNmcli(ctx, "con", "up", connName); err != nil {
+	if err := p.runNmcli(
+		ctx,
+		"con",
+		"up",
+		connName,
+	); err != nil {
 		return fmt.Errorf("activate connection %s: %w", connName, err)
 	}
 
@@ -69,9 +74,11 @@ func (p *NetworkManagerProvider) ApplyInterfaceConfig(ctx context.Context, iface
 // DHCP is the default branch; static overrides the address related properties.
 func buildNmcliModifyArgs(connName string, cfg InterfaceConfig) ([]string, error) {
 	method := "auto"
-	addresses := ""
-	gateway := ""
-	dns := ""
+	var (
+		addresses string
+		gateway   string
+		dns       string
+	)
 
 	if cfg.Mode == modeStatic {
 		cidr, err := CIDRFromIPAndMask(cfg.IPAddress, cfg.SubnetMask)
@@ -117,7 +124,12 @@ func (p *NetworkManagerProvider) ResetInterfaceToMaintenance(ctx context.Context
 		return fmt.Errorf("reset %s to maintenance mode: %w", connName, err)
 	}
 
-	if err := p.runNmcli(ctx, "con", "up", connName); err != nil {
+	if err := p.runNmcli(
+		ctx,
+		"con",
+		"up",
+		connName,
+	); err != nil {
 		return fmt.Errorf("up %s: %w", connName, err)
 	}
 
@@ -127,18 +139,45 @@ func (p *NetworkManagerProvider) ResetInterfaceToMaintenance(ctx context.Context
 }
 
 func (p *NetworkManagerProvider) getOrCreateConnection(ctx context.Context, iface string) (string, error) {
-	out, err := exec.CommandContext(ctx, "nmcli", "-g", "GENERAL.CONNECTION", "device", "show", iface).Output()
+	out, err := exec.CommandContext(
+		ctx,
+		"nmcli",
+		"-g",
+		"GENERAL.CONNECTION",
+		"device",
+		"show",
+		iface,
+	).Output()
 	conn := strings.TrimSpace(string(out))
-	if err == nil && conn != "" && conn != "--" {
+	isValidConn := err == nil && conn != "" && conn != "--"
+	if isValidConn {
 		return conn, nil
 	}
 
-	checkOut, checkErr := exec.CommandContext(ctx, "nmcli", "-g", "NAME", "con", "show", iface).Output()
+	checkOut, checkErr := exec.CommandContext(
+		ctx,
+		"nmcli",
+		"-g",
+		"NAME",
+		"con",
+		"show",
+		iface,
+	).Output()
 	if checkErr == nil && strings.TrimSpace(string(checkOut)) == iface {
 		return iface, nil
 	}
 
-	if err := p.runNmcli(ctx, "con", "add", "type", "ethernet", "ifname", iface, "con-name", iface); err != nil {
+	if err := p.runNmcli(
+		ctx,
+		"con",
+		"add",
+		"type",
+		"ethernet",
+		"ifname",
+		iface,
+		"con-name",
+		iface,
+	); err != nil {
 		return "", fmt.Errorf("create connection for %s: %w", iface, err)
 	}
 	return iface, nil

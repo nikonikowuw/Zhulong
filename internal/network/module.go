@@ -67,7 +67,12 @@ func NewNetworkComponents(opts Options, logger *zap.Logger) NetworkComponents {
 
 	provider := newLazyProvider(opts.CustomScript, logger)
 	watchdog := NewWatchdogManager(opts.DataDir, provider, logger)
-	service := NewNetworkService(provider, watchdog, portOf(opts.HTTPAddress), logger)
+	service := NewNetworkService(
+		provider,
+		watchdog,
+		portOf(opts.HTTPAddress),
+		logger,
+	)
 	handler := NewHandler(service)
 	lifecycle := &networkLifecycleImpl{
 		service:  service,

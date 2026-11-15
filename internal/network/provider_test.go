@@ -143,7 +143,10 @@ func TestMockProviderLifecycle(t *testing.T) {
 		t.Fatalf("ResetInterfaceToMaintenance failed: %v", err)
 	}
 
-	updated, _ = provider.ListPhysicalInterfaces(ctx)
+	updated, err = provider.ListPhysicalInterfaces(ctx)
+	if err != nil {
+		t.Fatalf("ListPhysicalInterfaces failed: %v", err)
+	}
 	for _, iface := range updated {
 		if iface.Name == "eth0" {
 			if len(iface.IPAddresses) == 0 || iface.IPAddresses[0] != "192.168.1.168/24" {
@@ -164,7 +167,7 @@ func TestDetectProviderFallback(t *testing.T) {
 	// Test valid executable script detected
 	tmpDir := t.TempDir()
 	scriptFile := filepath.Join(tmpDir, "mock_network_hook.sh")
-	if err := os.WriteFile(scriptFile, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+	if err := os.WriteFile(scriptFile, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

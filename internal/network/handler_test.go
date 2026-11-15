@@ -20,7 +20,12 @@ func setupTestNetworkHandler(t *testing.T) (*gin.Engine, *NetworkService, *Watch
 	tmpDir := t.TempDir()
 	provider := NewMockProvider(zap.NewNop())
 	watchdog := NewWatchdogManager(tmpDir, provider, zap.NewNop())
-	service := NewNetworkService(provider, watchdog, "8000", zap.NewNop())
+	service := NewNetworkService(
+		provider,
+		watchdog,
+		"8000",
+		zap.NewNop(),
+	)
 	handler := NewHandler(service)
 
 	router := gin.New()
@@ -34,7 +39,10 @@ func setupTestNetworkHandler(t *testing.T) (*gin.Engine, *NetworkService, *Watch
 func TestHandlerListInterfaces(t *testing.T) {
 	router, _, _, _ := setupTestNetworkHandler(t)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/system/network/interfaces", nil)
+	req, err := http.NewRequest(http.MethodGet, "/api/v1/system/network/interfaces", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -51,7 +59,10 @@ func TestHandlerListInterfaces(t *testing.T) {
 		t.Fatalf("expected code OK, got %s", resp.Code)
 	}
 
-	raw, _ := json.Marshal(resp.Data)
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		t.Fatalf("marshal response data: %v", err)
+	}
 	var ifaces []InterfaceInfo
 	if err := json.Unmarshal(raw, &ifaces); err != nil {
 		t.Fatalf("unmarshal data: %v", err)
@@ -93,8 +104,18 @@ func TestHandlerApplyAndConfirm(t *testing.T) {
 		DNS:        []string{"8.8.8.8"},
 		SetDefault: true,
 	}
-	bodyBytes, _ := json.Marshal(applyBody)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/interfaces/eth0/apply", bytes.NewReader(bodyBytes))
+	bodyBytes, err := json.Marshal(applyBody)
+	if err != nil {
+		t.Fatalf("marshal apply body: %v", err)
+	}
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"/api/v1/system/network/interfaces/eth0/apply",
+		bytes.NewReader(bodyBytes),
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -104,17 +125,31 @@ func TestHandlerApplyAndConfirm(t *testing.T) {
 	}
 
 	var resp httputil.Response
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	raw, _ := json.Marshal(resp.Data)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		t.Fatalf("marshal response data: %v", err)
+	}
 	var applyResp ApplyResponse
-	_ = json.Unmarshal(raw, &applyResp)
+	if err := json.Unmarshal(raw, &applyResp); err != nil {
+		t.Fatalf("unmarshal apply response: %v", err)
+	}
 
 	if applyResp.ConfirmToken == "" {
 		t.Fatalf("expected confirm_token in response")
 	}
 
 	// Confirm via token endpoint
-	confirmReq, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/confirm?token="+applyResp.ConfirmToken, nil)
+	confirmReq, err := http.NewRequest(
+		http.MethodPost,
+		"/api/v1/system/network/confirm?token="+applyResp.ConfirmToken,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create confirm request: %v", err)
+	}
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, confirmReq)
 
@@ -133,8 +168,18 @@ func TestHandlerApplyConflictAndValidation(t *testing.T) {
 		SubnetMask: "255.255.255.0",
 		Gateway:    "10.0.0.1",
 	}
-	bodyBytes, _ := json.Marshal(badGateway)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/interfaces/eth0/apply", bytes.NewReader(bodyBytes))
+	bodyBytes, err := json.Marshal(badGateway)
+	if err != nil {
+		t.Fatalf("marshal bad gateway body: %v", err)
+	}
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"/api/v1/system/network/interfaces/eth0/apply",
+		bytes.NewReader(bodyBytes),
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -151,8 +196,18 @@ func TestHandlerApplyConflictAndValidation(t *testing.T) {
 		Gateway:    "10.0.0.1",
 		SetDefault: true,
 	}
-	bodyBytes, _ = json.Marshal(conflict)
-	req2, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/interfaces/eth1/apply", bytes.NewReader(bodyBytes))
+	bodyBytes, err = json.Marshal(conflict)
+	if err != nil {
+		t.Fatalf("marshal conflict body: %v", err)
+	}
+	req2, err := http.NewRequest(
+		http.MethodPost,
+		"/api/v1/system/network/interfaces/eth1/apply",
+		bytes.NewReader(bodyBytes),
+	)
+	if err != nil {
+		t.Fatalf("create conflict request: %v", err)
+	}
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
@@ -173,8 +228,18 @@ func TestHandlerRollback(t *testing.T) {
 		Gateway:    "192.168.1.1",
 		SetDefault: true,
 	}
-	bodyBytes, _ := json.Marshal(applyBody)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/interfaces/eth0/apply", bytes.NewReader(bodyBytes))
+	bodyBytes, err := json.Marshal(applyBody)
+	if err != nil {
+		t.Fatalf("marshal apply body: %v", err)
+	}
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"/api/v1/system/network/interfaces/eth0/apply",
+		bytes.NewReader(bodyBytes),
+	)
+	if err != nil {
+		t.Fatalf("create apply request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -184,17 +249,27 @@ func TestHandlerRollback(t *testing.T) {
 	}
 
 	var resp httputil.Response
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	raw, _ := json.Marshal(resp.Data)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		t.Fatalf("marshal response data: %v", err)
+	}
 	var applyResp ApplyResponse
-	_ = json.Unmarshal(raw, &applyResp)
+	if err := json.Unmarshal(raw, &applyResp); err != nil {
+		t.Fatalf("unmarshal apply response: %v", err)
+	}
 
 	// Rollback with token
-	rollbackReq, _ := http.NewRequest(
+	rollbackReq, err := http.NewRequest(
 		http.MethodPost,
 		"/api/v1/system/network/rollback?token="+applyResp.ConfirmToken,
 		nil,
 	)
+	if err != nil {
+		t.Fatalf("create rollback request: %v", err)
+	}
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, rollbackReq)
 
@@ -207,8 +282,18 @@ func TestHandlerPing(t *testing.T) {
 	router, _, _, _ := setupTestNetworkHandler(t)
 
 	pingBody := PingRequest{Target: "127.0.0.1"}
-	bodyBytes, _ := json.Marshal(pingBody)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/ping", bytes.NewReader(bodyBytes))
+	bodyBytes, err := json.Marshal(pingBody)
+	if err != nil {
+		t.Fatalf("marshal ping body: %v", err)
+	}
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"/api/v1/system/network/ping",
+		bytes.NewReader(bodyBytes),
+	)
+	if err != nil {
+		t.Fatalf("create ping request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -218,15 +303,27 @@ func TestHandlerPing(t *testing.T) {
 	}
 
 	var resp httputil.Response
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
 	if resp.Code != "OK" {
 		t.Fatalf("expected code OK, got %s", resp.Code)
 	}
 
 	// Invalid ping target should return 422
 	badPing := PingRequest{Target: "-c 2 127.0.0.1"}
-	badBytes, _ := json.Marshal(badPing)
-	req2, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/ping", bytes.NewReader(badBytes))
+	badBytes, err := json.Marshal(badPing)
+	if err != nil {
+		t.Fatalf("marshal bad ping body: %v", err)
+	}
+	req2, err := http.NewRequest(
+		http.MethodPost,
+		"/api/v1/system/network/ping",
+		bytes.NewReader(badBytes),
+	)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
@@ -240,7 +337,10 @@ func TestHandlerConfirmRollbackTokenRequired(t *testing.T) {
 	router, _, _, _ := setupTestNetworkHandler(t)
 
 	// Confirm without token or session
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/confirm", nil)
+	req, err := http.NewRequest(http.MethodPost, "/api/v1/system/network/confirm", nil)
+	if err != nil {
+		t.Fatalf("create confirm request: %v", err)
+	}
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -249,13 +349,18 @@ func TestHandlerConfirmRollbackTokenRequired(t *testing.T) {
 	}
 
 	var resp httputil.Response
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
 	if resp.Code != "TOKEN_REQUIRED" {
 		t.Fatalf("expected code TOKEN_REQUIRED, got %s", resp.Code)
 	}
 
 	// Rollback without token or session
-	req2, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/rollback", nil)
+	req2, err := http.NewRequest(http.MethodPost, "/api/v1/system/network/rollback", nil)
+	if err != nil {
+		t.Fatalf("create rollback request: %v", err)
+	}
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
 

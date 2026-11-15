@@ -53,7 +53,12 @@ func readPhysicalInterfaces(ctx context.Context) ([]InterfaceInfo, error) {
 		}
 
 		route := defaultRoutes[name]
-		result = append(result, readLinuxInterface(name, route.gateway, route.isDefaultGW, dnsServers))
+		result = append(result, readLinuxInterface(
+			name,
+			route.gateway,
+			route.isDefaultGW,
+			dnsServers,
+		))
 	}
 
 	return result, nil
