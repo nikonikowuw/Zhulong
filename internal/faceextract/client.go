@@ -807,4 +807,3 @@ func killGroupBestEffort(cmd *algorunner.PinnedProcess) {
 		// Intentionally ignored — process may have already exited.
 	}
 }
-

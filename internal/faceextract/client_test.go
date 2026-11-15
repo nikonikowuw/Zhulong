@@ -665,8 +665,8 @@ func TestExtractAcceptsPaddedStride(t *testing.T) {
 	body := strings.Replace(
 		echoProvider(2, "passed", ""),
 		"    payload = sys.stdin.buffer.read(payload_len)",
-		"    payload = sys.stdin.buffer.read(payload_len)\n" +
-			"    open('" + strideFile + "', 'w').write('%d,%d' % (stride, len(payload)))",
+		"    payload = sys.stdin.buffer.read(payload_len)\n"+
+			"    open('"+strideFile+"', 'w').write('%d,%d' % (stride, len(payload)))",
 		1,
 	)
 	client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
