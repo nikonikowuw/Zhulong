@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -24,14 +25,6 @@ func snapshotFile(t *testing.T, mediaDir, name string, age time.Duration) string
 	return path
 }
 
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
 
 func TestCleaner_EmergencyStopCoversPercentTrigger(t *testing.T) {
 	mediaDir := t.TempDir()
@@ -58,7 +51,7 @@ func TestCleaner_EmergencyStopCoversPercentTrigger(t *testing.T) {
 		BatchSleep: batchSleep(0),
 	})
 
-	probeCalls := 0
+	var probeCalls int
 	cleaner.capacityProbe = func(string) (*FSStats, error) {
 		probeCalls++
 		if probeCalls == 1 {
@@ -98,7 +91,7 @@ func TestCleaner_EmergencyStopCoversPercentTrigger(t *testing.T) {
 	if _, err := os.Stat(second); err != nil {
 		t.Errorf("second snapshot should remain until the usage target is reached: %v", err)
 	}
-	if !containsString(summary.DeletedSnapshotIDs, "01ABC") {
+	if !slices.Contains(summary.DeletedSnapshotIDs, "01ABC") {
 		t.Errorf("deleted IDs = %v, want 01ABC", summary.DeletedSnapshotIDs)
 	}
 }
@@ -241,7 +234,7 @@ func TestCleaner_GroupedSnapshotDeletionAndIDs(t *testing.T) {
 			t.Errorf("group member %s should be deleted, err=%v", path, err)
 		}
 	}
-	if !containsString(summary.DeletedSnapshotIDs, "01ABC") {
+	if !slices.Contains(summary.DeletedSnapshotIDs, "01ABC") {
 		t.Errorf("deleted IDs = %v, want 01ABC", summary.DeletedSnapshotIDs)
 	}
 }

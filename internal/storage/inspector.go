@@ -68,10 +68,11 @@ func (p *DefaultPathInspector) ProbeWritable(path string) error {
 		return fmt.Errorf("path %q is not a directory", cleanPath)
 	}
 
-	// Generate random probe file name. crypto/rand.Read never returns an error on
-	// any platform Go supports, so the result needs no check.
+	// Generate random probe file name.
 	var randomBytes [8]byte
-	_, _ = rand.Read(randomBytes[:])
+	if _, err := rand.Read(randomBytes[:]); err != nil {
+		return fmt.Errorf("generate probe token: %w", err)
+	}
 	probeFileName := filepath.Join(
 		cleanPath,
 		fmt.Sprintf(".zhulong_storage_probe_%s", hex.EncodeToString(randomBytes[:])),
@@ -84,7 +85,9 @@ func (p *DefaultPathInspector) ProbeWritable(path string) error {
 	defer func() {
 		// Best effort: the probe already delivered its verdict, and a leftover
 		// file is harmless next to a failed cleanup.
-		_ = os.Remove(probeFileName)
+		if err := os.Remove(probeFileName); err != nil && !os.IsNotExist(err) {
+			// Intentionally ignored best-effort probe cleanup.
+		}
 	}()
 
 	readBack, err := os.ReadFile(probeFileName)

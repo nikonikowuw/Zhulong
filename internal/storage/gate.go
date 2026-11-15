@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -101,7 +102,7 @@ func (g *EmergencyGate) BlockWrites(reason string) {
 // gate mutex released, because observers may call back into the gate.
 func (g *EmergencyGate) publishWriteState(blocked bool) {
 	g.mu.RLock()
-	observers := append([]func(bool){}, g.observers...)
+	observers := slices.Clone(g.observers)
 	g.mu.RUnlock()
 	for _, observer := range observers {
 		observer(blocked)
@@ -222,7 +223,7 @@ func (t *gateTransition) markBlocked(canWrite *atomic.Bool) {
 // markAllowed latches a write-resume edge for a previously blocked gate.
 func (t *gateTransition) markAllowed(canWrite *atomic.Bool) {
 	if !canWrite.Swap(true) {
-		blocked := false
+		var blocked bool
 		t.writeBlocked = &blocked
 	}
 }

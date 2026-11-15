@@ -20,7 +20,9 @@ func (p *DefaultPathInspector) InspectFS(path string) (*FSStats, error) {
 	cleanPath := filepath.Clean(path)
 	// The probe directory is best effort here: a synthetic inspector cannot test
 	// writability, so a creation failure must not fail the simulation either.
-	_ = os.MkdirAll(cleanPath, 0o750)
+	if err := os.MkdirAll(cleanPath, 0o750); err != nil {
+		// Intentionally ignored for fallback simulation.
+	}
 
 	// 100 GB total, 50 GB free fallback
 	total := uint64(100 * 1024 * 1024 * 1024)

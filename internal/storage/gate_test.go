@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -266,7 +267,7 @@ func TestEmergencyGateReportsWriteStateEdges(t *testing.T) {
 	gate.Evaluate(healthy, cfg, false)
 	gate.Evaluate(healthy, cfg, false)
 
-	if want := []bool{true, false}; !equalBoolSlices(states, want) {
+	if want := []bool{true, false}; !slices.Equal(states, want) {
 		t.Fatalf("write state transitions = %v, want %v", states, want)
 	}
 }
@@ -285,7 +286,7 @@ func TestEmergencyGateReportsTelemetryBlockOnce(t *testing.T) {
 	gate.BlockWrites("telemetry unavailable")
 	gate.BlockWrites("telemetry unavailable again")
 
-	if want := []bool{true}; !equalBoolSlices(states, want) {
+	if want := []bool{true}; !slices.Equal(states, want) {
 		t.Fatalf("write state transitions = %v, want %v", states, want)
 	}
 }
@@ -306,22 +307,13 @@ func TestEmergencyGateKeepsAuditCallbacksWithObservers(t *testing.T) {
 	})
 
 	const gigabyte = uint64(1024 * 1024 * 1024)
-	gate.Evaluate(&FSStats{TotalBytes: 100 * gigabyte, UsedBytes: 96 * gigabyte, FreeBytes: 4 * gigabyte},
-		testStorageConfig(), false)
+	gate.Evaluate(
+		&FSStats{TotalBytes: 100 * gigabyte, UsedBytes: 96 * gigabyte, FreeBytes: 4 * gigabyte},
+		testStorageConfig(),
+		false,
+	)
 
 	if stops.Load() != 1 || observed.Load() != 1 {
 		t.Fatalf("stops = %d, observed = %d, want 1 and 1", stops.Load(), observed.Load())
 	}
-}
-
-func equalBoolSlices(got, want []bool) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
 }

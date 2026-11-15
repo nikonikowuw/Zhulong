@@ -71,7 +71,8 @@ type StorageStatus struct {
 	TotalBytes     uint64                `json:"totalBytes"`     // Total capacity in bytes
 	UsedBytes      uint64                `json:"usedBytes"`      // Used capacity in bytes
 	FreeBytes      uint64                `json:"freeBytes"`      // Available capacity for non-root users in bytes
-	UsagePercent   int                   `json:"usagePercent"`   // User-available usage percentage (0..100): used/(used+free)
+	// UsagePercent is user-available usage percentage (0..100): used/(used+free).
+	UsagePercent   int                   `json:"usagePercent"`
 	Breakdown      StorageUsageBreakdown `json:"breakdown"`      // Categorized usage breakdown
 	Status         StorageHealthStatus   `json:"status"`         // Current health status
 	DeviceID       uint64                `json:"deviceId"`       // Associated filesystem device ID (st_dev)

@@ -140,10 +140,14 @@ func findMountInfoLinux(targetPath string) (string, string) {
 	if err != nil {
 		return "", ""
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			// Intentionally ignored best-effort close for read-only /proc/mounts.
+		}
+	}()
 
-	bestMount := ""
-	bestFSType := ""
+	var bestMount string
+	var bestFSType string
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {

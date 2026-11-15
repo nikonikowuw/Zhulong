@@ -237,7 +237,10 @@ func (c *CleanerEngine) RunPrune(
 
 	startTime := time.Now()
 	now := startTime.UTC()
-	summary := &CleanupSummary{TriggerReason: trigger}
+	summary := &CleanupSummary{
+		TriggerReason:      trigger,
+		DeletedSnapshotIDs: []string{},
+	}
 
 	stats, err := c.inspector.InspectFS(mediaDir)
 	if err != nil {
@@ -462,7 +465,9 @@ func (c *CleanerEngine) deleteUnits(
 				dirs[filepath.Dir(file.path)] = struct{}{}
 			}
 			for dir := range dirs {
-				_ = os.Remove(dir)
+				if err := os.Remove(dir); err != nil {
+					// Intentionally ignore best-effort empty parent directory removal.
+				}
 			}
 
 			if allGone && unit.kind == unitSnapshot {
@@ -486,9 +491,11 @@ func (c *CleanerEngine) deleteUnits(
 		}
 
 		if c.batchSleep > 0 {
+			timer := time.NewTimer(c.batchSleep)
 			select {
-			case <-time.After(c.batchSleep):
+			case <-timer.C:
 			case <-ctx.Done():
+				timer.Stop()
 				outcome.canceled = true
 				return outcome
 			}
@@ -499,7 +506,7 @@ func (c *CleanerEngine) deleteUnits(
 }
 
 func (c *CleanerEngine) guardBatch(ctx context.Context, batch []pruneUnit, guard EvidenceGuard) map[string]bool {
-	protected := make(map[string]bool)
+	protected := map[string]bool{}
 	if guard == nil {
 		return protected
 	}
@@ -550,7 +557,7 @@ func (c *CleanerEngine) unitProtected(unit pruneUnit) bool {
 // from .lock protection: they are user-requested temporary clips.
 func (c *CleanerEngine) collectExportUnits(mediaDir string, ttl time.Duration, now time.Time) []pruneUnit {
 	threshold := now.Add(-ttl)
-	units := make([]pruneUnit, 0)
+	units := []pruneUnit{}
 
 	walkMediaFiles(filepath.Join(mediaDir, "exports"), func(path string, d fs.DirEntry) {
 		info, err := d.Info()
@@ -622,8 +629,8 @@ func (c *CleanerEngine) collectGroupedUnits(
 		}
 	})
 
-	expired = make([]pruneUnit, 0)
-	unexpired = make([]pruneUnit, 0)
+	expired = []pruneUnit{}
+	unexpired = []pruneUnit{}
 	for _, unit := range groups {
 		if len(unit.files) == 0 {
 			continue
@@ -747,14 +754,17 @@ func isCleanupProtected(name, path string) bool {
 // Walk errors are deliberately ignored: a missing or unreadable subtree simply
 // contributes no candidates, and the prune cycle reports its own outcome.
 func walkMediaFiles(root string, visit func(path string, d fs.DirEntry)) {
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
 
 		visit(path, d)
 		return nil
-	})
+	}); err != nil {
+		// Walk errors are intentionally ignored: a missing or unreadable subtree simply
+		// contributes no candidates, and the prune cycle reports its own outcome.
+	}
 }
 
 // sortUnitsOldestFirst orders units by their oldest member mtime.

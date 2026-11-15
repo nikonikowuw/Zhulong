@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func (e emergencyThenHealthyInspector) ScanBreakdown(context.Context, string) (S
 }
 
 func TestService_TickEmergencyCleanupAndResume(t *testing.T) {
-	dbStore, repo, closeDB := newTestRepository(t)
+	_, repo, closeDB := newTestRepository(t)
 	defer closeDB()
 
 	mediaDir := t.TempDir()
@@ -76,7 +77,6 @@ func TestService_TickEmergencyCleanupAndResume(t *testing.T) {
 		Cleaner:   cleaner,
 		Logger:    zap.NewNop(),
 	})
-	_ = dbStore
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -92,7 +92,7 @@ func TestService_TickEmergencyCleanupAndResume(t *testing.T) {
 
 	select {
 	case ids := <-pruned:
-		if !containsString(ids, "01ABC") {
+		if !slices.Contains(ids, "01ABC") {
 			t.Fatalf("after-prune IDs = %v, want 01ABC", ids)
 		}
 	case <-time.After(2 * time.Second):

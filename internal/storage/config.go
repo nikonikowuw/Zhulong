@@ -22,32 +22,47 @@ func ValidateConfig(cfg *StorageConfig) error {
 	cfg.MediaDirectory = cleanDir
 
 	if cfg.RecordingsRetentionDays < 1 || cfg.RecordingsRetentionDays > 365 {
-		return fmt.Errorf("recordings retention days must be between 1 and 365, got %d",
-			cfg.RecordingsRetentionDays)
+		return fmt.Errorf(
+			"recordings retention days must be between 1 and 365, got %d",
+			cfg.RecordingsRetentionDays,
+		)
 	}
 	if cfg.SnapshotsRetentionDays < 1 || cfg.SnapshotsRetentionDays > 730 {
-		return fmt.Errorf("snapshots retention days must be between 1 and 730, got %d",
-			cfg.SnapshotsRetentionDays)
+		return fmt.Errorf(
+			"snapshots retention days must be between 1 and 730, got %d",
+			cfg.SnapshotsRetentionDays,
+		)
 	}
 	if cfg.ExportsRetentionHours < 1 || cfg.ExportsRetentionHours > 168 {
-		return fmt.Errorf("exports retention hours must be between 1 and 168, got %d",
-			cfg.ExportsRetentionHours)
+		return fmt.Errorf(
+			"exports retention hours must be between 1 and 168, got %d",
+			cfg.ExportsRetentionHours,
+		)
 	}
 	if cfg.HighWatermarkPercent < 50 || cfg.HighWatermarkPercent > 95 {
-		return fmt.Errorf("high watermark percent must be between 50 and 95, got %d",
-			cfg.HighWatermarkPercent)
+		return fmt.Errorf(
+			"high watermark percent must be between 50 and 95, got %d",
+			cfg.HighWatermarkPercent,
+		)
 	}
 	if cfg.LowWatermarkPercent < 40 || cfg.LowWatermarkPercent > 85 {
-		return fmt.Errorf("low watermark percent must be between 40 and 85, got %d",
-			cfg.LowWatermarkPercent)
+		return fmt.Errorf(
+			"low watermark percent must be between 40 and 85, got %d",
+			cfg.LowWatermarkPercent,
+		)
 	}
 	if cfg.LowWatermarkPercent >= cfg.HighWatermarkPercent {
-		return fmt.Errorf("low watermark (%d%%) must be strictly less than high watermark (%d%%)",
-			cfg.LowWatermarkPercent, cfg.HighWatermarkPercent)
+		return fmt.Errorf(
+			"low watermark (%d%%) must be strictly less than high watermark (%d%%)",
+			cfg.LowWatermarkPercent,
+			cfg.HighWatermarkPercent,
+		)
 	}
 	if cfg.EmergencyStopPercent < 90 || cfg.EmergencyStopPercent > 99 {
-		return fmt.Errorf("emergency stop percent must be between 90 and 99, got %d",
-			cfg.EmergencyStopPercent)
+		return fmt.Errorf(
+			"emergency stop percent must be between 90 and 99, got %d",
+			cfg.EmergencyStopPercent,
+		)
 	}
 	if cfg.EmergencyStopPercent < cfg.HighWatermarkPercent {
 		return fmt.Errorf(
@@ -57,8 +72,10 @@ func ValidateConfig(cfg *StorageConfig) error {
 		)
 	}
 	if cfg.EmergencyStopMinMB < 100 || cfg.EmergencyStopMinMB > 102400 {
-		return fmt.Errorf("emergency stop min MB must be between 100 and 102400, got %d",
-			cfg.EmergencyStopMinMB)
+		return fmt.Errorf(
+			"emergency stop min MB must be between 100 and 102400, got %d",
+			cfg.EmergencyStopMinMB,
+		)
 	}
 
 	return nil

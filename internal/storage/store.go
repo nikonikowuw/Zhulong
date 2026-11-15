@@ -83,7 +83,8 @@ func (r *repositoryImpl) GetConfig(ctx context.Context) (*StorageConfig, error) 
 	if err != nil {
 		// A corrupt row must not take recording down with it, but reverting to
 		// defaults silently would hide the corruption from operators entirely.
-		r.logger.Warn("stored storage config is unusable; falling back to defaults",
+		r.logger.Warn(
+			"stored storage config is unusable; falling back to defaults",
 			zap.String("key", metadataKeyStorageConfig),
 			zap.Error(err),
 		)

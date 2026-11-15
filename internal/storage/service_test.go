@@ -607,16 +607,20 @@ func TestService_ConcurrentUpdateConfigAndRefreshStatus(t *testing.T) {
 			if idx%2 == 0 {
 				next.MediaDirectory = dirB
 			}
-			_, _ = svc.UpdateConfig(
+			if _, err := svc.UpdateConfig(
 				ctx,
 				next,
 				"admin",
 				"127.0.0.1",
-			)
+			); err != nil {
+				// Concurrent update may legitimately race or fail during switch.
+			}
 		}(i)
 		go func() {
 			defer wg.Done()
-			_, _ = svc.RefreshStatus(ctx)
+			if _, err := svc.RefreshStatus(ctx); err != nil {
+				// Concurrent refresh may encounter race during switch.
+			}
 		}()
 	}
 	wg.Wait()
