@@ -89,6 +89,30 @@ inline constexpr float kDefaultFusionTtlSeconds = 3.0f;
 inline constexpr float kMinFusionTtlSeconds = 0.5f;
 inline constexpr float kMaxFusionTtlSeconds = 30.0f;
 
+/**
+ * @brief 空间一致时的跨帧同人特征否决阈值默认值与合法域
+ *
+ * 观测框与状态上一帧框在空间上连续（IoU / 中心距 + 尺度比）时，特征只承担「防串人否决」，
+ * 门槛可以显著低于纯特征关联的 `fusion_similarity_threshold`：异人余弦通常接近 0，而同人
+ * 侧脸/模糊帧常落在 0.4~0.6 —— 正是旧门槛 0.62 把困难帧挡在融合之外的区间。
+ */
+inline constexpr float kDefaultFusionSpatialSimilarityThreshold = 0.40f;
+inline constexpr float kMinFusionSpatialSimilarityThreshold = 0.20f;
+inline constexpr float kMaxFusionSpatialSimilarityThreshold = 0.95f;
+
+/** @brief 轨迹级身份投票与锁定开关默认值（默认开启；仅在跨帧融合开启时生效） */
+inline constexpr bool kDefaultEnableTrackIdentity = true;
+
+/** @brief 轨迹投票确认所需的最少近阈值帧数默认值与合法域（窗口固定为最近 kTrackVoteWindow 帧） */
+inline constexpr int kDefaultTrackVoteMinHits = 2;
+inline constexpr int kMinTrackVoteMinHits = 2;
+inline constexpr int kMaxTrackVoteMinHits = 5;
+
+/** @brief 轨迹投票计票分数相对 `threshold` 的放宽量默认值与合法域（0.0 表示只计严格过阈值的帧） */
+inline constexpr float kDefaultTrackVoteRelax = 0.05f;
+inline constexpr float kMinTrackVoteRelax = 0.0f;
+inline constexpr float kMaxTrackVoteRelax = 0.15f;
+
 /** @brief 底库录入水平镜像 TTA 特征融合开关默认值（默认开启） */
 inline constexpr bool kDefaultEnableEnrollFlipTta = true;
 /** @brief 底库录入暗光自适应增强与无 EXIF 旋转重检兜底开关默认值（默认开启） */
@@ -134,6 +158,10 @@ struct MatchParams {
     bool enable_face_feature_fusion{kDefaultEnableFaceFeatureFusion};
     float fusion_similarity_threshold{kDefaultFusionSimilarityThreshold};
     float fusion_ttl_seconds{kDefaultFusionTtlSeconds};
+    float fusion_spatial_similarity_threshold{kDefaultFusionSpatialSimilarityThreshold};
+    bool enable_track_identity{kDefaultEnableTrackIdentity};
+    int track_vote_min_hits{kDefaultTrackVoteMinHits};
+    float track_vote_relax{kDefaultTrackVoteRelax};
     bool enable_enroll_flip_tta{kDefaultEnableEnrollFlipTta};
     bool enable_enroll_image_enhance{kDefaultEnableEnrollImageEnhance};
 };
@@ -238,6 +266,21 @@ inline MatchParams load_match_params_from_env(MatchParams base = MatchParams{}) 
     if (detail::parse_env_double("ZHULONG_FUSION_TTL_SECONDS", dval) &&
         within_float_bounds(dval, kMinFusionTtlSeconds, kMaxFusionTtlSeconds)) {
         p.fusion_ttl_seconds = static_cast<float>(dval);
+    }
+    if (detail::parse_env_double("ZHULONG_FUSION_SPATIAL_SIMILARITY_THRESHOLD", dval) &&
+        within_float_bounds(dval, kMinFusionSpatialSimilarityThreshold, kMaxFusionSpatialSimilarityThreshold)) {
+        p.fusion_spatial_similarity_threshold = static_cast<float>(dval);
+    }
+    if (detail::parse_env_bool("ZHULONG_ENABLE_TRACK_IDENTITY", bval)) {
+        p.enable_track_identity = bval;
+    }
+    if (detail::parse_env_double("ZHULONG_TRACK_VOTE_MIN_HITS", dval) &&
+        dval >= static_cast<double>(kMinTrackVoteMinHits) && dval <= static_cast<double>(kMaxTrackVoteMinHits)) {
+        p.track_vote_min_hits = static_cast<int>(std::lround(dval));
+    }
+    if (detail::parse_env_double("ZHULONG_TRACK_VOTE_RELAX", dval) &&
+        within_float_bounds(dval, kMinTrackVoteRelax, kMaxTrackVoteRelax)) {
+        p.track_vote_relax = static_cast<float>(dval);
     }
     if (detail::parse_env_bool("ZHULONG_ENABLE_ENROLL_FLIP_TTA", bval)) {
         p.enable_enroll_flip_tta = bval;
@@ -505,13 +548,42 @@ inline MatchParams resolve_match_params(std::string_view task_json, MatchParams 
         resolved.fusion_ttl_seconds = static_cast<float>(fusion_ttl_seconds);
     }
 
-    // 16. 底库录入水平镜像 TTA 开关
+    // 16. 空间一致时的跨帧特征否决阈值 [kMinFusionSpatialSimilarityThreshold, kMaxFusionSpatialSimilarityThreshold]
+    double fusion_spatial_similarity_threshold = 0.0;
+    if (find_json_number(json, "fusion_spatial_similarity_threshold", fusion_spatial_similarity_threshold) &&
+        within_float_bounds(fusion_spatial_similarity_threshold, kMinFusionSpatialSimilarityThreshold,
+                            kMaxFusionSpatialSimilarityThreshold)) {
+        resolved.fusion_spatial_similarity_threshold = static_cast<float>(fusion_spatial_similarity_threshold);
+    }
+
+    // 17. 轨迹级身份投票与锁定开关
+    bool enable_track_identity = true;
+    if (find_json_bool(json, "enable_track_identity", enable_track_identity)) {
+        resolved.enable_track_identity = enable_track_identity;
+    }
+
+    // 18. 轨迹投票最少近阈值帧数 [kMinTrackVoteMinHits, kMaxTrackVoteMinHits]
+    double track_vote_min_hits = 0.0;
+    if (find_json_number(json, "track_vote_min_hits", track_vote_min_hits) &&
+        track_vote_min_hits >= static_cast<double>(kMinTrackVoteMinHits) &&
+        track_vote_min_hits <= static_cast<double>(kMaxTrackVoteMinHits)) {
+        resolved.track_vote_min_hits = static_cast<int>(std::lround(track_vote_min_hits));
+    }
+
+    // 19. 轨迹投票计票分数放宽量 [kMinTrackVoteRelax, kMaxTrackVoteRelax]
+    double track_vote_relax = 0.0;
+    if (find_json_number(json, "track_vote_relax", track_vote_relax) &&
+        within_float_bounds(track_vote_relax, kMinTrackVoteRelax, kMaxTrackVoteRelax)) {
+        resolved.track_vote_relax = static_cast<float>(track_vote_relax);
+    }
+
+    // 20. 底库录入水平镜像 TTA 开关
     bool enable_enroll_flip_tta = true;
     if (find_json_bool(json, "enable_enroll_flip_tta", enable_enroll_flip_tta)) {
         resolved.enable_enroll_flip_tta = enable_enroll_flip_tta;
     }
 
-    // 17. 底库录入暗光增强与旋转兜底开关
+    // 21. 底库录入暗光增强与旋转兜底开关
     bool enable_enroll_image_enhance = true;
     if (find_json_bool(json, "enable_enroll_image_enhance", enable_enroll_image_enhance)) {
         resolved.enable_enroll_image_enhance = enable_enroll_image_enhance;

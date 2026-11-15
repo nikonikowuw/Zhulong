@@ -62,11 +62,13 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
      - **流式识别**：低于 `min_face_quality` 在特征提取前直接拦截，节省 512 维特征抽取算力；通过后得分写入 `FaceItem.quality` 并作为跨帧特征融合权重。
      - **底库登记（`--extract-feature`）**：同步接入 `eDifFIQA(T)` 质量门禁，低于 `min_face_quality` 时以帧级 `NO_FACE_DETECTED` 拒绝低质登记照（热进程不退出）。
      - 注：`rk3568` 档位当前打包 `ediffiqa_t.rknn`（INT8 量化，1.9 MB；相比 ONNX/FP16 分值存在约 `0.01~0.02` 系统下偏，板端耗时待实测）。
-4. **特征抽取、按流跨帧特征融合与身份级 1:N 比对（`src/common/face_feature_fusion.hpp` + `src/matching/matcher.*`）**
-   - FaceLiVTv2-L 输出 512 维单位特征向量；流式路径在 `enable_face_feature_fusion=true`（默认开启）时按 `task_id` 隔离维护最多 32 条活跃状态池，对当帧合格人脸与活跃状态做一对一贪心互斥配对。
-   - **池满时的腾位规则**：同帧人数超过 32 时优先淘汰**本帧未被命中**的状态；若 32 个状态本帧全部在用，则不为新面孔建状态（该脸照常输出单帧特征、`is_fused=false`）。绝不拆掉刚更新过的状态——否则那张脸的 `is_fused` 会每帧 1/0 抖动、融合永远攒不起来。
+4. **特征抽取、按流跨帧轨迹融合、轨迹级身份与 1:N 比对（`src/common/face_feature_fusion.hpp` + `face_track_identity.hpp` + `src/matching/matcher.*`）**
+   - FaceLiVTv2-L 输出 512 维单位特征向量；流式路径在 `enable_face_feature_fusion=true`（默认开启）时按 `task_id` 隔离维护最多 32 条活跃轨迹，对当帧合格人脸与活跃轨迹做一对一贪心互斥配对。
+   - **空间优先 + 特征否决的关联**：观测携带人脸框。与轨迹上一帧框空间连续（IoU `>= 0.10`，或按两框平均宽/高分轴归一化的中心位移 `<= 1.5` 且面积开方比在 `[0.5, 2.0]`，并且距上次观测 `<= 1.0 s`）时，特征只承担防串人否决：与融合特征**及**最高质量锚点的余弦均 `>= fusion_spatial_similarity_threshold`（默认 `0.40`）即可关联；否则回落纯特征门槛 `fusion_similarity_threshold`（默认 `0.62`）。同帧配对时空间连续的边优先。这样侧脸/模糊等困难帧（帧间同人相似度常在 0.4~0.6）不再把轨迹打断。
+   - **Top-K 高质量帧融合**：每条轨迹只保留 eDifFIQA 质量最高的 5 帧单位特征，融合 = 质量加权和 + 严格 L2 归一化；满库后比库内最差帧还差的帧只维持轨迹连续、不进入特征，避免大量中低质帧稀释少数好帧。锚点恒为库内最高质量帧。融合帧数 `>= 2` 时置 `is_fused = true`。
+   - **轨迹级身份投票与锁定（`enable_track_identity`，默认开启，仅在融合开启时生效）**：本帧融合特征严格命中（阈值 + 分差）→ 立即确认；或最近 5 帧中至少 `track_vote_min_hits`（默认 2）帧的**单帧**特征 top-1 为同一身份、分数 `>= threshold - track_vote_relax`（默认 `0.05`）且分差门禁通过、本帧也满足 → 投票确认（计票用单帧特征，避免把逐帧相关的融合特征重复计票）。确认后锁定，侧脸/模糊帧继承身份；连续 2 帧严格命中另一身份才改判。已确认时 `similarity` 取轨迹内该身份的最高分（投票确认时可能略低于 `threshold`），`candidates` 仍为本帧证据。包内轨迹键**不写入** `track_id`（宿主独占）。
+   - **池满时的腾位规则**：同帧人数超过 32 时优先淘汰**本帧未被命中**的轨迹；若 32 条本帧全部在用，则不为新面孔建轨迹（该脸照常输出单帧特征、`is_fused=false`、逐帧决策）。
    - **无效观测不落池**：空指针/含非有限分量/零模长的特征一律标记 `FusedFaceOutput::valid=false` 并由调用侧整条丢弃；直通（关闭融合）路径共用同一判定。零向量若被送进比对，只会得到「相似度 0 的伪候选人证据」。
-   - **双重同人门禁 + 质量加权防漂移**：观测特征与状态的当前融合特征及历史最高质量锚点特征的余弦相似度均须 `>= fusion_similarity_threshold`（默认 `0.62`）才允许融合；以质量分加权累加（累计权重软上限 `6.0`）并严格重做 L2 单位归一化，融合帧数 `>= 2` 时置 `is_fused = true`。
    - **按唯一 `person_id` 聚合候选**：同一登记人员名下多张底库模板只占用 1 个 `top_k` 名额，取其最高分模板为代表并保留 `face_id`；两层确定性 tie-break 与宿主 `person.SearchByImage` 对齐——同人等分取字典序较小 `face_id`，跨人等分取较小 `person_id`（再按 `face_id`、槽位下标）。
    - **不同身份分差门禁（`min_match_margin`）**：与输出 `top_k` 解耦，若底库存在第二名不同身份，则要求 `best_score - second_person_score >= min_match_margin` 才置 `matched = true`（底库仅含单一身份时不受分差阻断）。
 5. **人体关联与 `filter_unmatched` 场景裁剪（`src/common/face_association.hpp` + `scene_filter.hpp`）**
@@ -97,8 +99,12 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
 | 键名 | 对应环境变量 | 默认值 | 区间 | 说明 |
 | :--- | :--- | ---: | :--- | :--- |
 | `min_face_quality` | `ZHULONG_MIN_FACE_QUALITY` | 0.28 | 0.0 – 1.0 | `eDifFIQA(T)` 模型质量分门槛（`0.0` 仅关闭质量分阈值，几何/拓扑硬拒仍生效） |
-| `fusion_similarity_threshold` | `ZHULONG_FUSION_SIMILARITY_THRESHOLD` | 0.62 | 0.45 – 0.95 | 跨帧判定同人并允许融合的最小余弦相似度（同时校验当前融合向量与最高质量锚点） |
-| `fusion_ttl_seconds` | `ZHULONG_FUSION_TTL_SECONDS` | 3.0 | 0.5 – 30.0 | 单路特征状态池未再次观测到同人时的过期淘汰秒数 |
+| `fusion_similarity_threshold` | `ZHULONG_FUSION_SIMILARITY_THRESHOLD` | 0.62 | 0.45 – 0.95 | **位置不连续/无框**时跨帧判定同人的最小余弦相似度（同时校验融合向量与最高质量锚点） |
+| `fusion_spatial_similarity_threshold` | `ZHULONG_FUSION_SPATIAL_SIMILARITY_THRESHOLD` | 0.40 | 0.20 – 0.95 | **位置连续**时的防串人特征否决阈值（同时校验融合向量与锚点） |
+| `fusion_ttl_seconds` | `ZHULONG_FUSION_TTL_SECONDS` | 3.0 | 0.5 – 30.0 | 单路轨迹未再次观测到同人时的过期淘汰秒数 |
+| `enable_track_identity` | `ZHULONG_ENABLE_TRACK_IDENTITY` | true | 布尔 | 轨迹级身份投票与锁定（关闭后回到逐帧独立决策） |
+| `track_vote_min_hits` | `ZHULONG_TRACK_VOTE_MIN_HITS` | 2 | 2 – 5 | 最近 5 帧中投票确认所需的最少近阈值帧数 |
+| `track_vote_relax` | `ZHULONG_TRACK_VOTE_RELAX` | 0.05 | 0.0 – 0.15 | 计票分数下限 = `threshold - track_vote_relax`（`0.0` 表示只计严格过阈值的帧） |
 | `min_match_margin` | `ZHULONG_MIN_MATCH_MARGIN` | 0.00 | 0.0 – 1.0 | 第一与第二不同身份的最小相似度分差（`0.0` 表示关闭；开启前须按底库规模与现场样本标定） |
 | `enable_face_image_gate` | `ZHULONG_ENABLE_FACE_IMAGE_GATE` | false | 布尔 | 流式图像清晰度与曝光门禁总开关（默认关闭） |
 | `min_face_sharpness` | `ZHULONG_MIN_FACE_SHARPNESS` | 30.0 | 0.0 – 100000.0 | 仅在 `enable_face_image_gate=true` 时生效；上采样补偿后拉普拉斯方差下限 |

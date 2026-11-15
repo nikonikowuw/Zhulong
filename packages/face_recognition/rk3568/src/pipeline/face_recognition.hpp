@@ -134,11 +134,24 @@ private:
                                 const MatchParams& match_params,
                                 QualifiedFace& out_qualified) const;
 
-    /** @brief 用（融合或单帧）512 维单位特征执行 1:N 比对并组装输出项；被过滤时返回 false */
+    /**
+     * @brief 用本帧比对结果推进该脸所在轨迹的身份投票，已确认时把身份写回 `io_result`
+     *
+     * 只改写 matched / person / similarity，`candidates` 保持本帧证据语义；轨迹未确认或已被
+     * 淘汰时 `io_result` 原样不动（逐帧决策）。轨迹键只在包内使用，不写入 `track_id`。
+     */
+    void apply_track_identity(uint64_t task_id,
+                              const FusedFaceOutput& fused,
+                              const QualifiedFace& qualified,
+                              const std::vector<zhulong::FaceTemplate>& gallery,
+                              const MatchParams& match_params,
+                              MatchResult& io_result);
+
+    /** @brief 用已定稿的比对结果组装输出项；被 `filter_unmatched` 过滤时返回 false */
     bool populate_matched_face_item(const QualifiedFace& qualified,
                                     const std::array<float, kFusionFeatureDim>& match_features,
                                     bool is_fused,
-                                    const std::vector<zhulong::FaceTemplate>& gallery,
+                                    MatchResult match_result,
                                     const MatchParams& match_params,
                                     zhulong::FaceItem& out_face) const;
 

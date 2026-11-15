@@ -18,6 +18,13 @@ namespace zhulong::face {
 struct MatchResult {
     bool matched{false};
     float similarity{0.0f};
+    /**
+     * @brief 第一名与第二名不同身份的分差门禁是否通过（与 `threshold` 无关）
+     *
+     * 分差关闭、底库只有单一身份或无候选时恒为 true。轨迹投票据此只计「分差合格」的
+     * 近阈值帧：`top_k=1` 时 `candidates` 里看不到第二名，调用方没法自己重算。
+     */
+    bool margin_ok{true};
     std::string person_id;
     std::string person_name;
     std::string matched_face_id;

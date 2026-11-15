@@ -2439,6 +2439,362 @@ void test_face_enroll_enhance() {
           "镜像特征出现 NaN 时必须安全回退原图特征");
 }
 
+// ============================================================================
+// 13. 空间优先关联 + 特征否决、Top-K 高质量帧库、轨迹键
+// ============================================================================
+
+/** @brief 与 e0 余弦为 `cos_to_e0` 的单位向量（落在 e0/e{axis} 平面内） */
+std::array<float, zhulong::face::kFusionFeatureDim> vec_with_cos(float cos_to_e0, size_t axis = 1) {
+    std::array<float, zhulong::face::kFusionFeatureDim> v{};
+    v[0] = cos_to_e0;
+    v[axis] = std::sqrt(std::max(0.0f, 1.0f - cos_to_e0 * cos_to_e0));
+    return v;
+}
+
+float dot_512(const std::array<float, zhulong::face::kFusionFeatureDim>& a,
+              const std::array<float, zhulong::face::kFusionFeatureDim>& b) {
+    double sum = 0.0;
+    for (size_t d = 0; d < a.size(); ++d) {
+        sum += static_cast<double>(a[d]) * static_cast<double>(b[d]);
+    }
+    return static_cast<float>(sum);
+}
+
+void test_face_track_spatial_fusion_and_topk() {
+    using namespace zhulong::face;
+    using Clock = std::chrono::steady_clock;
+    using std::chrono::milliseconds;
+
+    const Clock::time_point t0 = Clock::now();
+    const MatchParams params; // 纯特征 0.62 / 空间 0.40 / TTL 3.0s
+    check(nearly_equal(params.fusion_spatial_similarity_threshold, 0.40f, 1e-6f),
+          "fusion_spatial_similarity_threshold 默认应为 0.40");
+
+    const auto e0 = vec_with_cos(1.0f);
+    const auto side50 = vec_with_cos(0.50f);   // 同人侧脸：与 e0 余弦 0.50（< 0.62，>= 0.40）
+    const auto stranger30 = vec_with_cos(0.30f, 2);
+    const std::array<float, 4> box{0.40f, 0.30f, 0.50f, 0.45f};
+    const std::array<float, 4> box_moved{0.42f, 0.31f, 0.52f, 0.46f};
+    const std::array<float, 4> box_far{0.00f, 0.00f, 0.10f, 0.15f};
+
+    // 1) 空间连续 + 特征 0.50：走低门槛否决，成功融合且轨迹键不变
+    {
+        StreamFeatureFusionPool pool;
+        const auto f1 = pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, params, t0);
+        check(f1[0].valid && f1[0].track_key != 0, "带框首帧应新建状态并分配非零轨迹键");
+        const auto f2 = pool.fuse_frame({FusionFaceObservation{&side50, 0.60f, box_moved, true}}, params,
+                                        t0 + milliseconds(200));
+        check(f2[0].is_fused && pool.state_count() == 1 && f2[0].track_key == f1[0].track_key,
+              "空间连续且特征 0.50 >= 0.40 的同人侧脸必须并入原轨迹");
+    }
+
+    // 2) 同样的特征但没有框：回落纯特征门槛 0.62，不融合（与旧行为一致）
+    {
+        StreamFeatureFusionPool pool;
+        pool.fuse_frame({FusionFaceObservation{&e0, 0.80f}}, params, t0);
+        const auto f2 = pool.fuse_frame({FusionFaceObservation{&side50, 0.60f}}, params, t0 + milliseconds(200));
+        check(!f2[0].is_fused && pool.state_count() == 2, "无框观测只走纯特征门槛 0.62");
+    }
+
+    // 3) 空间连续但特征 0.30 < 0.40：特征否决，另建轨迹（防串人）
+    {
+        StreamFeatureFusionPool pool;
+        const auto f1 = pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, params, t0);
+        const auto f2 = pool.fuse_frame({FusionFaceObservation{&stranger30, 0.80f, box_moved, true}}, params,
+                                        t0 + milliseconds(200));
+        check(!f2[0].is_fused && pool.state_count() == 2 && f2[0].track_key != f1[0].track_key,
+              "空间连续但特征低于 0.40 的路人必须被否决，不得并入原轨迹");
+    }
+
+    // 4) 位置跳变（不连续）：回落 0.62，0.50 的特征不融合
+    {
+        StreamFeatureFusionPool pool;
+        pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, params, t0);
+        const auto f2 = pool.fuse_frame({FusionFaceObservation{&side50, 0.80f, box_far, true}}, params,
+                                        t0 + milliseconds(200));
+        check(!f2[0].is_fused, "位置跳变时不承认空间连续，必须回落纯特征门槛");
+    }
+
+    // 5) 空间证据时效：间隔超过 1.0s 后同位置不再算连续（门口 A 走 B 来）
+    {
+        StreamFeatureFusionPool pool;
+        pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, params, t0);
+        const auto f2 = pool.fuse_frame({FusionFaceObservation{&side50, 0.80f, box, true}}, params,
+                                        t0 + milliseconds(1500));
+        check(!f2[0].is_fused && pool.state_count() == 2,
+              "距上次观测超过 kSpatialMaxGapSeconds 时同位置也必须回落纯特征门槛");
+    }
+
+    // 6) 空间判据与画面长宽比无关、尺度比越界拒绝、非法框拒绝
+    {
+        check(detail::boxes_spatially_consistent(box, box_moved), "小位移框应判为空间连续");
+        check(!detail::boxes_spatially_consistent(box, box_far), "远距离框不得判为空间连续");
+        const std::array<float, 4> tiny{0.44f, 0.36f, 0.46f, 0.39f}; // 面积开方比 ≈ 0.15
+        check(!detail::boxes_spatially_consistent(box, tiny), "尺度突变（< 0.5 倍）不得判为空间连续");
+        const std::array<float, 4> nan_box{std::nanf(""), 0.3f, 0.5f, 0.45f};
+        check(!detail::boxes_spatially_consistent(box, nan_box), "含 NaN 的框不得判为空间连续");
+        const std::array<float, 4> inverted{0.5f, 0.45f, 0.4f, 0.3f};
+        check(!detail::boxes_spatially_consistent(box, inverted), "倒置框不得判为空间连续");
+    }
+
+    // 7) 同帧两人：空间连续的边优先夺得原轨迹
+    {
+        StreamFeatureFusionPool pool;
+        const auto f1 = pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, params, t0);
+        // obs0：特征与轨迹更像（0.90）但位置在远处；obs1：位置连续、特征 0.55
+        const auto far_twin = vec_with_cos(0.90f, 3);
+        const auto near_owner = vec_with_cos(0.55f, 4);
+        const auto out = pool.fuse_frame(
+            {
+                FusionFaceObservation{&far_twin, 0.80f, box_far, true},
+                FusionFaceObservation{&near_owner, 0.80f, box_moved, true},
+            },
+            params, t0 + milliseconds(200));
+        check(out[1].track_key == f1[0].track_key && out[1].is_fused,
+              "空间连续的观测必须优先夺得原轨迹");
+        check(out[0].track_key != f1[0].track_key && !out[0].is_fused, "远处观测另建轨迹");
+    }
+
+    // 8) Top-K：满库后低质帧不进入特征；更高质帧替换最差帧；输出恒为单位向量；锚点为最高质帧
+    {
+        StreamFeatureFusionPool pool;
+        auto t = t0;
+        for (size_t k = 0; k < kFusionTopFrames; ++k) {
+            pool.fuse_frame({FusionFaceObservation{&e0, 0.90f, box, true}}, params, t);
+            t += milliseconds(100);
+        }
+        const auto blurry = vec_with_cos(0.60f);
+        std::array<float, kFusionFeatureDim> fused{};
+        for (int k = 0; k < 3; ++k) {
+            const auto r = pool.fuse_frame({FusionFaceObservation{&blurry, 0.30f, box, true}}, params, t);
+            t += milliseconds(100);
+            check(r[0].is_fused, "低质帧仍维持轨迹连续（is_fused=true）");
+            fused = r[0].features;
+        }
+        check(dot_512(fused, e0) > 0.9999f, "满库后低质帧不得稀释融合特征");
+
+        const auto sharp_side = vec_with_cos(0.60f);
+        const auto r = pool.fuse_frame({FusionFaceObservation{&sharp_side, 0.95f, box, true}}, params, t);
+        check(dot_512(r[0].features, e0) < 0.999f, "更高质量帧必须替换库内最差帧并影响融合特征");
+        check(nearly_equal(std::sqrt(dot_512(r[0].features, r[0].features)), 1.0f, 1e-5f),
+              "Top-K 融合输出必须是单位向量");
+
+        // 锚点已变为 0.95 的 sharp_side：与它余弦低的观测即便贴近均值也要被锚点门禁挡住
+        const auto opposite_side = vec_with_cos(0.60f, 5); // 与 sharp_side 余弦 0.36
+        const auto blocked = pool.fuse_frame({FusionFaceObservation{&opposite_side, 0.50f, box, true}}, params,
+                                             t + milliseconds(100));
+        check(!blocked[0].is_fused, "锚点（库内最高质量帧）门禁必须继续生效");
+    }
+
+    // 9) 轨迹键：直通路径为 0；管理器对未知流/零键返回空
+    {
+        const auto through = StreamFeatureFusionPool::passthrough({FusionFaceObservation{&e0, 0.8f, box, true}});
+        check(through[0].track_key == 0, "直通路径不得分配轨迹键");
+
+        TaskFeatureFusionManager mgr;
+        const IdentityEvidence none;
+        check(!mgr.observe_identity(7, 1, none, none, params).has_value(), "未知流必须返回空");
+        const auto out = mgr.fuse_frame(7, {FusionFaceObservation{&e0, 0.8f, box, true}}, params, t0);
+        check(out[0].track_key != 0, "管理器路径应分配轨迹键");
+        check(mgr.observe_identity(7, out[0].track_key, none, none, params).has_value(), "已知轨迹必须返回决策");
+        check(!mgr.observe_identity(7, 0, none, none, params).has_value(), "零键必须返回空");
+        check(mgr.stream_count() == 1, "observe_identity 不得为未知流创建分桶");
+    }
+}
+
+// ============================================================================
+// 14. 轨迹级身份：严格确认、k-of-n 投票、锁定与冲突切换
+// ============================================================================
+
+void test_track_identity_voting() {
+    using namespace zhulong::face;
+
+    const MatchParams params; // threshold 0.40, relax 0.05 → 计票下限 0.35, min_hits 2
+    check(params.enable_track_identity, "enable_track_identity 默认应开启");
+    check(params.track_vote_min_hits == 2, "track_vote_min_hits 默认应为 2");
+    check(nearly_equal(params.track_vote_relax, 0.05f, 1e-6f), "track_vote_relax 默认应为 0.05");
+
+    auto ev = [](const char* person, float score, bool matched, bool margin_ok = true) {
+        IdentityEvidence e;
+        e.matched = matched;
+        e.margin_ok = margin_ok;
+        e.score = score;
+        if (person != nullptr) {
+            e.person_id = person;
+            e.person_name = std::string("name_") + person;
+            e.face_id = std::string("face_") + person + "_" + std::to_string(std::lround(score * 1000.0f));
+        }
+        return e;
+    };
+
+    // 1) 严格命中立即确认
+    {
+        TrackIdentityState st;
+        const auto d = st.observe(ev("A", 0.45f, true), ev("A", 0.45f, true), params);
+        check(d.confirmed && d.person_id == "A" && nearly_equal(d.similarity, 0.45f, 1e-6f),
+              "严格命中必须立即确认身份");
+    }
+
+    // 2) 单帧近阈值不确认；第二帧同身份近阈值 → 投票确认
+    {
+        TrackIdentityState st;
+        const auto d1 = st.observe(ev("A", 0.37f, false), ev("A", 0.37f, false), params);
+        check(!d1.confirmed, "单帧近阈值不得确认");
+        const auto d2 = st.observe(ev("A", 0.36f, false), ev("A", 0.38f, false), params);
+        check(d2.confirmed && d2.person_id == "A" && nearly_equal(d2.similarity, 0.38f, 1e-6f),
+              "2/5 帧同身份近阈值必须投票确认，相似度取票内最高分");
+    }
+
+    // 3) 票数分散在不同身份不确认
+    {
+        TrackIdentityState st;
+        st.observe(ev("A", 0.37f, false), ev("A", 0.37f, false), params);
+        const auto d = st.observe(ev("B", 0.37f, false), ev("B", 0.37f, false), params);
+        check(!d.confirmed, "不同身份的近阈值票不得合并计数");
+    }
+
+    // 4) 分差不过 / 低于计票下限的帧不计票
+    {
+        TrackIdentityState margin_fail;
+        margin_fail.observe(ev("A", 0.38f, false, false), ev("A", 0.38f, false, false), params);
+        const auto d = margin_fail.observe(ev("A", 0.38f, false, false), ev("A", 0.38f, false, false), params);
+        check(!d.confirmed, "分差门禁不过的帧不得计票");
+
+        TrackIdentityState below;
+        for (int k = 0; k < 4; ++k) {
+            below.observe(ev("A", 0.34f, false), ev("A", 0.34f, false), params);
+        }
+        check(!below.confirmed(), "低于 threshold - relax 的帧不得计票");
+    }
+
+    // 5) 窗口只看最近 5 帧：早期的票滑出窗口后不再算数
+    {
+        TrackIdentityState st;
+        st.observe(ev("A", 0.37f, false), ev("A", 0.37f, false), params);
+        for (int k = 0; k < static_cast<int>(kTrackVoteWindow); ++k) {
+            st.observe(ev(nullptr, 0.0f, false), ev(nullptr, 0.0f, false), params);
+        }
+        const auto d = st.observe(ev("A", 0.37f, false), ev("A", 0.37f, false), params);
+        check(!d.confirmed, "滑出窗口的旧票不得参与计票");
+    }
+
+    // 6) 本帧不合格时不允许靠历史票「隔空」确认
+    {
+        TrackIdentityState st;
+        st.observe(ev("A", 0.37f, false), ev("A", 0.37f, false), params);
+        st.observe(ev("A", 0.30f, false), ev("A", 0.30f, false), params);
+        check(!st.confirmed(), "本帧不合格时不得确认");
+    }
+
+    // 7) 锁定、单帧冲突不切换、冲突被打断清零、连续 2 帧冲突切换、相似度只升不降
+    {
+        TrackIdentityState st;
+        st.observe(ev("A", 0.45f, true), ev("A", 0.45f, true), params);
+
+        const auto side = st.observe(ev("B", 0.20f, false), ev("B", 0.18f, false), params);
+        check(side.confirmed && side.person_id == "A", "侧脸帧（未命中任何人）必须继承已确认身份");
+
+        const auto up = st.observe(ev("A", 0.52f, true), ev("A", 0.52f, true), params);
+        check(nearly_equal(up.similarity, 0.52f, 1e-6f) && up.face_id == "face_A_520",
+              "同身份更高分必须抬升轨迹相似度并更新代表模板");
+        const auto down = st.observe(ev("A", 0.41f, true), ev("A", 0.41f, true), params);
+        check(nearly_equal(down.similarity, 0.52f, 1e-6f), "轨迹相似度只升不降");
+
+        const auto c1 = st.observe(ev("B", 0.46f, true), ev("B", 0.46f, true), params);
+        check(c1.person_id == "A", "单帧严格冲突视为噪声，不得切换身份");
+        st.observe(ev("A", 0.30f, false), ev("A", 0.30f, false), params); // 打断冲突
+        const auto c2 = st.observe(ev("B", 0.46f, true), ev("B", 0.46f, true), params);
+        check(c2.person_id == "A", "冲突被非冲突帧打断后必须重新计数");
+        const auto c3 = st.observe(ev("B", 0.47f, true), ev("B", 0.47f, true), params);
+        check(c3.person_id == "B" && nearly_equal(c3.similarity, 0.47f, 1e-6f),
+              "连续 2 帧严格命中另一身份必须切换");
+    }
+
+    // 8) relax = 0 时只计严格过阈值的票；min_hits = 3 时 2 票不够
+    {
+        MatchParams strict = params;
+        strict.track_vote_relax = 0.0f;
+        TrackIdentityState st;
+        st.observe(ev("A", 0.39f, false), ev("A", 0.39f, false), strict);
+        st.observe(ev("A", 0.39f, false), ev("A", 0.39f, false), strict);
+        check(!st.confirmed(), "relax=0 时 0.39 < 0.40 不得计票");
+
+        MatchParams three = params;
+        three.track_vote_min_hits = 3;
+        TrackIdentityState st3;
+        st3.observe(ev("A", 0.37f, false), ev("A", 0.37f, false), three);
+        st3.observe(ev("A", 0.37f, false), ev("A", 0.37f, false), three);
+        check(!st3.confirmed(), "min_hits=3 时 2 票不得确认");
+        st3.observe(ev("A", 0.37f, false), ev("A", 0.37f, false), three);
+        check(st3.confirmed(), "min_hits=3 时第 3 票确认");
+    }
+
+    // 9) Matcher::margin_ok 与分差门禁一致（top_k=1 时调用方看不到第二名，只能靠这个字段）
+    {
+        std::vector<float> ga(kFusionFeatureDim, 0.0f);
+        std::vector<float> gb(kFusionFeatureDim, 0.0f);
+        ga[0] = 1.0f;
+        gb[1] = 1.0f;
+        const std::vector<zhulong::FaceTemplate> gallery{
+            {"fa", "pa", "A", "a.jpg", ga},
+            {"fb", "pb", "B", "b.jpg", gb},
+        };
+        std::array<float, kFusionFeatureDim> probe{};
+        probe[0] = 0.62f;
+        probe[1] = 0.60f; // A 0.62 / B 0.60 → 分差 0.02
+        const Matcher matcher;
+        const auto loose = matcher.match(probe.data(), kFusionFeatureDim, gallery, MatchLimits{0.40f, 1, 0.0f});
+        check(loose.margin_ok && loose.matched, "分差关闭时 margin_ok 恒为 true");
+        const auto tight = matcher.match(probe.data(), kFusionFeatureDim, gallery, MatchLimits{0.40f, 1, 0.05f});
+        check(!tight.margin_ok && !tight.matched && tight.candidates.size() == 1,
+              "分差不足时 margin_ok=false，且 top_k=1 也能看到该结论");
+    }
+}
+
+void test_track_identity_params() {
+    using namespace zhulong::face;
+    const MatchParams defaults;
+
+    const MatchParams parsed = resolve_match_params(
+        R"({"fusion_spatial_similarity_threshold": 0.35, "enable_track_identity": false,
+            "track_vote_min_hits": 3, "track_vote_relax": 0.08})",
+        defaults);
+    check(nearly_equal(parsed.fusion_spatial_similarity_threshold, 0.35f, 1e-6f),
+          "fusion_spatial_similarity_threshold 解析成功");
+    check(!parsed.enable_track_identity, "enable_track_identity 可被任务级关闭");
+    check(parsed.track_vote_min_hits == 3, "track_vote_min_hits 解析成功");
+    check(nearly_equal(parsed.track_vote_relax, 0.08f, 1e-6f), "track_vote_relax 解析成功");
+
+    const MatchParams bounds = resolve_match_params(
+        R"({"fusion_spatial_similarity_threshold": 0.20, "track_vote_min_hits": 5, "track_vote_relax": 0.15})",
+        defaults);
+    check(nearly_equal(bounds.fusion_spatial_similarity_threshold, 0.20f, 1e-6f) &&
+              bounds.track_vote_min_hits == 5 && nearly_equal(bounds.track_vote_relax, 0.15f, 1e-6f),
+          "新参数上下界值必须合法");
+
+    const MatchParams oob = resolve_match_params(
+        R"({"fusion_spatial_similarity_threshold": 0.19, "track_vote_min_hits": 1, "track_vote_relax": 0.16})",
+        parsed);
+    check(nearly_equal(oob.fusion_spatial_similarity_threshold, 0.35f, 1e-6f) &&
+              oob.track_vote_min_hits == 3 && nearly_equal(oob.track_vote_relax, 0.08f, 1e-6f),
+          "越界的新参数必须回落上一层");
+
+    ::setenv("ZHULONG_FUSION_SPATIAL_SIMILARITY_THRESHOLD", "0.45", 1);
+    ::setenv("ZHULONG_ENABLE_TRACK_IDENTITY", "false", 1);
+    ::setenv("ZHULONG_TRACK_VOTE_MIN_HITS", "4", 1);
+    ::setenv("ZHULONG_TRACK_VOTE_RELAX", "0.03", 1);
+    const MatchParams env_loaded = load_match_params_from_env();
+    check(nearly_equal(env_loaded.fusion_spatial_similarity_threshold, 0.45f, 1e-6f),
+          "ZHULONG_FUSION_SPATIAL_SIMILARITY_THRESHOLD 环境变量生效");
+    check(!env_loaded.enable_track_identity, "ZHULONG_ENABLE_TRACK_IDENTITY 环境变量生效");
+    check(env_loaded.track_vote_min_hits == 4, "ZHULONG_TRACK_VOTE_MIN_HITS 环境变量生效");
+    check(nearly_equal(env_loaded.track_vote_relax, 0.03f, 1e-6f), "ZHULONG_TRACK_VOTE_RELAX 环境变量生效");
+    ::unsetenv("ZHULONG_FUSION_SPATIAL_SIMILARITY_THRESHOLD");
+    ::unsetenv("ZHULONG_ENABLE_TRACK_IDENTITY");
+    ::unsetenv("ZHULONG_TRACK_VOTE_MIN_HITS");
+    ::unsetenv("ZHULONG_TRACK_VOTE_RELAX");
+}
+
 } // namespace
 
 int main() {
@@ -2463,6 +2819,9 @@ int main() {
     test_scrfd_decode_crowded_budget_and_determinism();
     test_drop_unmatched_persons();
     test_face_feature_fusion();
+    test_face_track_spatial_fusion_and_topk();
+    test_track_identity_voting();
+    test_track_identity_params();
     test_aligner_downscale_antialiasing();
     test_face_enroll_enhance();
 #if defined(ZHULONG_FACE_HAS_PREPROCESS_HELPER)

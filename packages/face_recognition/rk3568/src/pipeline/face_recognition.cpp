@@ -295,16 +295,74 @@ bool FaceRecognitionPlugin::extract_qualified_face(
     return true;
 }
 
+namespace {
+
+/**
+ * @brief 把一次比对结果折成轨迹身份证据（top-1 候选 + 门禁结论）
+ *
+ * top-1 取 `candidates.front()`：候选列表恒按「人员聚合后相似度降序」输出且 `top_k >= 1`，
+ * 未命中时也保留最像的人 —— 投票要的正是这条「虽未过阈值但最像谁」的证据。
+ */
+IdentityEvidence identity_evidence_from(const MatchResult& result) {
+    IdentityEvidence evidence;
+    evidence.matched = result.matched;
+    evidence.margin_ok = result.margin_ok;
+    if (!result.candidates.empty()) {
+        const FaceCandidate& top = result.candidates.front();
+        evidence.person_id = top.person_id;
+        evidence.person_name = top.person_name;
+        evidence.face_id = top.face_id;
+        evidence.score = top.similarity;
+    }
+    return evidence;
+}
+
+} // namespace
+
+void FaceRecognitionPlugin::apply_track_identity(uint64_t task_id,
+                                                 const FusedFaceOutput& fused,
+                                                 const QualifiedFace& qualified,
+                                                 const std::vector<zhulong::FaceTemplate>& gallery,
+                                                 const MatchParams& match_params,
+                                                 MatchResult& io_result) {
+    const IdentityEvidence strict = identity_evidence_from(io_result);
+    IdentityEvidence vote = strict;
+    if (fused.is_fused && !io_result.matched) {
+        // 计票用**单帧**特征：融合特征逐帧高度相关，拿它计票等于把同一份证据数两次。
+        // 严格命中时投票已无意义（直接确认），省掉这次额外的 1:N。
+        vote = identity_evidence_from(matcher_.match(qualified.probe_features.data(), kFeatureDimension,
+                                                     gallery, match_limits_from(match_params)));
+    }
+
+    const std::optional<TrackIdentityDecision> decision =
+        fusion_manager_.observe_identity(task_id, fused.track_key, strict, vote, match_params);
+    if (!decision || !decision->confirmed) {
+        return; // 轨迹尚未确认身份：保持逐帧比对结论
+    }
+    // 已确认的人可能在轨迹存续期间被移出底库（删人 / 删脸）：持续在场的目标不会触发 TTL，
+    // 不校验就会一直报一个已不存在的身份。O(N) 字符串比较，远小于本帧 O(N·512) 的比对。
+    const bool still_enrolled =
+        std::any_of(gallery.begin(), gallery.end(), [&decision](const zhulong::FaceTemplate& item) {
+            return item.person_id == decision->person_id;
+        });
+    if (!still_enrolled) {
+        return;
+    }
+    // 轨迹已确认：侧脸/模糊帧继承身份；candidates 保持本帧证据语义不变
+    io_result.matched = true;
+    io_result.person_id = decision->person_id;
+    io_result.person_name = decision->person_name;
+    io_result.matched_face_id = decision->face_id;
+    io_result.similarity = decision->similarity;
+}
+
 bool FaceRecognitionPlugin::populate_matched_face_item(
     const QualifiedFace& qualified,
     const std::array<float, kFusionFeatureDim>& match_features,
     bool is_fused,
-    const std::vector<zhulong::FaceTemplate>& gallery,
+    MatchResult match_result,
     const MatchParams& match_params,
     zhulong::FaceItem& out_face) const {
-    const MatchResult match_result = matcher_.match(match_features.data(), kFeatureDimension, gallery,
-                                                    match_limits_from(match_params));
-
     if (!should_emit_face_result(match_result.matched, match_params)) {
         return false;
     }
@@ -390,7 +448,9 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
             std::vector<FusionFaceObservation> observations;
             observations.reserve(qualified_faces.size());
             for (const auto& qf : qualified_faces) {
-                observations.push_back(FusionFaceObservation{&qf.probe_features, qf.quality_score});
+                // 带上人脸框：融合池据此做空间优先关联（位置连续时特征只承担防串人否决）
+                observations.push_back(FusionFaceObservation{&qf.probe_features, qf.quality_score,
+                                                             qf.detection.face_box, true});
             }
 
             const std::vector<FusedFaceOutput> fused_outputs =
@@ -402,18 +462,27 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
             }
 
             const auto gallery = zhulong::GalleryRegistry::instance().snapshot();
+            const MatchLimits limits = match_limits_from(match_params);
+            const bool use_track_identity =
+                match_params.enable_face_feature_fusion && match_params.enable_track_identity;
             for (size_t i = 0; i < qualified_faces.size(); ++i) {
                 // 特征不可用（非有限/零模长）时直出只会得到「相似度 0 的伪候选人证据」，
                 // 该脸必须整条丢弃，而不是带着一张假证据进底库比对。
                 if (!fused_outputs[i].valid) {
                     continue;
                 }
+                MatchResult match_result = matcher_.match(fused_outputs[i].features.data(), kFeatureDimension,
+                                                          *gallery, limits);
+                if (use_track_identity && fused_outputs[i].track_key != 0) {
+                    apply_track_identity(task_context.task_id, fused_outputs[i], qualified_faces[i],
+                                         *gallery, match_params, match_result);
+                }
                 ProcessedFace processed;
                 processed.face_box = qualified_faces[i].detection.face_box;
                 if (populate_matched_face_item(qualified_faces[i],
                                                fused_outputs[i].features,
                                                fused_outputs[i].is_fused,
-                                               *gallery,
+                                               std::move(match_result),
                                                match_params,
                                                processed.item)) {
                     processed_faces.push_back(std::move(processed));

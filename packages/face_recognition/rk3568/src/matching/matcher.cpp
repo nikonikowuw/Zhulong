@@ -154,6 +154,7 @@ MatchResult Matcher::match(
         const float margin = unique_persons[0].score - unique_persons[1].score;
         margin_ok = (margin >= min_match_margin);
     }
+    result.margin_ok = margin_ok;
 
     if (result.similarity >= threshold && margin_ok) {
         result.matched = true;
