@@ -118,7 +118,8 @@ func isValidHeartbeatInterval(sec int) bool {
 	return sec >= MinHeartbeatIntervalSeconds && sec <= MaxHeartbeatIntervalSeconds
 }
 
-// destinationFilter defines event type, algorithm, and camera filtering criteria stored in filter_json.
+// destinationFilter defines event type, algorithm, and camera filtering criteria
+// stored in filter_json.
 type destinationFilter struct {
 	EventTypes   []string `json:"event_types,omitempty"`
 	AlgorithmIDs []string `json:"algorithm_ids,omitempty"`

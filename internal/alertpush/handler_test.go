@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
 func setupTestRouter(t *testing.T) (*gin.Engine, Components, func()) {
@@ -70,7 +71,11 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 		t.Fatalf("marshal request failed: %v", err)
 	}
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(bodyBytes))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations",
+		bytes.NewReader(bodyBytes),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -122,7 +127,11 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 		t.Fatalf("marshal update request failed: %v", err)
 	}
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPut, "/api/v1/alert-destinations/"+created.ID, bytes.NewReader(bodyBytes))
+	req = httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/alert-destinations/"+created.ID,
+		bytes.NewReader(bodyBytes),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -135,7 +144,11 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 
 	// 4. Disable and Enable
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations/"+created.ID+"/disable", nil)
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/"+created.ID+"/disable",
+		nil,
+	)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("disable expected 200, got %d", w.Code)
@@ -145,7 +158,11 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations/"+created.ID+"/enable", nil)
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/"+created.ID+"/enable",
+		nil,
+	)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("enable expected 200, got %d", w.Code)
@@ -186,7 +203,11 @@ func TestHandlerReservedHeaderForbidden(t *testing.T) {
 		t.Fatalf("marshal request failed: %v", err)
 	}
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(bodyBytes))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations",
+		bytes.NewReader(bodyBytes),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -271,7 +292,11 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 		Config:           AlertDestinationConfigInfo{URL: "https://example.com/hook"},
 	})
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(eventsURLNoPublic))
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations",
+		bytes.NewReader(eventsURLNoPublic),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusUnprocessableEntity {
@@ -295,11 +320,19 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 		},
 	})
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(hbOnly))
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations",
+		bytes.NewReader(hbOnly),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK for heartbeat-only without public_base_url, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf(
+			"expected 200 OK for heartbeat-only without public_base_url, got %d: %s",
+			w.Code,
+			w.Body.String(),
+		)
 	}
 
 	// 4. Cross-origin heartbeatUrl with Bearer credentials -> 422!
@@ -318,11 +351,19 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 		},
 	})
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(crossOrigin))
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations",
+		bytes.NewReader(crossOrigin),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422 for cross-origin heartbeatUrl with credentials, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf(
+			"expected 422 for cross-origin heartbeatUrl with credentials, got %d: %s",
+			w.Code,
+			w.Body.String(),
+		)
 	}
 
 	// 5. Out-of-range heartbeatIntervalSeconds (<15s) -> 422!
@@ -337,7 +378,11 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 		},
 	})
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(badInterval))
+	req = httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations",
+		bytes.NewReader(badInterval),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusUnprocessableEntity {
@@ -375,7 +420,11 @@ func TestHandlerTestEndpointHeartbeatOnlySendsHeartbeat(t *testing.T) {
 		},
 	})
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations/test", bytes.NewReader(probeReq))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/test",
+		bytes.NewReader(probeReq),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -396,11 +445,19 @@ func TestHandlerTestEndpointHeartbeatOnlySendsHeartbeat(t *testing.T) {
 		ID: "01MISSINGDEST0000000000000",
 	})
 	wMissing := httptest.NewRecorder()
-	reqMissing := httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations/test", bytes.NewReader(missingIDReq))
+	reqMissing := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/test",
+		bytes.NewReader(missingIDReq),
+	)
 	reqMissing.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(wMissing, reqMissing)
 	if wMissing.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for unknown destination ID on /test, got %d: %s", wMissing.Code, wMissing.Body.String())
+		t.Fatalf(
+			"expected 404 for unknown destination ID on /test, got %d: %s",
+			wMissing.Code,
+			wMissing.Body.String(),
+		)
 	}
 
 	// Main URL containing userinfo on /test must be rejected with 422.
@@ -413,7 +470,11 @@ func TestHandlerTestEndpointHeartbeatOnlySendsHeartbeat(t *testing.T) {
 		},
 	})
 	wUserinfo := httptest.NewRecorder()
-	reqUserinfo := httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations/test", bytes.NewReader(userinfoReq))
+	reqUserinfo := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/test",
+		bytes.NewReader(userinfoReq),
+	)
 	reqUserinfo.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(wUserinfo, reqUserinfo)
 	if wUserinfo.Code != http.StatusUnprocessableEntity {
@@ -430,7 +491,10 @@ func TestHandlerResolveExistingMQTTTestTargetAppliesOverrides(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	secBytes, err := store.EncryptSecret("01J8ZMQTTTEST0000000000001", &mqttSecret{Password: "stored-pass"})
+	secBytes, err := store.EncryptSecret(
+		"01J8ZMQTTTEST0000000000001",
+		&mqttSecret{Password: "stored-pass"},
+	)
 	if err != nil {
 		t.Fatalf("EncryptSecret: %v", err)
 	}
@@ -485,6 +549,9 @@ func TestHandlerResolveExistingMQTTTestTargetAppliesOverrides(t *testing.T) {
 	}
 	overridesApplied := merged.QoS == 1 && merged.KeepAliveSeconds == 45 && merged.TLSSkipVerify
 	if !overridesApplied || merged.effectiveLWTEnabled() {
-		t.Fatalf("expected MQTT test overrides (qos/keepAlive/tlsSkipVerify/lwtEnabled) to apply, got %+v", merged)
+		t.Fatalf(
+			"expected MQTT test overrides (qos/keepAlive/tlsSkipVerify/lwtEnabled) to apply, got %+v",
+			merged,
+		)
 	}
 }

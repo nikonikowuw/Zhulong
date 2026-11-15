@@ -189,8 +189,9 @@ type AlarmPayload struct {
 	ID string `json:"id"`
 	// DeviceID is this host's business identity, configured under settings → system.
 	// It is what lets one aggregation platform tell two edge boxes apart.
-	DeviceID    string              `json:"device_id,omitempty"`
-	EventType   string              `json:"event_type"` // "alarm" | "face_recognition" | "plate_recognition"
+	DeviceID string `json:"device_id,omitempty"`
+	// EventType: "alarm" | "face_recognition" | "plate_recognition"
+	EventType   string              `json:"event_type"`
 	CameraID    string              `json:"camera_id"`
 	CapturedAt  string              `json:"captured_at"`
 	ImageReady  bool                `json:"image_ready"`
@@ -202,7 +203,8 @@ type AlarmPayload struct {
 	Vehicle     *VehicleDataPayload `json:"vehicle,omitempty"`
 }
 
-// isReservedHeader returns true if the header name is managed internally and forbidden in custom headers.
+// isReservedHeader returns true if the header name is managed internally
+// and forbidden in custom headers.
 func isReservedHeader(name string) bool {
 	_, ok := reservedHeaders[strings.ToLower(strings.TrimSpace(name))]
 	return ok
@@ -343,7 +345,7 @@ func buildAlarmPayload(ev record.AlarmEvent, deviceID string) AlarmPayload {
 		if ev.Face != nil {
 			attrs := ev.Face.Attributes
 			if attrs == nil {
-				attrs = make(map[string]any)
+				attrs = map[string]any{}
 			}
 			payload.Face = &FaceDataPayload{
 				Matched:    ev.Face.Matched,
@@ -358,7 +360,7 @@ func buildAlarmPayload(ev record.AlarmEvent, deviceID string) AlarmPayload {
 		if ev.Vehicle != nil {
 			attrs := ev.Vehicle.Attributes
 			if attrs == nil {
-				attrs = make(map[string]any)
+				attrs = map[string]any{}
 			}
 			payload.Vehicle = &VehicleDataPayload{
 				PlateNumber:  ev.Vehicle.PlateNumber,
@@ -376,7 +378,7 @@ func buildAlarmPayload(ev record.AlarmEvent, deviceID string) AlarmPayload {
 		if ev.Alarm != nil {
 			extra := ev.Alarm.Extra
 			if extra == nil {
-				extra = make(map[string]any)
+				extra = map[string]any{}
 			}
 			alarmData = &AlarmDataPayload{
 				AlarmType: ev.Alarm.AlarmType,
@@ -387,7 +389,7 @@ func buildAlarmPayload(ev record.AlarmEvent, deviceID string) AlarmPayload {
 		} else {
 			extra := ev.Extra
 			if extra == nil {
-				extra = make(map[string]any)
+				extra = map[string]any{}
 			}
 			alarmData = &AlarmDataPayload{
 				AlarmType: ev.AlarmType,

@@ -15,16 +15,19 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/logsafe"
 	"github.com/nikonikowuw/Zhulong/internal/record"
-	"go.uber.org/zap"
 )
 
 var (
 	ErrWebhookURLMissing      = errors.New("webhook url is missing")
 	ErrPublicBaseURLMissing   = errors.New("public base url is required for url image mode")
 	ErrWebhookHTTPStatusError = errors.New("webhook target returned non-success http status")
-	ErrCrossOriginRedirect    = errors.New("refusing cross-origin redirect when credentials are configured")
+	ErrCrossOriginRedirect    = errors.New(
+		"refusing cross-origin redirect when credentials are configured",
+	)
 )
 
 // WebhookSenderOptions contains configuration for constructing a WebhookSender.
@@ -123,10 +126,12 @@ func (s *WebhookSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 	var lastErr error
 	for attempt := range attempts {
 		if attempt > 0 {
+			backoffTimer := time.NewTimer(backoffs[attempt-1])
 			select {
 			case <-ctx.Done():
+				backoffTimer.Stop()
 				return ctx.Err()
-			case <-time.After(backoffs[attempt-1]):
+			case <-backoffTimer.C:
 			}
 		}
 
@@ -143,7 +148,11 @@ func (s *WebhookSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 }
 
 // SendHeartbeat posts a single point-in-time liveness snapshot without retrying stale state.
-func (s *WebhookSender) SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, seq uint64) error {
+func (s *WebhookSender) SendHeartbeat(
+	ctx context.Context,
+	snap HeartbeatSnapshot,
+	seq uint64,
+) error {
 	targetURL := strings.TrimSpace(s.opts.HeartbeatURL)
 	if targetURL == "" {
 		targetURL = s.opts.URL
@@ -212,7 +221,10 @@ func (s *WebhookSender) executeRequest(
 	return true, fmt.Errorf("%w: status %d", ErrWebhookHTTPStatusError, resp.StatusCode)
 }
 
-func (s *WebhookSender) buildRequest(ctx context.Context, ev record.AlarmEvent) (*http.Request, func(), error) {
+func (s *WebhookSender) buildRequest(
+	ctx context.Context,
+	ev record.AlarmEvent,
+) (*http.Request, func(), error) {
 	payload := buildAlarmPayload(ev, resolveDeviceID(s.opts.Identity))
 
 	if s.opts.ImageMode == ImageModeMultipart {
@@ -221,7 +233,10 @@ func (s *WebhookSender) buildRequest(ctx context.Context, ev record.AlarmEvent) 
 	return s.buildJSONRequest(payload, ev)
 }
 
-func (s *WebhookSender) buildJSONRequest(payload AlarmPayload, ev record.AlarmEvent) (*http.Request, func(), error) {
+func (s *WebhookSender) buildJSONRequest(
+	payload AlarmPayload,
+	ev record.AlarmEvent,
+) (*http.Request, func(), error) {
 	populateSignedURLs(
 		&payload,
 		ev,

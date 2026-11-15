@@ -4,9 +4,10 @@ import (
 	"context"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
-	"go.uber.org/zap"
 )
 
 // Options holds parameters required to instantiate AlertPush components.
@@ -99,7 +100,10 @@ func NewComponents(opts Options) Components {
 func (l *alertPushLifecycleImpl) Start(ctx context.Context) error {
 	if l.signer != nil && l.dataDir != "" {
 		if err := initSignerFromDataDir(l.signer, l.dataDir); err != nil {
-			l.logger.Warn("failed to load or create media signing key, signed URL feature may fail", zap.Error(err))
+			l.logger.Warn(
+				"failed to load or create media signing key, signed URL feature may fail",
+				zap.Error(err),
+			)
 		}
 	}
 	if l.dispatcher != nil {

@@ -9,8 +9,9 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/nikonikowuw/Zhulong/internal/record"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/record"
 )
 
 type mockSender struct {
@@ -465,7 +466,9 @@ func TestDispatcherMQTTHotReloadNoSessionKickOrFalseOffline(t *testing.T) {
 		t.Fatalf("Dispatcher.Stop: %v", err)
 	}
 	offline := waitStatusMsg("shutdown offline")
-	if offline["event_type"] != EventTypeOffline || offline["reason"] != OfflineReasonGracefulShutdown {
+	isGracefulOffline := offline["event_type"] == EventTypeOffline &&
+		offline["reason"] == OfflineReasonGracefulShutdown
+	if !isGracefulOffline {
 		t.Fatalf("expected graceful_shutdown offline on Stop, got %+v", offline)
 	}
 }

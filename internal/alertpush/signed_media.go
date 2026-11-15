@@ -6,11 +6,12 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
-	"go.uber.org/zap"
 )
 
 // SignedMediaHandler serves unauthenticated but signature-verified media requests.
@@ -22,7 +23,11 @@ type SignedMediaHandler struct {
 }
 
 // NewSignedMediaHandler constructs a SignedMediaHandler.
-func NewSignedMediaHandler(signer *URLSigner, mediaHandler *mediafile.Handler, logger *zap.Logger) *SignedMediaHandler {
+func NewSignedMediaHandler(
+	signer *URLSigner,
+	mediaHandler *mediafile.Handler,
+	logger *zap.Logger,
+) *SignedMediaHandler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -55,7 +60,7 @@ func (h *SignedMediaHandler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Description  Streams snapshot bytes verified by HMAC signature without cookie authentication.
 // @Tags         media
 // @Produce      image/jpeg
-// @Param        path  path      string  true  "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg"
+// @Param        path  path      string  true  "Relative media path, e.g. snapshots/cam01/01J8Z.jpg"
 // @Param        exp   query     int64   true  "Expiration Unix timestamp"
 // @Param        sig   query     string  true  "Base64URL HMAC signature"
 // @Success      200   {file}    binary
@@ -77,7 +82,10 @@ func (h *SignedMediaHandler) ServeSignedMedia(c *gin.Context) {
 
 	exp, err := strconv.ParseInt(expStr, 10, 64)
 	if err != nil {
-		httputil.WriteError(c, apperr.PermissionDenied(CodeMediaURLInvalid, "Invalid expiration format", err))
+		httputil.WriteError(
+			c,
+			apperr.PermissionDenied(CodeMediaURLInvalid, "Invalid expiration format", err),
+		)
 		return
 	}
 
@@ -88,10 +96,16 @@ func (h *SignedMediaHandler) ServeSignedMedia(c *gin.Context) {
 
 	if err := h.signer.Verify(relPath, exp, sig); err != nil {
 		if errors.Is(err, ErrURLExpired) {
-			httputil.WriteError(c, apperr.PermissionDenied(CodeMediaURLExpired, "Signed media URL has expired", err))
+			httputil.WriteError(
+				c,
+				apperr.PermissionDenied(CodeMediaURLExpired, "Signed media URL has expired", err),
+			)
 			return
 		}
-		httputil.WriteError(c, apperr.PermissionDenied(CodeMediaURLInvalid, "Signed media URL signature is invalid", err))
+		httputil.WriteError(
+			c,
+			apperr.PermissionDenied(CodeMediaURLInvalid, "Signed media URL signature is invalid", err),
+		)
 		return
 	}
 

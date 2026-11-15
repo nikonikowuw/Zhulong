@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 var (
@@ -249,7 +250,10 @@ func (s *Store) GetByName(ctx context.Context, name string) (*AlertDestination, 
 }
 
 // CheckMQTTClientIDConflict checks if another destination holds the clientID.
-func (s *Store) CheckMQTTClientIDConflict(ctx context.Context, excludeID, clientID string) (bool, error) {
+func (s *Store) CheckMQTTClientIDConflict(
+	ctx context.Context,
+	excludeID, clientID string,
+) (bool, error) {
 	if clientID == "" {
 		return false, nil
 	}
@@ -292,7 +296,10 @@ func (s *Store) ListEnabled(ctx context.Context) ([]*AlertDestination, error) {
 	if err != nil {
 		return nil, err
 	}
-	items, err := gorm.G[AlertDestination](db).Where("enabled = ?", true).Order("created_at asc").Find(ctx)
+	items, err := gorm.G[AlertDestination](db).
+		Where("enabled = ?", true).
+		Order("created_at asc").
+		Find(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list enabled alert destinations: %w", err)
 	}

@@ -40,7 +40,12 @@ type URLSigner struct {
 // NewURLSigner creates a URLSigner with the given secret key.
 func NewURLSigner(key []byte) (*URLSigner, error) {
 	if len(key) != signingKeyLength {
-		return nil, fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidSignerKey, signingKeyLength, len(key))
+		return nil, fmt.Errorf(
+			"%w: expected %d bytes, got %d",
+			ErrInvalidSignerKey,
+			signingKeyLength,
+			len(key),
+		)
 	}
 	keyCopy := make([]byte, len(key))
 	copy(keyCopy, key)
@@ -55,7 +60,12 @@ func NewEmptyURLSigner() *URLSigner {
 // SetKey safely assigns the secret signing key.
 func (s *URLSigner) SetKey(key []byte) error {
 	if len(key) != signingKeyLength {
-		return fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidSignerKey, signingKeyLength, len(key))
+		return fmt.Errorf(
+			"%w: expected %d bytes, got %d",
+			ErrInvalidSignerKey,
+			signingKeyLength,
+			len(key),
+		)
 	}
 	keyCopy := make([]byte, len(key))
 	copy(keyCopy, key)
@@ -73,7 +83,8 @@ func (s *URLSigner) IsConfigured() bool {
 	return len(s.key) == signingKeyLength
 }
 
-// Sign generates a base64url encoded signature for the given relative path and expiration timestamp.
+// Sign generates a base64url encoded signature for the given relative path
+// and expiration timestamp.
 func (s *URLSigner) Sign(relPath string, exp int64) (string, error) {
 	normPath := normalizeRelativePath(relPath)
 	if !strings.HasPrefix(normPath, "snapshots/") {
@@ -134,7 +145,8 @@ func (s *URLSigner) Verify(relPath string, exp int64, sig string) error {
 	return nil
 }
 
-// initSignerFromDataDir loads media_url.key from dataDir or generates a new one atomically, populating the signer.
+// initSignerFromDataDir loads media_url.key from dataDir or generates a new one
+// atomically, populating the signer.
 func initSignerFromDataDir(signer *URLSigner, dataDir string) error {
 	keyPath := filepath.Join(dataDir, signingKeyFileName)
 	data, err := os.ReadFile(keyPath)

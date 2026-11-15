@@ -15,8 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/record"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/record"
 )
 
 // AlertDestinationStatus reports the operational health of a destination.
@@ -350,7 +351,9 @@ func (d *Dispatcher) reconcile() {
 	}
 }
 
-func (d *Dispatcher) buildSender(dest *AlertDestination) (Sender, destinationFilter, time.Duration, error) {
+func (d *Dispatcher) buildSender(
+	dest *AlertDestination,
+) (Sender, destinationFilter, time.Duration, error) {
 	var filter destinationFilter
 	if dest.FilterJSON != "" {
 		if err := json.Unmarshal([]byte(dest.FilterJSON), &filter); err != nil {

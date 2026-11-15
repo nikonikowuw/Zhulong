@@ -13,10 +13,11 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/logsafe"
 	"github.com/nikonikowuw/Zhulong/internal/record"
-	"go.uber.org/zap"
 )
 
 const (
@@ -80,7 +81,9 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 	if strings.ContainsAny(opts.Topic, "+#") {
 		return nil, ErrMQTTWildcardTopic
 	}
-	if strings.TrimSpace(opts.HeartbeatTopic) != "" && strings.ContainsAny(opts.HeartbeatTopic, "+#") {
+	hasWildcardHeartbeat := strings.TrimSpace(opts.HeartbeatTopic) != "" &&
+		strings.ContainsAny(opts.HeartbeatTopic, "+#")
+	if hasWildcardHeartbeat {
 		return nil, ErrMQTTWildcardTopic
 	}
 	needsPublicBaseURL := !opts.SkipImageURLCheck && opts.ImageMode == ImageModeURL
@@ -341,7 +344,11 @@ func (s *MQTTSender) publishBytes(ctx context.Context, topic string, data []byte
 	return nil
 }
 
-func (s *MQTTSender) attachBase64Image(ctx context.Context, payload *AlarmPayload, ev record.AlarmEvent) {
+func (s *MQTTSender) attachBase64Image(
+	ctx context.Context,
+	payload *AlarmPayload,
+	ev record.AlarmEvent,
+) {
 	canReadImage := ev.ImageReady && ev.ImagePath != "" && s.opts.Media != nil
 	if !canReadImage {
 		payload.ImageReady = false
@@ -350,7 +357,11 @@ func (s *MQTTSender) attachBase64Image(ctx context.Context, payload *AlarmPayloa
 
 	f, info, err := s.opts.Media.OpenContent(ctx, ev.ImagePath)
 	if err != nil {
-		s.logger.Warn("failed to open media file for base64", zap.String("path", ev.ImagePath), zap.Error(err))
+		s.logger.Warn(
+			"failed to open media file for base64",
+			zap.String("path", ev.ImagePath),
+			zap.Error(err),
+		)
 		payload.ImageReady = false
 		return
 	}

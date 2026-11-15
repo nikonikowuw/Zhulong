@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/record"
-	"go.uber.org/zap"
 )
 
 var (
@@ -80,7 +81,11 @@ func NewService(opts ServiceOptions) *Service {
 }
 
 // Create validates and saves a new destination, then requests reload.
-func (s *Service) Create(ctx context.Context, dest *AlertDestination, secretRaw destinationSecret) error {
+func (s *Service) Create(
+	ctx context.Context,
+	dest *AlertDestination,
+	secretRaw destinationSecret,
+) error {
 	if !dest.EventsEnabled && strings.TrimSpace(dest.ImageMode) == "" {
 		dest.ImageMode = ImageModeURL
 	}
@@ -120,7 +125,11 @@ func (s *Service) Create(ctx context.Context, dest *AlertDestination, secretRaw 
 }
 
 // Update updates an existing destination.
-func (s *Service) Update(ctx context.Context, existing *AlertDestination, params UpdateParams) error {
+func (s *Service) Update(
+	ctx context.Context,
+	existing *AlertDestination,
+	params UpdateParams,
+) error {
 	if params.Name != nil && strings.TrimSpace(*params.Name) != "" {
 		existing.Name = strings.TrimSpace(*params.Name)
 	}

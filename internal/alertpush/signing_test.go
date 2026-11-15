@@ -51,15 +51,22 @@ func TestURLSigner(t *testing.T) {
 	}
 
 	// 5. Tampered path rejected
-	if err := signer.Verify("snapshots/cam_01/2026-11-03/other.jpg", futureExp, sig); !errors.Is(err, ErrURLInvalid) {
+	err = signer.Verify("snapshots/cam_01/2026-11-03/other.jpg", futureExp, sig)
+	if !errors.Is(err, ErrURLInvalid) {
 		t.Fatalf("expected ErrURLInvalid for tampered path, got %v", err)
 	}
 
 	// 6. Path outside snapshots rejected
-	if _, err := signer.Sign("recordings/cam_01/test.mp4", futureExp); !errors.Is(err, ErrPathNotAllowed) {
+	if _, err := signer.Sign("recordings/cam_01/test.mp4", futureExp); !errors.Is(
+		err,
+		ErrPathNotAllowed,
+	) {
 		t.Fatalf("expected ErrPathNotAllowed, got %v", err)
 	}
-	if err := signer.Verify("recordings/cam_01/test.mp4", futureExp, sig); !errors.Is(err, ErrPathNotAllowed) {
+	if err := signer.Verify("recordings/cam_01/test.mp4", futureExp, sig); !errors.Is(
+		err,
+		ErrPathNotAllowed,
+	) {
 		t.Fatalf("expected ErrPathNotAllowed, got %v", err)
 	}
 

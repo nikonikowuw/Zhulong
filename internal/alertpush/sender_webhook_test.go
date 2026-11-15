@@ -32,7 +32,10 @@ type fakeMediaService struct {
 	files map[string][]byte
 }
 
-func (m *fakeMediaService) OpenContent(_ context.Context, relPath string) (*os.File, fs.FileInfo, error) {
+func (m *fakeMediaService) OpenContent(
+	_ context.Context,
+	relPath string,
+) (*os.File, fs.FileInfo, error) {
 	data, ok := m.files[relPath]
 	if !ok {
 		return nil, nil, os.ErrNotExist
@@ -165,7 +168,11 @@ func TestWebhookSenderMultipartMode(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			data, _ := io.ReadAll(part)
+			data, partErr := io.ReadAll(part)
+			if partErr != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			switch part.FormName() {
 			case "payload":
 				receivedPayload = data
@@ -351,7 +358,12 @@ func TestWebhookSenderHeartbeatRouteSplitAndSingleShot(t *testing.T) {
 		Status:     "degraded",
 		Reasons:    []string{"camera_offline"},
 		Host:       HeartbeatHostPayload{Arch: "arm64", UptimeSeconds: 3600},
-		Storage:    HeartbeatStoragePayload{Status: "healthy", Writable: true, UsedPercent: 42, FreeMB: 8192},
+		Storage: HeartbeatStoragePayload{
+			Status:      "healthy",
+			Writable:    true,
+			UsedPercent: 42,
+			FreeMB:      8192,
+		},
 	}
 
 	if err := sender.SendHeartbeat(context.Background(), snap, 7); err != nil {
@@ -368,7 +380,9 @@ func TestWebhookSenderHeartbeatRouteSplitAndSingleShot(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &payload); err != nil {
 		t.Fatalf("unmarshal heartbeat payload: %v", err)
 	}
-	headerOK := payload.EventType == EventTypeHeartbeat && payload.Seq == 7 && payload.DeviceID == "edge-box-09"
+	headerOK := payload.EventType == EventTypeHeartbeat &&
+		payload.Seq == 7 &&
+		payload.DeviceID == "edge-box-09"
 	if !headerOK {
 		t.Fatalf("unexpected heartbeat payload header: %+v", payload)
 	}

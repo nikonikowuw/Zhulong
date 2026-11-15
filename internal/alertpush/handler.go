@@ -10,10 +10,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 const maxDestinations = 32
@@ -55,7 +56,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 
 // List godoc
 // @Summary      List alert destinations
-// @Description  Returns list of configured alert push destinations with real-time operational status.
+// @Description  Returns list of configured alert push destinations with operational status.
 // @Tags         alertpush
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=AlertDestinationListResponse}
@@ -65,7 +66,10 @@ func (h *Handler) List(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	items, err := h.store.List(c.Request.Context())
 	if err != nil {
-		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to list alert destinations", err))
+		httputil.WriteError(
+			c,
+			apperr.Internal("INTERNAL_ERROR", "Failed to list alert destinations", err),
+		)
 		return
 	}
 
@@ -99,7 +103,10 @@ func (h *Handler) Create(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	var req CreateAlertDestinationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(c, apperr.Invalid(CodeAlertDestinationConfigInvalid, "Invalid request body", err))
+		httputil.WriteError(
+			c,
+			apperr.Invalid(CodeAlertDestinationConfigInvalid, "Invalid request body", err),
+		)
 		return
 	}
 
@@ -113,7 +120,10 @@ func (h *Handler) Create(c *gin.Context) {
 	ctx := c.Request.Context()
 	existing, err := h.store.List(ctx)
 	if err != nil {
-		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to check destination limit", err))
+		httputil.WriteError(
+			c,
+			apperr.Internal("INTERNAL_ERROR", "Failed to check destination limit", err),
+		)
 		return
 	}
 	if len(existing) >= maxDestinations {
@@ -170,7 +180,10 @@ func (h *Handler) Update(c *gin.Context) {
 	id := c.Param("id")
 	var req UpdateAlertDestinationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(c, apperr.Invalid(CodeAlertDestinationConfigInvalid, "Invalid request body", err))
+		httputil.WriteError(
+			c,
+			apperr.Invalid(CodeAlertDestinationConfigInvalid, "Invalid request body", err),
+		)
 		return
 	}
 
@@ -185,7 +198,10 @@ func (h *Handler) Update(c *gin.Context) {
 	existing, err := h.store.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrDestinationNotFound) {
-			httputil.WriteError(c, apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err))
+			httputil.WriteError(
+				c,
+				apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err),
+			)
 			return
 		}
 		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to get destination", err))
@@ -240,7 +256,10 @@ func (h *Handler) Delete(c *gin.Context) {
 
 	if err := h.service.Delete(c.Request.Context(), id); err != nil {
 		if errors.Is(err, ErrDestinationNotFound) {
-			httputil.WriteError(c, apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err))
+			httputil.WriteError(
+				c,
+				apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err),
+			)
 			return
 		}
 		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to delete destination", err))
@@ -297,10 +316,16 @@ func (h *Handler) setDestinationEnabled(c *gin.Context, id string, enabled bool)
 	ctx := c.Request.Context()
 	if err := h.service.SetEnabled(ctx, id, enabled); err != nil {
 		if errors.Is(err, ErrDestinationNotFound) {
-			httputil.WriteError(c, apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err))
+			httputil.WriteError(
+				c,
+				apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err),
+			)
 			return
 		}
-		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Failed to update destination enabled state", err))
+		httputil.WriteError(
+			c,
+			apperr.Internal("INTERNAL_ERROR", "Failed to update destination enabled state", err),
+		)
 		return
 	}
 
@@ -331,7 +356,10 @@ func (h *Handler) setDestinationEnabled(c *gin.Context, id string, enabled bool)
 func (h *Handler) Test(c *gin.Context) {
 	var req TestAlertDestinationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(c, apperr.Invalid(CodeAlertDestinationConfigInvalid, "Invalid request body", err))
+		httputil.WriteError(
+			c,
+			apperr.Invalid(CodeAlertDestinationConfigInvalid, "Invalid request body", err),
+		)
 		return
 	}
 
@@ -346,7 +374,10 @@ func (h *Handler) Test(c *gin.Context) {
 	dest, secretRaw, err := h.resolveTestTarget(ctx, req)
 	if err != nil {
 		if errors.Is(err, ErrDestinationNotFound) {
-			httputil.WriteError(c, apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err))
+			httputil.WriteError(
+				c,
+				apperr.NotFound(CodeAlertDestinationNotFound, "Alert destination not found", err),
+			)
 			return
 		}
 		if errors.Is(err, errTestTargetStoreFailure) {
@@ -962,7 +993,10 @@ func (h *Handler) applyMQTTUpdate(
 	return nil
 }
 
-func (h *Handler) toResponse(dest *AlertDestination, status AlertDestinationStatus) (AlertDestinationResponse, error) {
+func (h *Handler) toResponse(
+	dest *AlertDestination,
+	status AlertDestinationStatus,
+) (AlertDestinationResponse, error) {
 	resp := AlertDestinationResponse{
 		ID:               dest.ID,
 		Name:             dest.Name,
@@ -1140,7 +1174,8 @@ func validateWebhookAuthCredentials(authType string, sec *webhookSecret) error {
 			return errors.New("token is required for bearer auth")
 		}
 	case AuthTypeBasic:
-		missingBasicCreds := strings.TrimSpace(sec.Username) == "" || strings.TrimSpace(sec.Password) == ""
+		missingBasicCreds := strings.TrimSpace(sec.Username) == "" ||
+			strings.TrimSpace(sec.Password) == ""
 		if missingBasicCreds {
 			return errors.New("username and password are required for basic auth")
 		}

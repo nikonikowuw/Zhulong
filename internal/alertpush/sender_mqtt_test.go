@@ -358,7 +358,9 @@ func TestMQTTSenderHeartbeatAndGracefulOffline(t *testing.T) {
 		if offline.EventType != EventTypeOffline || offline.Reason != OfflineReasonGracefulShutdown {
 			t.Fatalf("unexpected graceful offline payload: %+v", offline)
 		}
-		fieldsPopulated := offline.DeviceID == "box-01-renamed" && offline.ReportedAt != "" && offline.ID != ""
+		fieldsPopulated := offline.DeviceID == "box-01-renamed" &&
+			offline.ReportedAt != "" &&
+			offline.ID != ""
 		if !fieldsPopulated {
 			t.Fatalf("expected populated id/device_id/reported_at on graceful offline: %+v", offline)
 		}

@@ -6,8 +6,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 type fakeCipher struct{}
@@ -116,8 +117,11 @@ func TestStoreCRUD(t *testing.T) {
 
 	// 7. Update with enabled=false & capability toggle (verifying zero values are NOT ignored)
 	if !got.EventsEnabled || got.HeartbeatEnabled {
-		t.Fatalf("expected default capabilities events=true heartbeat=false, got events=%v heartbeat=%v",
-			got.EventsEnabled, got.HeartbeatEnabled)
+		t.Fatalf(
+			"expected default capabilities events=true heartbeat=false, got events=%v heartbeat=%v",
+			got.EventsEnabled,
+			got.HeartbeatEnabled,
+		)
 	}
 	got.Enabled = false
 	got.EventsEnabled = false
@@ -134,8 +138,11 @@ func TestStoreCRUD(t *testing.T) {
 		t.Fatal("expected Enabled to be false after update, but zero value was ignored!")
 	}
 	if reloaded.EventsEnabled || !reloaded.HeartbeatEnabled {
-		t.Fatalf("expected EventsEnabled=false HeartbeatEnabled=true after update, got events=%v heartbeat=%v",
-			reloaded.EventsEnabled, reloaded.HeartbeatEnabled)
+		t.Fatalf(
+			"expected EventsEnabled=false HeartbeatEnabled=true after update, got events=%v heartbeat=%v",
+			reloaded.EventsEnabled,
+			reloaded.HeartbeatEnabled,
+		)
 	}
 	if reloaded.Name != "Renamed Webhook" {
 		t.Fatalf("expected Renamed Webhook, got %s", reloaded.Name)
@@ -163,8 +170,11 @@ func TestStoreCRUD(t *testing.T) {
 		t.Fatalf("GetByID heartbeat-only failed: %v", err)
 	}
 	if gotHB.EventsEnabled || !gotHB.HeartbeatEnabled {
-		t.Fatalf("expected EventsEnabled=false HeartbeatEnabled=true on create, got events=%v heartbeat=%v",
-			gotHB.EventsEnabled, gotHB.HeartbeatEnabled)
+		t.Fatalf(
+			"expected EventsEnabled=false HeartbeatEnabled=true on create, got events=%v heartbeat=%v",
+			gotHB.EventsEnabled,
+			gotHB.HeartbeatEnabled,
+		)
 	}
 	if err := store.Delete(ctx, hbOnlyID); err != nil {
 		t.Fatalf("Delete heartbeat-only failed: %v", err)
