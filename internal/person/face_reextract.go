@@ -11,10 +11,11 @@ import (
 	"os"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 const (
@@ -450,7 +451,15 @@ func (s *Service) GetFaceReextractFailedReportCSV(
 	if _, err := buf.Write([]byte("\xef\xbb\xbf")); err != nil {
 		return nil, fmt.Errorf("write csv bom: %w", err)
 	}
-	if err := w.Write([]string{"faceId", "personRowId", "personId", "name", "filePath", "errorCode", "message"}); err != nil {
+	if err := w.Write([]string{
+		"faceId",
+		"personRowId",
+		"personId",
+		"name",
+		"filePath",
+		"errorCode",
+		"message",
+	}); err != nil {
 		return nil, fmt.Errorf("write csv header: %w", err)
 	}
 

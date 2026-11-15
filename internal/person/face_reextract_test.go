@@ -17,12 +17,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 type reextractMockExtractor struct {
@@ -63,13 +64,21 @@ func setupReextractTestEnv(
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	jobComp := asyncjob.NewAsyncJobComponents(dbStore, zap.NewNop())
 	if err := jobComp.Start(context.Background()); err != nil {
 		t.Fatalf("start asyncjob: %v", err)
 	}
-	t.Cleanup(func() { _ = jobComp.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := jobComp.Stop(context.Background()); err != nil {
+			t.Logf("cleanup jobComp error: %v", err)
+		}
+	})
 
 	notifier := &mockGalleryNotifier{}
 	comp := NewPersonComponents(dbStore, facesDir, zap.NewNop(), Options{
@@ -150,8 +159,14 @@ func TestFaceReextractFullAndSelected(t *testing.T) {
 		t.Fatalf("unexpected selected job outcome: %+v", doneSel)
 	}
 
-	gotF1, _ := store.GetFace(ctx, f1.ID)
-	gotF2, _ := store.GetFace(ctx, f2.ID)
+	gotF1, err := store.GetFace(ctx, f1.ID)
+	if err != nil {
+		t.Fatalf("get face 1: %v", err)
+	}
+	gotF2, err := store.GetFace(ctx, f2.ID)
+	if err != nil {
+		t.Fatalf("get face 2: %v", err)
+	}
 	if bytesToFloat32(gotF1.FeatureVector)[0] != 0.1 {
 		t.Fatalf("expected f1 untouched at 0.1, got %v", bytesToFloat32(gotF1.FeatureVector)[0])
 	}
@@ -170,8 +185,14 @@ func TestFaceReextractFullAndSelected(t *testing.T) {
 		t.Fatalf("unexpected full job outcome: %+v", doneAll)
 	}
 
-	gotF1, _ = store.GetFace(ctx, f1.ID)
-	gotF2, _ = store.GetFace(ctx, f2.ID)
+	gotF1, err = store.GetFace(ctx, f1.ID)
+	if err != nil {
+		t.Fatalf("get face 1 v3: %v", err)
+	}
+	gotF2, err = store.GetFace(ctx, f2.ID)
+	if err != nil {
+		t.Fatalf("get face 2 v3: %v", err)
+	}
 	if bytesToFloat32(gotF1.FeatureVector)[0] != 0.3 {
 		t.Fatalf("expected f1 updated to 0.3, got %v", bytesToFloat32(gotF1.FeatureVector)[0])
 	}
@@ -179,7 +200,10 @@ func TestFaceReextractFullAndSelected(t *testing.T) {
 		t.Fatalf("expected f2 updated to 0.6, got %v", bytesToFloat32(gotF2.FeatureVector)[0])
 	}
 
-	p1Reloaded, _ := svc.GetPerson(ctx, p1.ID)
+	p1Reloaded, err := svc.GetPerson(ctx, p1.ID)
+	if err != nil {
+		t.Fatalf("get person 1: %v", err)
+	}
 	if p1Reloaded.PrimaryFaceID == nil || *p1Reloaded.PrimaryFaceID != f1.ID {
 		t.Fatalf("primary face id mutated: %v", p1Reloaded.PrimaryFaceID)
 	}
@@ -226,14 +250,34 @@ func TestFaceReextractPreservesOldVectorOnFailuresAndExportsCSV(t *testing.T) {
 		t.Fatalf("create person: %v", err)
 	}
 
-	fGood, _ := svc.AddFaceWithReader(ctx, p.ID, "good.png", bytes.NewReader(pngGood))
-	fNoFace, _ := svc.AddFaceWithReader(ctx, p.ID, "noface.png", bytes.NewReader(pngNoFace))
-	fMulti, _ := svc.AddFaceWithReader(ctx, p.ID, "multi.png", bytes.NewReader(pngMulti))
-	fBadDim, _ := svc.AddFaceWithReader(ctx, p.ID, "baddim.png", bytes.NewReader(pngBadDim))
-	fNaN, _ := svc.AddFaceWithReader(ctx, p.ID, "nan.png", bytes.NewReader(pngNaN))
-	fMissing, _ := svc.AddFaceWithReader(ctx, p.ID, "missing.png", bytes.NewReader(pngGood))
+	fGood, err := svc.AddFaceWithReader(ctx, p.ID, "good.png", bytes.NewReader(pngGood))
+	if err != nil {
+		t.Fatalf("add fGood: %v", err)
+	}
+	fNoFace, err := svc.AddFaceWithReader(ctx, p.ID, "noface.png", bytes.NewReader(pngNoFace))
+	if err != nil {
+		t.Fatalf("add fNoFace: %v", err)
+	}
+	fMulti, err := svc.AddFaceWithReader(ctx, p.ID, "multi.png", bytes.NewReader(pngMulti))
+	if err != nil {
+		t.Fatalf("add fMulti: %v", err)
+	}
+	fBadDim, err := svc.AddFaceWithReader(ctx, p.ID, "baddim.png", bytes.NewReader(pngBadDim))
+	if err != nil {
+		t.Fatalf("add fBadDim: %v", err)
+	}
+	fNaN, err := svc.AddFaceWithReader(ctx, p.ID, "nan.png", bytes.NewReader(pngNaN))
+	if err != nil {
+		t.Fatalf("add fNaN: %v", err)
+	}
+	fMissing, err := svc.AddFaceWithReader(ctx, p.ID, "missing.png", bytes.NewReader(pngGood))
+	if err != nil {
+		t.Fatalf("add fMissing: %v", err)
+	}
 	// Remove missing.png from disk to simulate orphaned image_path.
-	_ = os.Remove(filepath.Join(svc.facesDir, fMissing.ImagePath))
+	if err := os.Remove(filepath.Join(svc.facesDir, fMissing.ImagePath)); err != nil {
+		t.Fatalf("remove missing.png: %v", err)
+	}
 
 	failMode = true
 	job, err := svc.StartFaceReextractJob(ctx, nil)
@@ -375,27 +419,44 @@ func TestHandlerFaceReextractEndpointsAndAudit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tmpDir := t.TempDir()
 	facesDir := filepath.Join(tmpDir, "faces")
-	_ = os.MkdirAll(facesDir, 0o755)
+	if err := os.MkdirAll(facesDir, 0o755); err != nil {
+		t.Fatalf("mkdir facesDir: %v", err)
+	}
 
 	dbStore := database.New(tmpDir, zap.NewNop())
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("close dbStore: %v", err)
+		}
+	})
 
 	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 50, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 500,
+		BufferSize:    50,
+		BatchSize:     10,
+		FlushInterval: 5 * time.Millisecond,
+		MaxEntries:    500,
 	})
 	if err := auditSvc.Start(context.Background()); err != nil {
 		t.Fatalf("start audit: %v", err)
 	}
-	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := auditSvc.Stop(context.Background()); err != nil {
+			t.Logf("stop audit: %v", err)
+		}
+	})
 
 	jobComp := asyncjob.NewAsyncJobComponents(dbStore, zap.NewNop())
 	if err := jobComp.Start(context.Background()); err != nil {
 		t.Fatalf("start asyncjob: %v", err)
 	}
-	t.Cleanup(func() { _ = jobComp.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := jobComp.Stop(context.Background()); err != nil {
+			t.Logf("stop asyncjob: %v", err)
+		}
+	})
 
 	comp := NewPersonComponents(dbStore, facesDir, zap.NewNop(), Options{
 		Extractor: &reextractMockExtractor{},
@@ -454,7 +515,11 @@ func TestHandlerFaceReextractEndpointsAndAudit(t *testing.T) {
 		t.Fatalf("expected 200 on get job, got %d", wGet.Code)
 	}
 
-	reqReport := httptest.NewRequest(http.MethodGet, "/api/v1/persons/reextract-face-jobs/"+startResp.Data.JobID+"/failed-report", nil)
+	reqReport := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/persons/reextract-face-jobs/"+startResp.Data.JobID+"/failed-report",
+		nil,
+	)
 	wReport := httptest.NewRecorder()
 	r.ServeHTTP(wReport, reqReport)
 	if wReport.Code != http.StatusOK || !strings.Contains(wReport.Body.String(), "faceId,personRowId") {

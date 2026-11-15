@@ -5,9 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/person"
-	"go.uber.org/zap"
 )
 
 func setupTestStore(t *testing.T) (*person.Store, func()) {
@@ -21,7 +22,9 @@ func setupTestStore(t *testing.T) (*person.Store, func()) {
 
 	store := person.NewStore(dbStore)
 	cleanup := func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
 	}
 	return store, cleanup
 }
@@ -443,7 +446,10 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 	if err := store.AddFace(ctx, f1); err != nil {
 		t.Fatalf("AddFace 1 failed: %v", err)
 	}
-	got, _ = store.GetPerson(ctx, "p_primary")
+	got, err = store.GetPerson(ctx, "p_primary")
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
 	if got.PrimaryFaceID == nil || *got.PrimaryFaceID != "face_auto_1" {
 		t.Fatalf("expected PrimaryFaceID 'face_auto_1', got %v", got.PrimaryFaceID)
 	}
@@ -453,7 +459,10 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 	if err := store.AddFace(ctx, f2); err != nil {
 		t.Fatalf("AddFace 2 failed: %v", err)
 	}
-	got, _ = store.GetPerson(ctx, "p_primary")
+	got, err = store.GetPerson(ctx, "p_primary")
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
 	if got.PrimaryFaceID == nil || *got.PrimaryFaceID != "face_auto_1" {
 		t.Fatalf("expected PrimaryFaceID to remain 'face_auto_1', got %v", got.PrimaryFaceID)
 	}
@@ -463,7 +472,10 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 	if err := store.SetPrimaryFace(ctx, "p_primary", face2ID); err != nil {
 		t.Fatalf("SetPrimaryFace to face_auto_2 failed: %v", err)
 	}
-	got, _ = store.GetPerson(ctx, "p_primary")
+	got, err = store.GetPerson(ctx, "p_primary")
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
 	if got.PrimaryFaceID == nil || *got.PrimaryFaceID != "face_auto_2" {
 		t.Fatalf("expected PrimaryFaceID to be 'face_auto_2', got %v", got.PrimaryFaceID)
 	}
@@ -478,7 +490,10 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 	if err := store.DeleteFace(ctx, "p_primary", "face_auto_2"); err != nil {
 		t.Fatalf("DeleteFace failed: %v", err)
 	}
-	got, _ = store.GetPerson(ctx, "p_primary")
+	got, err = store.GetPerson(ctx, "p_primary")
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
 	if got.PrimaryFaceID == nil || *got.PrimaryFaceID != "face_auto_1" {
 		t.Fatalf("expected fallback PrimaryFaceID to 'face_auto_1', got %v", got.PrimaryFaceID)
 	}
@@ -487,7 +502,10 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 	if err := store.DeleteFace(ctx, "p_primary", "face_auto_1"); err != nil {
 		t.Fatalf("DeleteFace 1 failed: %v", err)
 	}
-	got, _ = store.GetPerson(ctx, "p_primary")
+	got, err = store.GetPerson(ctx, "p_primary")
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
 	if got.PrimaryFaceID != nil {
 		t.Fatalf("expected PrimaryFaceID to be nil when no faces remain, got %v", *got.PrimaryFaceID)
 	}

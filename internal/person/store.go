@@ -7,11 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 var (
@@ -742,7 +743,11 @@ func (s *Store) ListFacesByPerson(ctx context.Context, personID string) ([]Face,
 
 // ListFacesByPersonPaged returns one page of a person's face templates together
 // with the total count.
-func (s *Store) ListFacesByPersonPaged(ctx context.Context, personID string, limit, offset int) ([]Face, int64, error) {
+func (s *Store) ListFacesByPersonPaged(
+	ctx context.Context,
+	personID string,
+	limit, offset int,
+) ([]Face, int64, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -877,7 +882,7 @@ func (s *Store) ListFacesForReextract(ctx context.Context, personIDs []string) (
 	}
 
 	const chunkSize = 500
-	items := make([]FaceReextractTarget, 0)
+	items := []FaceReextractTarget{}
 	for start := 0; start < len(personIDs); start += chunkSize {
 		end := min(start+chunkSize, len(personIDs))
 		var chunk []FaceReextractTarget

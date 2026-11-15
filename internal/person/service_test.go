@@ -16,10 +16,11 @@ import (
 	"testing"
 	"unsafe"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
-	"go.uber.org/zap"
 )
 
 func TestBytesToFloat32_Aligned(t *testing.T) {
@@ -27,7 +28,7 @@ func TestBytesToFloat32_Aligned(t *testing.T) {
 	raw := make([]byte, count*4)
 	expected := make([]float32, count)
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		val := float32(i) * 1.25
 		expected[i] = val
 		binary.LittleEndian.PutUint32(raw[i*4:(i+1)*4], math.Float32bits(val))
@@ -38,7 +39,7 @@ func TestBytesToFloat32_Aligned(t *testing.T) {
 		t.Fatalf("expected length %d, got %d", count, len(got))
 	}
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if got[i] != expected[i] {
 			t.Fatalf("at index %d: expected %f, got %f", i, expected[i], got[i])
 		}
@@ -67,7 +68,7 @@ func TestBytesToFloat32_UnalignedFallback(t *testing.T) {
 	unaligned := buffer[offset : offset+count*4]
 	expected := make([]float32, count)
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		val := float32(i) * 0.5
 		expected[i] = val
 		binary.LittleEndian.PutUint32(unaligned[i*4:(i+1)*4], math.Float32bits(val))
@@ -78,7 +79,7 @@ func TestBytesToFloat32_UnalignedFallback(t *testing.T) {
 		t.Fatalf("expected length %d, got %d", count, len(got))
 	}
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if got[i] != expected[i] {
 			t.Fatalf("at index %d: expected %f, got %f", i, expected[i], got[i])
 		}
@@ -104,16 +105,18 @@ func TestBytesToFloat32_EdgeCases(t *testing.T) {
 	}
 }
 
+var benchSink []float32
+
 func BenchmarkBytesToFloat32_ZeroCopy(b *testing.B) {
 	raw := make([]byte, 512*4)
-	for i := 0; i < 512; i++ {
+	for i := range 512 {
 		binary.LittleEndian.PutUint32(raw[i*4:(i+1)*4], math.Float32bits(float32(i)))
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = bytesToFloat32(raw)
+	for range b.N {
+		benchSink = bytesToFloat32(raw)
 	}
 }
 
@@ -124,14 +127,14 @@ func BenchmarkBytesToFloat32_UnalignedFallback(b *testing.B) {
 		offset++
 	}
 	unaligned := buf[offset : offset+512*4]
-	for i := 0; i < 512; i++ {
+	for i := range 512 {
 		binary.LittleEndian.PutUint32(unaligned[i*4:(i+1)*4], math.Float32bits(float32(i)))
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = bytesToFloat32(unaligned)
+	for range b.N {
+		benchSink = bytesToFloat32(unaligned)
 	}
 }
 
@@ -235,7 +238,11 @@ func newTestService(t *testing.T) *Service {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	return NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor()})
 }
@@ -375,7 +382,7 @@ func TestUpdatePerson_RejectsBlankName(t *testing.T) {
 func TestNewID_IsUnique(t *testing.T) {
 	const draws = 1000
 	seen := make(map[string]struct{}, draws)
-	for i := 0; i < draws; i++ {
+	for i := range draws {
 		id := idutil.New()
 		if id == "" {
 			t.Fatal("idutil.New returned an empty id")
@@ -403,7 +410,7 @@ func TestAddFace_IDsAreUniqueUnderConcurrency(t *testing.T) {
 	ids := make([]string, workers)
 	errs := make([]error, workers)
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -424,7 +431,7 @@ func TestAddFace_IDsAreUniqueUnderConcurrency(t *testing.T) {
 	wg.Wait()
 
 	seen := make(map[string]struct{}, workers)
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		if errs[i] != nil {
 			t.Fatalf("concurrent store.AddFace #%d failed: %v", i, errs[i])
 		}
@@ -449,7 +456,7 @@ func TestAddFace_EnforcesMaxLimitUnderConcurrency(t *testing.T) {
 	const workers = 20
 	errs := make([]error, workers)
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -461,7 +468,7 @@ func TestAddFace_EnforcesMaxLimitUnderConcurrency(t *testing.T) {
 
 	successCount := 0
 	limitCount := 0
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		if errs[i] == nil {
 			successCount++
 			continue
@@ -779,7 +786,11 @@ func TestAddFace_WithExtractor_Success(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	expectedFeats := make([]float32, 512)
 	for i := range expectedFeats {
@@ -842,7 +853,11 @@ func TestAddFace_WithExtractor_NoFaceDetected(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	extractor := &mockExtractor{err: fmt.Errorf("%w: mock extractor", ErrNoFaceDetected)}
 	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
@@ -886,7 +901,11 @@ func TestAddFace_WithExtractor_MultipleFaces(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	extractor := &mockExtractor{err: fmt.Errorf("%w: mock extractor", ErrMultipleFaces)}
 	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
@@ -929,7 +948,11 @@ func TestAddFace_WithExtractor_DimMismatch(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	extractor := &mockExtractor{features: make([]float32, 256)} // 维度不符
 	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
@@ -958,7 +981,11 @@ func TestAddFace_WithoutExtractorFails(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{})
 	ctx := context.Background()
@@ -988,7 +1015,11 @@ func TestAddFace_ExtractorFailureIsNotBlamedOnThePhoto(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	extractor := &mockExtractor{err: errors.New("engine crashed")}
 	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
@@ -1011,7 +1042,11 @@ func TestAddFace_UndecodableImageIsAClientError(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	extractor := &mockExtractor{err: fmt.Errorf("%w: image: unknown format", ErrUnsupportedImageFormat)}
 	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
@@ -1065,10 +1100,22 @@ func TestGalleryNotifier_AddUpdateDelete(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	notifier := &mockGalleryNotifier{}
-	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor(), GalleryNotifier: notifier})
+	svc := NewService(
+		NewStore(dbStore),
+		tempDir,
+		zap.NewNop(),
+		Options{
+			Extractor:       defaultTestExtractor(),
+			GalleryNotifier: notifier,
+		},
+	)
 	ctx := context.Background()
 
 	// 1. Create Person
@@ -1135,10 +1182,22 @@ func TestUpdatePersonNoOpIsNotAWrite(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	notifier := &mockGalleryNotifier{}
-	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor(), GalleryNotifier: notifier})
+	svc := NewService(
+		NewStore(dbStore),
+		tempDir,
+		zap.NewNop(),
+		Options{
+			Extractor:       defaultTestExtractor(),
+			GalleryNotifier: notifier,
+		},
+	)
 	ctx := context.Background()
 
 	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_SAME"), Name: "同名"})
@@ -1228,10 +1287,22 @@ func TestUpdatePersonBackfillsRecognitionKeysWhenBinding(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	backfiller := &stubKeyBackfiller{}
-	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor(), RecognitionKeyBackfiller: backfiller})
+	svc := NewService(
+		NewStore(dbStore),
+		tempDir,
+		zap.NewNop(),
+		Options{
+			Extractor:                defaultTestExtractor(),
+			RecognitionKeyBackfiller: backfiller,
+		},
+	)
 	ctx := context.Background()
 
 	created, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "未绑定"})
@@ -1270,9 +1341,21 @@ func TestAddFaceRequiresBusinessKeyWhenPolicyEnabled(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
-	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor(), RequirePersonIDForEnrollment: true})
+	svc := NewService(
+		NewStore(dbStore),
+		tempDir,
+		zap.NewNop(),
+		Options{
+			Extractor:                    defaultTestExtractor(),
+			RequirePersonIDForEnrollment: true,
+		},
+	)
 	ctx := context.Background()
 
 	unkeyed, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "未绑定"})
@@ -1339,7 +1422,11 @@ func TestGetGallerySyncDataWalksEveryPage(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	store := NewStore(dbStore)
 	svc := NewService(store, tempDir, zap.NewNop(), Options{})
@@ -1573,13 +1660,21 @@ func TestService_SearchByImage_RankingAndAggregation(t *testing.T) {
 	ctx := context.Background()
 
 	// Create persons
-	p1, _ := store.GetPerson(ctx, "p1")
-	if p1 == nil {
-		_ = store.CreatePerson(ctx, &Person{ID: "p1", PersonID: strPtr("EXT_ALICE"), Name: "Alice"})
+	p1, err := store.GetPerson(ctx, "p1")
+	if p1 == nil && errors.Is(err, ErrNotFound) {
+		if err := store.CreatePerson(ctx, &Person{ID: "p1", PersonID: strPtr("EXT_ALICE"), Name: "Alice"}); err != nil {
+			t.Fatalf("CreatePerson p1 failed: %v", err)
+		}
 	}
-	_ = store.CreatePerson(ctx, &Person{ID: "p2", PersonID: strPtr("EXT_BOB"), Name: "Bob"})
-	_ = store.CreatePerson(ctx, &Person{ID: "p3", PersonID: nil, Name: "Charlie"})
-	_ = store.CreatePerson(ctx, &Person{ID: "p4", PersonID: nil, Name: "David"})
+	if err := store.CreatePerson(ctx, &Person{ID: "p2", PersonID: strPtr("EXT_BOB"), Name: "Bob"}); err != nil {
+		t.Fatalf("CreatePerson p2 failed: %v", err)
+	}
+	if err := store.CreatePerson(ctx, &Person{ID: "p3", PersonID: nil, Name: "Charlie"}); err != nil {
+		t.Fatalf("CreatePerson p3 failed: %v", err)
+	}
+	if err := store.CreatePerson(ctx, &Person{ID: "p4", PersonID: nil, Name: "David"}); err != nil {
+		t.Fatalf("CreatePerson p4 failed: %v", err)
+	}
 
 	// Setup query vector: unit vector along dimension 0
 	queryVec := make([]float32, 512)
@@ -1595,19 +1690,39 @@ func TestService_SearchByImage_RankingAndAggregation(t *testing.T) {
 	}
 
 	// P1 (Alice) has 2 faces: 0.95 and 0.80
-	_ = store.AddFace(ctx, &Face{ID: "f1_high", PersonRowID: "p1", ImagePath: "f1h.jpg", FeatureVector: makeVector(0.95)})
-	_ = store.AddFace(ctx, &Face{ID: "f1_low", PersonRowID: "p1", ImagePath: "f1l.jpg", FeatureVector: makeVector(0.80)})
+	if err := store.AddFace(ctx, &Face{
+		ID: "f1_high", PersonRowID: "p1", ImagePath: "f1h.jpg", FeatureVector: makeVector(0.95),
+	}); err != nil {
+		t.Fatalf("AddFace f1_high failed: %v", err)
+	}
+	if err := store.AddFace(ctx, &Face{
+		ID: "f1_low", PersonRowID: "p1", ImagePath: "f1l.jpg", FeatureVector: makeVector(0.80),
+	}); err != nil {
+		t.Fatalf("AddFace f1_low failed: %v", err)
+	}
 
 	// P2 (Bob) has 1 face: 0.85
-	_ = store.AddFace(ctx, &Face{ID: "f2", PersonRowID: "p2", ImagePath: "f2.jpg", FeatureVector: makeVector(0.85)})
+	if err := store.AddFace(ctx, &Face{
+		ID: "f2", PersonRowID: "p2", ImagePath: "f2.jpg", FeatureVector: makeVector(0.85),
+	}); err != nil {
+		t.Fatalf("AddFace f2 failed: %v", err)
+	}
 
 	// P3 (Charlie) has 1 face: 0.60
-	_ = store.AddFace(ctx, &Face{ID: "f3", PersonRowID: "p3", ImagePath: "f3.jpg", FeatureVector: makeVector(0.60)})
+	if err := store.AddFace(ctx, &Face{
+		ID: "f3", PersonRowID: "p3", ImagePath: "f3.jpg", FeatureVector: makeVector(0.60),
+	}); err != nil {
+		t.Fatalf("AddFace f3 failed: %v", err)
+	}
 
 	// P4 (David) has invalid vector (corrupted / NaN / wrong size)
 	badVec := make([]byte, 512*4)
 	binary.LittleEndian.PutUint32(badVec[:4], math.Float32bits(float32(math.NaN())))
-	_ = store.AddFace(ctx, &Face{ID: "f4", PersonRowID: "p4", ImagePath: "f4.jpg", FeatureVector: badVec})
+	if err := store.AddFace(ctx, &Face{
+		ID: "f4", PersonRowID: "p4", ImagePath: "f4.jpg", FeatureVector: badVec,
+	}); err != nil {
+		t.Fatalf("AddFace f4 failed: %v", err)
+	}
 
 	extractor := &mockExtractor{features: queryVec}
 	svc := NewService(store, tempDir, zap.NewNop(), Options{Extractor: extractor})
@@ -1688,7 +1803,7 @@ func TestExportPersonsManifestCSVRoundTrip(t *testing.T) {
 	}
 	// Two different people sharing one name and carrying no business key: their rows
 	// must not point at the same image path.
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if _, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "李四"}); err != nil {
 			t.Fatalf("create duplicate-name person: %v", err)
 		}

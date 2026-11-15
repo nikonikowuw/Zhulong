@@ -22,12 +22,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.uber.org/zap"
+	_ "golang.org/x/image/webp"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
-	"go.uber.org/zap"
-	_ "golang.org/x/image/webp"
 )
 
 const (

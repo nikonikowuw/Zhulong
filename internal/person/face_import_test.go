@@ -19,21 +19,24 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 func createTestPNG(width, height int) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			img.Set(x, y, color.RGBA{R: 200, G: 100, B: 50, A: 255})
 		}
 	}
 	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
+	if err := png.Encode(&buf, img); err != nil {
+		panic(err)
+	}
 	return buf.Bytes()
 }
 
@@ -100,7 +103,9 @@ func TestSafeExtractZip(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		zipPath := filepath.Join(tmpDir, "slip.zip")
-		_ = os.WriteFile(zipPath, zipBytes, 0644)
+		if err := os.WriteFile(zipPath, zipBytes, 0644); err != nil {
+			t.Fatalf("write slip.zip: %v", err)
+		}
 
 		destDir := filepath.Join(tmpDir, "out")
 		err = safeExtractZip(zipPath, destDir)
@@ -117,7 +122,9 @@ func TestParseManifestCSV(t *testing.T) {
 			"Alice,EMP001,images/a.png,true\n" +
 			"Bob,EMP002,images/b.png,0\n"
 		csvPath := filepath.Join(tmpDir, "manifest.csv")
-		_ = os.WriteFile(csvPath, []byte(manifestContent), 0644)
+		if err := os.WriteFile(csvPath, []byte(manifestContent), 0644); err != nil {
+			t.Fatalf("write manifest.csv: %v", err)
+		}
 
 		entries, err := parseManifestCSV(csvPath)
 		if err != nil {
@@ -139,7 +146,9 @@ func TestParseManifestCSV(t *testing.T) {
 	t.Run("missing required columns returns error", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		csvPath := filepath.Join(tmpDir, "manifest.csv")
-		_ = os.WriteFile(csvPath, []byte("personId,imagePath\nEMP001,images/a.png"), 0644)
+		if err := os.WriteFile(csvPath, []byte("personId,imagePath\nEMP001,images/a.png"), 0644); err != nil {
+			t.Fatalf("write manifest.csv: %v", err)
+		}
 
 		_, err := parseManifestCSV(csvPath)
 		if err == nil {
@@ -150,10 +159,18 @@ func TestParseManifestCSV(t *testing.T) {
 
 func TestScanImagesFallback(t *testing.T) {
 	tmpDir := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755)
-	_ = os.WriteFile(filepath.Join(tmpDir, "EMP001_张三.jpg"), createTestPNG(10, 10), 0644)
-	_ = os.WriteFile(filepath.Join(tmpDir, "sub/李四_EMP002.png"), createTestPNG(10, 10), 0644)
-	_ = os.WriteFile(filepath.Join(tmpDir, "plain.jpeg"), createTestPNG(10, 10), 0644)
+	if err := os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "EMP001_张三.jpg"), createTestPNG(10, 10), 0644); err != nil {
+		t.Fatalf("write EMP001_张三.jpg: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "sub/李四_EMP002.png"), createTestPNG(10, 10), 0644); err != nil {
+		t.Fatalf("write sub/李四_EMP002.png: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "plain.jpeg"), createTestPNG(10, 10), 0644); err != nil {
+		t.Fatalf("write plain.jpeg: %v", err)
+	}
 
 	entries, err := scanImagesFallback(tmpDir)
 	if err != nil {
@@ -203,7 +220,11 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore error: %v", err)
+		}
+	})
 
 	features := make([]float32, faceFeatureDim)
 	features[0] = 1.0
@@ -214,7 +235,11 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 	if err := asyncSvc.Start(context.Background()); err != nil {
 		t.Fatalf("asyncSvc.Start failed: %v", err)
 	}
-	t.Cleanup(func() { _ = asyncSvc.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := asyncSvc.Stop(context.Background()); err != nil {
+			t.Logf("cleanup asyncSvc error: %v", err)
+		}
+	})
 
 	opts := Options{AsyncJobs: asyncSvc, Extractor: extractor}
 	svc := NewService(NewStore(dbStore), filepath.Join(tempDir, "faces"), zap.NewNop(), opts)
@@ -239,17 +264,6 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 		t.Fatalf("create zip failed: %v", err)
 	}
 
-	fh := &multipart.FileHeader{
-		Filename: "upload.zip",
-		Size:     int64(len(zipBytes)),
-		Header:   make(map[string][]string),
-	}
-	// Write to temp file to mock multipart file opening
-	zipFilePath := filepath.Join(tempDir, "source.zip")
-	_ = os.WriteFile(zipFilePath, zipBytes, 0644)
-	mockFile, _ := os.Open(zipFilePath)
-	defer mockFile.Close()
-
 	// Use Handler with Gin test recorder to test full HTTP flow
 	gin.SetMode(gin.TestMode)
 	handler := NewHandler(svc, zap.NewNop())
@@ -260,9 +274,16 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 	// Create multipart request
 	body := new(bytes.Buffer)
 	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("file", "upload.zip")
-	_, _ = part.Write(zipBytes)
-	writer.Close()
+	part, err := writer.CreateFormFile("file", "upload.zip")
+	if err != nil {
+		t.Fatalf("CreateFormFile failed: %v", err)
+	}
+	if _, err := part.Write(zipBytes); err != nil {
+		t.Fatalf("write part failed: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer failed: %v", err)
+	}
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/persons/import-face-jobs", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -275,7 +296,7 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 
 	// Wait for worker to finish processing (polling up to 5 seconds)
 	jobID := ""
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		time.Sleep(100 * time.Millisecond)
 		jobs, total, _ := svc.store.ListPersons(context.Background(), ListPersonsParams{
 			Limit:  10,
@@ -350,8 +371,6 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 	if !strings.Contains(reportCSVEn, "Image is corrupted") {
 		t.Fatalf("expected localized english message in CSV, got: %s", reportCSVEn)
 	}
-
-	_ = fh
 }
 
 func TestService_StartLifecycle(t *testing.T) {

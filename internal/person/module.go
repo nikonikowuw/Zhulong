@@ -4,8 +4,9 @@ import (
 	"context"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 // PersonComponents groups instantiated person domain services.
@@ -35,12 +36,10 @@ type personLifecycleImpl struct {
 
 func (l *personLifecycleImpl) Start(ctx context.Context) error {
 	l.logger.Info("person service started")
-	if l.service != nil {
-		if err := l.service.Start(ctx); err != nil {
-			return err
-		}
+	if l.service == nil {
+		return nil
 	}
-	return nil
+	return l.service.Start(ctx)
 }
 
 func (l *personLifecycleImpl) Stop(_ context.Context) error {

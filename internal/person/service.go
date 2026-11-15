@@ -25,12 +25,12 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"go.uber.org/zap"
 	_ "golang.org/x/image/webp"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
-	"go.uber.org/zap"
 )
 
 const (
@@ -225,7 +225,12 @@ func normalizePersonName(raw string) (string, error) {
 // only ever seen in the server log. It exists because the same five-line mapping was
 // repeated at every store call in this file, and a mapping that is copied is a mapping
 // that drifts.
-func storeError(err error, notFoundCode, notFoundMessage, operation string) error {
+func storeError(
+	err error,
+	notFoundCode string,
+	notFoundMessage string,
+	operation string,
+) error {
 	if errors.Is(err, ErrNotFound) {
 		return apperr.NotFound(notFoundCode, notFoundMessage, err)
 	}
@@ -499,7 +504,11 @@ func (s *Service) removeFaceFile(imagePath string) {
 	}
 	rel, err := s.faceStorageName(imagePath)
 	if err != nil {
-		s.logger.Warn("skipped deletion of face file outside faces directory", zap.String("path", imagePath), zap.Error(err))
+		s.logger.Warn(
+			"skipped deletion of face file outside faces directory",
+			zap.String("path", imagePath),
+			zap.Error(err),
+		)
 		return
 	}
 	root, err := os.OpenRoot(s.facesDir)
@@ -722,7 +731,12 @@ func (s *Service) AddFace(ctx context.Context, personID string, file *multipart.
 }
 
 // AddFaceWithReader saves uploaded image file into data directory and enrolls face template.
-func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filename string, r io.Reader) (*Face, error) {
+func (s *Service) AddFaceWithReader(
+	ctx context.Context,
+	personID string,
+	filename string,
+	r io.Reader,
+) (*Face, error) {
 	personMeta, err := s.store.GetPersonMeta(ctx, personID)
 	if err != nil {
 		return nil, personLookupError(err, "Failed to verify person")
@@ -1364,7 +1378,7 @@ func (s *Service) ListFaces(ctx context.Context, personID string, limit, offset 
 
 // GetGallerySyncData prepares all enrolled face templates for IPC downlinking to algorithm runners.
 func (s *Service) GetGallerySyncData(ctx context.Context) ([]GalleryItem, error) {
-	syncItems := make([]GalleryItem, 0)
+	syncItems := []GalleryItem{}
 	for offset := 0; ; offset += gallerySyncPageSize {
 		persons, err := s.store.ListPersonsForGallery(ctx, gallerySyncPageSize, offset)
 		if err != nil {
