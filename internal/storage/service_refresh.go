@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -60,10 +61,12 @@ func (s *Service) RefreshStatus(ctx context.Context) (*StorageStatus, error) {
 
 	// Remember the identity of a newly discovered external volume so the next
 	// probe can tell a dismount apart from a first sighting.
-	isFirstExternalDiscovery := !isDismounted && isExternal && s.expectedDeviceID == 0
+	isFirstExternalDiscovery := !isDismounted && isExternal && snap.expectedDeviceID == 0
 	if isFirstExternalDiscovery {
 		s.mu.Lock()
-		s.expectedDeviceID = stats.DeviceID
+		if s.activeMediaDir == snap.mediaDir && s.expectedDeviceID == 0 {
+			s.expectedDeviceID = stats.DeviceID
+		}
 		s.mu.Unlock()
 	}
 
@@ -86,7 +89,7 @@ func (s *Service) RefreshStatus(ctx context.Context) (*StorageStatus, error) {
 	// instead of inheriting the value cached with the last breakdown scan.
 	breakdown.OtherBytes = 0
 	mediaBytes := breakdown.RecordingsBytes + breakdown.SnapshotsBytes + breakdown.ExportsBytes
-	if mediaBytes > 0 && stats.UsedBytes > uint64(mediaBytes) {
+	if mediaBytes >= 0 && stats.UsedBytes >= uint64(mediaBytes) && stats.UsedBytes <= math.MaxInt64 {
 		breakdown.OtherBytes = int64(stats.UsedBytes) - mediaBytes
 	}
 

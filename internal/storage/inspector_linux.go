@@ -82,7 +82,12 @@ func (p *DefaultPathInspector) InspectFS(path string) (*FSStats, error) {
 		usedBytes = 0
 	}
 
-	mountPoint, fsName := findMountInfoLinux(cleanPath)
+	mountTarget := cleanPath
+	if absPath, err := filepath.Abs(cleanPath); err == nil {
+		mountTarget = absPath
+	}
+
+	mountPoint, fsName := findMountInfoLinux(mountTarget)
 	if fsName == "" {
 		fsName = fsTypeFromMagic(uint64(statfs.Type))
 	}

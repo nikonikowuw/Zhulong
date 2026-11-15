@@ -98,6 +98,9 @@ type pruneUnit struct {
 // consult stopWhen; Phase 2 does.
 type pruneScope struct {
 	mediaDir      string
+	cfg           *StorageConfig
+	totalBytes    uint64
+	trigger       PruneTrigger
 	stopWhen      func(*FSStats) bool
 	evidenceGuard EvidenceGuard
 }
@@ -244,7 +247,8 @@ func (c *CleanerEngine) RunPrune(
 	usage := usagePercent(stats)
 	if trigger == PruneTriggerWatermark && usage < cfg.HighWatermarkPercent {
 		summary.StopReason = PruneStopSkippedBelowHigh
-		return finishSummary(summary, startTime, PruneStatusSkippedLow), nil
+		summary.finish(startTime, PruneStatusSkippedLow)
+		return summary, nil
 	}
 
 	c.logger.Info("starting storage cleanup cycle",
@@ -256,15 +260,13 @@ func (c *CleanerEngine) RunPrune(
 
 	exportUnits := c.collectExportUnits(mediaDir, time.Duration(cfg.ExportsRetentionHours)*time.Hour, now)
 	snapshotExpired, snapshotUnexpired := c.collectGroupedUnits(
-		mediaDir,
-		"snapshots",
+		filepath.Join(mediaDir, "snapshots"),
 		unitSnapshot,
 		time.Duration(cfg.SnapshotsRetentionDays)*24*time.Hour,
 		now,
 	)
 	recordingExpired, recordingUnexpired := c.collectGroupedUnits(
-		mediaDir,
-		"recordings",
+		filepath.Join(mediaDir, "recordings"),
 		unitRecording,
 		time.Duration(cfg.RecordingsRetentionDays)*24*time.Hour,
 		now,
@@ -272,6 +274,9 @@ func (c *CleanerEngine) RunPrune(
 
 	scope := pruneScope{
 		mediaDir:      mediaDir,
+		cfg:           cfg,
+		totalBytes:    stats.TotalBytes,
+		trigger:       trigger,
 		stopWhen:      c.stopPredicate(cfg, stats.TotalBytes, trigger),
 		evidenceGuard: c.currentEvidenceGuard(),
 	}
@@ -281,7 +286,12 @@ func (c *CleanerEngine) RunPrune(
 	phase1 = append(phase1, exportUnits...)
 	phase1 = append(phase1, recordingExpired...)
 	phase1 = append(phase1, snapshotExpired...)
-	phase1Outcome := c.deleteUnits(ctx, phase1, scope, false)
+	phase1Outcome := c.deleteUnits(
+		ctx,
+		phase1,
+		scope,
+		false,
+	)
 	summary.mergeOutcome(phase1Outcome)
 
 	if phase1Outcome.canceled || ctx.Err() != nil {
@@ -289,34 +299,15 @@ func (c *CleanerEngine) RunPrune(
 	}
 
 	if summary.StopReason == "" {
-		if trigger == PruneTriggerEmergency && emergencyReserveInfeasible(cfg, stats.TotalBytes) {
-			// Deleting unexpired media cannot make free >= minFree on this
-			// volume. Do not wipe the disk in a futile attempt; the gate stays
-			// latched and the startup warning points at the bad configuration.
-			summary.StopReason = PruneStopCandidatesExhausted
-			c.logger.Warn("emergency reserve is not feasible for this volume; skipping capacity eviction",
-				zap.Int64("emergency_stop_min_mb", cfg.EmergencyStopMinMB),
-				zap.Uint64("volume_total_bytes", stats.TotalBytes),
-			)
-		} else {
-			// Phase 2: capacity pressure, with a pre-check before the first unit.
-			phase2 := make([]pruneUnit, 0, len(recordingUnexpired)+len(snapshotUnexpired))
-			phase2 = append(phase2, recordingUnexpired...)
-			phase2 = append(phase2, snapshotUnexpired...)
-			outcome := c.deleteUnits(ctx, phase2, scope, true)
-			summary.mergeOutcome(outcome)
-			switch {
-			case outcome.canceled:
-				summary.StopReason = PruneStopContextCanceled
-			case outcome.stopped:
-				summary.StopReason = PruneStopTargetReached
-			default:
-				summary.StopReason = PruneStopCandidatesExhausted
-			}
-		}
+		phase2 := make([]pruneUnit, 0, len(recordingUnexpired)+len(snapshotUnexpired))
+		phase2 = append(phase2, recordingUnexpired...)
+		phase2 = append(phase2, snapshotUnexpired...)
+		outcome, stopReason := c.runPhase2(ctx, scope, phase2)
+		summary.mergeOutcome(outcome)
+		summary.StopReason = stopReason
 	}
 
-	summary = finishSummary(summary, startTime, PruneStatusCompleted)
+	summary.finish(startTime, PruneStatusCompleted)
 
 	c.logger.Info("finished storage cleanup cycle",
 		zap.String("reason", string(trigger)),
@@ -331,73 +322,45 @@ func (c *CleanerEngine) RunPrune(
 	return summary, nil
 }
 
+func (c *CleanerEngine) runPhase2(
+	ctx context.Context,
+	scope pruneScope,
+	units []pruneUnit,
+) (pruneOutcome, PruneStopReason) {
+	if scope.trigger == PruneTriggerEmergency && emergencyReserveInfeasible(scope.cfg, scope.totalBytes) {
+		// Deleting unexpired media cannot make free >= minFree on this
+		// volume. Do not wipe the disk in a futile attempt; the gate stays
+		// latched and the startup warning points at the bad configuration.
+		c.logger.Warn("emergency reserve is not feasible for this volume; skipping capacity eviction",
+			zap.Int64("emergency_stop_min_mb", scope.cfg.EmergencyStopMinMB),
+			zap.Uint64("volume_total_bytes", scope.totalBytes),
+		)
+		return pruneOutcome{}, PruneStopCandidatesExhausted
+	}
+
+	// Phase 2: capacity pressure, with a pre-check before the first unit.
+	outcome := c.deleteUnits(
+		ctx,
+		units,
+		scope,
+		true,
+	)
+	switch {
+	case outcome.canceled:
+		return outcome, PruneStopContextCanceled
+	case outcome.stopped:
+		return outcome, PruneStopTargetReached
+	default:
+		return outcome, PruneStopCandidatesExhausted
+	}
+}
+
 func (c *CleanerEngine) stopPredicate(cfg *StorageConfig, totalBytes uint64, trigger PruneTrigger) func(*FSStats) bool {
 	if trigger == PruneTriggerEmergency {
 		return emergencyTarget(cfg, totalBytes)
 	}
 
 	return lowWatermarkTarget(cfg.LowWatermarkPercent)
-}
-
-func (s *CleanupSummary) mergeOutcome(outcome pruneOutcome) {
-	s.DeletedFiles += outcome.deleted
-	s.FreedBytes += outcome.freed
-	s.ProtectedFiles += outcome.protectedFiles
-	s.ProtectedBytes += outcome.protectedBytes
-	s.DeletedSnapshotIDs = append(s.DeletedSnapshotIDs, outcome.deletedSnapshotIDs...)
-}
-
-// finishSummary stamps the cycle outcome, duration, and completion time.
-func finishSummary(summary *CleanupSummary, startTime time.Time, status PruneStatus) *CleanupSummary {
-	summary.DurationMs = time.Since(startTime).Milliseconds()
-	summary.FinishedAt = time.Now().UTC()
-	summary.TargetStatus = status
-
-	return summary
-}
-
-func lowWatermarkTarget(low int) func(*FSStats) bool {
-	if low < 0 {
-		low = 0
-	}
-	if low > 100 {
-		low = 100
-	}
-
-	return func(s *FSStats) bool {
-		return s != nil && usagePercent(s) <= low
-	}
-}
-
-// emergencyTarget must cover both gate trigger branches:
-//  1. FreeBytes < EmergencyStopMinMB
-//  2. usagePercent >= EmergencyStopPercent
-//
-// A free-only stop is not enough: a percent-triggered emergency can already
-// satisfy the free target while usage is still above the emergency line, and
-// the gate would never clear. Stopping below the high watermark also avoids an
-// immediate warning-cycle chain.
-func emergencyReserveInfeasible(cfg *StorageConfig, totalBytes uint64) bool {
-	return totalBytes > 0 && uint64(cfg.EmergencyStopMinMB)*1024*1024*5/4 >= totalBytes
-}
-
-func emergencyTarget(cfg *StorageConfig, totalBytes uint64) func(*FSStats) bool {
-	freeTarget := uint64(cfg.EmergencyStopMinMB) * 1024 * 1024 * 5 / 4
-	if emergencyReserveInfeasible(cfg, totalBytes) {
-		return func(*FSStats) bool { return true }
-	}
-	if cap := totalBytes * 9 / 10; cap > 0 && freeTarget > cap {
-		freeTarget = cap
-	}
-
-	usageTarget := cfg.HighWatermarkPercent
-	if usageTarget < 1 || usageTarget > 100 {
-		usageTarget = 100
-	}
-
-	return func(s *FSStats) bool {
-		return s != nil && s.FreeBytes >= freeTarget && usagePercent(s) < usageTarget
-	}
 }
 
 func (c *CleanerEngine) stopReached(scope pruneScope) (bool, error) {
@@ -464,7 +427,8 @@ func (c *CleanerEngine) deleteUnits(
 				return outcome
 			}
 
-			if unit.kind != unitExport && (unit.protected || guardProtected[unit.id] || c.unitProtected(unit)) {
+			isMarkedProtected := unit.protected || guardProtected[unit.id]
+			if unit.kind != unitExport && (isMarkedProtected || c.unitProtected(unit)) {
 				outcome.protectedFiles += len(unit.files)
 				outcome.protectedBytes += unit.size
 				continue
@@ -582,17 +546,6 @@ func (c *CleanerEngine) unitProtected(unit pruneUnit) bool {
 	return false
 }
 
-func appendUnique(ids []string, id string) []string {
-	if id == "" {
-		return ids
-	}
-	if slices.Contains(ids, id) {
-		return ids
-	}
-
-	return append(ids, id)
-}
-
 // collectExportUnits collects expired exports, oldest first. Exports are exempt
 // from .lock protection: they are user-requested temporary clips.
 func (c *CleanerEngine) collectExportUnits(mediaDir string, ttl time.Duration, now time.Time) []pruneUnit {
@@ -618,11 +571,10 @@ func (c *CleanerEngine) collectExportUnits(mediaDir string, ttl time.Duration, n
 	return sortUnitsOldestFirst(units)
 }
 
-// collectGroupedUnits groups snapshots or recordings by (directory, base
-// prefix) and splits them into expired and unexpired queues.
+// collectGroupedUnits groups snapshots or recordings under dir by
+// (directory, base prefix) and splits them into expired and unexpired queues.
 func (c *CleanerEngine) collectGroupedUnits(
-	mediaDir string,
-	subdir string,
+	dir string,
 	kind pruneKind,
 	ttl time.Duration,
 	now time.Time,
@@ -630,19 +582,19 @@ func (c *CleanerEngine) collectGroupedUnits(
 	cutoff := now.Add(-ttl)
 	groups := make(map[string]*pruneUnit)
 
-	walkMediaFiles(filepath.Join(mediaDir, subdir), func(path string, d fs.DirEntry) {
+	walkMediaFiles(dir, func(path string, d fs.DirEntry) {
 		name := d.Name()
 		info, err := d.Info()
 		if err != nil {
 			return
 		}
 
-		dir := filepath.Dir(path)
+		parentDir := filepath.Dir(path)
 		prefix := mediaPrefix(name)
 		if prefix == "" {
 			return
 		}
-		key := dir + "\x00" + prefix
+		key := parentDir + "\x00" + prefix
 
 		unit := groups[key]
 		if unit == nil {
@@ -689,6 +641,78 @@ func (c *CleanerEngine) collectGroupedUnits(
 	}
 
 	return sortUnitsOldestFirst(expired), sortUnitsOldestFirst(unexpired)
+}
+
+func (s *CleanupSummary) mergeOutcome(outcome pruneOutcome) {
+	s.DeletedFiles += outcome.deleted
+	s.FreedBytes += outcome.freed
+	s.ProtectedFiles += outcome.protectedFiles
+	s.ProtectedBytes += outcome.protectedBytes
+	s.DeletedSnapshotIDs = append(s.DeletedSnapshotIDs, outcome.deletedSnapshotIDs...)
+}
+
+// finish stamps the cycle outcome, duration, and completion time.
+func (s *CleanupSummary) finish(startTime time.Time, status PruneStatus) {
+	s.DurationMs = time.Since(startTime).Milliseconds()
+	s.FinishedAt = time.Now().UTC()
+	s.TargetStatus = status
+}
+
+func lowWatermarkTarget(low int) func(*FSStats) bool {
+	if low < 0 {
+		low = 0
+	}
+	if low > 100 {
+		low = 100
+	}
+
+	return func(s *FSStats) bool {
+		return s != nil && usagePercent(s) <= low
+	}
+}
+
+// emergencyReserveInfeasible reports whether the configured emergency reserve
+// exceeds or equals total volume capacity, making recovery by eviction impossible.
+func emergencyReserveInfeasible(cfg *StorageConfig, totalBytes uint64) bool {
+	return totalBytes > 0 && uint64(cfg.EmergencyStopMinMB)*1024*1024*5/4 >= totalBytes
+}
+
+// emergencyTarget must cover both gate trigger branches:
+//  1. FreeBytes < EmergencyStopMinMB
+//  2. usagePercent >= EmergencyStopPercent
+//
+// A free-only stop is not enough: a percent-triggered emergency can already
+// satisfy the free target while usage is still above the emergency line, and
+// the gate would never clear. Stopping below the high watermark also avoids an
+// immediate warning-cycle chain.
+func emergencyTarget(cfg *StorageConfig, totalBytes uint64) func(*FSStats) bool {
+	freeTarget := uint64(cfg.EmergencyStopMinMB) * 1024 * 1024 * 5 / 4
+	if emergencyReserveInfeasible(cfg, totalBytes) {
+		return func(*FSStats) bool { return true }
+	}
+	if cap := totalBytes * 9 / 10; cap > 0 && freeTarget > cap {
+		freeTarget = cap
+	}
+
+	usageTarget := cfg.HighWatermarkPercent
+	if usageTarget < 1 || usageTarget > 100 {
+		usageTarget = 100
+	}
+
+	return func(s *FSStats) bool {
+		return s != nil && s.FreeBytes >= freeTarget && usagePercent(s) < usageTarget
+	}
+}
+
+func appendUnique(ids []string, id string) []string {
+	if id == "" {
+		return ids
+	}
+	if slices.Contains(ids, id) {
+		return ids
+	}
+
+	return append(ids, id)
 }
 
 // mediaPrefix derives the grouping key from a file name:

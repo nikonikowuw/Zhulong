@@ -64,7 +64,10 @@ func (h *Handler) currentActor(c *gin.Context) (string, string) {
 // rejected and why" is the first thing an operator asks about a storage change.
 func (h *Handler) logClientError(err error) {
 	var appErr *apperr.Error
-	if !errors.As(err, &appErr) || appErr.Kind == apperr.KindInternal || appErr.Kind == apperr.KindUnspecified {
+	isServerFault := !errors.As(err, &appErr) ||
+		appErr.Kind == apperr.KindInternal ||
+		appErr.Kind == apperr.KindUnspecified
+	if isServerFault {
 		return
 	}
 
@@ -139,7 +142,12 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 
 	username, clientIP := h.currentActor(c)
 
-	status, err := h.service.UpdateConfig(c.Request.Context(), cfg, username, clientIP)
+	status, err := h.service.UpdateConfig(
+		c.Request.Context(),
+		cfg,
+		username,
+		clientIP,
+	)
 	if err != nil {
 		h.logClientError(err)
 		httputil.WriteErrorWithLogger(c, err, h.logger)
@@ -168,7 +176,12 @@ func (h *Handler) TestPath(c *gin.Context) {
 
 	username, clientIP := h.currentActor(c)
 
-	res, err := h.service.TestPath(c.Request.Context(), req.Path, username, clientIP)
+	res, err := h.service.TestPath(
+		c.Request.Context(),
+		req.Path,
+		username,
+		clientIP,
+	)
 	if err != nil {
 		httputil.WriteErrorWithLogger(c, err, h.logger)
 		return

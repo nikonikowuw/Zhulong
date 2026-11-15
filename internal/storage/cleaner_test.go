@@ -75,7 +75,12 @@ func TestCleaner_WatermarkHysteresisSkippedWhenLow(t *testing.T) {
 	}
 
 	// Automatic trigger should skip because usage (50%) < high watermark (90%)
-	summary, err := cleaner.RunPrune(context.Background(), tempDir, cfg, PruneTriggerWatermark)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		tempDir,
+		cfg,
+		PruneTriggerWatermark,
+	)
 	if err != nil {
 		t.Fatalf("unexpected prune error: %v", err)
 	}
@@ -149,7 +154,12 @@ func TestCleaner_CascadeOrderAndLockedFileProtection(t *testing.T) {
 	})
 
 	// Run manual prune
-	summary, err := cleaner.RunPrune(context.Background(), tempDir, cfg, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		tempDir,
+		cfg,
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("prune failed: %v", err)
 	}
@@ -206,10 +216,15 @@ func TestCleaner_PreservesSnapshotsWithLockSidecars(t *testing.T) {
 		UsedBytes:  95 * 1024 * 1024,
 	}}
 	cleaner := NewCleanerEngine(inspector, zap.NewNop(), CleanerOptions{BatchSize: 1, BatchSleep: batchSleep(0)})
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		LowWatermarkPercent:    80,
-		SnapshotsRetentionDays: 1,
-	}, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			LowWatermarkPercent:    80,
+			SnapshotsRetentionDays: 1,
+		},
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -236,9 +251,12 @@ func TestCleaner_ConcurrentPrevention(t *testing.T) {
 		},
 	}
 
+	entered := make(chan struct{})
+	var enterOnce sync.Once
 	blockCh := make(chan struct{})
 	cleaner := NewCleanerEngine(mock, zap.NewNop())
 	cleaner.fileRemover = func(path string) error {
+		enterOnce.Do(func() { close(entered) })
 		<-blockCh
 		return nil
 	}
@@ -256,23 +274,43 @@ func TestCleaner_ConcurrentPrevention(t *testing.T) {
 		ExportsRetentionHours: 24,
 	}
 
+	done := make(chan error, 1)
 	go func() {
-		_, _ = cleaner.RunPrune(context.Background(), tempDir, cfg, PruneTriggerManual)
+		_, err := cleaner.RunPrune(
+			context.Background(),
+			tempDir,
+			cfg,
+			PruneTriggerManual,
+		)
+		done <- err
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(blockCh)
+		t.Fatal("first RunPrune did not reach fileRemover in time")
+	}
 
 	if !cleaner.IsCleaning() {
 		t.Errorf("expected cleaner to be in running state")
 	}
 
 	// Second concurrent call should fail with ErrCleanupInProgress
-	_, err := cleaner.RunPrune(context.Background(), tempDir, cfg, PruneTriggerManual)
+	_, err := cleaner.RunPrune(
+		context.Background(),
+		tempDir,
+		cfg,
+		PruneTriggerManual,
+	)
 	if err != ErrCleanupInProgress {
 		t.Errorf("expected ErrCleanupInProgress, got %v", err)
 	}
 
 	close(blockCh)
+	if err := <-done; err != nil {
+		t.Errorf("first RunPrune failed: %v", err)
+	}
 }
 
 // TestCleanerOptions_BatchSizeOnlyKeepsDefaultThrottle is the regression guard

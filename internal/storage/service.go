@@ -134,13 +134,22 @@ func NewService(deps ServiceDeps) *Service {
 			if auditor := s.auditLog(); auditor != nil {
 				// Background event: no client origin, so it is recorded with an
 				// empty IP rather than a faked loopback address.
-				auditor.RecordSystem(ActionStorageEmergencyStop, "media_storage", reason, errEmergencyStop)
+				auditor.RecordSystem(
+					ActionStorageEmergencyStop,
+					"media_storage",
+					reason,
+					errEmergencyStop,
+				)
 			}
 		},
 		func() {
 			if auditor := s.auditLog(); auditor != nil {
-				auditor.RecordSystem(ActionStorageEmergencyResume, "media_storage",
-					"storage capacity recovered to safe levels", nil)
+				auditor.RecordSystem(
+					ActionStorageEmergencyResume,
+					"media_storage",
+					"storage capacity recovered to safe levels",
+					nil,
+				)
 			}
 		},
 	)
@@ -355,7 +364,12 @@ func (s *Service) tick() {
 			return
 		}
 
-		summary, err := s.cleaner.RunPrune(pruneCtx, status.MediaDirectory, cfg, trigger)
+		summary, err := s.cleaner.RunPrune(
+			pruneCtx,
+			status.MediaDirectory,
+			cfg,
+			trigger,
+		)
 		if err != nil {
 			if !errors.Is(err, ErrCleanupInProgress) {
 				s.logger.Warn("automatic storage cleanup failed", zap.Error(err))
@@ -406,26 +420,19 @@ func (s *Service) recordAutoCleanupResult(summary *CleanupSummary) {
 	s.backoffMu.Lock()
 	defer s.backoffMu.Unlock()
 
+	madePartialProgress := summary.DeletedFiles > 0 &&
+		summary.StopReason != PruneStopCandidatesExhausted &&
+		summary.StopReason != PruneStopContextCanceled
+
 	switch {
 	case summary.StopReason == PruneStopTargetReached,
 		summary.StopReason == PruneStopSkippedBelowHigh,
-		summary.DeletedFiles > 0 && summary.StopReason != PruneStopCandidatesExhausted && summary.StopReason != PruneStopContextCanceled:
+		madePartialProgress:
 		s.nextAutoPrune = time.Time{}
 		s.autoPruneFailCount = 0
 	default:
 		s.autoPruneFailCount++
 		s.nextAutoPrune = time.Now().Add(autoPruneBackoff(s.autoPruneFailCount))
-	}
-}
-
-func autoPruneBackoff(failCount int) time.Duration {
-	switch {
-	case failCount <= 1:
-		return time.Minute
-	case failCount == 2:
-		return 5 * time.Minute
-	default:
-		return 15 * time.Minute
 	}
 }
 
@@ -452,20 +459,22 @@ func (s *Service) writeAutoCleanupAudit(summary *CleanupSummary) {
 	s.lastAutoCleanupAudit = now
 	s.backoffMu.Unlock()
 
+	detail := fmt.Sprintf(
+		"trigger=%s, deleted=%d, freed=%d, protectedFiles=%d, "+
+			"protectedBytes=%d, target=%s, stopReason=%s, durationMs=%d",
+		summary.TriggerReason,
+		summary.DeletedFiles,
+		summary.FreedBytes,
+		summary.ProtectedFiles,
+		summary.ProtectedBytes,
+		summary.TargetStatus,
+		summary.StopReason,
+		summary.DurationMs,
+	)
 	auditor.RecordSystem(
 		ActionStorageAutoCleanup,
 		"media_storage",
-		fmt.Sprintf(
-			"trigger=%s, deleted=%d, freed=%d, protectedFiles=%d, protectedBytes=%d, target=%s, stopReason=%s, durationMs=%d",
-			summary.TriggerReason,
-			summary.DeletedFiles,
-			summary.FreedBytes,
-			summary.ProtectedFiles,
-			summary.ProtectedBytes,
-			summary.TargetStatus,
-			summary.StopReason,
-			summary.DurationMs,
-		),
+		detail,
 		nil,
 	)
 }
@@ -490,4 +499,15 @@ func (s *Service) GetConfig(ctx context.Context) (*StorageConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+func autoPruneBackoff(failCount int) time.Duration {
+	switch {
+	case failCount <= 1:
+		return time.Minute
+	case failCount == 2:
+		return 5 * time.Minute
+	default:
+		return 15 * time.Minute
+	}
 }

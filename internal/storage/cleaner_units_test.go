@@ -35,8 +35,18 @@ func containsString(values []string, want string) bool {
 
 func TestCleaner_EmergencyStopCoversPercentTrigger(t *testing.T) {
 	mediaDir := t.TempDir()
-	first := snapshotFile(t, mediaDir, "01ABC.jpg", 24*time.Hour)
-	second := snapshotFile(t, mediaDir, "01DEF.jpg", 23*time.Hour)
+	first := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC.jpg",
+		24*time.Hour,
+	)
+	second := snapshotFile(
+		t,
+		mediaDir,
+		"01DEF.jpg",
+		23*time.Hour,
+	)
 
 	mock := &mockInspector{stats: FSStats{
 		TotalBytes: 100 * testGB,
@@ -67,7 +77,12 @@ func TestCleaner_EmergencyStopCoversPercentTrigger(t *testing.T) {
 		RecordingsRetentionDays: 15,
 	}
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, cfg, PruneTriggerEmergency)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		cfg,
+		PruneTriggerEmergency,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -90,7 +105,12 @@ func TestCleaner_EmergencyStopCoversPercentTrigger(t *testing.T) {
 
 func TestCleaner_ManualHealthyDoesNotEvictUnexpired(t *testing.T) {
 	mediaDir := t.TempDir()
-	path := snapshotFile(t, mediaDir, "01ABC.jpg", 24*time.Hour)
+	path := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC.jpg",
+		24*time.Hour,
+	)
 
 	mock := &mockInspector{stats: FSStats{
 		TotalBytes: 100 * testGB,
@@ -102,12 +122,17 @@ func TestCleaner_ManualHealthyDoesNotEvictUnexpired(t *testing.T) {
 		BatchSleep: batchSleep(0),
 	})
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		HighWatermarkPercent:    90,
-		LowWatermarkPercent:     80,
-		SnapshotsRetentionDays:  90,
-		RecordingsRetentionDays: 15,
-	}, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			HighWatermarkPercent:    90,
+			LowWatermarkPercent:     80,
+			SnapshotsRetentionDays:  90,
+			RecordingsRetentionDays: 15,
+		},
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -124,7 +149,12 @@ func TestCleaner_ManualHealthyDoesNotEvictUnexpired(t *testing.T) {
 
 func TestCleaner_Phase1RunsBelowLowWatermark(t *testing.T) {
 	mediaDir := t.TempDir()
-	path := snapshotFile(t, mediaDir, "01ABC.jpg", 100*24*time.Hour)
+	path := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC.jpg",
+		100*24*time.Hour,
+	)
 
 	mock := &mockInspector{stats: FSStats{
 		TotalBytes: 100 * testGB,
@@ -136,12 +166,17 @@ func TestCleaner_Phase1RunsBelowLowWatermark(t *testing.T) {
 		BatchSleep: batchSleep(0),
 	})
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		HighWatermarkPercent:    90,
-		LowWatermarkPercent:     80,
-		SnapshotsRetentionDays:  90,
-		RecordingsRetentionDays: 15,
-	}, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			HighWatermarkPercent:    90,
+			LowWatermarkPercent:     80,
+			SnapshotsRetentionDays:  90,
+			RecordingsRetentionDays: 15,
+		},
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -155,9 +190,24 @@ func TestCleaner_Phase1RunsBelowLowWatermark(t *testing.T) {
 
 func TestCleaner_GroupedSnapshotDeletionAndIDs(t *testing.T) {
 	mediaDir := t.TempDir()
-	main := snapshotFile(t, mediaDir, "01ABC.jpg", 24*time.Hour)
-	crop := snapshotFile(t, mediaDir, "01ABC_crop.jpg", 24*time.Hour)
-	face := snapshotFile(t, mediaDir, "01ABC_face.jpg", 24*time.Hour)
+	main := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC.jpg",
+		24*time.Hour,
+	)
+	crop := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC_crop.jpg",
+		24*time.Hour,
+	)
+	face := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC_face.jpg",
+		24*time.Hour,
+	)
 
 	mock := &mockInspector{stats: FSStats{
 		TotalBytes: 100 * testGB,
@@ -169,12 +219,17 @@ func TestCleaner_GroupedSnapshotDeletionAndIDs(t *testing.T) {
 		BatchSleep: batchSleep(0),
 	})
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		HighWatermarkPercent:    90,
-		LowWatermarkPercent:     80,
-		SnapshotsRetentionDays:  90,
-		RecordingsRetentionDays: 15,
-	}, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			HighWatermarkPercent:    90,
+			LowWatermarkPercent:     80,
+			SnapshotsRetentionDays:  90,
+			RecordingsRetentionDays: 15,
+		},
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -193,7 +248,12 @@ func TestCleaner_GroupedSnapshotDeletionAndIDs(t *testing.T) {
 
 func TestCleaner_LockedGroupIsProtected(t *testing.T) {
 	mediaDir := t.TempDir()
-	image := snapshotFile(t, mediaDir, "alarm.jpg", 100*24*time.Hour)
+	image := snapshotFile(
+		t,
+		mediaDir,
+		"alarm.jpg",
+		100*24*time.Hour,
+	)
 	lock := image + ".lock"
 	mustWriteFile(t, lock, nil)
 	mustSetModTime(t, lock, time.Now().Add(-100*24*time.Hour))
@@ -208,12 +268,17 @@ func TestCleaner_LockedGroupIsProtected(t *testing.T) {
 		BatchSleep: batchSleep(0),
 	})
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		HighWatermarkPercent:    90,
-		LowWatermarkPercent:     80,
-		SnapshotsRetentionDays:  90,
-		RecordingsRetentionDays: 15,
-	}, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			HighWatermarkPercent:    90,
+			LowWatermarkPercent:     80,
+			SnapshotsRetentionDays:  90,
+			RecordingsRetentionDays: 15,
+		},
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -232,7 +297,12 @@ func TestCleaner_LockedGroupIsProtected(t *testing.T) {
 
 func TestCleaner_ActiveGroupIsSkipped(t *testing.T) {
 	mediaDir := t.TempDir()
-	path := snapshotFile(t, mediaDir, "01ABC.jpg", 0)
+	path := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC.jpg",
+		0,
+	)
 
 	mock := &mockInspector{stats: FSStats{
 		TotalBytes: 100 * testGB,
@@ -246,12 +316,17 @@ func TestCleaner_ActiveGroupIsSkipped(t *testing.T) {
 		ActiveFileGrace: &grace,
 	})
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		HighWatermarkPercent:    90,
-		LowWatermarkPercent:     80,
-		SnapshotsRetentionDays:  90,
-		RecordingsRetentionDays: 15,
-	}, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			HighWatermarkPercent:    90,
+			LowWatermarkPercent:     80,
+			SnapshotsRetentionDays:  90,
+			RecordingsRetentionDays: 15,
+		},
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -265,7 +340,12 @@ func TestCleaner_ActiveGroupIsSkipped(t *testing.T) {
 
 func TestCleaner_EvidenceGuardFailsClosed(t *testing.T) {
 	mediaDir := t.TempDir()
-	path := snapshotFile(t, mediaDir, "01ABC.jpg", 24*time.Hour)
+	path := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC.jpg",
+		24*time.Hour,
+	)
 
 	mock := &mockInspector{stats: FSStats{
 		TotalBytes: 100 * testGB,
@@ -284,12 +364,17 @@ func TestCleaner_EvidenceGuardFailsClosed(t *testing.T) {
 		return protected, nil
 	})
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		HighWatermarkPercent:    90,
-		LowWatermarkPercent:     80,
-		SnapshotsRetentionDays:  90,
-		RecordingsRetentionDays: 15,
-	}, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			HighWatermarkPercent:    90,
+			LowWatermarkPercent:     80,
+			SnapshotsRetentionDays:  90,
+			RecordingsRetentionDays: 15,
+		},
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -303,8 +388,18 @@ func TestCleaner_EvidenceGuardFailsClosed(t *testing.T) {
 
 func TestCleaner_PartialGroupFailureKeepsDBID(t *testing.T) {
 	mediaDir := t.TempDir()
-	main := snapshotFile(t, mediaDir, "01ABC.jpg", 24*time.Hour)
-	crop := snapshotFile(t, mediaDir, "01ABC_crop.jpg", 24*time.Hour)
+	main := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC.jpg",
+		24*time.Hour,
+	)
+	crop := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC_crop.jpg",
+		24*time.Hour,
+	)
 
 	mock := &mockInspector{stats: FSStats{
 		TotalBytes: 100 * testGB,
@@ -322,12 +417,17 @@ func TestCleaner_PartialGroupFailureKeepsDBID(t *testing.T) {
 		return os.Remove(path)
 	}
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		HighWatermarkPercent:    90,
-		LowWatermarkPercent:     80,
-		SnapshotsRetentionDays:  90,
-		RecordingsRetentionDays: 15,
-	}, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			HighWatermarkPercent:    90,
+			LowWatermarkPercent:     80,
+			SnapshotsRetentionDays:  90,
+			RecordingsRetentionDays: 15,
+		},
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -347,7 +447,12 @@ func TestCleaner_PartialGroupFailureKeepsDBID(t *testing.T) {
 
 func TestCleaner_InfeasibleEmergencyReserveDoesNotEvict(t *testing.T) {
 	mediaDir := t.TempDir()
-	path := snapshotFile(t, mediaDir, "01ABC.jpg", 24*time.Hour)
+	path := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC.jpg",
+		24*time.Hour,
+	)
 
 	mock := &mockInspector{stats: FSStats{
 		TotalBytes: 100 * testGB,
@@ -359,14 +464,19 @@ func TestCleaner_InfeasibleEmergencyReserveDoesNotEvict(t *testing.T) {
 		BatchSleep: batchSleep(0),
 	})
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		HighWatermarkPercent:    90,
-		LowWatermarkPercent:     80,
-		EmergencyStopPercent:    95,
-		EmergencyStopMinMB:      102400, // 100 GiB reserve on a 100 GiB volume
-		SnapshotsRetentionDays:  90,
-		RecordingsRetentionDays: 15,
-	}, PruneTriggerEmergency)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			HighWatermarkPercent:    90,
+			LowWatermarkPercent:     80,
+			EmergencyStopPercent:    95,
+			EmergencyStopMinMB:      102400, // 100 GiB reserve on a 100 GiB volume
+			SnapshotsRetentionDays:  90,
+			RecordingsRetentionDays: 15,
+		},
+		PruneTriggerEmergency,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -383,7 +493,12 @@ func TestCleaner_InfeasibleEmergencyReserveDoesNotEvict(t *testing.T) {
 
 func TestCleaner_EvidenceGuardErrorProtectsBatch(t *testing.T) {
 	mediaDir := t.TempDir()
-	path := snapshotFile(t, mediaDir, "01ABC.jpg", 24*time.Hour)
+	path := snapshotFile(
+		t,
+		mediaDir,
+		"01ABC.jpg",
+		24*time.Hour,
+	)
 
 	mock := &mockInspector{stats: FSStats{
 		TotalBytes: 100 * testGB,
@@ -398,12 +513,17 @@ func TestCleaner_EvidenceGuardErrorProtectsBatch(t *testing.T) {
 		return nil, errors.New("alarm database unavailable")
 	})
 
-	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
-		HighWatermarkPercent:    90,
-		LowWatermarkPercent:     80,
-		SnapshotsRetentionDays:  90,
-		RecordingsRetentionDays: 15,
-	}, PruneTriggerManual)
+	summary, err := cleaner.RunPrune(
+		context.Background(),
+		mediaDir,
+		&StorageConfig{
+			HighWatermarkPercent:    90,
+			LowWatermarkPercent:     80,
+			SnapshotsRetentionDays:  90,
+			RecordingsRetentionDays: 15,
+		},
+		PruneTriggerManual,
+	)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}

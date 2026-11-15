@@ -41,28 +41,6 @@ type StorageConfig struct {
 	EmergencyStopMinMB      int64  `json:"emergencyStopMinMb"`      // Write-stop free-space floor in MB
 }
 
-// usagePercent converts byte counts into the user-available usage percentage,
-// rounding up and matching `df`'s Use%: used / (used + available).
-//
-// Ext4 reserved blocks are only unavailable to unprivileged processes, so
-// dividing by TotalBytes systematically underestimates pressure for a non-root
-// daemon. Rounding up avoids 89.9% being truncated to 89% at high=90.
-//
-// On a root daemon Bavail usually equals Bfree, making this collapse to
-// used/total; callers still need the min-free emergency gate as the backstop.
-func usagePercent(stats *FSStats) int {
-	if stats == nil {
-		return 0
-	}
-
-	available := stats.UsedBytes + stats.FreeBytes
-	if available == 0 {
-		return 0
-	}
-
-	return int((stats.UsedBytes*100 + available - 1) / available)
-}
-
 // DefaultStorageConfig returns safe default settings tuned for edge NVR/AI boxes.
 func DefaultStorageConfig() StorageConfig {
 	return StorageConfig{
@@ -150,4 +128,26 @@ type CleanupSummary struct {
 	// removed. It is internal transport to the record reconciler and must never
 	// be serialized into the manual-cleanup API response.
 	DeletedSnapshotIDs []string `json:"-"`
+}
+
+// usagePercent converts byte counts into the user-available usage percentage,
+// rounding up and matching `df`'s Use%: used / (used + available).
+//
+// Ext4 reserved blocks are only unavailable to unprivileged processes, so
+// dividing by TotalBytes systematically underestimates pressure for a non-root
+// daemon. Rounding up avoids 89.9% being truncated to 89% at high=90.
+//
+// On a root daemon Bavail usually equals Bfree, making this collapse to
+// used/total; callers still need the min-free emergency gate as the backstop.
+func usagePercent(stats *FSStats) int {
+	if stats == nil {
+		return 0
+	}
+
+	available := stats.UsedBytes + stats.FreeBytes
+	if available == 0 {
+		return 0
+	}
+
+	return int((stats.UsedBytes*100 + available - 1) / available)
 }

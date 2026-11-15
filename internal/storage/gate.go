@@ -20,49 +20,6 @@ type EmergencyGate struct {
 	observers         []func(blocked bool)
 }
 
-// gateTransition carries the state changes one evaluation produced.
-//
-// Evaluation mutates the gate under its mutex, but callbacks and observers must
-// run with the mutex released: a listener is allowed to call back into the gate.
-// Collecting the edges into a value keeps that ordering explicit instead of
-// relying on the registration order of defers.
-type gateTransition struct {
-	writeBlocked *bool
-	stopReason   string
-	onStop       func(string)
-	onResume     func()
-}
-
-// markBlocked latches a write-block edge. Only a gate that was previously
-// writable produces one, so steady state reports nothing.
-func (t *gateTransition) markBlocked(canWrite *atomic.Bool) {
-	if canWrite.Swap(false) {
-		blocked := true
-		t.writeBlocked = &blocked
-	}
-}
-
-// markAllowed latches a write-resume edge for a previously blocked gate.
-func (t *gateTransition) markAllowed(canWrite *atomic.Bool) {
-	if !canWrite.Swap(true) {
-		blocked := false
-		t.writeBlocked = &blocked
-	}
-}
-
-// fire delivers the collected edges. Callers must hold no gate lock.
-func (t gateTransition) fire(g *EmergencyGate) {
-	if t.onStop != nil {
-		t.onStop(t.stopReason)
-	}
-	if t.onResume != nil {
-		t.onResume()
-	}
-	if t.writeBlocked != nil {
-		g.publishWriteState(*t.writeBlocked)
-	}
-}
-
 // NewEmergencyGate creates an EmergencyGate instance initially allowing writes.
 func NewEmergencyGate(logger *zap.Logger) *EmergencyGate {
 	if logger == nil {
@@ -238,4 +195,47 @@ func (g *EmergencyGate) evaluateLocked(
 	}
 
 	return StatusHealthy, transition
+}
+
+// gateTransition carries the state changes one evaluation produced.
+//
+// Evaluation mutates the gate under its mutex, but callbacks and observers must
+// run with the mutex released: a listener is allowed to call back into the gate.
+// Collecting the edges into a value keeps that ordering explicit instead of
+// relying on the registration order of defers.
+type gateTransition struct {
+	writeBlocked *bool
+	stopReason   string
+	onStop       func(string)
+	onResume     func()
+}
+
+// markBlocked latches a write-block edge. Only a gate that was previously
+// writable produces one, so steady state reports nothing.
+func (t *gateTransition) markBlocked(canWrite *atomic.Bool) {
+	if canWrite.Swap(false) {
+		blocked := true
+		t.writeBlocked = &blocked
+	}
+}
+
+// markAllowed latches a write-resume edge for a previously blocked gate.
+func (t *gateTransition) markAllowed(canWrite *atomic.Bool) {
+	if !canWrite.Swap(true) {
+		blocked := false
+		t.writeBlocked = &blocked
+	}
+}
+
+// fire delivers the collected edges. Callers must hold no gate lock.
+func (t gateTransition) fire(g *EmergencyGate) {
+	if t.onStop != nil {
+		t.onStop(t.stopReason)
+	}
+	if t.onResume != nil {
+		t.onResume()
+	}
+	if t.writeBlocked != nil {
+		g.publishWriteState(*t.writeBlocked)
+	}
 }

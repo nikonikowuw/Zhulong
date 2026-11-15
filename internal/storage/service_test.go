@@ -147,7 +147,12 @@ func TestService_UpdateConfigAndPathSwitch(t *testing.T) {
 		EmergencyStopMinMB:      1024,
 	}
 
-	status, err := svc.UpdateConfig(ctx, newCfg, "admin", "127.0.0.1")
+	status, err := svc.UpdateConfig(
+		ctx,
+		newCfg,
+		"admin",
+		"127.0.0.1",
+	)
 	if err != nil {
 		t.Fatalf("UpdateConfig failed: %v", err)
 	}
@@ -176,7 +181,12 @@ func TestService_TestPath(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Writable directory
-	res, err := svc.TestPath(ctx, tempDir, "admin", "127.0.0.1")
+	res, err := svc.TestPath(
+		ctx,
+		tempDir,
+		"admin",
+		"127.0.0.1",
+	)
 	if err != nil {
 		t.Fatalf("TestPath failed: %v", err)
 	}
@@ -189,7 +199,12 @@ func TestService_TestPath(t *testing.T) {
 
 	// Subfolder that doesn't exist yet should be created and tested
 	sub := filepath.Join(tempDir, "brand_new_subfolder")
-	resSub, err := svc.TestPath(ctx, sub, "admin", "127.0.0.1")
+	resSub, err := svc.TestPath(
+		ctx,
+		sub,
+		"admin",
+		"127.0.0.1",
+	)
 	if err != nil {
 		t.Fatalf("TestPath sub failed: %v", err)
 	}
@@ -290,7 +305,12 @@ func TestService_TestPathFailsWhenRootDeviceUnavailable(t *testing.T) {
 	inspector := mockRootDevErrorInspector{mockInspector: &mockInspector{}}
 	svc := NewService(ServiceDeps{Inspector: inspector, Logger: zap.NewNop()})
 
-	res, err := svc.TestPath(context.Background(), t.TempDir(), "admin", "127.0.0.1")
+	res, err := svc.TestPath(
+		context.Background(),
+		t.TempDir(),
+		"admin",
+		"127.0.0.1",
+	)
 	if err == nil {
 		t.Fatalf("expected TestPath to surface the root device error, got %+v", res)
 	}
@@ -433,7 +453,12 @@ func TestService_UpdateConfigDatabaseFailureIsInternal(t *testing.T) {
 	cfg := DefaultStorageConfig()
 	cfg.MediaDirectory = t.TempDir()
 
-	_, err := svc.UpdateConfig(context.Background(), cfg, "admin", "127.0.0.1")
+	_, err := svc.UpdateConfig(
+		context.Background(),
+		cfg,
+		"admin",
+		"127.0.0.1",
+	)
 
 	var appErr *apperr.Error
 	if !errors.As(err, &appErr) {
@@ -456,7 +481,12 @@ func TestService_UpdateConfigRejectsInvalidPolicy(t *testing.T) {
 	cfg.MediaDirectory = t.TempDir()
 	cfg.LowWatermarkPercent = cfg.HighWatermarkPercent
 
-	_, err := svc.UpdateConfig(context.Background(), cfg, "admin", "127.0.0.1")
+	_, err := svc.UpdateConfig(
+		context.Background(),
+		cfg,
+		"admin",
+		"127.0.0.1",
+	)
 
 	var appErr *apperr.Error
 	if !errors.As(err, &appErr) {
@@ -468,4 +498,126 @@ func TestService_UpdateConfigRejectsInvalidPolicy(t *testing.T) {
 	if appErr.Code != codeInvalidStorageConfig {
 		t.Errorf("expected %s, got %s", codeInvalidStorageConfig, appErr.Code)
 	}
+}
+
+func TestService_OtherBytesReportedWhenMediaDirsEmpty(t *testing.T) {
+	_, repo, closeDB := newTestRepository(t)
+	defer closeDB()
+
+	cfg := DefaultStorageConfig()
+	cfg.MediaDirectory = t.TempDir()
+	if _, err := repo.UpdateConfig(context.Background(), cfg); err != nil {
+		t.Fatalf("init config failed: %v", err)
+	}
+
+	const usedBytes = uint64(42 * 1024 * 1024)
+	inspector := &mockInspector{
+		rootDev: 1,
+		stats: FSStats{
+			TotalBytes: 100 * 1024 * 1024,
+			UsedBytes:  usedBytes,
+			FreeBytes:  58 * 1024 * 1024,
+			DeviceID:   1,
+			MountPoint: "/",
+			FSType:     "ext4",
+		},
+	}
+	svc := NewService(ServiceDeps{
+		Repo:      repo,
+		Inspector: inspector,
+		Logger:    zap.NewNop(),
+	})
+
+	status, err := svc.RefreshStatus(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshStatus failed: %v", err)
+	}
+	if status.Breakdown.OtherBytes != int64(usedBytes) {
+		t.Errorf("OtherBytes = %d, want %d", status.Breakdown.OtherBytes, usedBytes)
+	}
+}
+
+func TestService_TriggerManualCleanupBeforeStartUsesConfiguredDir(t *testing.T) {
+	_, repo, closeDB := newTestRepository(t)
+	defer closeDB()
+
+	mediaDir := t.TempDir()
+	expDir := filepath.Join(mediaDir, "exports")
+	mustMkdirAll(t, expDir)
+	expFile := filepath.Join(expDir, "stale.mp4")
+	mustWriteFile(t, expFile, []byte("data"))
+	mustSetModTime(t, expFile, time.Now().Add(-100*time.Hour))
+
+	cfg := DefaultStorageConfig()
+	cfg.MediaDirectory = mediaDir
+	if _, err := repo.UpdateConfig(context.Background(), cfg); err != nil {
+		t.Fatalf("init config failed: %v", err)
+	}
+
+	svc := NewService(ServiceDeps{
+		Repo:   repo,
+		Logger: zap.NewNop(),
+	})
+	summary, err := svc.TriggerManualCleanup(context.Background(), "admin", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("TriggerManualCleanup failed: %v", err)
+	}
+	if summary.DeletedFiles != 1 {
+		t.Errorf("DeletedFiles = %d, want 1", summary.DeletedFiles)
+	}
+}
+
+func TestService_ConcurrentUpdateConfigAndRefreshStatus(t *testing.T) {
+	_, repo, closeDB := newTestRepository(t)
+	defer closeDB()
+
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	cfg := DefaultStorageConfig()
+	cfg.MediaDirectory = dirA
+	if _, err := repo.UpdateConfig(context.Background(), cfg); err != nil {
+		t.Fatalf("init config failed: %v", err)
+	}
+
+	inspector := &mockInspector{
+		rootDev: 1,
+		stats: FSStats{
+			TotalBytes: 100 * testGB,
+			UsedBytes:  10 * testGB,
+			FreeBytes:  90 * testGB,
+			DeviceID:   2,
+			MountPoint: "/mnt/ext",
+			FSType:     "ext4",
+		},
+	}
+	svc := NewService(ServiceDeps{
+		Repo:      repo,
+		Inspector: inspector,
+		Logger:    zap.NewNop(),
+	})
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := range 10 {
+		wg.Add(2)
+		go func(idx int) {
+			defer wg.Done()
+			next := DefaultStorageConfig()
+			next.MediaDirectory = dirA
+			if idx%2 == 0 {
+				next.MediaDirectory = dirB
+			}
+			_, _ = svc.UpdateConfig(
+				ctx,
+				next,
+				"admin",
+				"127.0.0.1",
+			)
+		}(i)
+		go func() {
+			defer wg.Done()
+			_, _ = svc.RefreshStatus(ctx)
+		}()
+	}
+	wg.Wait()
 }

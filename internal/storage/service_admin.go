@@ -134,7 +134,11 @@ func (s *Service) TestPath(ctx context.Context, path, username, ip string) (*Pat
 	res.FreeBytes = stats.FreeBytes
 	res.DeviceID = stats.DeviceID
 	res.IsExternal = stats.DeviceID != rootDev
-	res.IsMount = stats.MountPoint == cleanPath
+	mountTarget := cleanPath
+	if absPath, err := filepath.Abs(cleanPath); err == nil {
+		mountTarget = absPath
+	}
+	res.IsMount = stats.MountPoint == mountTarget
 
 	if auditor := s.auditLog(); auditor != nil {
 		auditor.Record(audit.Entry{
@@ -165,8 +169,16 @@ func (s *Service) TriggerManualCleanup(ctx context.Context, username, ip string)
 	s.mu.RLock()
 	mediaDir := s.activeMediaDir
 	s.mu.RUnlock()
+	if mediaDir == "" {
+		mediaDir = cfg.MediaDirectory
+	}
 
-	summary, err := s.cleaner.RunPrune(ctx, mediaDir, cfg, PruneTriggerManual)
+	summary, err := s.cleaner.RunPrune(
+		ctx,
+		mediaDir,
+		cfg,
+		PruneTriggerManual,
+	)
 	if err != nil {
 		if errors.Is(err, ErrCleanupInProgress) {
 			return nil, cleanupInProgress(err)

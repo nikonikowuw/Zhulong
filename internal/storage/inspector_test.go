@@ -78,8 +78,20 @@ func TestInspector_ScanBreakdown(t *testing.T) {
 	}
 
 	// Populate dummy files
-	recFile := filepath.Join(tempDir, "recordings", "cam_1", "2026-10-07", "01.mp4")
-	snapFile := filepath.Join(tempDir, "snapshots", "cam_1", "2026-10-07", "snap.jpg")
+	recFile := filepath.Join(
+		tempDir,
+		"recordings",
+		"cam_1",
+		"2026-10-07",
+		"01.mp4",
+	)
+	snapFile := filepath.Join(
+		tempDir,
+		"snapshots",
+		"cam_1",
+		"2026-10-07",
+		"snap.jpg",
+	)
 	expFile := filepath.Join(tempDir, "exports", "clip.mp4")
 
 	mustMkdirAll(t, filepath.Dir(recFile))
