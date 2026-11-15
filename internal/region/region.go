@@ -73,18 +73,36 @@ func (r Rect) Y2() float64 { return r[3] }
 
 // Validate verifies normalization, non-degeneracy, and minimum side length.
 func (r Rect) Validate() error {
-	for i := 0; i < 4; i++ {
-		if r[i] < 0.0 || r[i] > 1.0 {
-			return fmt.Errorf("%w: component[%d]=%v", ErrInvalidCoordinate, i, r[i])
+	for i, v := range r {
+		if v < 0.0 || v > 1.0 {
+			return fmt.Errorf(
+				"%w: component[%d]=%v",
+				ErrInvalidCoordinate,
+				i,
+				v,
+			)
 		}
 	}
 	if r[0] >= r[2] || r[1] >= r[3] {
-		return fmt.Errorf("%w: [%v, %v, %v, %v]", ErrDegenerateRect, r[0], r[1], r[2], r[3])
+		return fmt.Errorf(
+			"%w: [%v, %v, %v, %v]",
+			ErrDegenerateRect,
+			r[0],
+			r[1],
+			r[2],
+			r[3],
+		)
 	}
 	// Use epsilon for floating point comparison tolerance
 	const eps = 1e-9
 	if (r[2]-r[0]) < MinSideLength-eps || (r[3]-r[1]) < MinSideLength-eps {
-		return fmt.Errorf("%w: width=%v height=%v min=%v", ErrRectTooSmall, r[2]-r[0], r[3]-r[1], MinSideLength)
+		return fmt.Errorf(
+			"%w: width=%v height=%v min=%v",
+			ErrRectTooSmall,
+			r[2]-r[0],
+			r[3]-r[1],
+			MinSideLength,
+		)
 	}
 	return nil
 }
@@ -108,7 +126,10 @@ type Config struct {
 
 // IsEmpty returns true if there are no ROI and no MASK regions defined.
 func (c Config) IsEmpty() bool {
-	return len(c.ROI) == 0 && len(c.MASK) == 0 && len(c.Tripwires) == 0
+	hasNoROI := len(c.ROI) == 0
+	hasNoMASK := len(c.MASK) == 0
+	hasNoTripwires := len(c.Tripwires) == 0
+	return hasNoROI && hasNoMASK && hasNoTripwires
 }
 
 // Validate checks all rectangles and category count limits in the configuration.
@@ -117,10 +138,20 @@ func (c Config) Validate() error {
 		return err
 	}
 	if len(c.ROI) > MaxRectsPerCategory {
-		return fmt.Errorf("%w: roi count %d > %d", ErrTooManyRects, len(c.ROI), MaxRectsPerCategory)
+		return fmt.Errorf(
+			"%w: roi count %d > %d",
+			ErrTooManyRects,
+			len(c.ROI),
+			MaxRectsPerCategory,
+		)
 	}
 	if len(c.MASK) > MaxRectsPerCategory {
-		return fmt.Errorf("%w: mask count %d > %d", ErrTooManyRects, len(c.MASK), MaxRectsPerCategory)
+		return fmt.Errorf(
+			"%w: mask count %d > %d",
+			ErrTooManyRects,
+			len(c.MASK),
+			MaxRectsPerCategory,
+		)
 	}
 	for i, r := range c.ROI {
 		if err := r.Validate(); err != nil {

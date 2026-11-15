@@ -35,12 +35,12 @@ func (c Config) Filter(res aitypes.InferenceResult) aitypes.InferenceResult {
 	filteredPersons := make([]aitypes.PersonItem, 0, len(res.Persons))
 	for oldIdx, person := range res.Persons {
 		px, py := Rect(person.BodyBox).BottomCenter()
-		if c.isPointAllowed(px, py) {
-			remap[oldIdx] = int32(len(filteredPersons))
-			filteredPersons = append(filteredPersons, person)
-		} else {
+		if !c.isPointAllowed(px, py) {
 			remap[oldIdx] = -1
+			continue
 		}
+		remap[oldIdx] = int32(len(filteredPersons))
+		filteredPersons = append(filteredPersons, person)
 	}
 	res.Persons = filteredPersons
 
@@ -48,7 +48,8 @@ func (c Config) Filter(res aitypes.InferenceResult) aitypes.InferenceResult {
 	if len(res.Faces) > 0 {
 		filteredFaces := make([]aitypes.FaceStructureItem, 0, len(res.Faces))
 		for _, face := range res.Faces {
-			if face.PersonIndex >= 0 {
+			switch {
+			case face.PersonIndex >= 0:
 				// 越界非法索引防御 (Fail-Closed)
 				if int(face.PersonIndex) >= len(remap) {
 					continue
@@ -59,14 +60,15 @@ func (c Config) Filter(res aitypes.InferenceResult) aitypes.InferenceResult {
 					filteredFaces = append(filteredFaces, face)
 				}
 				// 若关联的父人体被过滤 (newIdx == -1)，则人脸联动丢弃 (DeepStream 生命周期规范)
-			} else if face.PersonIndex == -1 {
+			case face.PersonIndex == -1:
 				// 孤立人脸：按自身人脸框底边中点独立进行 ROI/MASK 判定
 				px, py := Rect(face.Box).BottomCenter()
 				if c.isPointAllowed(px, py) {
 					filteredFaces = append(filteredFaces, face)
 				}
+			default:
+				// face.PersonIndex < -1 视为畸形索引直接丢弃
 			}
-			// face.PersonIndex < -1 视为畸形索引直接丢弃
 		}
 		res.Faces = filteredFaces
 	}
@@ -97,7 +99,7 @@ func filterByRegion[T any](items []T, boxOf func(T) [4]float64, config Config) [
 func (c Config) isPointAllowed(px, py float64) bool {
 	// 1. If ROI is configured, point must be inside at least one ROI
 	if len(c.ROI) > 0 {
-		inROI := false
+		var inROI bool
 		for _, roi := range c.ROI {
 			if roi.Contains(px, py) {
 				inROI = true

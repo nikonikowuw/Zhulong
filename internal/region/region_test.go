@@ -9,7 +9,12 @@ import (
 func assertInDelta(t *testing.T, expected, actual, delta float64) {
 	t.Helper()
 	if math.Abs(expected-actual) > delta {
-		t.Fatalf("expected %v, got %v (delta %v)", expected, actual, delta)
+		t.Fatalf(
+			"expected %v, got %v (delta %v)",
+			expected,
+			actual,
+			delta,
+		)
 	}
 }
 
@@ -98,9 +103,9 @@ func TestRect_Validation(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("expected %v, got %v", tt.wantErr, err)
 				}
-			} else {
-				assertNoError(t, err)
+				return
 			}
+			assertNoError(t, err)
 		})
 	}
 }
@@ -108,8 +113,18 @@ func TestRect_Validation(t *testing.T) {
 func TestRect_BottomCenterAndContains(t *testing.T) {
 	rect := Rect{0.2, 0.3, 0.6, 0.9}
 	bx, by := rect.BottomCenter()
-	assertInDelta(t, 0.4, bx, 1e-6)
-	assertInDelta(t, 0.9, by, 1e-6)
+	assertInDelta(
+		t,
+		0.4,
+		bx,
+		1e-6,
+	)
+	assertInDelta(
+		t,
+		0.9,
+		by,
+		1e-6,
+	)
 
 	assertTrue(t, rect.Contains(0.4, 0.9))
 	assertTrue(t, rect.Contains(0.2, 0.3)) // top-left boundary
@@ -129,7 +144,7 @@ func TestConfig_Validation(t *testing.T) {
 		cfg := Config{
 			ROI: make([]Rect, 9),
 		}
-		for i := 0; i < 9; i++ {
+		for i := range cfg.ROI {
 			cfg.ROI[i] = Rect{0.1, 0.1, 0.2, 0.2}
 		}
 		err := cfg.Validate()
@@ -140,7 +155,7 @@ func TestConfig_Validation(t *testing.T) {
 		cfg := Config{
 			MASK: make([]Rect, 9),
 		}
-		for i := 0; i < 9; i++ {
+		for i := range cfg.MASK {
 			cfg.MASK[i] = Rect{0.1, 0.1, 0.2, 0.2}
 		}
 		err := cfg.Validate()

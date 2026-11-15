@@ -75,10 +75,10 @@ func TestValidateCrop(t *testing.T) {
 		{name: "valid", rect: Rect{0.1, 0.2, 0.5, 0.8}, ok: true},
 		{name: "minimum side", rect: Rect{0.1, 0.1, 0.12, 0.12}, ok: true},
 		{name: "full frame", rect: Rect{0, 0, 1, 1}, ok: true},
-		{name: "NaN", rect: Rect{math.NaN(), 0, 1, 1}},
-		{name: "Inf", rect: Rect{0, 0, math.Inf(1), 1}},
-		{name: "below minimum", rect: Rect{0.1, 0.1, 0.119, 0.2}},
-		{name: "degenerate", rect: Rect{0.5, 0.1, 0.5, 0.9}},
+		{name: "NaN", rect: Rect{math.NaN(), 0, 1, 1}, ok: false},
+		{name: "Inf", rect: Rect{0, 0, math.Inf(1), 1}, ok: false},
+		{name: "below minimum", rect: Rect{0.1, 0.1, 0.119, 0.2}, ok: false},
+		{name: "degenerate", rect: Rect{0.5, 0.1, 0.5, 0.9}, ok: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

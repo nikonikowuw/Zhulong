@@ -93,19 +93,42 @@ func parseCropArray(raw []byte) (*Rect, error) {
 func ValidateCrop(r Rect) error {
 	for i, v := range r {
 		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return fmt.Errorf("%w: component[%d]=%v", ErrCropNonFinite, i, v)
+			return fmt.Errorf(
+				"%w: component[%d]=%v",
+				ErrCropNonFinite,
+				i,
+				v,
+			)
 		}
 		if v < 0.0 || v > 1.0 {
-			return fmt.Errorf("%w: component[%d]=%v", ErrInvalidCoordinate, i, v)
+			return fmt.Errorf(
+				"%w: component[%d]=%v",
+				ErrInvalidCoordinate,
+				i,
+				v,
+			)
 		}
 	}
 	if r[0] >= r[2] || r[1] >= r[3] {
-		return fmt.Errorf("%w: [%v, %v, %v, %v]", ErrDegenerateRect, r[0], r[1], r[2], r[3])
+		return fmt.Errorf(
+			"%w: [%v, %v, %v, %v]",
+			ErrDegenerateRect,
+			r[0],
+			r[1],
+			r[2],
+			r[3],
+		)
 	}
 	// 与 Rect.Validate 使用同一 epsilon 口径，避免浮点比较在边界上抖动。
 	const eps = 1e-9
 	if (r[2]-r[0]) < MinCropSide-eps || (r[3]-r[1]) < MinCropSide-eps {
-		return fmt.Errorf("%w: width=%v height=%v min=%v", ErrRectTooSmall, r[2]-r[0], r[3]-r[1], MinCropSide)
+		return fmt.Errorf(
+			"%w: width=%v height=%v min=%v",
+			ErrRectTooSmall,
+			r[2]-r[0],
+			r[3]-r[1],
+			MinCropSide,
+		)
 	}
 	return nil
 }

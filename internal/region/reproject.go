@@ -6,6 +6,22 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 )
 
+type rectTransform struct {
+	ox float64
+	sx float64
+	oy float64
+	sy float64
+}
+
+func newRectTransform(view Rect) rectTransform {
+	return rectTransform{
+		ox: view[0],
+		sx: view[2] - view[0],
+		oy: view[1],
+		sy: view[3] - view[1],
+	}
+}
+
 // Reproject 把窗口局部归一化结果线性映射回全幅归一化坐标。
 //
 //	g = E.origin + c * E.span，再 clamp 到 [0,1]
@@ -27,13 +43,12 @@ func Reproject(res aitypes.InferenceResult, view Rect) aitypes.InferenceResult {
 		return res
 	}
 
-	ox, sx := view[0], view[2]-view[0]
-	oy, sy := view[1], view[3]-view[1]
+	tf := newRectTransform(view)
 
 	if len(res.Detections) > 0 {
 		detections := make([]aitypes.DetectionItem, 0, len(res.Detections))
 		for _, det := range res.Detections {
-			box, ok := reprojectBox(det.Box, ox, sx, oy, sy)
+			box, ok := reprojectBox(det.Box, tf)
 			if !ok {
 				continue
 			}
@@ -48,14 +63,14 @@ func Reproject(res aitypes.InferenceResult, view Rect) aitypes.InferenceResult {
 		remap := make([]int32, len(res.Persons))
 		persons := make([]aitypes.PersonItem, 0, len(res.Persons))
 		for oldIdx, person := range res.Persons {
-			box, ok := reprojectBox(person.BodyBox, ox, sx, oy, sy)
+			box, ok := reprojectBox(person.BodyBox, tf)
 			if !ok {
 				remap[oldIdx] = -1
 				continue
 			}
 			person.BodyBox = box
 			// 兼容路径（default/unknown task_type）会保留嵌套 faces，同样要映射。
-			person.Faces = reprojectFaceSubs(person.Faces, ox, sx, oy, sy)
+			person.Faces = reprojectFaceSubs(person.Faces, tf)
 			remap[oldIdx] = int32(len(persons))
 			persons = append(persons, person)
 		}
@@ -64,7 +79,7 @@ func Reproject(res aitypes.InferenceResult, view Rect) aitypes.InferenceResult {
 		if len(res.Faces) > 0 {
 			faces := make([]aitypes.FaceStructureItem, 0, len(res.Faces))
 			for _, face := range res.Faces {
-				box, ok := reprojectBox(face.Box, ox, sx, oy, sy)
+				box, ok := reprojectBox(face.Box, tf)
 				if !ok {
 					continue
 				}
@@ -80,7 +95,7 @@ func Reproject(res aitypes.InferenceResult, view Rect) aitypes.InferenceResult {
 					face.PersonIndex = newIdx
 				}
 				face.Box = box
-				face.Landmarks = reprojectLandmarks(face.Landmarks, ox, sx, oy, sy)
+				face.Landmarks = reprojectLandmarks(face.Landmarks, tf)
 				faces = append(faces, face)
 			}
 			res.Faces = faces
@@ -90,7 +105,7 @@ func Reproject(res aitypes.InferenceResult, view Rect) aitypes.InferenceResult {
 	if len(res.Vehicles) > 0 {
 		vehicles := make([]aitypes.VehicleItem, 0, len(res.Vehicles))
 		for _, vehicle := range res.Vehicles {
-			box, ok := reprojectBox(vehicle.VehicleBox, ox, sx, oy, sy)
+			box, ok := reprojectBox(vehicle.VehicleBox, tf)
 			if !ok {
 				continue
 			}
@@ -98,7 +113,7 @@ func Reproject(res aitypes.InferenceResult, view Rect) aitypes.InferenceResult {
 			if len(vehicle.Plates) > 0 {
 				plates := make([]aitypes.PlateSubItem, 0, len(vehicle.Plates))
 				for _, plate := range vehicle.Plates {
-					plateBox, ok := reprojectBox(plate.Box, ox, sx, oy, sy)
+					plateBox, ok := reprojectBox(plate.Box, tf)
 					if !ok {
 						continue
 					}
@@ -116,34 +131,31 @@ func Reproject(res aitypes.InferenceResult, view Rect) aitypes.InferenceResult {
 }
 
 // reprojectFaceSubs 映射挂在 person 上的兼容路径人脸（旧 person_structure 形状）。
-func reprojectFaceSubs(
-	faces []aitypes.FaceSubItem,
-	ox, sx, oy, sy float64,
-) []aitypes.FaceSubItem {
+func reprojectFaceSubs(faces []aitypes.FaceSubItem, tf rectTransform) []aitypes.FaceSubItem {
 	if len(faces) == 0 {
 		return faces
 	}
 	out := make([]aitypes.FaceSubItem, 0, len(faces))
 	for _, face := range faces {
-		box, ok := reprojectBox(face.Box, ox, sx, oy, sy)
+		box, ok := reprojectBox(face.Box, tf)
 		if !ok {
 			continue
 		}
 		face.Box = box
-		face.Landmarks = reprojectLandmarks(face.Landmarks, ox, sx, oy, sy)
+		face.Landmarks = reprojectLandmarks(face.Landmarks, tf)
 		out = append(out, face)
 	}
 	return out
 }
 
-func reprojectLandmarks(points [][2]float64, ox, sx, oy, sy float64) [][2]float64 {
+func reprojectLandmarks(points [][2]float64, tf rectTransform) [][2]float64 {
 	if len(points) == 0 {
 		return points
 	}
 	out := make([][2]float64, 0, len(points))
 	for _, point := range points {
-		x, okX := reprojectValue(point[0], ox, sx)
-		y, okY := reprojectValue(point[1], oy, sy)
+		x, okX := reprojectValue(point[0], tf.ox, tf.sx)
+		y, okY := reprojectValue(point[1], tf.oy, tf.sy)
 		if !okX || !okY {
 			continue
 		}
@@ -152,12 +164,13 @@ func reprojectLandmarks(points [][2]float64, ox, sx, oy, sy float64) [][2]float6
 	return out
 }
 
-func reprojectBox(box [4]float64, ox, sx, oy, sy float64) ([4]float64, bool) {
-	x1, okX1 := reprojectValue(box[0], ox, sx)
-	y1, okY1 := reprojectValue(box[1], oy, sy)
-	x2, okX2 := reprojectValue(box[2], ox, sx)
-	y2, okY2 := reprojectValue(box[3], oy, sy)
-	if !okX1 || !okY1 || !okX2 || !okY2 {
+func reprojectBox(box [4]float64, tf rectTransform) ([4]float64, bool) {
+	x1, okX1 := reprojectValue(box[0], tf.ox, tf.sx)
+	y1, okY1 := reprojectValue(box[1], tf.oy, tf.sy)
+	x2, okX2 := reprojectValue(box[2], tf.ox, tf.sx)
+	y2, okY2 := reprojectValue(box[3], tf.oy, tf.sy)
+	allValid := okX1 && okY1 && okX2 && okY2
+	if !allValid {
 		return box, false
 	}
 	return [4]float64{x1, y1, x2, y2}, true

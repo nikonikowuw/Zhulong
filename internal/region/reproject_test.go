@@ -17,7 +17,12 @@ func assertBox(t *testing.T, got, want [4]float64) {
 	t.Helper()
 	for i := range want {
 		if !nearlyEqual(got[i], want[i]) {
-			t.Fatalf("box mismatch at %d: got %v want %v", i, got, want)
+			t.Fatalf(
+				"box mismatch at %d: got %v want %v",
+				i,
+				got,
+				want,
+			)
 		}
 	}
 }
@@ -137,8 +142,12 @@ func TestReprojectDropsNonFiniteAndRepairsPersonIndex(t *testing.T) {
 		t.Fatalf("expected 3 faces, got %d", len(got.Faces))
 	}
 	if got.Faces[0].PersonIndex != 0 || got.Faces[1].PersonIndex != 1 || got.Faces[2].PersonIndex != -1 {
-		t.Fatalf("unexpected person index remap: %d %d %d",
-			got.Faces[0].PersonIndex, got.Faces[1].PersonIndex, got.Faces[2].PersonIndex)
+		t.Fatalf(
+			"unexpected person index remap: %d %d %d",
+			got.Faces[0].PersonIndex,
+			got.Faces[1].PersonIndex,
+			got.Faces[2].PersonIndex,
+		)
 	}
 }
 

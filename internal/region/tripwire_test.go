@@ -38,16 +38,66 @@ func TestTripwireValidationBoundaries(t *testing.T) {
 		mutate func(*Tripwire)
 		valid  bool
 	}{
-		{"minimum length", func(*Tripwire) {}, true},
-		{"vertical", func(line *Tripwire) { line.Points = []Point{{1, 0}, {1, 1}} }, true},
-		{"reverse endpoints", func(line *Tripwire) { line.Points = []Point{{1, 1}, {0, 0}} }, true},
-		{"empty id", func(line *Tripwire) { line.ID = "" }, false},
-		{"unsafe id", func(line *Tripwire) { line.ID = "with space" }, false},
-		{"empty name", func(line *Tripwire) { line.Name = "  " }, false},
-		{"missing endpoint", func(line *Tripwire) { line.Points = []Point{{0, 0}} }, false},
-		{"NaN", func(line *Tripwire) { line.Points = []Point{{math.NaN(), 0}, {1, 1}} }, false},
-		{"infinity", func(line *Tripwire) { line.Points = []Point{{0, 0}, {math.Inf(1), 1}} }, false},
-		{"long name", func(line *Tripwire) { line.Name = strings.Repeat("线", 65) }, false},
+		{
+			name:   "minimum length",
+			mutate: func(*Tripwire) {},
+			valid:  true,
+		},
+		{
+			name: "vertical",
+			mutate: func(line *Tripwire) {
+				line.Points = []Point{{1, 0}, {1, 1}}
+			},
+			valid: true,
+		},
+		{
+			name: "reverse endpoints",
+			mutate: func(line *Tripwire) {
+				line.Points = []Point{{1, 1}, {0, 0}}
+			},
+			valid: true,
+		},
+		{
+			name:   "empty id",
+			mutate: func(line *Tripwire) { line.ID = "" },
+			valid:  false,
+		},
+		{
+			name:   "unsafe id",
+			mutate: func(line *Tripwire) { line.ID = "with space" },
+			valid:  false,
+		},
+		{
+			name:   "empty name",
+			mutate: func(line *Tripwire) { line.Name = "  " },
+			valid:  false,
+		},
+		{
+			name: "missing endpoint",
+			mutate: func(line *Tripwire) {
+				line.Points = []Point{{0, 0}}
+			},
+			valid: false,
+		},
+		{
+			name: "NaN",
+			mutate: func(line *Tripwire) {
+				line.Points = []Point{{math.NaN(), 0}, {1, 1}}
+			},
+			valid: false,
+		},
+		{
+			name: "infinity",
+			mutate: func(line *Tripwire) {
+				line.Points = []Point{{0, 0}, {math.Inf(1), 1}}
+			},
+			valid: false,
+		},
+		{
+			name:   "long name",
+			mutate: func(line *Tripwire) { line.Name = strings.Repeat("线", 65) },
+			valid:  false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

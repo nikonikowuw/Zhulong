@@ -58,13 +58,25 @@ func TestConfig_Apply(t *testing.T) {
 					TrackID:      101,
 					VehicleBox:   [4]float64{0.1, 0.1, 0.3, 0.3}, // bottom center: (0.2, 0.3)
 					VehicleScore: 0.93,
-					Plates:       []aitypes.PlateSubItem{{Box: [4]float64{0.15, 0.2, 0.25, 0.28}, Score: 0.97, PlateNumber: "\u4eacA12345"}},
+					Plates: []aitypes.PlateSubItem{
+						{
+							Box:         [4]float64{0.15, 0.2, 0.25, 0.28},
+							Score:       0.97,
+							PlateNumber: "\u4eacA12345",
+						},
+					},
 				},
 				{
 					TrackID:      102,
 					VehicleBox:   [4]float64{0.7, 0.7, 0.9, 0.9}, // bottom center: (0.8, 0.9)
 					VehicleScore: 0.88,
-					Plates:       []aitypes.PlateSubItem{{Box: [4]float64{0.75, 0.8, 0.85, 0.88}, Score: 0.91, PlateNumber: "\u6caaB54321"}},
+					Plates: []aitypes.PlateSubItem{
+						{
+							Box:         [4]float64{0.75, 0.8, 0.85, 0.88},
+							Score:       0.91,
+							PlateNumber: "\u6caaB54321",
+						},
+					},
 				},
 				{
 					TrackID:      103,
