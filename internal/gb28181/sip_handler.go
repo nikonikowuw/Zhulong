@@ -246,7 +246,7 @@ func (i *sipIngress) messageSenderAllowed(
 		}
 		i.reject(req, tx, sip.StatusInternalServerError, "gb28181 message from unverifiable device",
 			zap.String("device_id", deviceID), zap.Error(err))
-			return false
+		return false
 	}
 	// Ports are not compared: NAT rebinding changes them, addresses do not.
 	if device.RemoteAddr == nil {
