@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 func newTestStore(t *testing.T) (*Store, func()) {
@@ -182,7 +183,16 @@ func TestStore_TouchLastUsed(t *testing.T) {
 		t.Fatalf("CreateToken failed: %v", err)
 	}
 
-	targetTime := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	targetTime := time.Date(
+		2026,
+		11,
+		3,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
 	if err := store.TouchLastUsed(ctx, "id_touch", targetTime); err != nil {
 		t.Fatalf("TouchLastUsed failed: %v", err)
 	}

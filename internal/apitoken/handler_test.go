@@ -9,8 +9,9 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 func setupHandlerEnv(t *testing.T) (*gin.Engine, *Service, func()) {

@@ -12,6 +12,22 @@ type APITokenInfo struct {
 	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
 }
 
+// APITokenListResponse wraps the list of API tokens. Items is always non-nil.
+type APITokenListResponse struct {
+	Items []APITokenInfo `json:"items"`
+}
+
+// APITokenCreateResponse returns the token details along with the one-time plaintext token.
+type APITokenCreateResponse struct {
+	APITokenInfo
+	Token string `json:"token"`
+}
+
+// APITokenRevokeResponse is the response payload when revoking an API token.
+type APITokenRevokeResponse struct {
+	Revoked bool `json:"revoked"`
+}
+
 func newAPITokenInfo(t APIToken) APITokenInfo {
 	var lastUsed *time.Time
 	if t.LastUsedAt != nil {
@@ -31,20 +47,4 @@ func newAPITokenInfo(t APIToken) APITokenInfo {
 		LastUsedAt: lastUsed,
 		RevokedAt:  revoked,
 	}
-}
-
-// APITokenListResponse wraps the list of API tokens. Items is always non-nil.
-type APITokenListResponse struct {
-	Items []APITokenInfo `json:"items"`
-}
-
-// APITokenCreateResponse returns the token details along with the one-time plaintext token.
-type APITokenCreateResponse struct {
-	APITokenInfo
-	Token string `json:"token"`
-}
-
-// APITokenRevokeResponse is the response payload when revoking an API token.
-type APITokenRevokeResponse struct {
-	Revoked bool `json:"revoked"`
 }

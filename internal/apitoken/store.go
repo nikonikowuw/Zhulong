@@ -6,8 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 var errDatabaseClosed = database.ErrClosed

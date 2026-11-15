@@ -5,10 +5,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 const identityContextKey = "\x00apitoken:identity"

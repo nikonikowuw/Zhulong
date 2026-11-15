@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 func newTestService(t *testing.T) (*Service, func()) {

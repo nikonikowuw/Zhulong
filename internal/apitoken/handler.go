@@ -4,9 +4,10 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // Handler manages HTTP endpoints for API token creation, listing, and revocation.

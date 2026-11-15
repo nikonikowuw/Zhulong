@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 func init() {

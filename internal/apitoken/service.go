@@ -6,9 +6,10 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
-	"go.uber.org/zap"
 )
 
 // Identity represents the authenticated caller identity injected into Gin context.
@@ -95,6 +96,9 @@ func (s *Service) ListTokens(ctx context.Context, includeRevoked bool) ([]APITok
 	if err != nil {
 		return nil, apperr.Internal("INTERNAL_ERROR", "Failed to list API tokens", err)
 	}
+	if tokens == nil {
+		tokens = []APIToken{}
+	}
 	return tokens, nil
 }
 
@@ -123,6 +127,36 @@ func (s *Service) Authenticate(ctx context.Context, rawToken string) (Identity, 
 
 	s.touchLastUsed(token.ID)
 	return Identity{ID: token.ID, Name: token.Name}, nil
+}
+
+// Close gracefully stops the service and waits for in-flight touchLastUsed writes to drain.
+func (s *Service) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.closeOnce.Do(func() {
+		close(s.stopCh)
+	})
+	s.mu.Unlock()
+
+	waitDone := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(waitDone)
+	}()
+
+	timer := time.NewTimer(500 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-waitDone:
+	case <-timer.C:
+		s.logger.Warn("timed out waiting for touchLastUsed goroutines to drain")
+	}
+	return nil
 }
 
 // touchLastUsed initiates an asynchronous update of last_used_at, coalesced to
@@ -157,31 +191,4 @@ func (s *Service) touchLastUsed(id string) {
 			s.logger.Warn("failed to touch token last_used_at", zap.String("tokenId", id), zap.Error(err))
 		}
 	}()
-}
-
-// Close gracefully stops the service and waits for in-flight touchLastUsed writes to drain.
-func (s *Service) Close() error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil
-	}
-	s.closed = true
-	s.closeOnce.Do(func() {
-		close(s.stopCh)
-	})
-	s.mu.Unlock()
-
-	waitDone := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(waitDone)
-	}()
-
-	select {
-	case <-waitDone:
-	case <-time.After(500 * time.Millisecond):
-		s.logger.Warn("timed out waiting for touchLastUsed goroutines to drain")
-	}
-	return nil
 }

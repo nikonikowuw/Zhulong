@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // GenerateToken produces a high-entropy bearer token, its SHA-256 hash for database
@@ -43,7 +44,7 @@ func normalizeTokenName(name string) (string, error) {
 	if trimmed == "" {
 		return "", errTokenNameRequired
 	}
-	if len([]rune(trimmed)) > maxTokenNameLen {
+	if utf8.RuneCountInString(trimmed) > maxTokenNameLen {
 		return "", errTokenNameTooLong
 	}
 	for _, r := range trimmed {
