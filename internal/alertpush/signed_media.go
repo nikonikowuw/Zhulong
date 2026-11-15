@@ -60,7 +60,7 @@ func (h *SignedMediaHandler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Description  Streams snapshot bytes verified by HMAC signature without cookie authentication.
 // @Tags         media
 // @Produce      image/jpeg
-// @Param        path  path      string  true  "Relative media path, e.g. snapshots/cam01/01J8Z.jpg"
+// @Param        path  path      string  true  "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg"
 // @Param        exp   query     int64   true  "Expiration Unix timestamp"
 // @Param        sig   query     string  true  "Base64URL HMAC signature"
 // @Success      200   {file}    binary

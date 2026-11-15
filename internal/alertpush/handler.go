@@ -56,7 +56,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 
 // List godoc
 // @Summary      List alert destinations
-// @Description  Returns list of configured alert push destinations with operational status.
+// @Description  Returns list of configured alert push destinations with real-time operational status.
 // @Tags         alertpush
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=AlertDestinationListResponse}
