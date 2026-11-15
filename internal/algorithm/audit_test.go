@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 // setupAuditRouter wires the real audit middleware so the assertions cover the
@@ -33,20 +34,40 @@ func setupAuditRouter(t *testing.T) (*gin.Engine, *algorithm.Service, *audit.Ser
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
-
-	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore close: %v", err)
+		}
 	})
+
+	auditSvc := audit.NewService(
+		audit.NewStore(dbStore),
+		zap.NewNop(),
+		audit.Config{
+			BufferSize:    100,
+			BatchSize:     10,
+			FlushInterval: 5 * time.Millisecond,
+			MaxEntries:    1000,
+		},
+	)
 	if err := auditSvc.Start(context.Background()); err != nil {
 		t.Fatalf("start audit service: %v", err)
 	}
-	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := auditSvc.Stop(context.Background()); err != nil {
+			t.Logf("cleanup auditSvc stop: %v", err)
+		}
+	})
 
 	// enable/disable need a package process that actually starts; the archive's
 	// entry is an idle stub, so the supervised status is deterministic.
 	rt := algorunner.Runtime{AlgorithmsDir: dataDir}
-	comp := algorithm.NewAlgorithmComponents(dbStore, rt, x86Host(), zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(
+		dbStore,
+		rt,
+		x86Host(),
+		zap.NewNop(),
+	)
 	t.Cleanup(func() { comp.Supervisor.StopAll(time.Second) })
 
 	router := gin.New()
@@ -186,12 +207,12 @@ func TestHandlerAuditCoverage(t *testing.T) {
 	}
 
 	wants := []auditWant{
-		{algorithm.ActionAlgorithmInstall, audit.StatusSuccess},
-		{algorithm.ActionAlgorithmEnable, audit.StatusSuccess},
-		{algorithm.ActionAlgorithmReset, audit.StatusFailed},
-		{algorithm.ActionAlgorithmDisable, audit.StatusSuccess},
-		{algorithm.ActionAlgorithmDelete, audit.StatusSuccess},
-		{algorithm.ActionAlgorithmDelete, audit.StatusFailed},
+		{action: algorithm.ActionAlgorithmInstall, status: audit.StatusSuccess},
+		{action: algorithm.ActionAlgorithmEnable, status: audit.StatusSuccess},
+		{action: algorithm.ActionAlgorithmReset, status: audit.StatusFailed},
+		{action: algorithm.ActionAlgorithmDisable, status: audit.StatusSuccess},
+		{action: algorithm.ActionAlgorithmDelete, status: audit.StatusSuccess},
+		{action: algorithm.ActionAlgorithmDelete, status: audit.StatusFailed},
 	}
 	assertAuditEntriesMatch(t, entries, wants)
 	assertAuditDetails(t, entries, algoID)

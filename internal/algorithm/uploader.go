@@ -99,11 +99,15 @@ func SaveUploadStreamWithLimit(r io.Reader, tempDir string, limit int64) (string
 		return "", fmt.Errorf("create temp upload file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	success := false
+	var success bool
 	defer func() {
-		_ = tmpFile.Close()
+		if closeErr := tmpFile.Close(); closeErr != nil {
+			// Best-effort close on temporary upload file.
+		}
 		if !success {
-			_ = os.Remove(tmpPath)
+			if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				// Best-effort cleanup on failure.
+			}
 		}
 	}()
 
@@ -296,7 +300,11 @@ func writeArchiveFile(targetPath string, r io.Reader, remaining int64) (int64, e
 		return 0, fmt.Errorf("create extracted file: %w", err)
 	}
 
-	written, copyErr := io.Copy(outFile, &countingReader{r: r, limit: remaining})
+	written, copyErr := io.Copy(outFile, &countingReader{
+		r:         r,
+		readBytes: 0,
+		limit:     remaining,
+	})
 	closeErr := outFile.Close()
 	if copyErr != nil {
 		return written, copyErr
@@ -354,11 +362,17 @@ func ExtractMultipartFile(r *http.Request, fieldName string) (io.ReadCloser, fun
 		}
 
 		if part.FormName() != fieldName {
-			_ = part.Close()
+			if closeErr := part.Close(); closeErr != nil {
+				// Best-effort close on unused multipart part.
+			}
 			continue
 		}
 
-		return part, func() { _ = part.Close() }, nil
+		return part, func() {
+			if closeErr := part.Close(); closeErr != nil {
+				// Best-effort cleanup closure for caller.
+			}
+		}, nil
 	}
 
 	return nil, nil, httputil.NewError(

@@ -31,13 +31,21 @@ func TestVerifierMissingConventionFiles(t *testing.T) {
 	}
 
 	// 2. 合法 manifest 但缺包根可执行文件（入口名 = manifest.id）
-	manifestBytes, _ := json.Marshal(algorithm.Manifest{
-		ID: "sample_pkg", Version: "1.0.0", Name: "sample_pkg",
-		TaskType:  algorithm.TaskTypeDetection,
-		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
-		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
+	manifestBytes, err := json.Marshal(algorithm.Manifest{
+		ID:       "sample_pkg",
+		Version:  "1.0.0",
+		Name:     "sample_pkg",
+		TaskType: algorithm.TaskTypeDetection,
+		Category: algorithm.CategorySafety,
+		Platform: algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
+		Resources: algorithm.ManifestResources{
+			ComputeCost: 20,
+			MemoryMB:    64,
+		},
 	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
 	mustWriteFile(t, filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
 
 	_, err = verifier.VerifyDirectory(ctx, dir)
@@ -85,10 +93,13 @@ func TestVerifierPlatformMismatch(t *testing.T) {
 		Platform:  algorithm.ManifestPlatform{Arch: "aarch64", Target: "rk3568"},
 		Resources: algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 64},
 	}
-	manifestBytes, _ := json.Marshal(manifest)
-	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	mustWriteFile(t, filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
 
-	_, err := verifier.VerifyDirectory(ctx, dir)
+	_, err = verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorithm.ErrPlatformMismatch) {
 		t.Errorf("expected ErrPlatformMismatch, got: %v", err)
 	}
@@ -114,10 +125,13 @@ func TestVerifierRejectsRetiredCPUTarget(t *testing.T) {
 		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
 		Resources: algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 64},
 	}
-	manifestBytes, _ := json.Marshal(manifest)
-	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	mustWriteFile(t, filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
 
-	_, err := verifier.VerifyDirectory(ctx, dir)
+	_, err = verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorithm.ErrPlatformTargetRetired) {
 		t.Fatalf("expected ErrPlatformTargetRetired, got: %v", err)
 	}
@@ -146,10 +160,13 @@ func TestVerifierInvalidComputeBudget(t *testing.T) {
 		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 1500, MemoryMB: 64},
 	}
-	manifestBytes, _ := json.Marshal(manifest)
-	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	mustWriteFile(t, filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
 
-	_, err := verifier.VerifyDirectory(ctx, dir)
+	_, err = verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorithm.ErrInvalidComputeBudget) {
 		t.Errorf("expected ErrInvalidComputeBudget, got: %v", err)
 	}
@@ -577,7 +594,11 @@ func TestVerifierSupportsMotionGate(t *testing.T) {
 				m.ID:            []byte(verifyStubScript(1)),
 				"sample.jpg":    []byte("sample"),
 			})
-			t.Cleanup(func() { _ = os.Remove(archivePath) })
+			t.Cleanup(func() {
+				if err := os.Remove(archivePath); err != nil {
+					t.Logf("cleanup remove archive: %v", err)
+				}
+			})
 
 			verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 			installDir := t.TempDir()

@@ -10,10 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 // newTaskService builds a Service backed by a real migrated DB and a supervisor
@@ -29,13 +30,26 @@ func newTaskService(t *testing.T) (*algorithm.Service, *algorunner.Supervisor, *
 	store := algorithm.NewStore(dbStore)
 	// 包 = 自己的可执行文件：把 idle 桩装到 supervisor 会去解析的位置。
 	installStubPackage(t, dataDir, "task_algo", "1.0.0", idleStubScript())
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(
+		store,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		algorunner.DefaultRecoveryOptions(),
+		zap.NewNop(),
+	)
 	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
-	service := algorithm.NewService(store, verifier, supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
+	service := algorithm.NewService(
+		store,
+		verifier,
+		supervisor,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		zap.NewNop(),
+	)
 
 	cleanup := func() {
 		supervisor.StopAll(time.Second)
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore close: %v", err)
+		}
 	}
 	return service, supervisor, store, dbStore, cleanup
 }
@@ -84,7 +98,7 @@ func TestServiceTaskChangeDebouncesRestart(t *testing.T) {
 	// 20 rapid task change notifications must not restart the package 20
 	// times. Without the debounce this loop would thrash
 	// StopAlgorithm/StartAlgorithm once per task.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		service.OnTaskChanged(ctx, algo.ID)
 	}
 
@@ -218,15 +232,28 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	t.Setenv("RUN_ARG_FILE", argFile)
 
 	installStubPackage(t, dataDir, "task_algo", "1.0.0", argRecordingStubScript())
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(
+		store,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		algorunner.DefaultRecoveryOptions(),
+		zap.NewNop(),
+	)
 	resolver := &storeBackedBrokerResolver{dbStore: dbStore}
 	supervisor.SetBrokerSubscriptionResolver(resolver)
-	service := algorithm.NewService(store, algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true}), supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
+	service := algorithm.NewService(
+		store,
+		algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true}),
+		supervisor,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		zap.NewNop(),
+	)
 
 	ctx := context.Background()
 	t.Cleanup(func() {
 		supervisor.StopAll(2 * time.Second)
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore close: %v", err)
+		}
 	})
 
 	// 先建 camera1 的任务，再启动包 → 首轮应为 1 个 --broker
@@ -299,15 +326,28 @@ func TestTaskDrivenLazyStartupAndTeardownLifecycle(t *testing.T) {
 	t.Setenv("RUN_ARG_FILE", argFile)
 
 	installStubPackage(t, dataDir, algo.ID, algo.Version, argRecordingStubScript())
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(
+		store,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		algorunner.DefaultRecoveryOptions(),
+		zap.NewNop(),
+	)
 	resolver := &storeBackedBrokerResolver{dbStore: dbStore}
 	supervisor.SetBrokerSubscriptionResolver(resolver)
-	service := algorithm.NewService(store, algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true}), supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
+	service := algorithm.NewService(
+		store,
+		algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true}),
+		supervisor,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		zap.NewNop(),
+	)
 
 	ctx := context.Background()
 	t.Cleanup(func() {
 		supervisor.StopAll(2 * time.Second)
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore close: %v", err)
+		}
 	})
 
 	// Step 1: Enable algorithm when 0 tasks exist in DB -> Standby state

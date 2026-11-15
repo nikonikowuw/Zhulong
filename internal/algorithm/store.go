@@ -5,9 +5,10 @@ import (
 	"errors"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"gorm.io/gorm"
 )
 
 var _ algorunner.LifecycleStore = (*Store)(nil)

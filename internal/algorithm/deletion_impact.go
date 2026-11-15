@@ -61,10 +61,11 @@ func (s *Service) GetDeletionImpact(ctx context.Context, id string) (*DeletionIm
 	}
 
 	impact := &DeletionImpact{
-		AlgorithmID:   algo.ID,
-		AlgorithmName: algo.Name,
-		Version:       algo.Version,
-		Status:        algo.Status,
+		AlgorithmID:       algo.ID,
+		AlgorithmName:     algo.Name,
+		Version:           algo.Version,
+		Status:            algo.Status,
+		AffectedCameraIDs: []string{},
 	}
 
 	// 任务绑定与受影响的相机
@@ -72,8 +73,10 @@ func (s *Service) GetDeletionImpact(ctx context.Context, id string) (*DeletionIm
 	if err != nil {
 		return nil, apperr.Internal("IMPACT_QUERY_FAILED", "Failed to count bound tasks", err)
 	}
-	impact.AffectedCameraIDs = cameraIDs
-	impact.BoundTaskCount = int64(len(cameraIDs))
+	if cameraIDs != nil {
+		impact.AffectedCameraIDs = cameraIDs
+	}
+	impact.BoundTaskCount = int64(len(impact.AffectedCameraIDs))
 
 	// 历史证据条数
 	counts, err := s.store.CountEvidenceByAlgorithm(ctx, id)

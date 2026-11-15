@@ -12,12 +12,13 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
-	"gorm.io/gorm"
 )
 
 func setupTestRouter(t *testing.T) (*gin.Engine, *algorithm.Service) {
@@ -37,11 +38,20 @@ func newAlgorithmTestApp(t *testing.T) (*gin.Engine, *algorithm.Service, *gorm.D
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore close: %v", err)
+		}
+	})
 
 	// No runner binary in the Runtime: verification stays static, and the stub
 	// supervisor below never starts a process either.
-	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: tempDir}, x86Host(), zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(
+		dbStore,
+		algorunner.Runtime{AlgorithmsDir: tempDir},
+		x86Host(),
+		zap.NewNop(),
+	)
 
 	r := gin.New()
 	api := r.Group("/api/v1")
@@ -96,9 +106,16 @@ func TestHandlerListAndInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create form file: %v", err)
 	}
-	fileBytes, _ := os.ReadFile(tarGzPath)
-	_, _ = part.Write(fileBytes)
-	writer.Close()
+	fileBytes, err := os.ReadFile(tarGzPath)
+	if err != nil {
+		t.Fatalf("read tar.gz file: %v", err)
+	}
+	if _, err := part.Write(fileBytes); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
 
 	uploadReq := httptest.NewRequest(http.MethodPost, "/api/v1/algorithms/install", body)
 	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())

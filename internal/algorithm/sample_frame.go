@@ -75,12 +75,16 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 		return "", nil, fmt.Errorf("create temp ppm: %w", err)
 	}
 	cleanup := func() {
-		_ = os.Remove(temp.Name())
+		if rmErr := os.Remove(temp.Name()); rmErr != nil && !os.IsNotExist(rmErr) {
+			// Best-effort cleanup of temporary PPM file.
+		}
 	}
-	success := false
+	var success bool
 	defer func() {
 		if !success {
-			_ = temp.Close()
+			if closeErr := temp.Close(); closeErr != nil {
+				// Best-effort close on failed creation path.
+			}
 			cleanup()
 		}
 	}()
@@ -103,7 +107,7 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 	switch concrete := img.(type) {
 	case *image.RGBA:
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			rowOffset := 0
+			var rowOffset int
 			pixOffset := concrete.PixOffset(bounds.Min.X, y)
 			for x := range width {
 				i := pixOffset + x*4
@@ -118,7 +122,7 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 		}
 	case *image.NRGBA:
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			rowOffset := 0
+			var rowOffset int
 			pixOffset := concrete.PixOffset(bounds.Min.X, y)
 			for x := range width {
 				i := pixOffset + x*4
@@ -133,7 +137,7 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 		}
 	case *image.YCbCr:
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			rowOffset := 0
+			var rowOffset int
 			yi := concrete.YOffset(bounds.Min.X, y)
 			for x := range width {
 				ci := concrete.COffset(bounds.Min.X+x, y)
@@ -149,7 +153,7 @@ func writeImageToPPM(img image.Image, prefix string) (string, func(), error) {
 		}
 	default:
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			rowOffset := 0
+			var rowOffset int
 			for x := bounds.Min.X; x < bounds.Max.X; x++ {
 				r, g, b, _ := img.At(x, y).RGBA()
 				row[rowOffset] = byte(r >> 8)

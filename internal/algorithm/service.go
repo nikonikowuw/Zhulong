@@ -12,12 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/task"
-	"go.uber.org/zap"
 )
 
 var (
@@ -278,6 +279,9 @@ func (s *Service) ListAlgorithms(ctx context.Context) ([]Algorithm, error) {
 	algos, err := s.store.ListAlgorithms(ctx)
 	if err != nil {
 		return nil, apperr.Internal(internalErrorCode, "Failed to list algorithms", err)
+	}
+	if algos == nil {
+		algos = []Algorithm{}
 	}
 	// Enrich with live supervisor status
 	if s.supervisor != nil {

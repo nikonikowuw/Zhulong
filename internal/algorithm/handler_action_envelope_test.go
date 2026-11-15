@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 // TestHandlerEnableDisableActionEnvelope pins the algorithm action endpoints to
@@ -36,14 +37,23 @@ func TestHandlerEnableDisableActionEnvelope(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore close: %v", err)
+		}
+	})
 
 	// 每个被启用的包都要有可执行入口：把 idle 桩装到 supervisor 会解析的路径，
 	// 这样被监督状态才是确定的（没有任何进程注入的后门）。
 	installStubPackage(t, dataDir, "action_contract", "1.0.0", idleStubScript())
 	installStubPackage(t, dataDir, "action_contract_crash_loop", "1.0.0", idleStubScript())
 	rt := algorunner.Runtime{AlgorithmsDir: dataDir}
-	comp := algorithm.NewAlgorithmComponents(dbStore, rt, x86Host(), zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(
+		dbStore,
+		rt,
+		x86Host(),
+		zap.NewNop(),
+	)
 	t.Cleanup(func() { comp.Supervisor.StopAll(time.Second) })
 
 	seedAlgorithm(t, comp.Store, "action_contract", algorithm.StatusDisabled)
@@ -92,14 +102,16 @@ func TestHandlerEnableDisableActionEnvelope(t *testing.T) {
 	}
 
 	// Reset is an unlock, not a restart: the payload must report DISABLED.
-	if data := postAction("action_contract_crash_loop", "reset"); len(data) != 1 || data["status"] != algorithm.StatusDisabled {
+	data := postAction("action_contract_crash_loop", "reset")
+	if len(data) != 1 || data["status"] != algorithm.StatusDisabled {
 		t.Fatalf(`reset payload drifted from {"status":"DISABLED"}: %#v`, data)
 	}
 
 	// Reset is idempotent once the algorithm is DISABLED, so the dialog can
 	// safely offer a retry after a transient failure.
-	if data := postAction("action_contract_crash_loop", "reset"); len(data) != 1 || data["status"] != algorithm.StatusDisabled {
-		t.Fatalf(`repeated reset payload drifted from {"status":"DISABLED"}: %#v`, data)
+	repeatedData := postAction("action_contract_crash_loop", "reset")
+	if len(repeatedData) != 1 || repeatedData["status"] != algorithm.StatusDisabled {
+		t.Fatalf(`repeated reset payload drifted from {"status":"DISABLED"}: %#v`, repeatedData)
 	}
 	if data := postAction("action_contract", "reset"); len(data) != 1 || data["status"] != algorithm.StatusDisabled {
 		t.Fatalf(`reset on a DISABLED algorithm must stay idempotent: %#v`, data)

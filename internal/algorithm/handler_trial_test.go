@@ -13,10 +13,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 func setupTrialHandlerTest(t *testing.T) (*gin.Engine, *algorithm.Service, *algorithm.Store, string) {
@@ -34,11 +35,18 @@ func setupTrialHandlerTest(t *testing.T) (*gin.Engine, *algorithm.Service, *algo
 	})
 
 	algoDir := filepath.Join(tempDir, "algorithms")
-	_ = os.MkdirAll(algoDir, 0o755)
+	if err := os.MkdirAll(algoDir, 0o755); err != nil {
+		t.Fatalf("create algorithms directory: %v", err)
+	}
 
 	rt := algorunner.Runtime{AlgorithmsDir: algoDir}
 	host := algorithm.HostPlatform{Arch: "x86_64", Target: "onnx"}
-	comp := algorithm.NewAlgorithmComponents(dbStore, rt, host, zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(
+		dbStore,
+		rt,
+		host,
+		zap.NewNop(),
+	)
 
 	r := gin.New()
 	api := r.Group("/api/v1")
@@ -55,7 +63,9 @@ func TestHandlerTrial_Endpoints(t *testing.T) {
 	algoID := "plate_reader"
 	version := "1.0.0"
 	pkgDir := filepath.Join(algoDir, algoID, version)
-	_ = os.MkdirAll(pkgDir, 0o755)
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatalf("create pkgDir: %v", err)
+	}
 
 	scriptPath := filepath.Join(pkgDir, algoID)
 	scriptContent := `#!/bin/sh
@@ -92,8 +102,12 @@ exit 0
 	if err != nil {
 		t.Fatalf("create form file: %v", err)
 	}
-	_, _ = part.Write(pngBytes)
-	_ = writer.Close()
+	if _, err := part.Write(pngBytes); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/algorithms/"+algoID+"/trial", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())

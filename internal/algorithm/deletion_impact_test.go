@@ -7,8 +7,9 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"gorm.io/gorm"
+
+	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 )
 
 // mustExec 执行一条 SQL，失败即终止测试。

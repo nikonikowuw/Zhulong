@@ -12,18 +12,19 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 func createTestPNGBytes(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			img.Set(x, y, color.RGBA{R: 120, G: 180, B: 240, A: 255})
 		}
 	}
@@ -48,11 +49,18 @@ func setupTrialTestEnvironment(t *testing.T) (*algorithm.Service, *algorithm.Sto
 	})
 
 	algoDir := filepath.Join(tempDir, "algorithms")
-	_ = os.MkdirAll(algoDir, 0o755)
+	if err := os.MkdirAll(algoDir, 0o755); err != nil {
+		t.Fatalf("create algorithms directory: %v", err)
+	}
 
 	rt := algorunner.Runtime{AlgorithmsDir: algoDir}
 	host := algorithm.HostPlatform{Arch: "x86_64", Target: "onnx"}
-	comp := algorithm.NewAlgorithmComponents(dbStore, rt, host, zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(
+		dbStore,
+		rt,
+		host,
+		zap.NewNop(),
+	)
 
 	return comp.Service, comp.Store, algoDir
 }

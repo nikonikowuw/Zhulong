@@ -6,9 +6,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 // AlgorithmLifecycle defines start and stop actions for algorithm service.
@@ -128,12 +129,16 @@ func NewAlgorithmComponents(
 	handler := NewHandler(service, logger)
 
 	return &AlgorithmComponents{
-		Store:           store,
-		Verifier:        verifier,
-		Supervisor:      supervisor,
-		Service:         service,
-		Handler:         handler,
-		Lifecycle:       &algorithmLifecycleImpl{service: service, algorithmsDir: rt.AlgorithmsDir, logger: logger},
+		Store:      store,
+		Verifier:   verifier,
+		Supervisor: supervisor,
+		Service:    service,
+		Handler:    handler,
+		Lifecycle: &algorithmLifecycleImpl{
+			service:       service,
+			algorithmsDir: rt.AlgorithmsDir,
+			logger:        logger,
+		},
 		ProtectedRoutes: handler,
 		UploadRoutes:    handler.UploadRouteRegistrar(),
 	}

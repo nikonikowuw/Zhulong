@@ -5,9 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 func setupTestStore(t *testing.T) (*algorithm.Store, func()) {
@@ -20,7 +21,9 @@ func setupTestStore(t *testing.T) (*algorithm.Store, func()) {
 
 	store := algorithm.NewStore(dbStore)
 	cleanup := func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore close: %v", err)
+		}
 	}
 	return store, cleanup
 }

@@ -13,10 +13,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 )
 
 // fakeVerifyEntryScript is the *package entry* of a stub package: it emulates
@@ -49,8 +50,8 @@ printf '{"status":"passed","sample":"%s","sample_decoded":%s,"width":%s,"height"
 func writeSampleJPEG(t *testing.T, path string, width, height int) {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			img.Set(x, y, color.RGBA{R: uint8(x * 8), G: uint8(y * 8), B: 200, A: 255})
 		}
 	}

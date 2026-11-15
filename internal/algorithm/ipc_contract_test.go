@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/nikonikowuw/Zhulong/internal/algoipc"
@@ -220,10 +221,5 @@ func evalConstExpr(expr string) (uint64, bool) {
 }
 
 func indexOfComment(s string) int {
-	for i := 0; i+1 < len(s); i++ {
-		if s[i] == '/' && s[i+1] == '/' {
-			return i
-		}
-	}
-	return -1
+	return strings.Index(s, "//")
 }

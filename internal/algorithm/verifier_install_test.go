@@ -37,7 +37,7 @@ func TestInstallDirectoryAtomicallyDoesNotReplaceConcurrentTarget(t *testing.T) 
 	wg.Wait()
 	close(results)
 
-	succeeded, rejected := 0, 0
+	var succeeded, rejected int
 	for err := range results {
 		switch {
 		case err == nil:
@@ -118,7 +118,11 @@ func makeCrossDeviceTempDir(t *testing.T, src string) string {
 	if err != nil {
 		t.Skipf("cross-filesystem temp directory unavailable: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(parent) })
+	t.Cleanup(func() {
+		if err := os.RemoveAll(parent); err != nil {
+			t.Logf("cleanup remove parent: %v", err)
+		}
+	})
 
 	sourceInfo, err := os.Stat(src)
 	if err != nil {

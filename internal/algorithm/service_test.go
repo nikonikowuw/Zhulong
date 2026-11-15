@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"go.uber.org/zap"
 )
 
 func setupServiceTest(t *testing.T) (*algorithm.AlgorithmComponents, *database.Store, string) {
@@ -28,7 +29,13 @@ func setupServiceTest(t *testing.T) (*algorithm.AlgorithmComponents, *database.S
 			t.Errorf("close database: %v", err)
 		}
 	})
-	return algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: tempDir}, x86Host(), zap.NewNop()), dbStore, tempDir
+	comp := algorithm.NewAlgorithmComponents(
+		dbStore,
+		algorunner.Runtime{AlgorithmsDir: tempDir},
+		x86Host(),
+		zap.NewNop(),
+	)
+	return comp, dbStore, tempDir
 }
 
 func TestServiceDeleteAlgorithmCleansUpTasks(t *testing.T) {
@@ -118,7 +125,9 @@ func TestServiceErrorApperrClassifications(t *testing.T) {
 		TargetArch: "x86_64", TargetDevice: "onnx", ComputeCost: 10, MemoryMB: 64,
 		Status: algorithm.StatusActive,
 	}
-	_ = comp.Store.CreateAlgorithm(ctx, algo)
+	if err := comp.Store.CreateAlgorithm(ctx, algo); err != nil {
+		t.Fatalf("create algorithm failed: %v", err)
+	}
 	err = comp.Service.ResetAlgorithm(ctx, algo.ID)
 	if !errors.As(err, &appErr) || appErr.Kind != apperr.KindConflict || appErr.Code != "ALGORITHM_NOT_IN_CRASH_LOOP" {
 		t.Fatalf("expected ALGORITHM_NOT_IN_CRASH_LOOP apperr on ResetAlgorithm, got: %v", err)
@@ -151,8 +160,19 @@ func TestServiceDeleteStopsRestartDuringCrashBackoff(t *testing.T) {
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 250 * time.Millisecond
 	options.MaxBackoff = time.Second
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms")}, options, zap.NewNop())
-	service := algorithm.NewService(store, nil, supervisor, algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms")}, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(
+		store,
+		algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms")},
+		options,
+		zap.NewNop(),
+	)
+	service := algorithm.NewService(
+		store,
+		nil,
+		supervisor,
+		algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms")},
+		zap.NewNop(),
+	)
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 		if err := dbStore.Close(); err != nil {
@@ -266,15 +286,30 @@ func TestEnableAlgorithmInCrashLoopReturnsConflict(t *testing.T) {
 	opts.MaxCrashes = 1
 	opts.InitialBackoff = 5 * time.Millisecond
 	opts.CrashWindow = time.Second
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir}, opts, zap.NewNop())
-	service := algorithm.NewService(store, nil, supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(
+		store,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		opts,
+		zap.NewNop(),
+	)
+	service := algorithm.NewService(
+		store,
+		nil,
+		supervisor,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		zap.NewNop(),
+	)
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("cleanup dbStore close: %v", err)
+		}
 	})
 
 	ctx := context.Background()
-	_ = supervisor.StartAlgorithm(ctx, algo.ToPackageMeta())
+	if err := supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); err != nil {
+		t.Logf("StartAlgorithm returned error: %v", err)
+	}
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

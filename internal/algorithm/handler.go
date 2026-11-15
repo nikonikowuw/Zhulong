@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // Handler provides HTTP endpoints for algorithm packages, analysis tasks, and face galleries.
@@ -363,11 +364,17 @@ func (h *Handler) Delete(c *gin.Context) {
 	}
 
 	if impact != nil {
-		audithttp.TagDetail(c, fmt.Sprintf(
+		detail := fmt.Sprintf(
 			"uninstalled %s v%s; detached %d task(s) on %s, kept %d recognition(s)/%d alarm(s)/%d capture(s) with name snapshot",
-			impact.AlgorithmName, impact.Version, impact.BoundTaskCount,
+			impact.AlgorithmName,
+			impact.Version,
+			impact.BoundTaskCount,
 			strings.Join(impact.AffectedCameraIDs, ","),
-			impact.RecognitionCount, impact.AlarmCount, impact.CaptureCount))
+			impact.RecognitionCount,
+			impact.AlarmCount,
+			impact.CaptureCount,
+		)
+		audithttp.TagDetail(c, detail)
 	}
 	httputil.Success(c, AlgorithmDeleteResponse{Deleted: true})
 }

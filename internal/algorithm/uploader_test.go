@@ -164,8 +164,12 @@ func TestExtractArchiveUnsupportedFormat(t *testing.T) {
 	}
 	defer os.Remove(tmpFile.Name())
 
-	_, _ = tmpFile.WriteString("random data that is not tar or zip")
-	tmpFile.Close()
+	if _, err := tmpFile.WriteString("random data that is not tar or zip"); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		t.Fatalf("close temp: %v", err)
+	}
 
 	destDir := t.TempDir()
 	err = algorithm.ExtractArchive(tmpFile.Name(), destDir)
@@ -177,7 +181,7 @@ func TestExtractArchiveUnsupportedFormat(t *testing.T) {
 func TestExtractArchiveDecompressionBombFileCount(t *testing.T) {
 	// Create an archive with 1001 files
 	files := make(map[string][]byte)
-	for i := 0; i <= algorithm.MaxDecompressedFiles; i++ {
+	for i := range algorithm.MaxDecompressedFiles + 1 {
 		files[fmt.Sprintf("data/file_%d.txt", i)] = []byte("1")
 	}
 
