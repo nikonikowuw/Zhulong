@@ -338,7 +338,12 @@ func locateTask(ctx context.Context, tx *gorm.DB, task *Task) (*Task, error) {
 }
 
 // ensureCameraAvailable 拦住"一对多"写入：目标 camera_id 已被另一个任务占用。
-func ensureCameraAvailable(ctx context.Context, tx *gorm.DB, task *Task, existing *Task) error {
+func ensureCameraAvailable(
+	ctx context.Context,
+	tx *gorm.DB,
+	task *Task,
+	existing *Task,
+) error {
 	owner, err := gorm.G[Task](tx).Where("camera_id = ?", task.CameraID).First(ctx)
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
@@ -352,7 +357,12 @@ func ensureCameraAvailable(ctx context.Context, tx *gorm.DB, task *Task, existin
 }
 
 // writeTaskRow 写主表行。更新走 map 形式，否则 enabled=false 会被 GORM 零值机制省略。
-func writeTaskRow(ctx context.Context, tx *gorm.DB, task *Task, update bool) error {
+func writeTaskRow(
+	ctx context.Context,
+	tx *gorm.DB,
+	task *Task,
+	update bool,
+) error {
 	if !update {
 		parent := *task
 		parent.Algorithms = nil
@@ -375,7 +385,12 @@ func writeTaskRow(ctx context.Context, tx *gorm.DB, task *Task, update bool) err
 }
 
 // syncTaskAlgorithms 先删除已移除的算法子项，再 upsert 保留下来的与新增的子项。
-func syncTaskAlgorithms(ctx context.Context, tx *gorm.DB, task *Task, now time.Time) error {
+func syncTaskAlgorithms(
+	ctx context.Context,
+	tx *gorm.DB,
+	task *Task,
+	now time.Time,
+) error {
 	keepIDs := make([]string, 0, len(task.Algorithms))
 	for _, sub := range task.Algorithms {
 		keepIDs = append(keepIDs, sub.AlgorithmID)

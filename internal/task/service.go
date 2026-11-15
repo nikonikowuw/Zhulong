@@ -276,6 +276,9 @@ func (s *Service) ListTasks(ctx context.Context, cameraID, algorithmID string) (
 	for i := range tasks {
 		s.warnInvalidCrop(&tasks[i])
 	}
+	if tasks == nil {
+		tasks = []Task{}
+	}
 	return tasks, nil
 }
 

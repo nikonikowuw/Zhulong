@@ -41,7 +41,9 @@ type DeleteTaskResponse struct {
 // ToResponse converts a Task entity to its public API response.
 func (t *Task) ToResponse() TaskResponse {
 	if t == nil {
-		return TaskResponse{}
+		return TaskResponse{
+			Algorithms: []TaskAlgorithmInfo{},
+		}
 	}
 	algorithms := make([]TaskAlgorithmInfo, 0, len(t.Algorithms))
 	for i := range t.Algorithms {

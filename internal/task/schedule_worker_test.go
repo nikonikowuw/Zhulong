@@ -299,7 +299,12 @@ func TestScheduleWorkerInvalidScheduleTreatedAsActive(t *testing.T) {
 	}
 
 	listener := &recordedListener{}
-	worker := NewScheduleWorker(store, []TaskChangeListener{listener}, nil, time.Second)
+	worker := NewScheduleWorker(
+		store,
+		[]TaskChangeListener{listener},
+		nil,
+		time.Second,
+	)
 	worker.check(ctx)
 	if !worker.lastActive[taskAlgorithmKey{taskID: "task_bad_sched", algorithmID: "algo_bad_sched"}] {
 		t.Fatal("expected malformed schedule to fall back to active")

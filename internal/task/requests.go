@@ -181,12 +181,10 @@ func (req *UpdateTaskRequest) apply(t *Task) error {
 
 // hasLegacyAlgorithmFields reports whether any flat single-algorithm update fields were provided.
 func (req *UpdateTaskRequest) hasLegacyAlgorithmFields() bool {
-	return req.SampleFPS != 0 ||
-		req.SampleFPSAlt != 0 ||
-		req.ConfigJSON != "" ||
-		req.ConfigJSONAlt != "" ||
-		req.RegionConfigJSON != "" ||
-		req.RegionConfigJSONAlt != ""
+	hasSampleFPS := req.SampleFPS != 0 || req.SampleFPSAlt != 0
+	hasConfig := req.ConfigJSON != "" || req.ConfigJSONAlt != ""
+	hasRegion := req.RegionConfigJSON != "" || req.RegionConfigJSONAlt != ""
+	return hasSampleFPS || hasConfig || hasRegion
 }
 
 func (req *UpdateTaskRequest) resolveCrop() (string, bool, error) {

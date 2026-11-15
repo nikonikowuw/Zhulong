@@ -673,7 +673,12 @@ func TestServiceListTasksWrapsStoreFailure(t *testing.T) {
 	store, db, cleanup := setupTestStore(t)
 	defer cleanup()
 
-	svc := task.NewService(store, nil, nil, zap.NewNop())
+	svc := task.NewService(
+		store,
+		nil,
+		nil,
+		zap.NewNop(),
+	)
 	sqlDB, err := db.DB()
 	if err != nil {
 		t.Fatalf("unwrap sql.DB: %v", err)

@@ -165,14 +165,15 @@ func (w *ScheduleWorker) check(ctx context.Context) {
 
 			isActive := true
 			sched, err := schedule.Parse(algo.ScheduleJSON)
-			if err != nil {
+			switch {
+			case err != nil:
 				w.logger.Warn(
 					"invalid schedule config in schedule worker; treating as always active",
 					zap.String("task_id", tsk.ID),
 					zap.String("algorithm_id", algo.AlgorithmID),
 					zap.Error(err),
 				)
-			} else if sched != nil {
+			case sched != nil:
 				isActive = sched.IsActiveAt(now)
 			}
 
