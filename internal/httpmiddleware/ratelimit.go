@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/logsafe"
-	"go.uber.org/zap"
 )
 
 // Defaults for the client-log ingestion surface. The per-IP values are fixed by
@@ -26,8 +27,6 @@ const (
 	rateLimitCodePerIP           = "TOO_MANY_REQUESTS"
 	rateLimitCodeProcessRequests = "CLIENT_LOG_BUDGET_EXHAUSTED"
 	rateLimitCodeProcessInFlight = "CLIENT_LOG_CONCURRENCY_LIMIT"
-	rateLimitWindow              = time.Minute
-	rateLimitKeyContextKey       = "zhulong.httpmiddleware.ratelimit_key"
 )
 
 // RateLimitConfig configures a RateLimit middleware. Zero values fall back to
@@ -182,7 +181,13 @@ func (l *IPRateLimiter) allowIPLocked(key string, now time.Time) bool {
 		delete(l.buckets, oldest.Value.(*bucketEntry).key)
 	}
 
-	entry := &bucketEntry{key: key, bucket: tokenBucket{tokens: capacity, last: now}}
+	entry := &bucketEntry{
+		key: key,
+		bucket: tokenBucket{
+			tokens: capacity,
+			last:   now,
+		},
+	}
 	element := l.order.PushFront(entry)
 	l.buckets[key] = element
 	if entry.bucket.tokens < 1 {
@@ -211,7 +216,10 @@ func (l *IPRateLimiter) reserve(key string) admission {
 	}
 
 	processCapacity := float64(l.config.ProcessRequestsPerMinute)
-	processBucket := tokenBucket{tokens: l.processTokens, last: l.processLast}
+	processBucket := tokenBucket{
+		tokens: l.processTokens,
+		last:   l.processLast,
+	}
 	refill(&processBucket, now, processCapacity, processCapacity)
 	l.processTokens, l.processLast = processBucket.tokens, processBucket.last
 	if l.processTokens < 1 {
@@ -240,7 +248,10 @@ func (l *IPRateLimiter) release(bodyBytes int64) {
 	}
 	now := l.now()
 	capacity := float64(l.config.ProcessBytesPerMinute)
-	byteBucket := tokenBucket{tokens: l.byteTokens, last: l.byteLast}
+	byteBucket := tokenBucket{
+		tokens: l.byteTokens,
+		last:   l.byteLast,
+	}
 	refill(&byteBucket, now, capacity, capacity)
 	l.byteTokens, l.byteLast = byteBucket.tokens, byteBucket.last
 	l.byteTokens -= float64(bodyBytes)
@@ -262,7 +273,8 @@ func RateLimit(limiter *IPRateLimiter, logger *zap.Logger) gin.HandlerFunc {
 		key := c.ClientIP()
 		result := limiter.reserve(key)
 		if !result.allowed {
-			logger.Warn("client log request rejected by rate limit",
+			logger.Warn(
+				"client log request rejected by rate limit",
 				zap.String("route", c.FullPath()),
 				zap.String("reason", result.code),
 				zap.String("clientIp", logsafe.IP(key)),

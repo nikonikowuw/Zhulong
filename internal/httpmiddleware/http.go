@@ -15,13 +15,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/logctx"
-	"go.uber.org/zap"
 )
 
-const requestIDKey = "zhulong.request_id"
-const accessLogRecoveryKey = "zhulong.httpmiddleware.access_log_recovery"
+const (
+	requestIDKey         = "zhulong.request_id"
+	accessLogRecoveryKey = "zhulong.httpmiddleware.access_log_recovery"
+)
 
 // MaxAPIRequestBodyBytes bounds non-file API request bodies to 1 MiB.
 const MaxAPIRequestBodyBytes int64 = 1 << 20
@@ -47,8 +50,14 @@ type PanicObserver interface {
 func Recovery(logger *zap.Logger, observers ...PanicObserver) gin.HandlerFunc {
 	return gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, recovered any) {
 		cause := fmt.Errorf("HTTP handler panic (%T)", recovered)
-		httputil.WriteErrorWithLogger(c,
-			httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", cause),
+		httputil.WriteErrorWithLogger(
+			c,
+			httputil.NewError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Internal server error",
+				cause,
+			),
 			logger,
 			zap.Any("panic", recovered),
 			zap.Stack("stack"),
@@ -123,7 +132,7 @@ func AccessLog(logger *zap.Logger) gin.HandlerFunc {
 			streamLogger.Info("stream.started", startFields...)
 		}
 
-		completed := false
+		var completed bool
 		complete := func() {
 			if completed {
 				return
@@ -131,8 +140,14 @@ func AccessLog(logger *zap.Logger) gin.HandlerFunc {
 			completed = true
 			status := trackedWriter.Status()
 			if streamKind != "" {
-				established := streamEstablished(streamKind, status, trackedWriter.Header().Get("Content-Type"), trackedWriter.hijacked)
-				fields := append(streamFields,
+				established := streamEstablished(
+					streamKind,
+					status,
+					trackedWriter.Header().Get("Content-Type"),
+					trackedWriter.hijacked,
+				)
+				fields := append(
+					streamFields,
 					zap.Int("status", status),
 					zap.Int("bytes", trackedWriter.Size()),
 					zap.String("clientIP", c.ClientIP()),
@@ -143,11 +158,16 @@ func AccessLog(logger *zap.Logger) gin.HandlerFunc {
 					streamLogger.Info("stream.closed", fields...)
 					return
 				}
-				fields = append(fields, zap.Int64("latency_ms", time.Since(started).Milliseconds()), zap.String("requestId", requestID))
+				fields = append(
+					fields,
+					zap.Int64("latency_ms", time.Since(started).Milliseconds()),
+					zap.String("requestId", requestID),
+				)
 				streamLogger.Info("stream.closed", fields...)
 				return
 			}
-			fields := append(baseFields,
+			fields := append(
+				baseFields,
 				zap.Int("status", status),
 				zap.Int("bytes", trackedWriter.Size()),
 				zap.String("clientIP", c.ClientIP()),
@@ -175,7 +195,9 @@ func streamEstablished(kind string, status int, contentType string, hijacked boo
 	if kind == "websocket" {
 		return status == http.StatusSwitchingProtocols || hijacked
 	}
-	return status >= http.StatusOK && status < http.StatusMultipleChoices && strings.HasPrefix(strings.ToLower(contentType), "text/event-stream")
+	isStatus2xx := status >= http.StatusOK && status < http.StatusMultipleChoices
+	isEventStream := strings.HasPrefix(strings.ToLower(contentType), "text/event-stream")
+	return isStatus2xx && isEventStream
 }
 
 type trackingResponseWriter struct {
@@ -216,7 +238,15 @@ func MaxBodyLimitWithLimit(limit int64) gin.HandlerFunc {
 func MaxBodyLimitWithLimitAndCode(limit int64, errorCode string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.ContentLength > limit {
-			httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, errorCode, "Request body too large", nil))
+			httputil.WriteError(
+				c,
+				httputil.NewError(
+					http.StatusRequestEntityTooLarge,
+					errorCode,
+					"Request body too large",
+					nil,
+				),
+			)
 			return
 		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
@@ -229,8 +259,11 @@ func validRequestID(requestID string) bool {
 		return false
 	}
 	for _, char := range requestID {
-		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') || strings.ContainsRune("-_.", char)) {
+		isLower := char >= 'a' && char <= 'z'
+		isUpper := char >= 'A' && char <= 'Z'
+		isDigit := char >= '0' && char <= '9'
+		isSpecial := strings.ContainsRune("-_.", char)
+		if !isLower && !isUpper && !isDigit && !isSpecial {
 			return false
 		}
 	}

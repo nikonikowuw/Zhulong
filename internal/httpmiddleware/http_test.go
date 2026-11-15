@@ -29,9 +29,21 @@ func TestRequestIDPropagatesValidValueAndReplacesInvalidValue(t *testing.T) {
 		wantID     string
 		wantFormat bool
 	}{
-		{name: "valid incoming ID", requestID: "edge-node_1.abc", wantID: "edge-node_1.abc"},
-		{name: "invalid incoming ID", requestID: "bad\nvalue", wantFormat: true},
-		{name: "oversized incoming ID", requestID: string(make([]byte, 129)), wantFormat: true},
+		{
+			name:      "valid incoming ID",
+			requestID: "edge-node_1.abc",
+			wantID:    "edge-node_1.abc",
+		},
+		{
+			name:       "invalid incoming ID",
+			requestID:  "bad\nvalue",
+			wantFormat: true,
+		},
+		{
+			name:       "oversized incoming ID",
+			requestID:  string(make([]byte, 129)),
+			wantFormat: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -108,7 +120,15 @@ func TestAccessLogAndWriteErrorShareRequestIDAndSingleErrorOwnership(t *testing.
 	router := gin.New()
 	router.Use(Recovery(logger), RequestID(), AccessLog(logger))
 	router.GET("/api/v1/records/:id", func(c *gin.Context) {
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "DATABASE_ERROR", "safe", nil))
+		httputil.WriteError(
+			c,
+			httputil.NewError(
+				http.StatusInternalServerError,
+				"DATABASE_ERROR",
+				"safe",
+				nil,
+			),
+		)
 	})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/records/42?token=private", nil)
@@ -179,7 +199,11 @@ func TestRecoveryLeavesErrorOwnershipToWriteError(t *testing.T) {
 		t.Fatalf("single panic error event lacks internal panic detail and stack: %#v", fields)
 	}
 	accessFields := entries[1].ContextMap()
-	if accessFields["requestId"] != "req-panic" || accessFields["route"] != "/panic" || accessFields["status"] != int64(http.StatusInternalServerError) || accessFields["latency_ms"] == nil {
+	hasReqID := accessFields["requestId"] == "req-panic"
+	hasRoute := accessFields["route"] == "/panic"
+	hasStatus := accessFields["status"] == int64(http.StatusInternalServerError)
+	hasLatency := accessFields["latency_ms"] != nil
+	if !hasReqID || !hasRoute || !hasStatus || !hasLatency {
 		t.Fatalf("panic access event lacks safe request metadata: %#v", accessFields)
 	}
 	if _, exists := accessFields["path"]; exists {
@@ -214,7 +238,10 @@ func TestAccessLogSSEEstablishedAndFailedHandshake(t *testing.T) {
 			router.ServeHTTP(recorder, request)
 
 			entries := observed.All()
-			if len(entries) != 2 || entries[0].Message != "stream.started" || entries[1].Message != "stream.closed" {
+			hasValidSSEEvents := len(entries) == 2 &&
+				entries[0].Message == "stream.started" &&
+				entries[1].Message == "stream.closed"
+			if !hasValidSSEEvents {
 				t.Fatalf("unexpected SSE events: %+v", entries)
 			}
 			var streamID string
@@ -264,14 +291,25 @@ func TestAccessLogClosesPanickedSSERequest(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 
 	entries := observed.All()
-	if len(entries) != 3 || entries[0].Message != "stream.started" || entries[1].Level != zap.ErrorLevel || entries[1].Message != "HTTP request failed" || entries[2].Message != "stream.closed" {
+	hasValidPanickedSSEEvents := len(entries) == 3 &&
+		entries[0].Message == "stream.started" &&
+		entries[1].Level == zap.ErrorLevel &&
+		entries[1].Message == "HTTP request failed" &&
+		entries[2].Message == "stream.closed"
+	if !hasValidPanickedSSEEvents {
 		t.Fatalf("panicked SSE must emit start, one error, and close events: %+v", entries)
 	}
 	if entries[1].ContextMap()["requestId"] != "req-stream-panic" {
 		t.Fatalf("panic error lost request ID: %#v", entries[1].ContextMap())
 	}
 	fields := entries[2].ContextMap()
-	if fields["requestId"] != "req-stream-panic" || fields["route"] != "/api/v1/cameras/events" || fields["status"] != int64(http.StatusInternalServerError) || fields["established"] != false || fields["latency_ms"] == nil || fields["session_ms"] != nil {
+	hasValidPanicLifecycle := fields["requestId"] == "req-stream-panic" &&
+		fields["route"] == "/api/v1/cameras/events" &&
+		fields["status"] == int64(http.StatusInternalServerError) &&
+		fields["established"] == false &&
+		fields["latency_ms"] != nil &&
+		fields["session_ms"] == nil
+	if !hasValidPanicLifecycle {
 		t.Fatalf("panicked SSE close event has invalid lifecycle metadata: %#v", fields)
 	}
 	if _, exists := fields["path"]; exists {
@@ -288,7 +326,9 @@ func TestAccessLogWebSocketEstablishedAndFailedHandshake(t *testing.T) {
 	router.GET("/cameras/:id/ws", func(c *gin.Context) {
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err == nil {
-			_ = conn.Close()
+			if closeErr := conn.Close(); closeErr != nil {
+				t.Logf("closing upgraded connection: %v", closeErr)
+			}
 		}
 	})
 	server := httptest.NewServer(router)
@@ -298,7 +338,9 @@ func TestAccessLogWebSocketEstablishedAndFailedHandshake(t *testing.T) {
 		server.Close()
 		t.Fatalf("WebSocket handshake: %v (response=%v)", err, response)
 	}
-	_ = conn.Close()
+	if closeErr := conn.Close(); closeErr != nil {
+		t.Logf("closing dialer connection: %v", closeErr)
+	}
 	server.Close()
 
 	var entries []observer.LoggedEntry
@@ -310,7 +352,10 @@ func TestAccessLogWebSocketEstablishedAndFailedHandshake(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(entries) != 2 || entries[0].Message != "stream.started" || entries[1].Message != "stream.closed" {
+	hasValidWSEvents := len(entries) == 2 &&
+		entries[0].Message == "stream.started" &&
+		entries[1].Message == "stream.closed"
+	if !hasValidWSEvents {
 		t.Fatalf("unexpected WebSocket events: %+v", entries)
 	}
 	var streamID string
@@ -330,7 +375,10 @@ func TestAccessLogWebSocketEstablishedAndFailedHandshake(t *testing.T) {
 		streamID = id
 	}
 	fields := entries[1].ContextMap()
-	if fields["established"] != true || fields["session_ms"] == nil || fields["latency_ms"] != nil {
+	isWSEstablished := fields["established"] == true
+	hasWSSession := fields["session_ms"] != nil
+	hasNoWSLatency := fields["latency_ms"] == nil
+	if !isWSEstablished || !hasWSSession || !hasNoWSLatency {
 		t.Fatalf("successful WebSocket must use session_ms only: %#v", fields)
 	}
 
@@ -343,7 +391,9 @@ func TestAccessLogWebSocketEstablishedAndFailedHandshake(t *testing.T) {
 	failedRequest.Header.Set("X-Request-ID", "req-failed-websocket")
 	failedRouter.ServeHTTP(failedResponse, failedRequest)
 	failedEntries := failedLogs.All()
-	if len(failedEntries) != 2 || failedEntries[1].Message != "stream.closed" {
+	hasValidFailedWSEvents := len(failedEntries) == 2 &&
+		failedEntries[1].Message == "stream.closed"
+	if !hasValidFailedWSEvents {
 		t.Fatalf("failed WebSocket handshake events: %+v", failedEntries)
 	}
 	failedFields := failedEntries[1].ContextMap()
@@ -353,7 +403,10 @@ func TestAccessLogWebSocketEstablishedAndFailedHandshake(t *testing.T) {
 	if id, ok := failedFields["streamId"].(string); !ok || id == "" {
 		t.Fatalf("failed stream event lacks streamId: %#v", failedFields)
 	}
-	if failedFields["established"] != false || failedFields["latency_ms"] == nil || failedFields["session_ms"] != nil {
+	isWSNotEstablished := failedFields["established"] == false
+	hasWSLatency := failedFields["latency_ms"] != nil
+	hasNoWSSession := failedFields["session_ms"] == nil
+	if !isWSNotEstablished || !hasWSLatency || !hasNoWSSession {
 		t.Fatalf("failed WebSocket handshake fields: %#v", failedFields)
 	}
 }
@@ -404,7 +457,8 @@ func TestMaxBodyLimitWithLimit(t *testing.T) {
 		c.String(http.StatusOK, "ok")
 	})
 
-	req1 := httptest.NewRequest(http.MethodPost, "/test", httptest.NewRequest(http.MethodPost, "/", nil).Body)
+	dummyReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	req1 := httptest.NewRequest(http.MethodPost, "/test", dummyReq.Body)
 	req1.ContentLength = 32
 	rec1 := httptest.NewRecorder()
 	router.ServeHTTP(rec1, req1)

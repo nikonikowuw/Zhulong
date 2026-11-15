@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +19,9 @@ type fakeClock struct {
 }
 
 func newFakeClock() *fakeClock {
-	return &fakeClock{now: time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)}
+	return &fakeClock{
+		now: time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC),
+	}
 }
 
 func (c *fakeClock) Now() time.Time {
@@ -44,11 +47,14 @@ func admit(l *IPRateLimiter, key string) admission {
 func TestIPRateLimiterRefillRate(t *testing.T) {
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 60, Burst: 10, MaxKeys: 16, Now: clock.Now,
+		PerMinute: 60,
+		Burst:     10,
+		MaxKeys:   16,
+		Now:       clock.Now,
 	})
 
 	// Drain the burst.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if !admit(limiter, "1.2.3.4").allowed {
 			t.Fatalf("burst token %d rejected", i)
 		}
@@ -76,10 +82,13 @@ func TestIPRateLimiterRefillRate(t *testing.T) {
 func TestIPRateLimiterBurstExhaustionAndRecovery(t *testing.T) {
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 60, Burst: 3, MaxKeys: 16, Now: clock.Now,
+		PerMinute: 60,
+		Burst:     3,
+		MaxKeys:   16,
+		Now:       clock.Now,
 	})
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if !admit(limiter, "10.0.0.1").allowed {
 			t.Fatalf("burst token %d rejected", i)
 		}
@@ -94,7 +103,7 @@ func TestIPRateLimiterBurstExhaustionAndRecovery(t *testing.T) {
 	}
 
 	clock.Advance(time.Minute)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if !admit(limiter, "10.0.0.1").allowed {
 			t.Fatalf("token %d not restored after one minute", i)
 		}
@@ -104,10 +113,13 @@ func TestIPRateLimiterBurstExhaustionAndRecovery(t *testing.T) {
 func TestIPRateLimiterBoundedKeySpace(t *testing.T) {
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 60, Burst: 1, MaxKeys: 32, Now: clock.Now,
+		PerMinute: 60,
+		Burst:     1,
+		MaxKeys:   32,
+		Now:       clock.Now,
 	})
 
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		admit(limiter, fmt.Sprintf("10.0.%d.%d", i/256, i%256))
 		if got := limiter.Len(); got > 32 {
 			t.Fatalf("key space grew to %d, max 32", got)
@@ -123,7 +135,10 @@ func TestIPRateLimiterBoundedKeySpace(t *testing.T) {
 func TestIPRateLimiterEvictsOldestNotNewest(t *testing.T) {
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 60, Burst: 1, MaxKeys: 2, Now: clock.Now,
+		PerMinute: 60,
+		Burst:     1,
+		MaxKeys:   2,
+		Now:       clock.Now,
 	})
 
 	if !admit(limiter, "old").allowed {
@@ -153,7 +168,10 @@ func TestIPRateLimiterEvictsOldestNotNewest(t *testing.T) {
 func TestIPRateLimiterRecencyOrder(t *testing.T) {
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 60, Burst: 5, MaxKeys: 2, Now: clock.Now,
+		PerMinute: 60,
+		Burst:     5,
+		MaxKeys:   2,
+		Now:       clock.Now,
 	})
 
 	admit(limiter, "a")
@@ -177,7 +195,8 @@ func TestIPRateLimiterRecencyOrder(t *testing.T) {
 func TestIPRateLimiterProcessRequestBudget(t *testing.T) {
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 100, Burst: 100,
+		PerMinute:                100,
+		Burst:                    100,
 		MaxKeys:                  1024,
 		ProcessRequestsPerMinute: 2,
 		ProcessMaxInFlight:       100,
@@ -185,7 +204,7 @@ func TestIPRateLimiterProcessRequestBudget(t *testing.T) {
 	})
 
 	// Distinct IPs so the per-IP budget never triggers.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if r := limiter.reserve(fmt.Sprintf("10.1.0.%d", i)); !r.allowed {
 			t.Fatalf("request %d rejected by process budget too early", i)
 		}
@@ -208,7 +227,9 @@ func TestIPRateLimiterProcessRequestBudget(t *testing.T) {
 func TestIPRateLimiterProcessInFlightBudget(t *testing.T) {
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 100, Burst: 100, MaxKeys: 1024,
+		PerMinute:                100,
+		Burst:                    100,
+		MaxKeys:                  1024,
 		ProcessRequestsPerMinute: 1000,
 		ProcessMaxInFlight:       2,
 		Now:                      clock.Now,
@@ -234,7 +255,9 @@ func TestIPRateLimiterProcessInFlightBudget(t *testing.T) {
 func TestIPRateLimiterProcessByteBudget(t *testing.T) {
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 100, Burst: 100, MaxKeys: 1024,
+		PerMinute:                100,
+		Burst:                    100,
+		MaxKeys:                  1024,
 		ProcessRequestsPerMinute: 1000,
 		ProcessBytesPerMinute:    1000,
 		ProcessMaxInFlight:       100,
@@ -272,15 +295,18 @@ func TestIPRateLimiterProcessByteBudget(t *testing.T) {
 func TestIPRateLimiterConcurrentSafety(t *testing.T) {
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 6000, Burst: 100, MaxKeys: 64, Now: clock.Now,
+		PerMinute: 6000,
+		Burst:     100,
+		MaxKeys:   64,
+		Now:       clock.Now,
 	})
 
 	var waitGroup sync.WaitGroup
-	for worker := 0; worker < 16; worker++ {
+	for worker := range 16 {
 		waitGroup.Add(1)
 		go func(worker int) {
 			defer waitGroup.Done()
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				limiter.reserve(fmt.Sprintf("10.4.%d.%d", worker, i%40))
 				if i%3 == 0 {
 					limiter.release(64)
@@ -301,7 +327,10 @@ func TestRateLimitMiddlewareRejectsWithEnvelope(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	clock := newFakeClock()
 	limiter := NewIPRateLimiter(RateLimitConfig{
-		PerMinute: 60, Burst: 1, MaxKeys: 8, Now: clock.Now,
+		PerMinute: 60,
+		Burst:     1,
+		MaxKeys:   8,
+		Now:       clock.Now,
 	})
 
 	router := gin.New()
@@ -322,22 +351,11 @@ func TestRateLimitMiddlewareRejectsWithEnvelope(t *testing.T) {
 		t.Fatalf("second request status = %d, want 429", second.Code)
 	}
 	body := second.Body.String()
-	if want := `"code":"TOO_MANY_REQUESTS"`; !contains(body, want) {
+	if want := `"code":"TOO_MANY_REQUESTS"`; !strings.Contains(body, want) {
 		t.Fatalf("response body %q missing %s", body, want)
 	}
 	// The envelope must not echo request details.
-	if contains(body, "10.0.0.1") {
+	if strings.Contains(body, "10.0.0.1") {
 		t.Fatalf("response body leaked client address: %q", body)
 	}
-}
-
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (func() bool {
-		for i := 0; i+len(needle) <= len(haystack); i++ {
-			if haystack[i:i+len(needle)] == needle {
-				return true
-			}
-		}
-		return false
-	})()
 }
