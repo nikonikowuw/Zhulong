@@ -21,8 +21,24 @@ func TestNewQueueLogsStructuredNativeRecords(t *testing.T) {
 	if err := queue.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	seenAt := time.Date(2026, 10, 20, 12, 30, 0, 0, time.UTC)
-	if !queue.TryEnqueue(Record{Level: Info, StreamID: 17, Module: "engine.capture", Message: "frame acquired", SeenAt: seenAt}) {
+	seenAt := time.Date(
+		2026,
+		time.October,
+		20,
+		12,
+		30,
+		0,
+		0,
+		time.UTC,
+	)
+	rec := Record{
+		Level:    Info,
+		StreamID: 17,
+		Module:   "engine.capture",
+		Message:  "frame acquired",
+		SeenAt:   seenAt,
+	}
+	if !queue.TryEnqueue(rec) {
 		t.Fatal("TryEnqueue rejected a valid record")
 	}
 	pending, err := queue.Stop(context.Background())
@@ -34,11 +50,19 @@ func TestNewQueueLogsStructuredNativeRecords(t *testing.T) {
 		t.Fatalf("got %d entries, want 1", len(entries))
 	}
 	entry := entries[0]
-	if entry.Level != zap.InfoLevel || entry.LoggerName != "native.log" || entry.Message != "native event" {
+	hasCorrectLevel := entry.Level == zap.InfoLevel
+	hasCorrectLogger := entry.LoggerName == "native.log"
+	hasCorrectMessage := entry.Message == "native event"
+	if !hasCorrectLevel || !hasCorrectLogger || !hasCorrectMessage {
 		t.Fatalf("unexpected native log entry: %+v", entry)
 	}
 	fields := entry.ContextMap()
-	if fields["module"] != "engine.capture" || fields["streamId"] != uint64(17) || fields["message"] != "frame acquired" || !fields["seenAt"].(time.Time).Equal(seenAt) {
+	seenTime, hasSeenTime := fields["seenAt"].(time.Time)
+	moduleMatch := fields["module"] == "engine.capture"
+	streamMatch := fields["streamId"] == uint64(17)
+	messageMatch := fields["message"] == "frame acquired"
+	seenAtMatch := hasSeenTime && seenTime.Equal(seenAt)
+	if !moduleMatch || !streamMatch || !messageMatch || !seenAtMatch {
 		t.Fatalf("unexpected structured fields: %#v", fields)
 	}
 }
@@ -52,7 +76,12 @@ func TestNewQueueAcceptsEmptyNativeMessage(t *testing.T) {
 	if err := queue.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if !queue.TryEnqueue(Record{Level: Info, Module: "engine", SeenAt: time.Now()}) {
+	rec := Record{
+		Level:  Info,
+		Module: "engine",
+		SeenAt: time.Now(),
+	}
+	if !queue.TryEnqueue(rec) {
 		t.Fatal("TryEnqueue rejected a valid empty native message")
 	}
 	pending, err := queue.Stop(context.Background())
@@ -60,7 +89,10 @@ func TestNewQueueAcceptsEmptyNativeMessage(t *testing.T) {
 		t.Fatalf("Stop = (%d, %v), want a fully drained queue", pending, err)
 	}
 	entries := observed.All()
-	if len(entries) != 1 || entries[0].ContextMap()["message"] != "" {
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].ContextMap()["message"] != "" {
 		t.Fatalf("empty native message was not preserved: %+v", entries)
 	}
 }
@@ -69,7 +101,9 @@ func TestQueueNonblockingAdmissionAndDropAccounting(t *testing.T) {
 	queue := newQueue(1, func(Record) error { return nil })
 	queue.admission.Lock()
 	done := make(chan bool, 1)
-	go func() { done <- queue.TryEnqueue(validRecord()) }()
+	go func() {
+		done <- queue.TryEnqueue(validRecord())
+	}()
 	select {
 	case accepted := <-done:
 		if accepted {
@@ -97,8 +131,11 @@ func TestQueueNonblockingAdmissionAndDropAccounting(t *testing.T) {
 	if !errors.Is(err, ErrNotStarted) || pending != 1 {
 		t.Fatalf("Stop before Start = (%d, %v), want (1, ErrNotStarted)", pending, err)
 	}
-	if queue.TryEnqueue(validRecord()) || queue.Dropped() != 4 {
-		t.Fatal("post-stop enqueue was not rejected and counted")
+	if queue.TryEnqueue(validRecord()) {
+		t.Fatal("post-stop enqueue was accepted")
+	}
+	if queue.Dropped() != 4 {
+		t.Fatalf("dropped = %d, want 4", queue.Dropped())
 	}
 }
 
@@ -117,10 +154,10 @@ func TestQueueConcurrentProducersAndSuccessfulDrain(t *testing.T) {
 	var accepted atomic.Int64
 	var producersDone sync.WaitGroup
 	producersDone.Add(producers)
-	for i := 0; i < producers; i++ {
+	for range producers {
 		go func() {
 			defer producersDone.Done()
-			for j := 0; j < recordsPerProducer; j++ {
+			for range recordsPerProducer {
 				if queue.TryEnqueue(validRecord()) {
 					accepted.Add(1)
 				}
@@ -142,8 +179,9 @@ func TestQueueConcurrentProducersAndSuccessfulDrain(t *testing.T) {
 	if queue.TryEnqueue(validRecord()) {
 		t.Fatal("post-stop enqueue was accepted")
 	}
-	if got := accepted.Load() + int64(queue.Dropped()); got != attempted+1 {
-		t.Fatalf("post-stop attempt accounting = %d, want %d", got, attempted+1)
+	totalHandled := accepted.Load() + int64(queue.Dropped())
+	if totalHandled != attempted+1 {
+		t.Fatalf("post-stop attempt accounting = %d, want %d", totalHandled, attempted+1)
 	}
 }
 
@@ -181,15 +219,19 @@ func TestQueueStopTimeoutReportsPendingAndSinkErrors(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || pending != 2 {
 		t.Fatalf("timed Stop = (%d, %v), want two pending records and deadline error", pending, err)
 	}
-	releaseOnce.Do(func() { close(release) })
+	releaseOnce.Do(func() {
+		close(release)
+	})
 	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
 	defer cancel2()
 	pending, err = queue.Stop(ctx2)
 	if err != nil || pending != 1 {
 		t.Fatalf("Stop after unblocking sink = (%d, %v), want one queued record after timeout abort", pending, err)
 	}
-	if got := queue.SinkFailures(); got != 1 || !errors.Is(queue.LastSinkError(), sinkErr) {
-		t.Fatalf("sink health = (%d, %v), want one reported sink error", got, queue.LastSinkError())
+	failures := queue.SinkFailures()
+	lastErr := queue.LastSinkError()
+	if failures != 1 || !errors.Is(lastErr, sinkErr) {
+		t.Fatalf("sink health = (%d, %v), want one reported sink error", failures, lastErr)
 	}
 }
 
@@ -208,11 +250,22 @@ func TestQueueDropSummaryIsEmittedOnStop(t *testing.T) {
 		t.Fatalf("Stop = (%d, %v)", pending, err)
 	}
 	entries := observed.All()
-	if len(entries) != 1 || entries[0].Message != "native log records dropped" || entries[0].ContextMap()["dropped_total"] != uint64(1) {
-		t.Fatalf("unexpected drop summary: %+v", entries)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	entry := entries[0]
+	hasExpectedMsg := entry.Message == "native log records dropped"
+	hasExpectedDrop := entry.ContextMap()["dropped_total"] == uint64(1)
+	if !hasExpectedMsg || !hasExpectedDrop {
+		t.Fatalf("unexpected drop summary: %+v", entry)
 	}
 }
 
 func validRecord() Record {
-	return Record{Level: Info, Module: "test", Message: "record", SeenAt: time.Now().UTC()}
+	return Record{
+		Level:   Info,
+		Module:  "test",
+		Message: "record",
+		SeenAt:  time.Now().UTC(),
+	}
 }

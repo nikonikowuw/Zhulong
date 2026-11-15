@@ -72,11 +72,13 @@ func NewQueue(capacity int, logger *zap.Logger) (*Queue, error) {
 	}
 	nativeLogger := logger.Named("native.log")
 	q := newQueue(capacity, func(record Record) error {
-		fields := []zap.Field{
+		fields := make([]zap.Field, 0, 4)
+		fields = append(
+			fields,
 			zap.String("module", record.Module),
 			zap.Time("seenAt", record.SeenAt),
 			zap.String("message", record.Message),
-		}
+		)
 		if record.StreamID != 0 {
 			fields = append(fields, zap.Uint64("streamId", record.StreamID))
 		}
@@ -152,16 +154,24 @@ func (q *Queue) TryEnqueue(record Record) bool {
 }
 
 // RecordDrop accounts for native-side invalid input rejected before queue admission.
-func (q *Queue) RecordDrop() { q.dropped.Add(1) }
+func (q *Queue) RecordDrop() {
+	q.dropped.Add(1)
+}
 
 // Dropped returns the total number of invalid, contended, full, or post-stop drops.
-func (q *Queue) Dropped() uint64 { return q.dropped.Load() }
+func (q *Queue) Dropped() uint64 {
+	return q.dropped.Load()
+}
 
 // Pending returns queued and currently-consumed records not yet drained.
-func (q *Queue) Pending() int { return int(q.pending.Load()) }
+func (q *Queue) Pending() int {
+	return int(q.pending.Load())
+}
 
 // SinkFailures reports consumer errors since construction.
-func (q *Queue) SinkFailures() uint64 { return q.sinkFailures.Load() }
+func (q *Queue) SinkFailures() uint64 {
+	return q.sinkFailures.Load()
+}
 
 // LastSinkError returns the latest consumer error, if any.
 func (q *Queue) LastSinkError() error {
@@ -196,7 +206,9 @@ func (q *Queue) Stop(ctx context.Context) (int, error) {
 			return q.Pending(), nil
 		default:
 		}
-		q.abortOnce.Do(func() { close(q.abortCh) })
+		q.abortOnce.Do(func() {
+			close(q.abortCh)
+		})
 		pending := q.Pending()
 		return pending, fmt.Errorf("stop native log queue with %d pending records: %w", pending, ctx.Err())
 	}
@@ -271,5 +283,8 @@ func (q *Queue) reportDrops() {
 }
 
 func (r Record) valid() bool {
-	return r.Level <= Error && r.Module != "" && !r.SeenAt.IsZero()
+	hasValidLevel := r.Level <= Error
+	hasModule := r.Module != ""
+	hasSeenAt := !r.SeenAt.IsZero()
+	return hasValidLevel && hasModule && hasSeenAt
 }
