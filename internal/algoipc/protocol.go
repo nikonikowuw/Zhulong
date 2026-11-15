@@ -1,3 +1,5 @@
+// Package algoipc defines binary framing protocols, message types, and control payload
+// layouts used for IPC between the Zhulong host and algorithm runner processes.
 package algoipc
 
 import (
@@ -7,6 +9,9 @@ import (
 )
 
 const (
+	// IpcHeaderSize is the fixed size in bytes of the 16-byte binary IPC header.
+	IpcHeaderSize = 16
+
 	// IpcMagic matches native IPC_MAGIC ('ZHLG' = 0x5A484C47).
 	IpcMagic uint32 = 0x5A484C47
 	// IpcVersion matches native IPC_VERSION = 1.
@@ -78,43 +83,13 @@ const (
 	MsgTaskConfig uint16 = 14
 	// MsgTaskRegions carries the host-owned full-frame region JSON, with the same framing.
 	MsgTaskRegions uint16 = 15
-)
 
-// IPC control payload layouts.
-//
-// TaskConfigHeaderSize is sizeof(zhulong::ipc::TaskConfigMsg) in
-// native/src/algorithm/ipc/ipc_protocol.hpp: a uint32 length followed by a
-// 64-byte algorithm id. Keep both numbers in sync with that struct — the
-// cross-language contract test asserts it.
-const (
 	taskConfigAlgorithmIDMaxBytes = 64
 	// TaskConfigHeaderSize is the fixed prefix every MSG_TASK_CONFIG payload starts with.
+	// It is sizeof(zhulong::ipc::TaskConfigMsg) in native/src/algorithm/ipc/ipc_protocol.hpp:
+	// a uint32 length followed by a 64-byte algorithm id.
 	TaskConfigHeaderSize = 4 + taskConfigAlgorithmIDMaxBytes
 )
-
-// EncodeTaskConfigPayload frames one MSG_TASK_CONFIG payload: the fixed header
-// (config length + target algorithm id) followed by the raw config JSON.
-//
-// The skeleton never parses the JSON: field semantics belong to each algorithm's
-// config.schema.json. It only filters by algorithm id, because a FrameBroker
-// broadcast reaches every package subscribed to that stream.
-func EncodeTaskConfigPayload(algorithmID string, configJSON []byte) ([]byte, error) {
-	if algorithmID == "" {
-		return nil, errors.New("task config payload requires an algorithm id")
-	}
-	if len(algorithmID) >= taskConfigAlgorithmIDMaxBytes {
-		return nil, fmt.Errorf("algorithm id %q exceeds the %d-byte IPC field", algorithmID, taskConfigAlgorithmIDMaxBytes)
-	}
-	if len(configJSON) > MaxIpcPayloadSize-TaskConfigHeaderSize {
-		return nil, ErrIpcPayloadTooLarge
-	}
-
-	payload := make([]byte, TaskConfigHeaderSize+len(configJSON))
-	binary.LittleEndian.PutUint32(payload[0:4], uint32(len(configJSON)))
-	copy(payload[4:4+taskConfigAlgorithmIDMaxBytes], algorithmID)
-	copy(payload[TaskConfigHeaderSize:], configJSON)
-	return payload, nil
-}
 
 // ErrIpcPayloadTooLarge is returned when a payload exceeds MaxIpcPayloadSize.
 var ErrIpcPayloadTooLarge = errors.New("IPC payload exceeds the 64KB protocol limit")
@@ -134,21 +109,21 @@ func EncodeIpcMessage(msgType uint16, seq uint32, payload []byte) ([]byte, error
 	if len(payload) > MaxIpcPayloadSize {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrIpcPayloadTooLarge, len(payload))
 	}
-	buf := make([]byte, 16+len(payload))
+	buf := make([]byte, IpcHeaderSize+len(payload))
 	binary.LittleEndian.PutUint32(buf[0:4], IpcMagic)
 	binary.LittleEndian.PutUint16(buf[4:6], msgType)
 	binary.LittleEndian.PutUint16(buf[6:8], IpcVersion)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(payload)))
 	binary.LittleEndian.PutUint32(buf[12:16], seq)
 	if len(payload) > 0 {
-		copy(buf[16:], payload)
+		copy(buf[IpcHeaderSize:], payload)
 	}
 	return buf, nil
 }
 
 // DecodeIpcHeader parses a 16-byte header from a byte slice.
 func DecodeIpcHeader(data []byte) (*IpcHeader, error) {
-	if len(data) < 16 {
+	if len(data) < IpcHeaderSize {
 		return nil, errors.New("insufficient data for IPC header")
 	}
 	hdr := &IpcHeader{
@@ -168,4 +143,32 @@ func DecodeIpcHeader(data []byte) (*IpcHeader, error) {
 		return nil, fmt.Errorf("%w: declared size %d", ErrIpcPayloadTooLarge, hdr.PayloadSize)
 	}
 	return hdr, nil
+}
+
+// EncodeTaskConfigPayload frames one MSG_TASK_CONFIG payload: the fixed header
+// (config length + target algorithm id) followed by the raw config JSON.
+//
+// The skeleton never parses the JSON: field semantics belong to each algorithm's
+// config.schema.json. It only filters by algorithm id, because a FrameBroker
+// broadcast reaches every package subscribed to that stream.
+func EncodeTaskConfigPayload(algorithmID string, configJSON []byte) ([]byte, error) {
+	if algorithmID == "" {
+		return nil, errors.New("task config payload requires an algorithm id")
+	}
+	if len(algorithmID) >= taskConfigAlgorithmIDMaxBytes {
+		return nil, fmt.Errorf(
+			"algorithm id %q exceeds the %d-byte IPC field",
+			algorithmID,
+			taskConfigAlgorithmIDMaxBytes,
+		)
+	}
+	if len(configJSON) > MaxIpcPayloadSize-TaskConfigHeaderSize {
+		return nil, ErrIpcPayloadTooLarge
+	}
+
+	payload := make([]byte, TaskConfigHeaderSize+len(configJSON))
+	binary.LittleEndian.PutUint32(payload[0:4], uint32(len(configJSON)))
+	copy(payload[4:4+taskConfigAlgorithmIDMaxBytes], algorithmID)
+	copy(payload[TaskConfigHeaderSize:], configJSON)
+	return payload, nil
 }

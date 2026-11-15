@@ -21,8 +21,12 @@ func TestEncodeTaskConfigPayload(t *testing.T) {
 		t.Fatalf("EncodeTaskConfigPayload: %v", err)
 	}
 	if len(payload) != algoipc.TaskConfigHeaderSize+len(config) {
-		t.Fatalf("payload length = %d, want header %d + config %d",
-			len(payload), algoipc.TaskConfigHeaderSize, len(config))
+		t.Fatalf(
+			"payload length = %d, want header %d + config %d",
+			len(payload),
+			algoipc.TaskConfigHeaderSize,
+			len(config),
+		)
 	}
 	if got := binary.LittleEndian.Uint32(payload[0:4]); got != uint32(len(config)) {
 		t.Fatalf("config length field = %d, want %d", got, len(config))
@@ -30,9 +34,10 @@ func TestEncodeTaskConfigPayload(t *testing.T) {
 	if got := string(payload[4 : 4+len("face_recognition")]); got != "face_recognition" {
 		t.Fatalf("algorithm id prefix = %q", got)
 	}
-	for i := 4 + len("face_recognition"); i < algoipc.TaskConfigHeaderSize; i++ {
-		if payload[i] != 0 {
-			t.Fatalf("algorithm id field must be NUL padded, byte %d = %d", i, payload[i])
+	paddingStart := 4 + len("face_recognition")
+	for i, b := range payload[paddingStart:algoipc.TaskConfigHeaderSize] {
+		if b != 0 {
+			t.Fatalf("algorithm id field must be NUL padded, byte %d = %d", paddingStart+i, b)
 		}
 	}
 	if got := string(payload[algoipc.TaskConfigHeaderSize:]); got != string(config) {
@@ -55,7 +60,8 @@ func TestEncodeTaskConfigPayloadRejectsInvalidInput(t *testing.T) {
 		t.Fatal("algorithm id at the field width must be rejected")
 	}
 	oversized := make([]byte, algoipc.MaxIpcPayloadSize)
-	if _, err := algoipc.EncodeTaskConfigPayload("face_recognition", oversized); !errors.Is(err, algoipc.ErrIpcPayloadTooLarge) {
+	_, err := algoipc.EncodeTaskConfigPayload("face_recognition", oversized)
+	if !errors.Is(err, algoipc.ErrIpcPayloadTooLarge) {
 		t.Fatalf("oversized config must return ErrIpcPayloadTooLarge, got: %v", err)
 	}
 	// Exactly at the boundary (header + body == MaxIpcPayloadSize) must still fit.
@@ -79,10 +85,12 @@ func TestTaskConfigHeaderMatchesNativeStruct(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		if fi, statErr := os.Stat(abs); statErr == nil && !fi.IsDir() {
-			path = abs
-			break
+		fi, err := os.Stat(abs)
+		if err != nil || fi.IsDir() {
+			continue
 		}
+		path = abs
+		break
 	}
 	if path == "" {
 		t.Skip("ipc_protocol.hpp not found, skipping cross-language layout check")
@@ -104,8 +112,11 @@ func TestTaskConfigHeaderMatchesNativeStruct(t *testing.T) {
 		t.Fatalf("parse native TaskConfigMsg size: %v", err)
 	}
 	if size != algoipc.TaskConfigHeaderSize {
-		t.Fatalf("TaskConfigMsg size drift: native %d, Go TaskConfigHeaderSize %d",
-			size, algoipc.TaskConfigHeaderSize)
+		t.Fatalf(
+			"TaskConfigMsg size drift: native %d, Go TaskConfigHeaderSize %d",
+			size,
+			algoipc.TaskConfigHeaderSize,
+		)
 	}
 
 	// Field order is part of the contract: length first, id second.
@@ -116,7 +127,10 @@ func TestTaskConfigHeaderMatchesNativeStruct(t *testing.T) {
 	}
 	lenIdx := regexp.MustCompile(`config_json_len`).FindStringIndex(decl[1])
 	idIdx := regexp.MustCompile(`algorithm_id\[`).FindStringIndex(decl[1])
-	if lenIdx == nil || idIdx == nil || lenIdx[0] > idIdx[0] {
+	if lenIdx == nil || idIdx == nil {
+		t.Fatal("TaskConfigMsg declaration missing config_json_len or algorithm_id")
+	}
+	if lenIdx[0] > idIdx[0] {
 		t.Fatal("TaskConfigMsg must declare config_json_len before algorithm_id")
 	}
 }
