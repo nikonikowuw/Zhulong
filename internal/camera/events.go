@@ -158,7 +158,8 @@ func (h *EventHub) Unsubscribe(sub *ClientSubscription) {
 }
 
 // BroadcastChange emits a state change event for a camera to all connected clients.
-// If a client's bounded channel is full (slow consumer), it is disconnected to prevent server-side leak.
+// If a client's bounded channel is full (slow consumer), it is disconnected to prevent
+// server-side leak.
 func (h *EventHub) BroadcastChange(state *CameraStateInfo) {
 	if state == nil || h.stopped.Load() {
 		return

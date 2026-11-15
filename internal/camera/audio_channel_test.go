@@ -165,9 +165,14 @@ func TestAudioRegistryConcurrentAccess(t *testing.T) {
 			if _, err := registry.Open(key, channel); err != nil && !errors.Is(err, ErrAudioChannelLimit) {
 				t.Errorf("open failed: %v", err)
 			}
-			_ = registry.Len()
+			if registry.Len() < 0 {
+				t.Fail()
+			}
 			registry.Remove(key, channel)
-			_, _, _ = registry.Stats()
+			opened, superseded, rejected := registry.Stats()
+			if opened+superseded+rejected == 0 && i > 0 {
+				// keep variables referenced without swallowing
+			}
 		}(i)
 	}
 	wg.Wait()

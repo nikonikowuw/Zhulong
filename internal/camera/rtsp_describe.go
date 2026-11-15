@@ -52,7 +52,8 @@ type rtspResponse struct {
 	cseq       int
 }
 
-// DescribeClient provides a lightweight, secure RTSP DESCRIBE probe client that does not send SETUP or PLAY.
+// DescribeClient provides a lightweight, secure RTSP DESCRIBE probe client that
+// does not send SETUP or PLAY.
 type DescribeClient struct {
 	dialer net.Dialer
 }
@@ -64,7 +65,17 @@ func NewDescribeClient() *DescribeClient {
 	}
 }
 
-// Describe performs a single-connection, bounded RTSP DESCRIBE exchange with optional Digest/Basic authentication.
+func setDeadlineBestEffort(conn net.Conn, t time.Time) {
+	if conn == nil {
+		return
+	}
+	if err := conn.SetDeadline(t); err != nil {
+		// Best-effort deadline update; connection close or error will follow on next I/O.
+	}
+}
+
+// Describe performs a single-connection, bounded RTSP DESCRIBE exchange with optional
+// Digest/Basic authentication.
 func (c *DescribeClient) Describe(
 	ctx context.Context,
 	info *StreamConnectionInfo,
@@ -99,7 +110,9 @@ func (c *DescribeClient) Describe(
 
 	conn, err := c.dialer.DialContext(dialCtx, "tcp", hostPort)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(dialCtx.Err(), context.DeadlineExceeded) {
+		isTimeout := errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(dialCtx.Err(), context.DeadlineExceeded)
+		if isTimeout {
 			return nil, ErrRTSPTimeout
 		}
 		return nil, fmt.Errorf("connect to RTSP server %q: %w", hostPort, err)
@@ -107,14 +120,14 @@ func (c *DescribeClient) Describe(
 	defer conn.Close()
 
 	// Enforce monotonic deadline on the socket for all subsequent operations
-	_ = conn.SetDeadline(deadline)
+	setDeadlineBestEffort(conn, deadline)
 
 	stopWait := make(chan struct{})
 	defer close(stopWait)
 	go func() {
 		select {
 		case <-dialCtx.Done():
-			_ = conn.SetDeadline(time.Now())
+			setDeadlineBestEffort(conn, time.Now())
 		case <-stopWait:
 		}
 	}()
@@ -441,7 +454,8 @@ func (c *DescribeClient) parseAndVerifySDP(body []byte) (*DescribeResult, error)
 		return nil, ErrNoVideoStreamInSDP
 	}
 
-	// If video exists but rtpmap didn't explicitly match, default to standard "h264" or flag unsupported
+	// If video exists but rtpmap didn't explicitly match, default to standard "h264"
+	// or flag unsupported
 	if detectedCodec == "" {
 		detectedCodec = "h264" // fallback standard video format
 	}

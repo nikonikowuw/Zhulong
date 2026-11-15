@@ -87,7 +87,8 @@ type streamTarget struct {
 }
 
 // aiStreamRef 表示一路相机的 AI 分析流（ConsumerAI 物理拉流 + FrameBroker）。
-// 其生命周期由 aiSubscribers 的订阅者集合驱动：任一订阅者存在则保活，全部撤销后才释放。
+// 其生命周期由 aiSubscribers 的订阅者集合驱动：
+// 任一订阅者存在则保活，全部撤销后才释放。
 type aiStreamRef struct {
 	stream MediaStream
 	aiSub  *engine.AIResultSubscription
@@ -136,10 +137,11 @@ func (r *aiStreamRef) viewFor(timestamp time.Time) region.Rect {
 // updateView 吸收引擎回报的生效窗口。
 //
 // 单调性防护：引擎的切换点只会前进（`advance_since_locked` 取 max(now, last+1)）。
-// 零切换点 = 「从未切换过」，更旧的切换点 = 并发读到的旧值；两者都不得覆盖已知状态，
-// 否则视图会静默退回旧窗口，整批结果按错的映射落库。
+// 零切换点 = 「从未切换过」，更旧的切换点 = 并发读到的旧值；
+// 两者都不得覆盖已知状态，否则视图会静默退回旧窗口，整批结果按错的映射落库。
 //
-// ⚠️ 被忽略的快照**不清 viewPending**：NOT_READY 之后的首帧还没到，清了就再也没人去捞它。
+// ⚠️ 被忽略的快照**不清 viewPending**：
+// NOT_READY 之后的首帧还没到，清了就再也没人去捞它。
 func (r *aiStreamRef) updateView(state region.ViewState) {
 	r.viewMu.Lock()
 	defer r.viewMu.Unlock()
@@ -156,7 +158,8 @@ func (r *aiStreamRef) updateView(state region.ViewState) {
 
 // needsViewPoll 报告结果路径是否需要轮询引擎的生效窗口。
 //
-// 引擎只会在两种情况下自己改窗口：延迟生效（配了 crop 但首帧尺寸还没到）与分辨率热切换。
+// 引擎只会在两种情况下自己改窗口：
+// 延迟生效（配了 crop 但首帧尺寸还没到）与分辨率热切换。
 // 两者都以「本机配过窗口」为前提，所以未裁剪的相机可以完全省掉每条结果一次
 // cgo + handle lease；裁剪过的相机必须继续轮询（热切换只有引擎知道）。
 func (r *aiStreamRef) needsViewPoll() bool {
@@ -176,7 +179,8 @@ type AIResultConsumer interface {
 	ProcessInferenceResult(ctx context.Context, res aitypes.InferenceResult) error
 }
 
-// RegionConfigProvider provides read access to the compiled region configuration for a given camera and algorithm.
+// RegionConfigProvider provides read access to the compiled region configuration
+// for a given camera and algorithm.
 type RegionConfigProvider interface {
 	ConfigFor(cameraID, algorithmID string) (region.Config, bool)
 }
@@ -247,7 +251,8 @@ func NewStreamHub(
 
 // HasPacketActivitySource 报告该相机这一路流是否有 Go 侧可见的收包通道。
 //
-// 预览分发器在 Go 侧逐包可观测；AI 分析流只有推理结果，而结果是运动门控之后的产物，
+// 预览分发器在 Go 侧逐包可观测；
+// AI 分析流只有推理结果，而结果是运动门控之后的产物，
 // 不能当作「视频包还在到达」的证据（见 PacketActivitySource）。
 func (h *StreamHub) HasPacketActivitySource(cameraID, role string) bool {
 	h.mu.Lock()
@@ -306,7 +311,10 @@ func streamKey(cameraID, role string) string {
 }
 
 // GetOrCreateDispatcher 获取或按需拉起指定摄像机流的分发器。
-func (h *StreamHub) GetOrCreateDispatcher(ctx context.Context, cameraID, role string) (*StreamDispatcher, error) {
+func (h *StreamHub) GetOrCreateDispatcher(
+	ctx context.Context,
+	cameraID, role string,
+) (*StreamDispatcher, error) {
 	key := streamKey(cameraID, role)
 
 	h.mu.Lock()
@@ -347,7 +355,10 @@ func (h *StreamHub) GetOrCreateDispatcher(ctx context.Context, cameraID, role st
 	return val.(*StreamDispatcher), nil
 }
 
-func (h *StreamHub) resolveStreamTarget(ctx context.Context, cameraID, role string) (streamTarget, error) {
+func (h *StreamHub) resolveStreamTarget(
+	ctx context.Context,
+	cameraID, role string,
+) (streamTarget, error) {
 	cam, err := h.store.GetByID(ctx, cameraID)
 	if err != nil {
 		return streamTarget{}, err
@@ -382,7 +393,10 @@ func (h *StreamHub) resolveStreamTarget(ctx context.Context, cameraID, role stri
 	return streamTarget{RawURI: string(rawBytes), Transport: transport}, nil
 }
 
-func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key string) (*StreamDispatcher, error) {
+func (h *StreamHub) createDispatcher(
+	ctx context.Context,
+	cameraID, role, key string,
+) (*StreamDispatcher, error) {
 	target, err := h.resolveStreamTarget(ctx, cameraID, role)
 	if err != nil {
 		return nil, err
@@ -409,7 +423,9 @@ func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key st
 
 	sub, err := mediaStream.Subscribe(ctx, engine.SubscriptionOptions{})
 	if err != nil {
-		_ = mediaStream.Close()
+		if closeErr := mediaStream.Close(); closeErr != nil {
+			// Intentionally ignored — media stream cleanup on subscribe failure is best-effort.
+		}
 		h.logger.Warn("subscribe media stream failed",
 			zap.String("camera_id", cameraID),
 			zap.String("role", role),
@@ -466,11 +482,15 @@ func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key st
 
 // AcquireAudioStream 为一条按需音频通道获取独立流引用。
 //
-// ⚠️ 刻意不复用视频分发器的 MediaStream：那个句柄上已经挂着视频订阅，而单句柄单订阅
-// 是既有不变量。音频用**自己的消费者 ID + 自己的 Stream 句柄**，原生侧按 URL 去重，
+// ⚠️ 刻意不复用视频分发器的 MediaStream：
+// 那个句柄上已经挂着视频订阅，而单句柄单订阅是既有不变量。
+// 音频用**自己的消费者 ID + 自己的 Stream 句柄**，原生侧按 URL 去重，
 // 因此不会多开一条 RTSP 连接，但音频订阅的任何故障（失败、背压、关流）都不会碰到
 // 视频订阅与健康态 —— 这正是本任务最重要的一条隔离。
-func (h *StreamHub) AcquireAudioStream(ctx context.Context, cameraID, role string) (*AcquiredAudioStream, error) {
+func (h *StreamHub) AcquireAudioStream(
+	ctx context.Context,
+	cameraID, role string,
+) (*AcquiredAudioStream, error) {
 	target, err := h.resolveStreamTarget(ctx, cameraID, role)
 	if err != nil {
 		return nil, err
@@ -497,7 +517,9 @@ func (h *StreamHub) AcquireAudioStream(ctx context.Context, cameraID, role strin
 
 	info, err := waitAudioInfo(ctx, mediaStream)
 	if err != nil {
-		_ = mediaStream.Close()
+		if closeErr := mediaStream.Close(); closeErr != nil {
+			// Intentionally ignored — media stream cleanup on query failure is best-effort.
+		}
 		h.logger.Warn("query audio info failed",
 			zap.String("camera_id", cameraID),
 			zap.String("role", role),
@@ -519,7 +541,11 @@ func waitAudioInfo(ctx context.Context, stream MediaStream) (engine.AudioInfo, e
 }
 
 // waitAudioInfoWithin 带预算的版本：预览能力帧只需要一个很短的上限。
-func waitAudioInfoWithin(ctx context.Context, stream MediaStream, timeout time.Duration) (engine.AudioInfo, error) {
+func waitAudioInfoWithin(
+	ctx context.Context,
+	stream MediaStream,
+	timeout time.Duration,
+) (engine.AudioInfo, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
@@ -549,7 +575,8 @@ func (h *StreamHub) removeDispatcher(cameraID, role string) {
 
 // markStreamWarm 记录某路流进入空闲热保留窗口，并按上限回收最早进入空闲的那条。
 //
-// 必须在调用方释放分发器锁之后调用：回收会把受害者 Close 掉，而 Close 会回头拿 Hub 锁。
+// 必须在调用方释放分发器锁之后调用：
+// 回收会把受害者 Close 掉，而 Close 会回头拿 Hub 锁。
 func (h *StreamHub) markStreamWarm(cameraID, role string) {
 	key := streamKey(cameraID, role)
 
@@ -642,9 +669,13 @@ func (h *StreamHub) ResolveAIStreamID(ctx context.Context, cameraID string) (uin
 // ResolveAIStreamBrokerPath 解析指定相机 AI 分析流的 FrameBroker socket 路径，
 // 并在该流尚未激活时以 ConsumerAI 模式拉起物理拉流（固定 main 角色）。
 //
-// ⚠️ 本方法只负责「解析」，不建立订阅关系。调用方拿到路径后必须在同一次解析流程内
-// 调用 AttachAIStreamSubscriber，否则该流会在下一次 ResolveAIStream 时被回收。
-func (h *StreamHub) ResolveAIStreamBrokerPath(ctx context.Context, cameraID string) (string, error) {
+// ⚠️ 本方法只负责「解析」，不建立订阅关系。
+// 调用方拿到路径后必须在同一次解析流程内调用 AttachAIStreamSubscriber，
+// 否则该流会在下一次 ResolveAIStream 时被回收。
+func (h *StreamHub) ResolveAIStreamBrokerPath(
+	ctx context.Context,
+	cameraID string,
+) (string, error) {
 	if err := h.waitForRecoveryGate(ctx, cameraID); err != nil {
 		return "", err
 	}
@@ -653,7 +684,10 @@ func (h *StreamHub) ResolveAIStreamBrokerPath(ctx context.Context, cameraID stri
 
 // acquireAIStreamBrokerPath 是 ResolveAIStreamBrokerPath 的无门禁版本：
 // 调用方（重连协程）自己已经等过宽限期，再走一遍门禁只会重复等待。
-func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID string) (string, error) {
+func (h *StreamHub) acquireAIStreamBrokerPath(
+	ctx context.Context,
+	cameraID string,
+) (string, error) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -704,8 +738,9 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 			return "", err
 		}
 
-		// 引擎按 URL 复用物理流：旧流仍在宽限期或还有其它消费者时，交回的可能是
-		// 同一路已经失败的流。交给调用方前必须认出来，否则它会拿到一个永远不出帧的 broker。
+		// 引擎按 URL 复用物理流：旧流仍在宽限期或还有其它消费者时，
+		// 交回的可能是同一路已经失败的流。
+		// 交给调用方前必须认出来，否则它会拿到一个永远不出帧的 broker。
 		if status, failed := streamIsFailed(ctx, mediaStream); failed {
 			if closeErr := mediaStream.Close(); closeErr != nil {
 				h.logger.Warn("close failed AI stream after detection",
@@ -848,7 +883,9 @@ func (h *StreamHub) ReleaseAIStreamSubscriber(cameraID, subscriberID string) {
 			ref.cancel()
 		}
 		if ref.aiSub != nil {
-			_ = ref.aiSub.Close()
+			if closeErr := ref.aiSub.Close(); closeErr != nil {
+				// Intentionally ignored — AI subscription cleanup is best-effort.
+			}
 		}
 	}
 
@@ -1004,8 +1041,9 @@ func (h *StreamHub) AIStreamBrokerStats(
 // Snapshot 对指定相机的 AI 分析流执行抓拍（全幅 + 可选裁剪），返回 JPEG 字节流。
 //
 // 语义（⚠️ 调用方必须了解）：
-//   - 若 options.PTS > 0，优先在 Native 历史环形缓存中精确匹配对应帧；未指定（PTS <= 0）
-//     或历史已滑出时退回抓取当前最新的一帧。历史未命中时与结果之间存在固有延迟（实测约 1~4 帧）。
+//   - 若 options.PTS > 0，优先在 Native 历史环形缓存中精确匹配对应帧；
+//     未指定（PTS <= 0）或历史已滑出时退回抓取当前最新的一帧。
+//     历史未命中时与结果之间存在固有延迟（实测约 1~4 帧）。
 //   - 相机当前没有活跃 AI 流时返回 ErrAIStreamInactive，不自行拉起拉流：
 //     默默拉流会引来无法解释的带宽消耗与运维困惑。
 //   - 本调用同步执行 JPEG 编码（RK3568 1080p 约 35~60ms），必须在独立 goroutine
@@ -1068,7 +1106,9 @@ func (h *StreamHub) Close() error {
 			ref.cancel()
 		}
 		if ref.aiSub != nil {
-			_ = ref.aiSub.Close()
+			if closeErr := ref.aiSub.Close(); closeErr != nil {
+				h.logger.Warn("close AI subscription on hub shutdown", zap.Error(closeErr))
+			}
 		}
 		if err := ref.stream.Close(); err != nil {
 			h.logger.Warn("close AI stream on hub shutdown", zap.Error(err))

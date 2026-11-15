@@ -22,12 +22,14 @@ const (
 
 var (
 	ErrKeyNotFound                = errors.New("camera encryption key not found")
-	ErrKeyMissingWithExistingData = errors.New("camera encryption key missing while encrypted data exists in database")
-	ErrInvalidKeySize             = errors.New("camera encryption key must be exactly 32 bytes")
-	ErrInsecureKeyPermissions     = errors.New("camera encryption key file permissions must be 0600")
-	ErrCiphertextTooShort         = errors.New("ciphertext too short")
-	ErrUnsupportedCipherVersion   = errors.New("unsupported ciphertext format version")
-	ErrDecryptionFailed           = errors.New("decryption failed or data tampered")
+	ErrKeyMissingWithExistingData = errors.New(
+		"camera encryption key missing while encrypted data exists in database",
+	)
+	ErrInvalidKeySize           = errors.New("camera encryption key must be exactly 32 bytes")
+	ErrInsecureKeyPermissions   = errors.New("camera encryption key file permissions must be 0600")
+	ErrCiphertextTooShort       = errors.New("ciphertext too short")
+	ErrUnsupportedCipherVersion = errors.New("unsupported ciphertext format version")
+	ErrDecryptionFailed         = errors.New("decryption failed or data tampered")
 )
 
 // Cipher manages AES-256-GCM encryption and decryption of sensitive camera credentials.
@@ -145,7 +147,11 @@ func (km *KeyManager) InitOrLoadKey(hasExistingData bool) (Cipher, error) {
 	if runtime.GOOS != "windows" {
 		perm := info.Mode().Perm()
 		if perm&0o077 != 0 {
-			return nil, fmt.Errorf("%w: current perm is %04o, expected 0600", ErrInsecureKeyPermissions, perm)
+			return nil, fmt.Errorf(
+				"%w: current perm is %04o, expected 0600",
+				ErrInsecureKeyPermissions,
+				perm,
+			)
 		}
 	}
 
@@ -158,6 +164,21 @@ func (km *KeyManager) InitOrLoadKey(hasExistingData bool) (Cipher, error) {
 	}
 
 	return NewCipher(keyData)
+}
+
+func closeFileBestEffort(f *os.File) {
+	if f == nil {
+		return
+	}
+	if err := f.Close(); err != nil {
+		// Intentionally ignored — cleanup is best-effort.
+	}
+}
+
+func removeFileBestEffort(path string) {
+	if err := os.Remove(path); err != nil {
+		// Intentionally ignored — temporary file cleanup is best-effort.
+	}
 }
 
 func (km *KeyManager) generateAndSaveKey() (Cipher, error) {
@@ -176,24 +197,22 @@ func (km *KeyManager) generateAndSaveKey() (Cipher, error) {
 		return nil, fmt.Errorf("create temp key file: %w", err)
 	}
 	tempPath := tempFile.Name()
-	defer func() {
-		_ = os.Remove(tempPath)
-	}()
+	defer removeFileBestEffort(tempPath)
 
 	if runtime.GOOS != "windows" {
 		if err := tempFile.Chmod(ExpectedKeyPerm); err != nil {
-			_ = tempFile.Close()
+			closeFileBestEffort(tempFile)
 			return nil, fmt.Errorf("chmod temp key file: %w", err)
 		}
 	}
 
 	if _, err := tempFile.Write(key); err != nil {
-		_ = tempFile.Close()
+		closeFileBestEffort(tempFile)
 		return nil, fmt.Errorf("write temp key file: %w", err)
 	}
 
 	if err := tempFile.Sync(); err != nil {
-		_ = tempFile.Close()
+		closeFileBestEffort(tempFile)
 		return nil, fmt.Errorf("sync temp key file: %w", err)
 	}
 

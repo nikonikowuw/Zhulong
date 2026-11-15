@@ -19,7 +19,9 @@ func setupTestStore(t *testing.T) (CameraStore, func()) {
 
 	store := NewCameraStore(dbStore)
 	cleanup := func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore.Close error: %v", err)
+		}
 	}
 	return store, cleanup
 }

@@ -17,7 +17,8 @@ const (
 	MaxCameraCapacity = 128
 )
 
-// CameraService manages camera domain lifecycle, validation gates, credential encryption, and state orchestration.
+// CameraService manages camera domain lifecycle, validation gates, credential encryption,
+// and state orchestration.
 type CameraService struct {
 	store     CameraStore
 	cipher    Cipher
@@ -136,8 +137,12 @@ func (s *CameraService) persistCamera(
 	return s.buildCameraResponse(camera, state), nil
 }
 
-// Create validates stream connections through the 3-5s probe gate, encrypts credentials, and persists the camera.
-func (s *CameraService) Create(ctx context.Context, req CreateCameraRequest) (*CameraResponse, error) {
+// Create validates stream connections through the 3-5s probe gate, encrypts credentials,
+// and persists the camera.
+func (s *CameraService) Create(
+	ctx context.Context,
+	req CreateCameraRequest,
+) (*CameraResponse, error) {
 	// 1. Capacity limit check
 	if err := s.ensureCapacity(ctx); err != nil {
 		return nil, err
@@ -343,7 +348,10 @@ func (s *CameraService) Get(ctx context.Context, id string) (*CameraResponse, er
 }
 
 // GetCredentials returns decrypted stream URLs for authorized administrator inspection/copying.
-func (s *CameraService) GetCredentials(ctx context.Context, id string) (*CameraCredentialsResponse, error) {
+func (s *CameraService) GetCredentials(
+	ctx context.Context,
+	id string,
+) (*CameraCredentialsResponse, error) {
 	cam, err := s.store.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrCameraNotFound) {
@@ -383,7 +391,10 @@ func (s *CameraService) GetCredentials(ctx context.Context, id string) (*CameraC
 }
 
 // List returns a paginated list of cameras merged with runtime health states.
-func (s *CameraService) List(ctx context.Context, limit, offset int) ([]CameraResponse, int64, error) {
+func (s *CameraService) List(
+	ctx context.Context,
+	limit, offset int,
+) ([]CameraResponse, int64, error) {
 	cameras, total, err := s.store.List(ctx, limit, offset)
 	if err != nil {
 		return nil, 0, apperr.New(
@@ -408,8 +419,13 @@ func (s *CameraService) List(ctx context.Context, limit, offset int) ([]CameraRe
 	return responses, total, nil
 }
 
-// Update updates an existing camera's name, enabled switch, or stream connections with revision CAS check.
-func (s *CameraService) Update(ctx context.Context, id string, req UpdateCameraRequest) (*CameraResponse, error) {
+// Update updates an existing camera's name, enabled switch, or stream connections with
+// revision CAS check.
+func (s *CameraService) Update(
+	ctx context.Context,
+	id string,
+	req UpdateCameraRequest,
+) (*CameraResponse, error) {
 	current, err := s.store.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrCameraNotFound) {

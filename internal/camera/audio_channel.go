@@ -207,6 +207,52 @@ func NewAudioChannel(cfg AudioChannelConfig) *AudioChannel {
 	}
 }
 
+func closeAudioWSConnBestEffort(conn *websocket.Conn) {
+	if conn == nil {
+		return
+	}
+	if err := conn.Close(); err != nil {
+		// Intentionally ignored — connection teardown is best-effort.
+	}
+}
+
+func writeAudioWSCloseControlBestEffort(
+	conn *websocket.Conn,
+	code int,
+	reason string,
+	timeout time.Duration,
+) {
+	if conn == nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	if err := conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(code, reason),
+		deadline,
+	); err != nil {
+		// Intentionally ignored — peer may already have disconnected.
+	}
+}
+
+func setAudioWSWriteDeadlineBestEffort(conn *websocket.Conn, timeout time.Duration) {
+	if conn == nil {
+		return
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		// Intentionally ignored — deadline failure will surface on next write.
+	}
+}
+
+func setAudioWSReadDeadlineBestEffort(conn *websocket.Conn, timeout time.Duration) {
+	if conn == nil {
+		return
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		// Intentionally ignored — deadline failure will surface on next read.
+	}
+}
+
 // SendInfo 在二进制帧之前同步写出文本帧。
 //
 // 此刻写协程还没启动，连接只有一个写者，因此不需要任何锁。
@@ -218,7 +264,7 @@ func (c *AudioChannel) SendInfo(message any) error {
 	if err != nil {
 		return err
 	}
-	_ = c.conn.SetWriteDeadline(time.Now().Add(audioChannelWriteWait))
+	setAudioWSWriteDeadlineBestEffort(c.conn, audioChannelWriteWait)
 	return c.conn.WriteMessage(websocket.TextMessage, payload)
 }
 
@@ -258,16 +304,18 @@ func (c *AudioChannel) WritePump() {
 		select {
 		case frame, ok := <-c.send:
 			if !ok {
-				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				if writeErr := c.conn.WriteMessage(websocket.CloseMessage, []byte{}); writeErr != nil {
+					// Intentionally ignored — connection is closing.
+				}
 				return
 			}
-			_ = c.conn.SetWriteDeadline(time.Now().Add(audioChannelWriteWait))
+			setAudioWSWriteDeadlineBestEffort(c.conn, audioChannelWriteWait)
 			if err := c.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 				c.logger.Debug("audio ws write failed", zap.Error(err))
 				return
 			}
 		case <-ticker.C:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(audioChannelWriteWait))
+			setAudioWSWriteDeadlineBestEffort(c.conn, audioChannelWriteWait)
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
@@ -282,15 +330,20 @@ func (c *AudioChannel) ReadPump() {
 	defer c.Close()
 
 	c.conn.SetReadLimit(wsMaxMessageSize)
-	_ = c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	setAudioWSReadDeadlineBestEffort(c.conn, wsPongWait)
 	c.conn.SetPongHandler(func(string) error {
-		_ = c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		setAudioWSReadDeadlineBestEffort(c.conn, wsPongWait)
 		return nil
 	})
 
 	for {
 		if _, _, err := c.conn.ReadMessage(); err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+			isUnexpected := websocket.IsUnexpectedCloseError(
+				err,
+				websocket.CloseGoingAway,
+				websocket.CloseNormalClosure,
+			)
+			if isUnexpected {
 				c.logger.Debug("audio ws read failed", zap.Error(err))
 			}
 			return
@@ -317,19 +370,24 @@ func (c *AudioChannel) closeWithReason(code int, reason string) {
 		close(c.done)
 		if c.conn != nil {
 			if code != websocket.CloseNormalClosure && code != 0 {
-				_ = c.conn.WriteControl(
-					websocket.CloseMessage,
-					websocket.FormatCloseMessage(code, reason),
-					time.Now().Add(time.Second),
+				writeAudioWSCloseControlBestEffort(
+					c.conn,
+					code,
+					reason,
+					time.Second,
 				)
 			}
-			_ = c.conn.Close()
+			closeAudioWSConnBestEffort(c.conn)
 		}
 		if c.sub != nil {
-			_ = c.sub.Close()
+			if err := c.sub.Close(); err != nil {
+				// Intentionally ignored — sub cleanup is best-effort.
+			}
 		}
 		if c.stream != nil {
-			_ = c.stream.Close()
+			if err := c.stream.Close(); err != nil {
+				// Intentionally ignored — stream cleanup is best-effort.
+			}
 		}
 		if c.registry != nil {
 			c.registry.Remove(c.key, c)

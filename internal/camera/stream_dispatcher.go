@@ -116,8 +116,9 @@ type StreamDispatcher struct {
 
 // capabilityReadyTimeout 是预览能力帧等待「流就绪」的预算。
 //
-// 上限取得比音频通道的 5 s 小：它摆在 WS 握手的路径上，等太久会让一个打不开的相机
-// 看起来像“网页卡了”。2 s 覆盖了实测的冷建连（300~800 ms），又远小于人能忍受的阈值。
+// 上限取得比音频通道的 5 s 小：它摆在 WS 握手的路径上，
+// 等太久会让一个打不开的相机看起来像“网页卡了”。
+// 2 s 覆盖了实测的冷建连（300~800 ms），又远小于人能忍受的阈值。
 const capabilityReadyTimeout = 2 * time.Second
 
 // NewStreamDispatcher 构造单流分发器。
@@ -151,17 +152,21 @@ func (d *StreamDispatcher) IsClosed() bool {
 // 查询失败不当作错误向外抛：能力帧的语义是「告诉你这路能不能听」，查不到就是
 // 「现在不知道/不能听」，前端置灰即可，绝不能让一次探测失败影响视频建连。
 //
-// ⚠️ 必须等一小段（{@link capabilityReadyTimeout}）：acquire 是异步的，流还没 ready 时
-// `audio_info` 一律报错。此时照实写 `present=false` 会把一台**有音频**的相机永久标成
-// 哑巴——能力帧只发一次，前端不会重试。板端 16 路压测里正是这个形态：全部 16 路都被
-// 记成 `audio info unavailable`，而其中 4 路的音频通道实际工作正常。健康流上这段等待
-// 与「第一帧视频到达」本来就是同一个时间点，不额外增加首帧延迟。
+// ⚠️ 必须等一小段（{@link capabilityReadyTimeout}）：acquire 是异步的，
+// 流还没 ready 时 `audio_info` 一律报错。
+// 此时照实写 `present=false` 会把一台**有音频**的相机永久标成哑巴
+// ——能力帧只发一次，前端不会重试。板端 16 路压测里正是这个形态：
+// 全部 16 路都被记成 `audio info unavailable`，而其中 4 路的音频通道实际工作正常。
+// 健康流上这段等待与「第一帧视频到达」本来就是同一个时间点，不额外增加首帧延迟。
 func (d *StreamDispatcher) AudioCapability(ctx context.Context) AudioCapabilityInfo {
 	return d.audioCapabilityWithin(ctx, capabilityReadyTimeout)
 }
 
 // audioCapabilityWithin 是 AudioCapability 的可调预算版本，测试用它把失败路径缩短到毫秒级。
-func (d *StreamDispatcher) audioCapabilityWithin(ctx context.Context, timeout time.Duration) AudioCapabilityInfo {
+func (d *StreamDispatcher) audioCapabilityWithin(
+	ctx context.Context,
+	timeout time.Duration,
+) AudioCapabilityInfo {
 	if d.stream == nil {
 		d.logCapability(AudioCapabilityInfo{Reason: "stream handle unavailable"})
 		return audioCapability(engine.AudioInfo{}, "stream handle unavailable")
@@ -257,7 +262,8 @@ func (d *StreamDispatcher) RegisterClient(client *StreamClient) {
 	}
 
 	d.subscribers[client] = struct{}{}
-	// 注册时刻必须在锁内打点：它只用于起播耗时诊断，基准点必须是「注册」而不是「构造」。
+	// 注册时刻必须在锁内打点：
+	// 它只用于起播耗时诊断，基准点必须是「注册」而不是「构造」。
 	client.subscribedAt = time.Now()
 	count := len(d.subscribers)
 	d.mu.Unlock()
@@ -453,8 +459,9 @@ func (d *StreamDispatcher) deliverLocked(client *StreamClient, frame outFrame) {
 		client.needsKey = false
 	}
 
-	// 判据是「最新输入帧 DTS - 最近一次成功 WebSocket 写入帧 DTS」而不是队列长度：队列长度只说明包数，
-	// DTS 是解码包序的单调时间轴，可直接测量客户端实际发送进度；PTS 会因 B 帧重排而回退。
+	// 判据是「最新输入帧 DTS - 最近一次成功 WebSocket 写入帧 DTS」而不是队列长度：
+	// 队列长度只说明包数，DTS 是解码包序的单调时间轴，可直接测量客户端实际发送进度；
+	// PTS 会因 B 帧重排而回退。
 	isLagging := client.hasProgressDTS && frame.dtsUS > client.lastProgressDTSUS &&
 		(frame.dtsUS-client.lastProgressDTSUS > maxClientLagUS)
 	if isLagging {
@@ -632,10 +639,14 @@ func (d *StreamDispatcher) Close() {
 
 		// 释放底层订阅与流引用
 		if d.sub != nil {
-			_ = d.sub.Close()
+			if err := d.sub.Close(); err != nil {
+				// Intentionally ignored — sub cleanup on dispatcher close is best-effort.
+			}
 		}
 		if d.stream != nil {
-			_ = d.stream.Close()
+			if err := d.stream.Close(); err != nil {
+				// Intentionally ignored — stream cleanup on dispatcher close is best-effort.
+			}
 		}
 
 		// 从全局 Hub 移除自身

@@ -48,7 +48,8 @@ func GenerateCnonce() (string, error) {
 }
 
 // NormalizeChallengeHeader normalizes parameter keys to lowercase and preserves quoted strings,
-// handling quirks like QOP/ALGORITHM capitalization, whitespace in lists, and tracking empty opaque="".
+// handling quirks like QOP/ALGORITHM capitalization, whitespace in lists, and tracking
+// empty opaque="".
 func NormalizeChallengeHeader(header string) (normalized string, hadEmptyOpaque bool, err error) {
 	header = strings.TrimSpace(header)
 	if header == "" {
@@ -76,7 +77,7 @@ func NormalizeChallengeHeader(header string) (normalized string, hadEmptyOpaque 
 	var current strings.Builder
 	var inQuote, escaped bool
 
-	for i := 0; i < len(params); i++ {
+	for i := range len(params) {
 		ch := params[i]
 		if escaped {
 			current.WriteByte(ch)
@@ -145,8 +146,8 @@ func NormalizeChallengeHeader(header string) (normalized string, hadEmptyOpaque 
 	return "Digest " + strings.Join(normParts, ", "), hadEmptyOpaque, nil
 }
 
-// SelectBestChallenge parses WWW-Authenticate header values and selects the strongest supported challenge.
-// Priority: Digest SHA-256 > Digest MD5 > Basic.
+// SelectBestChallenge parses WWW-Authenticate header values and selects the
+// strongest supported challenge. Priority: Digest SHA-256 > Digest MD5 > Basic.
 func SelectBestChallenge(challenges []string) (*ParsedChallenge, error) {
 	if len(challenges) == 0 {
 		return nil, ErrNoSupportedAuthChallenge
@@ -249,7 +250,8 @@ type AuthorizationParams struct {
 	NC        int
 }
 
-// BuildAuthorizationHeader generates the Authorization header value for a given challenge, credentials, and request context.
+// BuildAuthorizationHeader generates the Authorization header value for a given challenge,
+// credentials, and request context.
 func BuildAuthorizationHeader(params AuthorizationParams) (string, error) {
 	if params.Challenge == nil {
 		return "", errors.New("nil challenge")

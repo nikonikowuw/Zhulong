@@ -15,11 +15,16 @@ import (
 func TestHealthSchedulerActivePacketTimeout(t *testing.T) {
 	tempDir := t.TempDir()
 	dbStore := database.New(tempDir, zap.NewNop())
-	_ = dbStore.OpenAndMigrate(context.Background())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
 	defer dbStore.Close()
 
 	km := NewKeyManager(tempDir)
-	cipher, _ := km.InitOrLoadKey(false)
+	cipher, err := km.InitOrLoadKey(false)
+	if err != nil {
+		t.Fatalf("InitOrLoadKey failed: %v", err)
+	}
 	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
@@ -33,7 +38,9 @@ func TestHealthSchedulerActivePacketTimeout(t *testing.T) {
 		Name:    "Active Cam",
 		Enabled: true,
 	}
-	_ = store.Create(context.Background(), cam, nil)
+	if err := store.Create(context.Background(), cam, nil); err != nil {
+		t.Fatalf("Create camera failed: %v", err)
+	}
 	registry.InitCameraState(cam)
 
 	// Set stream to running, and simulate last packet arrived 5 seconds ago
@@ -72,20 +79,30 @@ func TestHealthSchedulerTriggerCheck(t *testing.T) {
 	addr, cleanup := startMockRTSPServer(t, func(conn net.Conn) {
 		defer conn.Close()
 		r := bufio.NewReader(conn)
-		_, _, cseq, _, _ := readMockRTSPRequest(r)
+		_, _, cseq, _, err := readMockRTSPRequest(r)
+		if err != nil {
+			return
+		}
 		resp := fmt.Sprintf("RTSP/1.0 200 OK\r\nCSeq: %s\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s",
 			cseq, len(sampleH264SDP), sampleH264SDP)
-		_, _ = conn.Write([]byte(resp))
+		if _, writeErr := conn.Write([]byte(resp)); writeErr != nil {
+			t.Logf("mock rtsp write error: %v", writeErr)
+		}
 	})
 	defer cleanup()
 
 	tempDir := t.TempDir()
 	dbStore := database.New(tempDir, zap.NewNop())
-	_ = dbStore.OpenAndMigrate(context.Background())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
 	defer dbStore.Close()
 
 	km := NewKeyManager(tempDir)
-	cipher, _ := km.InitOrLoadKey(false)
+	cipher, err := km.InitOrLoadKey(false)
+	if err != nil {
+		t.Fatalf("InitOrLoadKey failed: %v", err)
+	}
 	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
@@ -95,7 +112,10 @@ func TestHealthSchedulerTriggerCheck(t *testing.T) {
 
 	rawURI := fmt.Sprintf("rtsp://%s/live/main", addr)
 	aad := MakeAAD("cam_sched_01", StreamRoleMain)
-	encrypted, _ := cipher.Encrypt([]byte(rawURI), aad)
+	encrypted, err := cipher.Encrypt([]byte(rawURI), aad)
+	if err != nil {
+		t.Fatalf("cipher.Encrypt failed: %v", err)
+	}
 
 	cam := &Camera{
 		ID:      "cam_sched_01",
@@ -113,7 +133,9 @@ func TestHealthSchedulerTriggerCheck(t *testing.T) {
 			Height:       1080,
 		},
 	}
-	_ = store.Create(context.Background(), cam, streams)
+	if err := store.Create(context.Background(), cam, streams); err != nil {
+		t.Fatalf("store.Create failed: %v", err)
+	}
 	registry.InitCameraState(cam)
 
 	// Trigger immediate check
@@ -130,11 +152,16 @@ func TestHealthSchedulerTriggerCheck(t *testing.T) {
 func TestHealthSchedulerGracefulStopCancelsProbes(t *testing.T) {
 	tempDir := t.TempDir()
 	dbStore := database.New(tempDir, zap.NewNop())
-	_ = dbStore.OpenAndMigrate(context.Background())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
 	defer dbStore.Close()
 
 	km := NewKeyManager(tempDir)
-	cipher, _ := km.InitOrLoadKey(false)
+	cipher, err := km.InitOrLoadKey(false)
+	if err != nil {
+		t.Fatalf("InitOrLoadKey failed: %v", err)
+	}
 	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
@@ -157,7 +184,10 @@ func TestHealthSchedulerGracefulStopCancelsProbes(t *testing.T) {
 	}
 	uri := fmt.Sprintf("rtsp://%s/live", hangingAddr)
 	aad := MakeAAD(cam.ID, StreamRoleMain)
-	encrypted, _ := cipher.Encrypt([]byte(uri), aad)
+	encrypted, err := cipher.Encrypt([]byte(uri), aad)
+	if err != nil {
+		t.Fatalf("cipher.Encrypt failed: %v", err)
+	}
 	streams := []CameraStream{
 		{
 			Role:         StreamRoleMain,
@@ -169,7 +199,9 @@ func TestHealthSchedulerGracefulStopCancelsProbes(t *testing.T) {
 			Height:       1080,
 		},
 	}
-	_ = store.Create(context.Background(), cam, streams)
+	if err := store.Create(context.Background(), cam, streams); err != nil {
+		t.Fatalf("store.Create failed: %v", err)
+	}
 	registry.InitCameraState(cam)
 
 	// 启动异步探测
@@ -203,7 +235,11 @@ func TestHealthSchedulerSkipsDescribeForGB28181Streams(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer func() { _ = dbStore.Close() }()
+	defer func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore.Close error: %v", err)
+		}
+	}()
 
 	km := NewKeyManager(tempDir)
 	cipher, err := km.InitOrLoadKey(false)
@@ -271,11 +307,16 @@ func (s packetActivityStub) HasPacketActivitySource(cameraID, role string) bool 
 func TestHealthSchedulerSkipsPacketTimeoutWithoutPacketVisibility(t *testing.T) {
 	tempDir := t.TempDir()
 	dbStore := database.New(tempDir, zap.NewNop())
-	_ = dbStore.OpenAndMigrate(context.Background())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
 	defer dbStore.Close()
 
 	km := NewKeyManager(tempDir)
-	cipher, _ := km.InitOrLoadKey(false)
+	cipher, err := km.InitOrLoadKey(false)
+	if err != nil {
+		t.Fatalf("InitOrLoadKey failed: %v", err)
+	}
 	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
@@ -316,11 +357,16 @@ func TestHealthSchedulerSkipsPacketTimeoutWithoutPacketVisibility(t *testing.T) 
 func TestHealthSchedulerMonitorsStreamsWithPacketVisibility(t *testing.T) {
 	tempDir := t.TempDir()
 	dbStore := database.New(tempDir, zap.NewNop())
-	_ = dbStore.OpenAndMigrate(context.Background())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
 	defer dbStore.Close()
 
 	km := NewKeyManager(tempDir)
-	cipher, _ := km.InitOrLoadKey(false)
+	cipher, err := km.InitOrLoadKey(false)
+	if err != nil {
+		t.Fatalf("InitOrLoadKey failed: %v", err)
+	}
 	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)

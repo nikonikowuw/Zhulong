@@ -29,7 +29,8 @@ type StreamStateInfo struct {
 	ConsecutiveFailures int        `json:"consecutiveFailures"`
 }
 
-// CameraStateInfo represents the full runtime status of a camera including aggregated state and per-stream details.
+// CameraStateInfo represents the full runtime status of a camera including aggregated
+// state and per-stream details.
 type CameraStateInfo struct {
 	LastCheckedAt *time.Time                  `json:"lastCheckedAt,omitempty"`
 	LastSuccessAt *time.Time                  `json:"lastSuccessAt,omitempty"`
@@ -169,7 +170,10 @@ func (r *StateRegistry) DeleteState(cameraID string) {
 	delete(r.states, cameraID)
 }
 
-func (r *StateRegistry) getOrCreateStreamLocked(state *CameraStateInfo, role string) *StreamStateInfo {
+func (r *StateRegistry) getOrCreateStreamLocked(
+	state *CameraStateInfo,
+	role string,
+) *StreamStateInfo {
 	stream, ok := state.Streams[role]
 	if !ok {
 		stream = &StreamStateInfo{Role: role}
@@ -178,8 +182,9 @@ func (r *StateRegistry) getOrCreateStreamLocked(state *CameraStateInfo, role str
 	return stream
 }
 
-// RecordStreamSuccess records a successful health check or packet arrival for a stream and updates the aggregated camera state.
-// If expectedRevision > 0 and the camera's current revision does not match, the stale probe result is ignored.
+// RecordStreamSuccess records a successful health check or packet arrival for a stream
+// and updates the aggregated camera state. If expectedRevision > 0 and the camera's
+// current revision does not match, the stale probe result is ignored.
 func (r *StateRegistry) RecordStreamSuccess(
 	cameraID string,
 	expectedRevision int64,
@@ -210,7 +215,8 @@ func (r *StateRegistry) RecordStreamSuccess(
 
 	// 收到真实的视频包到达证据，证明媒体会话活跃运行中。
 	// 若之前处于 reconnecting（如偶发包超时）或 error，恢复为 running。
-	isRecoveringSession := stream.Session == SessionStateReconnecting || stream.Session == SessionStateError
+	isRecoveringSession := stream.Session == SessionStateReconnecting ||
+		stream.Session == SessionStateError
 	if evidenceType == EvidencePacketActivity && isRecoveringSession {
 		stream.Session = SessionStateRunning
 	}
@@ -219,8 +225,9 @@ func (r *StateRegistry) RecordStreamSuccess(
 	return r.cloneState(state)
 }
 
-// RecordStreamFailure records a check or media failure for a stream.
-// If expectedRevision > 0 and the camera's current revision does not match on non-media checks, the stale result is ignored.
+// RecordStreamFailure records a check or media failure for a stream. If expectedRevision > 0
+// and the camera's current revision does not match on non-media checks, the stale result
+// is ignored.
 func (r *StateRegistry) RecordStreamFailure(params StreamFailureParams) *CameraStateInfo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -229,7 +236,10 @@ func (r *StateRegistry) RecordStreamFailure(params StreamFailureParams) *CameraS
 	if !ok {
 		return nil
 	}
-	if !params.IsMediaSession && params.ExpectedRevision > 0 && state.Revision != params.ExpectedRevision {
+	isStaleRevision := !params.IsMediaSession &&
+		params.ExpectedRevision > 0 &&
+		state.Revision != params.ExpectedRevision
+	if isStaleRevision {
 		return r.cloneState(state)
 	}
 
@@ -260,8 +270,11 @@ func (r *StateRegistry) RecordStreamFailure(params StreamFailureParams) *CameraS
 	return r.cloneState(state)
 }
 
-// UpdateSessionState updates the session dimension (e.g. idle -> starting -> running -> reconnecting).
-func (r *StateRegistry) UpdateSessionState(cameraID, role, sessionState string) *CameraStateInfo {
+// UpdateSessionState updates the session dimension (e.g. idle -> starting -> running ->
+// reconnecting).
+func (r *StateRegistry) UpdateSessionState(
+	cameraID, role, sessionState string,
+) *CameraStateInfo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -325,7 +338,11 @@ func (r *StateRegistry) aggregateCameraStateLocked(state *CameraStateInfo, now t
 	state.Reason = mainStream.Reason
 
 	// Substream status influences degraded flag
-	subUnhealthy := hasSub && (subStream.Health == HealthStateOffline || subStream.Health == HealthStateError)
+	var subUnhealthy bool
+	if hasSub && subStream != nil {
+		subUnhealthy = subStream.Health == HealthStateOffline ||
+			subStream.Health == HealthStateError
+	}
 	state.Degraded = mainStream.Health == HealthStateOnline && subUnhealthy
 }
 

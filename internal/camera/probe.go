@@ -42,7 +42,8 @@ func NewProbeService(prober VideoProber) *ProbeService {
 }
 
 // ValidateStreams probes main and optional sub streams concurrently within a shared timeout budget.
-// Both streams must succeed for validation to pass; any failure causes the entire validation to fail.
+// Both streams must succeed for validation to pass; any failure causes the entire validation
+// to fail.
 func (s *ProbeService) ValidateStreams(
 	ctx context.Context,
 	mainInfo *StreamConnectionInfo,
@@ -90,7 +91,10 @@ func (s *ProbeService) ValidateStreams(
 	return mainRes, subRes, nil
 }
 
-func (s *ProbeService) probeSingleStream(ctx context.Context, info *StreamConnectionInfo) (*StreamProbeResult, error) {
+func (s *ProbeService) probeSingleStream(
+	ctx context.Context,
+	info *StreamConnectionInfo,
+) (*StreamProbeResult, error) {
 	if s.prober == nil {
 		return nil, errors.New("video prober is not configured")
 	}
@@ -154,7 +158,8 @@ func (s *ProbeService) mapProbeError(err error, role string) error {
 	isAuthError := strings.Contains(errStr, "auth") ||
 		strings.Contains(errStr, "401") ||
 		strings.Contains(errStr, "credentials")
-	isUnsupported := errors.Is(err, ErrUnsupportedVideoFormat) || strings.Contains(errStr, "unsupported")
+	isUnsupported := errors.Is(err, ErrUnsupportedVideoFormat) ||
+		strings.Contains(errStr, "unsupported")
 
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):

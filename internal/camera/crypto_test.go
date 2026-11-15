@@ -44,7 +44,10 @@ func TestGCMCipherEncryptDecrypt(t *testing.T) {
 
 func TestGCMCipherTamperDetection(t *testing.T) {
 	key := make([]byte, 32)
-	cipher, _ := NewCipher(key)
+	cipher, err := NewCipher(key)
+	if err != nil {
+		t.Fatalf("NewCipher failed: %v", err)
+	}
 
 	plaintext := []byte("secret_stream_uri")
 	aad := MakeAAD("cam_test", StreamRoleMain)

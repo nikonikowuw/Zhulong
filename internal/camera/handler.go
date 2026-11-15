@@ -220,7 +220,10 @@ func (h *Handler) Update(c *gin.Context) {
 		return
 	}
 
-	isToggleOnly := req.Enabled != nil && req.Name == nil && req.MainStream == nil && req.SubStream == nil
+	isToggleOnly := req.Enabled != nil &&
+		req.Name == nil &&
+		req.MainStream == nil &&
+		req.SubStream == nil
 	if isToggleOnly {
 		audithttp.TagAction(c, audit.ActionCameraToggle)
 	}
@@ -306,10 +309,16 @@ func (h *Handler) AIStreamStats(c *gin.Context) {
 			// 暂时状态而非配置错误：任务停用或算法未启动时就是这样。
 			httputil.WriteError(c, apperr.New(apperr.KindNotFound, "AI_STREAM_INACTIVE",
 				"Camera has no active AI analysis stream", err))
-		case errors.Is(err, ErrStreamHubClosed), errors.Is(err, engine.ErrNotRunning), errors.Is(err, engine.ErrClosed):
+		case errors.Is(err, ErrStreamHubClosed),
+			errors.Is(err, engine.ErrNotRunning),
+			errors.Is(err, engine.ErrClosed):
 			// 可恢复的暂时状态：宿主正在停机或引擎尚未就绪，重启后可再查。
-			httputil.WriteError(c, apperr.New(apperr.KindPrecondition, "MEDIA_ENGINE_UNAVAILABLE",
-				"Media engine is not running", err))
+			httputil.WriteError(c, apperr.New(
+				apperr.KindPrecondition,
+				"MEDIA_ENGINE_UNAVAILABLE",
+				"Media engine is not running",
+				err,
+			))
 		default:
 			httputil.WriteError(c, apperr.New(apperr.KindInternal, "AI_STREAM_STATS_FAILED",
 				"Failed to read AI stream delivery stats", err))
@@ -560,7 +569,9 @@ func (h *Handler) writeStreamInfo(params streamInfoParams) {
 		h.logger.Debug("marshal stream info failed", zap.Error(err))
 		return
 	}
-	_ = params.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	if err := params.conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+		h.logger.Debug("set write deadline failed", zap.Error(err))
+	}
 	if err := params.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 		h.logger.Debug("write stream info failed", zap.Error(err))
 	}
@@ -614,7 +625,9 @@ func (h *Handler) StreamAudioWS(c *gin.Context) {
 	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		h.logger.Debug("audio websocket upgrade failed", zap.Error(err))
-		_ = acquired.Stream.Close()
+		if closeErr := acquired.Stream.Close(); closeErr != nil {
+			// Best-effort close on upgrade failure
+		}
 		return
 	}
 
@@ -625,10 +638,12 @@ func (h *Handler) StreamAudioWS(c *gin.Context) {
 			Code:   AudioErrorNoAudio,
 			Reason: "camera reports no playable audio track",
 		})
-		_ = conn.WriteControl(websocket.CloseMessage,
-			websocket.FormatCloseMessage(AudioCloseNoAudio, "no audio"), time.Now().Add(time.Second))
-		_ = conn.Close()
-		_ = acquired.Stream.Close()
+		closeAudioConnectionAndStream(
+			conn,
+			acquired.Stream,
+			AudioCloseNoAudio,
+			"no audio",
+		)
 		h.logger.Info("audio channel rejected: no audio",
 			zap.String("session", sessionKey), zap.String("camera_id", cameraID), zap.String("role", role))
 		return
@@ -647,10 +662,12 @@ func (h *Handler) StreamAudioWS(c *gin.Context) {
 			Code:   AudioErrorSubscribeFailed,
 			Reason: "failed to subscribe camera audio",
 		})
-		_ = conn.WriteControl(websocket.CloseMessage,
-			websocket.FormatCloseMessage(AudioCloseInternal, "subscribe failed"), time.Now().Add(time.Second))
-		_ = conn.Close()
-		_ = acquired.Stream.Close()
+		closeAudioConnectionAndStream(
+			conn,
+			acquired.Stream,
+			AudioCloseInternal,
+			"subscribe failed",
+		)
 		h.logger.Warn("audio subscribe failed",
 			zap.String("session", sessionKey), zap.String("camera_id", cameraID),
 			zap.String("role", role), zap.Error(err))
@@ -718,14 +735,47 @@ func (h *Handler) StreamAudioWS(c *gin.Context) {
 	channel.ReadPump()
 }
 
+func closeAudioConnectionAndStream(
+	conn *websocket.Conn,
+	stream MediaStream,
+	statusCode int,
+	reason string,
+) {
+	if conn != nil {
+		deadline := time.Now().Add(time.Second)
+		if ctrlErr := conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(statusCode, reason),
+			deadline,
+		); ctrlErr != nil {
+			// Intentionally ignored — connection may already be closing.
+		}
+		if closeErr := conn.Close(); closeErr != nil {
+			// Intentionally ignored — socket teardown is best-effort.
+		}
+	}
+	if stream != nil {
+		if closeErr := stream.Close(); closeErr != nil {
+			// Intentionally ignored — stream teardown is best-effort.
+		}
+	}
+}
+
 // writeAudioTerminalFrame 尽力写一条终止性文本帧；失败无所谓，连接马上要关。
 func writeAudioTerminalFrame(conn *websocket.Conn, message AudioErrorMessage) {
+	if conn == nil {
+		return
+	}
 	payload, err := json.Marshal(message)
 	if err != nil {
 		return
 	}
-	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	_ = conn.WriteMessage(websocket.TextMessage, payload)
+	if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+		// Intentionally ignored — connection may already be closing.
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		// Intentionally ignored — best-effort terminal frame.
+	}
 }
 
 // Ensure interface compliance
@@ -760,7 +810,10 @@ func createAuditDetail(req CreateCameraRequest) string {
 	if req.SubStream != nil {
 		detail["subStream"] = streamAuditDetail(req.SubStream)
 	}
-	b, _ := json.Marshal(detail)
+	b, err := json.Marshal(detail)
+	if err != nil {
+		return ""
+	}
 	return string(b)
 }
 
@@ -778,6 +831,9 @@ func updateAuditDetail(req UpdateCameraRequest) string {
 	if req.SubStream != nil {
 		detail["subStream"] = streamAuditDetail(req.SubStream)
 	}
-	b, _ := json.Marshal(detail)
+	b, err := json.Marshal(detail)
+	if err != nil {
+		return ""
+	}
 	return string(b)
 }

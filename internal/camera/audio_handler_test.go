@@ -43,7 +43,10 @@ func createCameraForTest(t *testing.T, router *gin.Engine, id string) {
 			"transport": "tcp"
 		}
 	}`
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(body))
+	req, err := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -62,7 +65,14 @@ func TestAudioStreamWSRequiresSession(t *testing.T) {
 	defer server.Close()
 
 	// 不带 Upgrade 头也能看出语义：会话缺失时必须在升级前以 401 信封拒绝
-	req, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/cameras/cam_audio_no_session/streams/main/audio/ws", nil)
+	req, err := http.NewRequest(
+		http.MethodGet,
+		server.URL+"/api/v1/cameras/cam_audio_no_session/streams/main/audio/ws",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
@@ -87,7 +97,9 @@ func TestAudioStreamWSCameraWithoutAudio(t *testing.T) {
 	}
 	defer conn.Close()
 
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline failed: %v", err)
+	}
 	msgType, data, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read error frame failed: %v", err)
@@ -104,7 +116,9 @@ func TestAudioStreamWSCameraWithoutAudio(t *testing.T) {
 	}
 
 	// 随后连接必须以 4404 关闭：4404 让前端区分「这路没声音」与「网络抖了」
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline failed: %v", err)
+	}
 	_, _, err = conn.ReadMessage()
 	var closeErr *websocket.CloseError
 	if !asCloseError(err, &closeErr) {
@@ -141,7 +155,9 @@ func TestAudioStreamWSDeliversFrames(t *testing.T) {
 	}
 	defer conn.Close()
 
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline failed: %v", err)
+	}
 	msgType, data, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read audio_info failed: %v", err)
@@ -175,7 +191,9 @@ func TestAudioStreamWSDeliversFrames(t *testing.T) {
 		Data:      bytes.Repeat([]byte{0xD5}, 160),
 	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline failed: %v", err)
+	}
 	msgType, data, err = conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read audio frame failed: %v", err)
@@ -221,7 +239,9 @@ func TestAudioStreamWSSupersedesSameSession(t *testing.T) {
 		t.Fatalf("first dial failed: %v", err)
 	}
 	defer first.Close()
-	_ = first.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := first.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline failed: %v", err)
+	}
 	if _, _, err := first.ReadMessage(); err != nil {
 		t.Fatalf("first audio_info failed: %v", err)
 	}
@@ -233,7 +253,9 @@ func TestAudioStreamWSSupersedesSameSession(t *testing.T) {
 	defer second.Close()
 
 	// 旧连接必须以 4001 关闭：前端据此知道「是被自己顶掉的」，不该自动重连
-	_ = first.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := first.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("set read deadline failed: %v", err)
+	}
 	var closeErr *websocket.CloseError
 	for {
 		_, _, err = first.ReadMessage()
@@ -250,7 +272,9 @@ func TestAudioStreamWSSupersedesSameSession(t *testing.T) {
 	}
 
 	// 新连接照常收到 audio_info
-	_ = second.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := second.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("set read deadline failed: %v", err)
+	}
 	msgType, _, err := second.ReadMessage()
 	if err != nil {
 		t.Fatalf("second audio_info failed: %v", err)

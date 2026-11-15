@@ -10,7 +10,8 @@ import (
 
 // TestAudioWireRoundTrip 钉住 ZLA1 的 20 字节头布局。
 //
-// 前端要按偏移直接读这块内存，任何字段挪位都必须当场红，而不是等浏览器解码出噪声。
+// 前端要按偏移直接读这块内存，任何字段挪位都必须当场红，
+// 而不是等浏览器解码出噪声。
 func TestAudioWireRoundTrip(t *testing.T) {
 	pkt := engine.Packet{
 		TrackType: engine.TrackAudio,

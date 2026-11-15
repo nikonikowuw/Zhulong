@@ -68,7 +68,8 @@ type aiRecovery struct {
 	gen       uint64
 }
 
-// reconnectDelay 返回第 attempt 轮（0 起）的重连等待时间：min*2^n，封顶 max，再叠加向上抖动。
+// reconnectDelay 返回第 attempt 轮（0 起）的重连等待时间：
+// min*2^n，封顶 max，再叠加向上抖动。
 func (h *StreamHub) reconnectDelay(attempt int) time.Duration {
 	delay := h.reconnectMinDelay
 	for i := 0; i < attempt && delay < h.reconnectMaxDelay; i++ {
@@ -214,7 +215,8 @@ func (h *StreamHub) extendRecoveryGrace(cameraID string, gen uint64) {
 	}
 }
 
-// finishAIRecovery 清理重连登记；只有代次仍匹配时才删除，避免覆盖后一次失败拉起的新协程。
+// finishAIRecovery 清理重连登记；
+// 只有代次仍匹配时才删除，避免覆盖后一次失败拉起的新协程。
 func (h *StreamHub) finishAIRecovery(cameraID string, gen uint64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -291,7 +293,11 @@ func (h *StreamHub) awaitStreamReady(ctx context.Context, stream MediaStream) er
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("%w: stream did not become ready within %s", ErrStreamRecovering, h.streamReadyTimeout)
+			return fmt.Errorf(
+				"%w: stream did not become ready within %s",
+				ErrStreamRecovering,
+				h.streamReadyTimeout,
+			)
 		case <-ticker.C:
 		}
 	}
@@ -314,9 +320,13 @@ func streamIsFailed(ctx context.Context, stream MediaStream) (engine.StreamStatu
 
 // aiSubscriptionIsCurrent 判断一条 AI 结果订阅是否仍属于该相机当前的 AI 流。
 //
-// 重连或任务同步会重建 AI 流，而旧订阅的失败回调可能迟到：没有这层代次校验，
-// 一条来自上一代流的历史错误就能把刚恢复的新流拆掉，形成「重连成功立刻又失败」的循环。
-func (h *StreamHub) aiSubscriptionIsCurrent(cameraID string, sub *engine.AIResultSubscription) bool {
+// 重连或任务同步会重建 AI 流，而旧订阅的失败回调可能迟到：
+// 没有这层代次校验，一条来自上一代流的历史错误就能把刚恢复的新流拆掉，
+// 形成「重连成功立刻又失败」的循环。
+func (h *StreamHub) aiSubscriptionIsCurrent(
+	cameraID string,
+	sub *engine.AIResultSubscription,
+) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	ref, ok := h.aiStreams[cameraID]

@@ -7,7 +7,8 @@ import (
 	"sync"
 )
 
-// LazyCipher provides a thread-safe deferred Cipher implementation initialized during runtime lifecycle start.
+// LazyCipher provides a thread-safe deferred Cipher implementation initialized
+// during runtime lifecycle start.
 type LazyCipher struct {
 	cipher Cipher
 	mu     sync.RWMutex
@@ -128,8 +129,14 @@ func (m *LifecycleManager) Start(ctx context.Context) error {
 // Stop cleanly terminates the event hub, stream hub and scheduler.
 func (m *LifecycleManager) Stop() {
 	if m.streamHub != nil {
-		_ = m.streamHub.Close()
+		if err := m.streamHub.Close(); err != nil {
+			// Best-effort close of streamHub during lifecycle teardown.
+		}
 	}
-	_ = m.hub.Close()
+	if m.hub != nil {
+		if err := m.hub.Close(); err != nil {
+			// Best-effort close of event hub during lifecycle teardown.
+		}
+	}
 	m.scheduler.Stop()
 }

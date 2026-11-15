@@ -88,11 +88,16 @@ type streamAdapter struct {
 	stream *engine.Stream
 }
 
-func (s *streamAdapter) Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error) {
+func (s *streamAdapter) Subscribe(
+	ctx context.Context,
+	options engine.SubscriptionOptions,
+) (PacketSource, error) {
 	return s.stream.Subscribe(ctx, options)
 }
 
-func (s *streamAdapter) SubscribeAIResults(ctx context.Context) (*engine.AIResultSubscription, error) {
+func (s *streamAdapter) SubscribeAIResults(
+	ctx context.Context,
+) (*engine.AIResultSubscription, error) {
 	return s.stream.SubscribeAIResults(ctx)
 }
 
@@ -112,7 +117,9 @@ func (s *streamAdapter) Status(ctx context.Context) (engine.StreamStatus, error)
 	return s.stream.Status(ctx)
 }
 
-func (s *streamAdapter) BrokerClients(ctx context.Context) ([]engine.BrokerClientStats, uint32, error) {
+func (s *streamAdapter) BrokerClients(
+	ctx context.Context,
+) ([]engine.BrokerClientStats, uint32, error) {
 	return s.stream.BrokerClients(ctx)
 }
 
@@ -152,7 +159,10 @@ func toRegionViewState(state engine.ViewState) region.ViewState {
 	return view
 }
 
-func (s *streamAdapter) Snapshot(ctx context.Context, options engine.SnapshotOptions) ([]engine.SnapshotImage, error) {
+func (s *streamAdapter) Snapshot(
+	ctx context.Context,
+	options engine.SnapshotOptions,
+) ([]engine.SnapshotImage, error) {
 	return s.stream.Snapshot(ctx, options)
 }
 

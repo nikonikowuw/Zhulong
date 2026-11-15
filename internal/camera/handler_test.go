@@ -29,10 +29,15 @@ func setupTestCameraApp(
 
 	tempDir := t.TempDir()
 	dbStore := database.New(tempDir, zap.NewNop())
-	_ = dbStore.OpenAndMigrate(context.Background())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
 
 	km := NewKeyManager(tempDir)
-	rawCipher, _ := km.InitOrLoadKey(false)
+	rawCipher, err := km.InitOrLoadKey(false)
+	if err != nil {
+		t.Fatalf("InitOrLoadKey failed: %v", err)
+	}
 	lazyCipher := NewLazyCipher()
 	lazyCipher.Set(rawCipher)
 	store := NewCameraStore(dbStore)
@@ -64,9 +69,13 @@ func setupTestCameraApp(
 	handler.RegisterRoutes(apiGroup)
 
 	cleanup := func() {
-		_ = streamHub.Close()
+		if err := streamHub.Close(); err != nil {
+			t.Logf("streamHub.Close error: %v", err)
+		}
 		hub.Close()
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore.Close error: %v", err)
+		}
 	}
 	return router, service, hub, mockEngine, cleanup
 }
@@ -85,7 +94,10 @@ func TestCameraHandlerCRUD(t *testing.T) {
 		}
 	}`
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody))
+	req, err := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -106,7 +118,10 @@ func TestCameraHandlerCRUD(t *testing.T) {
 	}
 
 	// 2. Get Camera
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/cameras/cam_gate_test", nil)
+	req, err = http.NewRequest(http.MethodGet, "/api/v1/cameras/cam_gate_test", nil)
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -133,7 +148,10 @@ func TestCameraHandlerCRUD(t *testing.T) {
 	}
 
 	// 2b. List Cameras (must provide complete RTSP URL for frontend display)
-	listReq, _ := http.NewRequest(http.MethodGet, "/api/v1/cameras", nil)
+	listReq, err := http.NewRequest(http.MethodGet, "/api/v1/cameras", nil)
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	listW := httptest.NewRecorder()
 	router.ServeHTTP(listW, listReq)
 	if listW.Code != http.StatusOK {
@@ -155,7 +173,10 @@ func TestCameraHandlerCRUD(t *testing.T) {
 	}
 
 	// 3. Get Credentials (admin view)
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/cameras/cam_gate_test/credentials", nil)
+	req, err = http.NewRequest(http.MethodGet, "/api/v1/cameras/cam_gate_test/credentials", nil)
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -167,7 +188,9 @@ func TestCameraHandlerCRUD(t *testing.T) {
 	var credResp struct {
 		Data *CameraCredentialsResponse `json:"data"`
 	}
-	_ = json.Unmarshal(w.Body.Bytes(), &credResp)
+	if err := json.Unmarshal(w.Body.Bytes(), &credResp); err != nil {
+		t.Fatalf("Unmarshal credentials failed: %v", err)
+	}
 	if credResp.Data == nil || credResp.Data.Credentials["main"] == "" {
 		t.Fatalf("expected plaintext credentials, got: %+v", credResp)
 	}
@@ -180,7 +203,10 @@ func TestCameraHandlerCRUD(t *testing.T) {
 		"revision": 1,
 		"name": "Gate Camera Renamed"
 	}`
-	req, _ = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_gate_test", bytes.NewBufferString(updateBody))
+	req, err = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_gate_test", bytes.NewBufferString(updateBody))
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -193,7 +219,10 @@ func TestCameraHandlerCRUD(t *testing.T) {
 		"revision": 1,
 		"name": "Stale Update"
 	}`
-	req, _ = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_gate_test", bytes.NewBufferString(badUpdateBody))
+	req, err = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_gate_test", bytes.NewBufferString(badUpdateBody))
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -202,7 +231,10 @@ func TestCameraHandlerCRUD(t *testing.T) {
 	}
 
 	// 6. Delete Camera
-	req, _ = http.NewRequest(http.MethodDelete, "/api/v1/cameras/cam_gate_test", nil)
+	req, err = http.NewRequest(http.MethodDelete, "/api/v1/cameras/cam_gate_test", nil)
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -215,7 +247,10 @@ func TestCameraSSEEventsRouteNoCollision(t *testing.T) {
 	defer cleanup()
 
 	// Ensure GET /api/v1/cameras/events is hit and initiates SSE without colliding with /:id
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/cameras/events", nil)
+	req, err := http.NewRequest(http.MethodGet, "/api/v1/cameras/events", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	w := httptest.NewRecorder()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -244,7 +279,10 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 	defer cleanup()
 
 	// 1. 测试不存在的摄像机 -> HTTP 404
-	req404, _ := http.NewRequest(http.MethodGet, "/api/v1/cameras/cam_not_found/ws", nil)
+	req404, err := http.NewRequest(http.MethodGet, "/api/v1/cameras/cam_not_found/ws", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	w404 := httptest.NewRecorder()
 	router.ServeHTTP(w404, req404)
 	if w404.Code != http.StatusNotFound {
@@ -263,7 +301,10 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 			"transport": "tcp"
 		}
 	}`
-	createReq, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody))
+	createReq, err := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	createReq.Header.Set("Content-Type", "application/json")
 	wCreate := httptest.NewRecorder()
 	router.ServeHTTP(wCreate, createReq)
@@ -308,7 +349,9 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 	// 3.1 建连后第一条必须是文本能力帧，且只发一次。
 	//     老前端按 `instanceof ArrayBuffer` 判据忽略它，所以它绝不能出现在二进制帧之后
 	//     ——那会让旧 bundle 把文本当帧解析，直接黑屏。
-	_ = wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := wsConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline failed: %v", err)
+	}
 	msgType, msgData, err := wsConn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read capability frame failed: %v", err)
@@ -331,7 +374,9 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 		t.Fatalf("expected Present=false for a video-only stream, got %+v", capability.Audio)
 	}
 
-	_ = wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := wsConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline failed: %v", err)
+	}
 	msgType, msgData, err = wsConn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read ws message failed: %v", err)
@@ -384,11 +429,16 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 func TestCameraHandler_AuditLogging(t *testing.T) {
 	tempDir := t.TempDir()
 	dbStore := database.New(tempDir, zap.NewNop())
-	_ = dbStore.OpenAndMigrate(context.Background())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
 	defer dbStore.Close()
 
 	km := NewKeyManager(tempDir)
-	rawCipher, _ := km.InitOrLoadKey(false)
+	rawCipher, err := km.InitOrLoadKey(false)
+	if err != nil {
+		t.Fatalf("InitOrLoadKey failed: %v", err)
+	}
 	lazyCipher := NewLazyCipher()
 	lazyCipher.Set(rawCipher)
 	store := NewCameraStore(dbStore)
@@ -439,9 +489,15 @@ func TestCameraHandler_AuditLogging(t *testing.T) {
 			Transport: "tcp",
 		},
 	}
-	body, _ := json.Marshal(createReq)
+	body, err := json.Marshal(createReq)
+	if err != nil {
+		t.Fatalf("Marshal createReq failed: %v", err)
+	}
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
@@ -454,9 +510,15 @@ func TestCameraHandler_AuditLogging(t *testing.T) {
 		Revision: 1,
 		Enabled:  &disabled,
 	}
-	body, _ = json.Marshal(toggleReq)
+	body, err = json.Marshal(toggleReq)
+	if err != nil {
+		t.Fatalf("Marshal toggleReq failed: %v", err)
+	}
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_audit_1", bytes.NewReader(body))
+	req, err = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_audit_1", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -469,9 +531,15 @@ func TestCameraHandler_AuditLogging(t *testing.T) {
 		Revision: 2,
 		Name:     &newName,
 	}
-	body, _ = json.Marshal(updateReq)
+	body, err = json.Marshal(updateReq)
+	if err != nil {
+		t.Fatalf("Marshal updateReq failed: %v", err)
+	}
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_audit_1", bytes.NewReader(body))
+	req, err = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_audit_1", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -480,7 +548,10 @@ func TestCameraHandler_AuditLogging(t *testing.T) {
 
 	// 4. Delete camera
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodDelete, "/api/v1/cameras/cam_audit_1", nil)
+	req, err = http.NewRequest(http.MethodDelete, "/api/v1/cameras/cam_audit_1", nil)
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -540,7 +611,10 @@ func TestCameraHandlerCreate_GeneratedULID(t *testing.T) {
 		}
 	}`
 
-	req1, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody1))
+	req1, err := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody1))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
 	router.ServeHTTP(w1, req1)
@@ -570,7 +644,10 @@ func TestCameraHandlerCreate_GeneratedULID(t *testing.T) {
 		}
 	}`
 
-	req2, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody2))
+	req2, err := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody2))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)

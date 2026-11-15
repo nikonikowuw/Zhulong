@@ -24,7 +24,11 @@ func TestAIStreamStatsHandler(t *testing.T) {
 
 	mockEngine := newMockMediaEngine()
 	hub := NewStreamHub(mockEngine, store, lazyCipher, nil, nil, zap.NewNop())
-	defer func() { _ = hub.Close() }()
+	defer func() {
+		if err := hub.Close(); err != nil {
+			t.Logf("hub.Close error: %v", err)
+		}
+	}()
 
 	registry := NewStateRegistry()
 	eventHub := NewEventHub(registry)

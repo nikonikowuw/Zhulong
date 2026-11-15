@@ -41,7 +41,8 @@ type CameraResponse struct {
 	Enabled       bool             `json:"enabled"`
 }
 
-// CameraCredentialsResponse provides decrypted stream URLs for authorized administrator inspection/copying.
+// CameraCredentialsResponse provides decrypted stream URLs for authorized administrator
+// inspection/copying.
 type CameraCredentialsResponse struct {
 	Credentials map[string]string `json:"credentials"` // role -> full plaintext RTSP URL
 	CameraID    string            `json:"cameraId"`

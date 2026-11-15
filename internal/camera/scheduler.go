@@ -30,7 +30,8 @@ type PacketActivitySource interface {
 	HasPacketActivitySource(cameraID, role string) bool
 }
 
-// HealthScheduler runs periodic lightweight health checks on idle streams and monitors packet health on active streams.
+// HealthScheduler runs periodic lightweight health checks on idle streams and monitors
+// packet health on active streams.
 type HealthScheduler struct {
 	store          CameraStore
 	cipher         Cipher
@@ -86,7 +87,8 @@ func (s *HealthScheduler) SetPacketActivitySource(src PacketActivitySource) {
 	s.activitySource = src
 }
 
-// Start loads persisted cameras, initializes their state, and begins the scheduling and monitoring loops.
+// Start loads persisted cameras, initializes their state, and begins the scheduling
+// and monitoring loops.
 func (s *HealthScheduler) Start(ctx context.Context) error {
 	cameras, _, err := s.store.List(ctx, 100, 0)
 	if err != nil {
@@ -115,8 +117,12 @@ func (s *HealthScheduler) Stop() {
 	s.logger.Info("camera health scheduler stopped")
 }
 
-// TriggerCheck immediately executes a health check on the specified camera and returns the resulting state.
-func (s *HealthScheduler) TriggerCheck(ctx context.Context, cameraID string) (*CameraStateInfo, error) {
+// TriggerCheck immediately executes a health check on the specified camera and returns
+// the resulting state.
+func (s *HealthScheduler) TriggerCheck(
+	ctx context.Context,
+	cameraID string,
+) (*CameraStateInfo, error) {
 	cam, err := s.store.GetByID(ctx, cameraID)
 	if err != nil {
 		return nil, err
@@ -167,7 +173,9 @@ func (s *HealthScheduler) activeMonitorLoop() {
 	}
 }
 
-func (s *HealthScheduler) newProbeContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+func (s *HealthScheduler) newProbeContext(
+	timeout time.Duration,
+) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	go func() {
 		select {
@@ -220,12 +228,15 @@ func (s *HealthScheduler) monitorActiveStreams() {
 			// 只有 Go 侧真能看见包节拍的流才做 4 秒超时判定。
 			// AI 分析流的活性由 Native 流状态负责：read idle 超时会把流置为 FAILED，
 			// 订阅随即报错并触发重连——那是可复现的证据，不是猜。
-			if s.activitySource != nil && !s.activitySource.HasPacketActivitySource(camState.CameraID, role) {
+			if s.activitySource != nil &&
+				!s.activitySource.HasPacketActivitySource(camState.CameraID, role) {
 				continue
 			}
 
 			// If last packet is older than 4s, trigger timeout
-			if streamState.LastCheckedAt == nil || now.Sub(*streamState.LastCheckedAt) <= DefaultActivePacketTimeout {
+			isPacketRecent := streamState.LastCheckedAt != nil &&
+				now.Sub(*streamState.LastCheckedAt) <= DefaultActivePacketTimeout
+			if isPacketRecent {
 				continue
 			}
 

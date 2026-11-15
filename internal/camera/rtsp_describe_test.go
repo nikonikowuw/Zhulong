@@ -44,7 +44,9 @@ func startMockRTSPServer(t *testing.T, handler func(conn net.Conn)) (string, fun
 
 	cleanup := func() {
 		close(stopChan)
-		_ = listener.Close()
+		if closeErr := listener.Close(); closeErr != nil {
+			t.Logf("cleanup listener close: %v", closeErr)
+		}
 	}
 	return listener.Addr().String(), cleanup
 }
@@ -93,9 +95,15 @@ func TestDescribeClientSuccessNoAuth(t *testing.T) {
 			return
 		}
 
-		resp := fmt.Sprintf("RTSP/1.0 200 OK\r\nCSeq: %s\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s",
-			cseq, len(sampleH264SDP), sampleH264SDP)
-		_, _ = conn.Write([]byte(resp))
+		resp := fmt.Sprintf(
+			"RTSP/1.0 200 OK\r\nCSeq: %s\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s",
+			cseq,
+			len(sampleH264SDP),
+			sampleH264SDP,
+		)
+		if _, writeErr := conn.Write([]byte(resp)); writeErr != nil {
+			return
+		}
 	})
 	defer cleanup()
 
@@ -126,11 +134,16 @@ func TestDescribeClientDigestAuthWorkflow(t *testing.T) {
 			return
 		}
 
-		resp1 := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\n"+
-			"CSeq: %s\r\n"+
-			"WWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\", qop=\"auth\"\r\n"+
-			"Content-Length: 0\r\n\r\n", cseq1)
-		_, _ = conn.Write([]byte(resp1))
+		resp1 := fmt.Sprintf(
+			"RTSP/1.0 401 Unauthorized\r\n"+
+				"CSeq: %s\r\n"+
+				"WWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\", qop=\"auth\"\r\n"+
+				"Content-Length: 0\r\n\r\n",
+			cseq1,
+		)
+		if _, writeErr := conn.Write([]byte(resp1)); writeErr != nil {
+			return
+		}
 
 		// Request 2: with auth -> return 200 OK
 		_, _, cseq2, auth2, err := readMockRTSPRequest(r)
@@ -139,13 +152,21 @@ func TestDescribeClientDigestAuthWorkflow(t *testing.T) {
 		}
 		if !strings.Contains(auth2, `username="admin"`) || !strings.Contains(auth2, `nonce="testnonce123"`) {
 			failResp := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\nCSeq: %s\r\nContent-Length: 0\r\n\r\n", cseq2)
-			_, _ = conn.Write([]byte(failResp))
+			if _, writeErr := conn.Write([]byte(failResp)); writeErr != nil {
+				return
+			}
 			return
 		}
 
-		resp2 := fmt.Sprintf("RTSP/1.0 200 OK\r\nCSeq: %s\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s",
-			cseq2, len(sampleH264SDP), sampleH264SDP)
-		_, _ = conn.Write([]byte(resp2))
+		resp2 := fmt.Sprintf(
+			"RTSP/1.0 200 OK\r\nCSeq: %s\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s",
+			cseq2,
+			len(sampleH264SDP),
+			sampleH264SDP,
+		)
+		if _, writeErr := conn.Write([]byte(resp2)); writeErr != nil {
+			return
+		}
 	})
 	defer cleanup()
 
@@ -173,20 +194,36 @@ func TestDescribeClientAuthRejectedOnWrongPassword(t *testing.T) {
 		r := bufio.NewReader(conn)
 
 		// 1. Send 401
-		_, _, cseq1, _, _ := readMockRTSPRequest(r)
-		resp1 := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\n"+
-			"CSeq: %s\r\n"+
-			"WWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\"\r\n"+
-			"Content-Length: 0\r\n\r\n", cseq1)
-		_, _ = conn.Write([]byte(resp1))
+		_, _, cseq1, _, err1 := readMockRTSPRequest(r)
+		if err1 != nil {
+			return
+		}
+		resp1 := fmt.Sprintf(
+			"RTSP/1.0 401 Unauthorized\r\n"+
+				"CSeq: %s\r\n"+
+				"WWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\"\r\n"+
+				"Content-Length: 0\r\n\r\n",
+			cseq1,
+		)
+		if _, writeErr := conn.Write([]byte(resp1)); writeErr != nil {
+			return
+		}
 
 		// 2. Client responds with auth, server rejects with 401
-		_, _, cseq2, _, _ := readMockRTSPRequest(r)
-		resp2 := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\n"+
-			"CSeq: %s\r\n"+
-			"WWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\"\r\n"+
-			"Content-Length: 0\r\n\r\n", cseq2)
-		_, _ = conn.Write([]byte(resp2))
+		_, _, cseq2, _, err2 := readMockRTSPRequest(r)
+		if err2 != nil {
+			return
+		}
+		resp2 := fmt.Sprintf(
+			"RTSP/1.0 401 Unauthorized\r\n"+
+				"CSeq: %s\r\n"+
+				"WWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\"\r\n"+
+				"Content-Length: 0\r\n\r\n",
+			cseq2,
+		)
+		if _, writeErr := conn.Write([]byte(resp2)); writeErr != nil {
+			return
+		}
 	})
 	defer cleanup()
 
@@ -208,12 +245,17 @@ func TestDescribeClientRejectsRedirect(t *testing.T) {
 	addr, cleanup := startMockRTSPServer(t, func(conn net.Conn) {
 		defer conn.Close()
 		r := bufio.NewReader(conn)
-		_, _, cseq, _, _ := readMockRTSPRequest(r)
+		_, _, cseq, _, err := readMockRTSPRequest(r)
+		if err != nil {
+			return
+		}
 		resp := fmt.Sprintf(
 			"RTSP/1.0 302 Moved Temporarily\r\nCSeq: %s\r\nLocation: rtsp://127.0.0.1:8554/other\r\nContent-Length: 0\r\n\r\n",
 			cseq,
 		)
-		_, _ = conn.Write([]byte(resp))
+		if _, writeErr := conn.Write([]byte(resp)); writeErr != nil {
+			return
+		}
 	})
 	defer cleanup()
 
@@ -233,11 +275,23 @@ func TestDescribeClientDetectsCSeqMismatch(t *testing.T) {
 	addr, cleanup := startMockRTSPServer(t, func(conn net.Conn) {
 		defer conn.Close()
 		r := bufio.NewReader(conn)
-		_, _, cseq, _, _ := readMockRTSPRequest(r)
-		badCSeq, _ := strconv.Atoi(cseq)
-		resp := fmt.Sprintf("RTSP/1.0 200 OK\r\nCSeq: %d\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s",
-			badCSeq+10, len(sampleH264SDP), sampleH264SDP)
-		_, _ = conn.Write([]byte(resp))
+		_, _, cseq, _, err := readMockRTSPRequest(r)
+		if err != nil {
+			return
+		}
+		badCSeq, parseErr := strconv.Atoi(cseq)
+		if parseErr != nil {
+			return
+		}
+		resp := fmt.Sprintf(
+			"RTSP/1.0 200 OK\r\nCSeq: %d\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s",
+			badCSeq+10,
+			len(sampleH264SDP),
+			sampleH264SDP,
+		)
+		if _, writeErr := conn.Write([]byte(resp)); writeErr != nil {
+			return
+		}
 	})
 	defer cleanup()
 

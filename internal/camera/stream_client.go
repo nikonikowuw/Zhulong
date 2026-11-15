@@ -50,7 +50,8 @@ type StreamClient struct {
 	// subscribedAt 是**注册**时刻（由 RegisterClient 在锁内打点），仅用于首帧耗时诊断。
 	// ⚠️ 不要在构造函数里初始化：构造到注册之间可能隔着排队，基准点会漂。
 	subscribedAt time.Time
-	// 只有 WebSocket 写成功才推进基准；首帧先以最早排队的 DTS 初始化，确保写阻塞时预算仍会增长。
+	// 只有 WebSocket 写成功才推进基准；
+	// 首帧先以最早排队的 DTS 初始化，确保写阻塞时预算仍会增长。
 	lastProgressDTSUS int64
 	// skippedBeforeFirstFrame 统计首帧写出前因等待关键帧而被跳过的帧数，
 	// 用于区分「卡在 RTSP 建连」与「卡在等 IDR」。
@@ -62,7 +63,11 @@ type StreamClient struct {
 }
 
 // NewStreamClient 构造单个客户端。
-func NewStreamClient(conn *websocket.Conn, dispatcher *StreamDispatcher, logger *zap.Logger) *StreamClient {
+func NewStreamClient(
+	conn *websocket.Conn,
+	dispatcher *StreamDispatcher,
+	logger *zap.Logger,
+) *StreamClient {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -75,11 +80,58 @@ func NewStreamClient(conn *websocket.Conn, dispatcher *StreamDispatcher, logger 
 	}
 }
 
+func closeWebsocketConnBestEffort(conn *websocket.Conn) {
+	if conn == nil {
+		return
+	}
+	if err := conn.Close(); err != nil {
+		// Intentionally ignored — connection teardown is best-effort.
+	}
+}
+
+func writeWebsocketCloseControlBestEffort(
+	conn *websocket.Conn,
+	statusCode int,
+	reason string,
+	timeout time.Duration,
+) {
+	if conn == nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	if err := conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(statusCode, reason),
+		deadline,
+	); err != nil {
+		// Intentionally ignored — peer may already have disconnected.
+	}
+}
+
+func setWriteDeadlineBestEffort(conn *websocket.Conn, timeout time.Duration) {
+	if conn == nil {
+		return
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		// Intentionally ignored — deadline failure will surface on next write.
+	}
+}
+
+func setReadDeadlineBestEffort(conn *websocket.Conn, timeout time.Duration) {
+	if conn == nil {
+		return
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		// Intentionally ignored — deadline failure will surface on next read.
+	}
+}
+
 // advanceProgressDTS 把写出进度推进到 dtsUS，**只前进，绝不回退**。
 //
-// 单调性是这条字段的全部意义：补发 GOP 时进度会被预先锚在末帧，而「补发首帧真的
-// 写进 socket」的回调要晚一拍才到；若那里按最后一次写入直接赋值，进度就会倒退一整个
-// GOP，紧随其后的实时帧被误判为滞后，整段队列被清空。调用方必须持有 dispatcher 锁。
+// 单调性是这条字段的全部意义：补发 GOP 时进度会被预先锚在末帧，
+// 而「补发首帧真的写进 socket」的回调要晚一拍才到；若那里按最后一次写入直接赋值，
+// 进度就会倒退一整个 GOP，紧随其后的实时帧被误判为滞后，整段队列被清空。
+// 调用方必须持有 dispatcher 锁。
 func (c *StreamClient) advanceProgressDTS(dtsUS int64) {
 	if c.hasProgressDTS && dtsUS <= c.lastProgressDTSUS {
 		return
@@ -93,7 +145,7 @@ func (c *StreamClient) Close() {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		if c.conn != nil {
-			_ = c.conn.Close()
+			closeWebsocketConnBestEffort(c.conn)
 		}
 		if c.dispatcher != nil {
 			c.dispatcher.UnregisterClient(c)
@@ -106,13 +158,13 @@ func (c *StreamClient) CloseWithReason(statusCode int, reason string) {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		if c.conn != nil {
-			deadline := time.Now().Add(time.Second)
-			_ = c.conn.WriteControl(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(statusCode, reason),
-				deadline,
+			writeWebsocketCloseControlBestEffort(
+				c.conn,
+				statusCode,
+				reason,
+				time.Second,
 			)
-			_ = c.conn.Close()
+			closeWebsocketConnBestEffort(c.conn)
 		}
 		if c.dispatcher != nil {
 			c.dispatcher.UnregisterClient(c)
@@ -131,9 +183,11 @@ func (c *StreamClient) WritePump() {
 	for {
 		select {
 		case f, ok := <-c.sendChan:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			setWriteDeadlineBestEffort(c.conn, wsWriteWait)
 			if !ok {
-				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				if writeErr := c.conn.WriteMessage(websocket.CloseMessage, []byte{}); writeErr != nil {
+					// Intentionally ignored — connection is closing.
+				}
 				return
 			}
 			if err := c.conn.WriteMessage(websocket.BinaryMessage, f.data); err != nil {
@@ -144,7 +198,7 @@ func (c *StreamClient) WritePump() {
 				c.dispatcher.markFrameWritten(c, f)
 			}
 		case <-ticker.C:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			setWriteDeadlineBestEffort(c.conn, wsWriteWait)
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
@@ -161,16 +215,21 @@ func (c *StreamClient) ReadPump() {
 	}()
 
 	c.conn.SetReadLimit(wsMaxMessageSize)
-	_ = c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	setReadDeadlineBestEffort(c.conn, wsPongWait)
 	c.conn.SetPongHandler(func(string) error {
-		_ = c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		setReadDeadlineBestEffort(c.conn, wsPongWait)
 		return nil
 	})
 
 	for {
 		_, _, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+			isUnexpected := websocket.IsUnexpectedCloseError(
+				err,
+				websocket.CloseGoingAway,
+				websocket.CloseNormalClosure,
+			)
+			if isUnexpected {
 				c.logger.Debug("ws read error", zap.Error(err))
 			}
 			break

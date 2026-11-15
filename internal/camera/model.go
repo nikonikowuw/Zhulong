@@ -1,7 +1,7 @@
 package camera
 
 import (
-	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -86,5 +86,5 @@ func (s *CameraStream) FormatFPS() string {
 		return "unknown"
 	}
 	fps := float64(s.FPSNumerator) / float64(s.FPSDenominator)
-	return fmt.Sprintf("%.2f", fps)
+	return strconv.FormatFloat(fps, 'f', 2, 64)
 }

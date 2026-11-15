@@ -181,7 +181,11 @@ func (s *mockMediaStream) Close() error {
 		s.mu.Lock()
 		s.closed = true
 		s.mu.Unlock()
-		_ = s.source.Close()
+		if s.source != nil {
+			if err := s.source.Close(); err != nil {
+				// best-effort in test
+			}
+		}
 	})
 	return nil
 }
@@ -238,7 +242,9 @@ func setupTestStoreAndCipher(t *testing.T) (CameraStore, *LazyCipher, string, fu
 
 	store := NewCameraStore(dbStore)
 	cleanup := func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore.Close error: %v", err)
+		}
 	}
 
 	rawCipher, err := NewCipher(make([]byte, 32))
@@ -386,8 +392,9 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 	}
 
 	// 验证状态机切为 idle。
-	// SessionStateIdle 由 StreamDispatcher 的收流协程异步写入（stream_dispatcher.go 中的
-	// UpdateSessionState 调用），可能晚于 UnregisterClient 返回，因此必须轮询等待而不能立即断言。
+	// SessionStateIdle 由 StreamDispatcher 的收流协程异步写入
+	// （stream_dispatcher.go 中的 UpdateSessionState 调用），
+	// 可能晚于 UnregisterClient 返回，因此必须轮询等待而不能立即断言。
 	deadline = time.After(time.Second)
 	for {
 		info, ok = registry.GetState(camID)
@@ -565,8 +572,10 @@ func TestStreamDispatcherGOPCacheInstantPlayback(t *testing.T) {
 	}
 }
 
-// 验证当 WritePump 异步写出补发的首个关键帧时，markFrameWritten 绝不回滚已锚定在 GOP 末帧的进度。
-// 否则后续实时帧一到，就会因「实时帧 DTS - 补发首帧 DTS > 500ms」被误判为 lag 并清空整个 GOP，导致秒开失效。
+// 验证当 WritePump 异步写出补发的首个关键帧时，
+// markFrameWritten 绝不回滚已锚定在 GOP 末帧的进度。
+// 否则后续实时帧一到，就会因「实时帧 DTS - 补发首帧 DTS > 500ms」
+// 被误判为 lag 并清空整个 GOP，导致秒开失效。
 func TestStreamDispatcherGOPPrimingProgressNotRewoundByMarkFrameWritten(t *testing.T) {
 	disp := NewStreamDispatcher(StreamDispatcherConfig{
 		CameraID: "cam_test_priming",

@@ -57,7 +57,11 @@ func (s *gormCameraStore) db(ctx context.Context) (*gorm.DB, error) {
 	return db.WithContext(ctx), nil
 }
 
-func (s *gormCameraStore) Create(ctx context.Context, camera *Camera, streams []CameraStream) error {
+func (s *gormCameraStore) Create(
+	ctx context.Context,
+	camera *Camera,
+	streams []CameraStream,
+) error {
 	db, err := s.db(ctx)
 	if err != nil {
 		return err
@@ -160,7 +164,9 @@ func (s *gormCameraStore) Update(ctx context.Context, params UpdateCameraParams)
 
 	var updatedCamera Camera
 	err = db.Transaction(func(tx *gorm.DB) error {
-		current, err := gorm.G[Camera](tx, clause.Locking{Strength: "UPDATE"}).Where("id = ?", params.ID).First(ctx)
+		current, err := gorm.G[Camera](tx, clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", params.ID).
+			First(ctx)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrCameraNotFound
@@ -183,7 +189,9 @@ func (s *gormCameraStore) Update(ctx context.Context, params UpdateCameraParams)
 			updates["enabled"] = *params.Enabled
 		}
 
-		res := tx.Model(&Camera{}).Where("id = ? AND revision = ?", params.ID, params.ExpectedRevision).Updates(updates)
+		res := tx.Model(&Camera{}).
+			Where("id = ? AND revision = ?", params.ID, params.ExpectedRevision).
+			Updates(updates)
 		if res.Error != nil {
 			return fmt.Errorf("update camera: %w", res.Error)
 		}
@@ -203,13 +211,18 @@ func (s *gormCameraStore) Update(ctx context.Context, params UpdateCameraParams)
 				params.Streams[i].UpdatedAt = now
 			}
 			if len(params.Streams) > 0 {
-				if err := gorm.G[CameraStream](tx).CreateInBatches(ctx, &params.Streams, len(params.Streams)); err != nil {
-					return fmt.Errorf("insert updated camera streams: %w", err)
+				batchErr := gorm.G[CameraStream](tx).
+					CreateInBatches(ctx, &params.Streams, len(params.Streams))
+				if batchErr != nil {
+					return fmt.Errorf("insert updated camera streams: %w", batchErr)
 				}
 			}
 		}
 
-		updatedCamera, err = gorm.G[Camera](tx).Preload("Streams", nil).Where("id = ?", params.ID).First(ctx)
+		updatedCamera, err = gorm.G[Camera](tx).
+			Preload("Streams", nil).
+			Where("id = ?", params.ID).
+			First(ctx)
 		return err
 	})
 
@@ -252,7 +265,9 @@ func (s *gormCameraStore) HasAnyEncryptedStreams(ctx context.Context) (bool, err
 		return false, err
 	}
 
-	count, err := gorm.G[CameraStream](db).Where("encrypted_uri IS NOT NULL AND length(encrypted_uri) > 0").Count(ctx, "*")
+	count, err := gorm.G[CameraStream](db).
+		Where("encrypted_uri IS NOT NULL AND length(encrypted_uri) > 0").
+		Count(ctx, "*")
 	if err != nil {
 		return false, fmt.Errorf("count encrypted streams: %w", err)
 	}

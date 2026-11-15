@@ -137,7 +137,9 @@ func ParseAndNormalizeRTSP(raw string, transport string) (*StreamConnectionInfo,
 	var username, password string
 	if parsed.User != nil {
 		username = parsed.User.Username()
-		password, _ = parsed.User.Password()
+		if pass, ok := parsed.User.Password(); ok {
+			password = pass
+		}
 	}
 
 	transport = strings.ToLower(strings.TrimSpace(transport))
@@ -190,7 +192,7 @@ func IsGB28181ID(id string) bool {
 	if len(id) != 20 {
 		return false
 	}
-	for i := 0; i < len(id); i++ {
+	for i := range len(id) {
 		if id[i] < '0' || id[i] > '9' {
 			return false
 		}
@@ -198,7 +200,8 @@ func IsGB28181ID(id string) bool {
 	return true
 }
 
-// SanitizeURL masks credentials in any URL for safe logging and public display using standard library Redacted.
+// SanitizeURL masks credentials in any URL for safe logging and public display
+// using standard library Redacted.
 func SanitizeURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
