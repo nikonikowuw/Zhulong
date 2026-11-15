@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"gorm.io/gorm"
 )
 
 var (
@@ -96,10 +97,8 @@ func (s *Store) ListJobs(ctx context.Context, jobType string, limit, offset int)
 		offset = 0
 	}
 
-	var (
-		list  []Job
-		total int64
-	)
+	list := []Job{}
+	var total int64
 	txErr := db.Transaction(func(tx *gorm.DB) error {
 		// Scopes() with no arguments is a no-op that yields the filtered chain
 		// type, which Where() returns and Count()/Find() are methods on.
@@ -253,7 +252,7 @@ func (s *Store) CancelJobRecord(ctx context.Context, id string) error {
 		}
 		return err
 	}
-	return fmt.Errorf("%w: status %s", ErrNotCancellable, job.Status)
+	return fmt.Errorf("%w: status %q", ErrNotCancellable, job.Status)
 }
 
 // AbandonJob fails an active job that will never execute (queue overflow or

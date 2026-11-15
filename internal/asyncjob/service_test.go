@@ -13,12 +13,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 const jobTestTimeout = 5 * time.Second
@@ -377,7 +378,12 @@ func TestCancelRejectsUnknownAndFinishedJobs(t *testing.T) {
 
 func TestLateProgressDoesNotResurrectTerminalJob(t *testing.T) {
 	svc, store := newTestService(t)
-	job := &Job{ID: "job-late", Type: "test", Status: StatusCompleted, Progress: 100}
+	job := &Job{
+		ID:       "job-late",
+		Type:     "test",
+		Status:   StatusCompleted,
+		Progress: 100,
+	}
 	if err := store.CreateJob(context.Background(), job); err != nil {
 		t.Fatalf("CreateJob failed: %v", err)
 	}
@@ -431,9 +437,23 @@ func TestStartupRecoveryFailsOrphansAndClearsProgress(t *testing.T) {
 	svc, store := newTestService(t)
 
 	stale := []*Job{
-		{ID: "job-stale-1", Type: "test.echo", Status: StatusPending},
-		{ID: "job-stale-2", Type: "test.echo", Status: StatusProcessing, CurrentFile: "images/a.jpg"},
-		{ID: "job-stale-3", Type: "test.echo", Status: StatusExtracting, CurrentStage: string(StageExtracting)},
+		{
+			ID:     "job-stale-1",
+			Type:   "test.echo",
+			Status: StatusPending,
+		},
+		{
+			ID:          "job-stale-2",
+			Type:        "test.echo",
+			Status:      StatusProcessing,
+			CurrentFile: "images/a.jpg",
+		},
+		{
+			ID:           "job-stale-3",
+			Type:         "test.echo",
+			Status:       StatusExtracting,
+			CurrentStage: string(StageExtracting),
+		},
 	}
 	for _, job := range stale {
 		if err := store.CreateJob(context.Background(), job); err != nil {
@@ -770,9 +790,16 @@ func TestHandlerCancelAudited(t *testing.T) {
 		}
 	})
 
-	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
-	})
+	auditSvc := audit.NewService(
+		audit.NewStore(dbStore),
+		zap.NewNop(),
+		audit.Config{
+			BufferSize:    100,
+			BatchSize:     10,
+			FlushInterval: 5 * time.Millisecond,
+			MaxEntries:    1000,
+		},
+	)
 	if err := auditSvc.Start(context.Background()); err != nil {
 		t.Fatalf("start audit service: %v", err)
 	}
@@ -784,7 +811,11 @@ func TestHandlerCancelAudited(t *testing.T) {
 
 	store := NewStore(dbStore)
 	svc := NewService(store, zap.NewNop())
-	job := &Job{ID: "job-audit-1", Type: "test.sample", Status: StatusPending}
+	job := &Job{
+		ID:     "job-audit-1",
+		Type:   "test.sample",
+		Status: StatusPending,
+	}
 	if err := store.CreateJob(context.Background(), job); err != nil {
 		t.Fatalf("CreateJob failed: %v", err)
 	}

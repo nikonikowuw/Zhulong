@@ -8,9 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
-	"go.uber.org/zap"
 )
 
 const (
@@ -361,11 +362,11 @@ func (s *Service) executeJob(jobID string) {
 			// Shutdown interrupted a job that never got to run. Nothing else will
 			// write its terminal state, so fail it here with the honest reason.
 			s.abandon(jobID, CodeJobShutdown, "service stopped before the handler started")
-		} else {
-			// A user cancellation is being written by CancelJob; the handler still
-			// must not run, and its artifacts are released now.
-			s.abortNeverRun(jobID, "cancelled before the handler started")
+			return
 		}
+		// A user cancellation is being written by CancelJob; the handler still
+		// must not run, and its artifacts are released now.
+		s.abortNeverRun(jobID, "cancelled before the handler started")
 		return
 	}
 
@@ -381,7 +382,12 @@ func (s *Service) executeJob(jobID string) {
 	}
 
 	s.logger.Info("executing async job", zap.String("id", jobID), zap.String("type", job.Type))
-	execErr := handler.Execute(jobCtx, job, &jobProgressUpdater{store: s.store, jobID: jobID, logger: s.logger})
+	updater := &jobProgressUpdater{
+		store:  s.store,
+		jobID:  jobID,
+		logger: s.logger,
+	}
+	execErr := handler.Execute(jobCtx, job, updater)
 
 	switch {
 	case execErr == nil:
@@ -432,7 +438,8 @@ func (s *Service) abandon(jobID, errorCode, reason string) {
 	cancel()
 	if err != nil {
 		s.logger.Warn("failed to abandon async job", zap.String("id", jobID), zap.Error(err))
-	} else if failed {
+	}
+	if failed {
 		s.logger.Info(
 			"abandoned async job that never started",
 			zap.String("id", jobID),

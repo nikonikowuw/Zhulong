@@ -79,10 +79,11 @@ func toJobResponses(jobs []Job, locale string) []JobResponse {
 // written before error codes existed only carry free text; that text is still
 // returned rather than replaced with a guess.
 func jobErrorMessage(j *Job, locale string) string {
-	if j.ErrorCode != "" {
-		if localized, ok := httputil.LookupMessage(j.ErrorCode, locale); ok && localized != "" {
-			return localized
-		}
+	if j.ErrorCode == "" {
+		return j.ErrorMessage
+	}
+	if localized, ok := httputil.LookupMessage(j.ErrorCode, locale); ok && localized != "" {
+		return localized
 	}
 	return j.ErrorMessage
 }

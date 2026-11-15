@@ -4,8 +4,9 @@ import (
 	"context"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+
+	"github.com/nikonikowuw/Zhulong/internal/database"
 )
 
 // RouteRegistrar allows route registration.
