@@ -65,20 +65,19 @@ type StorageUsageBreakdown struct {
 
 // StorageStatus is the telemetry payload returned by GET /api/v1/system/storage/status.
 type StorageStatus struct {
-	MediaDirectory string `json:"mediaDirectory"` // Currently active media directory
-	MountPoint     string `json:"mountPoint"`     // Mount point where the media directory lives
-	FSType         string `json:"fsType"`         // Filesystem type, e.g. "ext4", "xfs", "btrfs"
-	TotalBytes     uint64 `json:"totalBytes"`     // Total capacity in bytes
-	UsedBytes      uint64 `json:"usedBytes"`      // Used capacity in bytes
-	FreeBytes      uint64 `json:"freeBytes"`      // Available capacity for non-root users in bytes
-	// UsagePercent is user-available usage percentage (0..100): used/(used+free).
-	UsagePercent int                   `json:"usagePercent"`
-	Breakdown    StorageUsageBreakdown `json:"breakdown"`  // Categorized usage breakdown
-	Status       StorageHealthStatus   `json:"status"`     // Current health status
-	DeviceID     uint64                `json:"deviceId"`   // Associated filesystem device ID (st_dev)
-	IsExternal   bool                  `json:"isExternal"` // True if mounted on dedicated volume outside rootfs (/)
-	CanWrite     bool                  `json:"canWrite"`   // True if storage is currently accepting new writes
-	UpdatedAt    time.Time             `json:"updatedAt"`  // Metric collection timestamp (UTC)
+	MediaDirectory string                `json:"mediaDirectory"` // Currently active media directory
+	MountPoint     string                `json:"mountPoint"`     // Mount point where the media directory lives
+	FSType         string                `json:"fsType"`         // Filesystem type, e.g. "ext4", "xfs", "btrfs"
+	TotalBytes     uint64                `json:"totalBytes"`     // Total capacity in bytes
+	UsedBytes      uint64                `json:"usedBytes"`      // Used capacity in bytes
+	FreeBytes      uint64                `json:"freeBytes"`      // Available capacity for non-root users in bytes
+	UsagePercent   int                   `json:"usagePercent"`   // User-available usage percentage (0..100): used/(used+free)
+	Breakdown      StorageUsageBreakdown `json:"breakdown"`      // Categorized usage breakdown
+	Status         StorageHealthStatus   `json:"status"`         // Current health status
+	DeviceID       uint64                `json:"deviceId"`       // Associated filesystem device ID (st_dev)
+	IsExternal     bool                  `json:"isExternal"`     // True if mounted on dedicated volume outside rootfs (/)
+	CanWrite       bool                  `json:"canWrite"`       // True if storage is currently accepting new writes
+	UpdatedAt      time.Time             `json:"updatedAt"`      // Metric collection timestamp (UTC)
 }
 
 // PathTestRequest is the payload for POST /api/v1/system/storage/test.
