@@ -143,8 +143,15 @@ func (e *Engine) CloseNativeLogSink() error {
 // 任何异常/越界/非法 UTF-8 都记为一次丢弃，让「丢日志」本身可观测。
 //
 //export zhulongLogTrampoline
-func zhulongLogTrampoline(token C.uintptr_t, level C.int32_t, streamID C.uint64_t,
-	module *C.char, moduleLen C.size_t, text *C.char, textLen C.size_t) {
+func zhulongLogTrampoline(
+	token C.uintptr_t,
+	level C.int32_t,
+	streamID C.uint64_t,
+	module *C.char,
+	moduleLen C.size_t,
+	text *C.char,
+	textLen C.size_t,
+) {
 	if token == 0 {
 		return
 	}

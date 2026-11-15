@@ -44,7 +44,7 @@ func TestEngineProbeConcurrencyLimit(t *testing.T) {
 	defer e.Close()
 
 	// 占满 4 个探测令牌
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		e.probeTokens <- struct{}{}
 	}
 
@@ -58,7 +58,7 @@ func TestEngineProbeConcurrencyLimit(t *testing.T) {
 	}
 
 	// 归还 4 个令牌
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		<-e.probeTokens
 	}
 }
@@ -158,7 +158,12 @@ func TestEngineAcquireValidation(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := e.Acquire(ctx, test.uri, test.consumer, test.options); !errors.Is(err, ErrInvalidArgument) {
+			if _, err := e.Acquire(
+				ctx,
+				test.uri,
+				test.consumer,
+				test.options,
+			); !errors.Is(err, ErrInvalidArgument) {
 				t.Fatalf("Acquire(%s) error = %v, want ErrInvalidArgument", test.uri, err)
 			}
 		})
@@ -173,16 +178,18 @@ func TestEngineConcurrentProbeCancellation(t *testing.T) {
 	defer e.Close()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			defer cancel()
 			// 探测不存在的端口，迅速触发 context deadline
-			_, _ = e.Probe(ctx, "rtsp://127.0.0.1:18554/stream", StreamOptions{
+			if _, err := e.Probe(ctx, "rtsp://127.0.0.1:18554/stream", StreamOptions{
 				OpenTimeout: 10 * time.Second,
-			})
+			}); err != nil {
+				// Probe cancellation expected.
+			}
 		}()
 	}
 	wg.Wait()
@@ -195,7 +202,7 @@ func TestEngineUnsubscribeNotFoundDeletesToken(t *testing.T) {
 	}
 	defer e.Close()
 
-	tokenDeleted := false
+	var tokenDeleted bool
 	deleteToken := func() {
 		tokenDeleted = true
 	}
@@ -260,7 +267,7 @@ func TestEngineBrokerPathAndPublishRateValidation(t *testing.T) {
 // 快照晚用一步就是对已释放句柄调 stop（Use-After-Free）。
 // 窗口靠调度，因此这里用「不可路由地址 + 立即 Stop/Close」反复冲击它。
 func TestEngineStopRacesInFlightProbe(t *testing.T) {
-	for iteration := 0; iteration < 10; iteration++ {
+	for iteration := range 10 {
 		eng := New()
 		if err := eng.Start(); err != nil {
 			t.Fatalf("iteration %d: Start: %v", iteration, err)
@@ -274,7 +281,10 @@ func TestEngineStopRacesInFlightProbe(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 				defer cancel()
 				// TEST-NET-1（RFC 5737）：连接会被黑洞，探测停留在原生 open 里。
-				_, _ = eng.Probe(ctx, "rtsp://192.0.2.1:554/race", StreamOptions{OpenTimeout: 500 * time.Millisecond})
+				opts := StreamOptions{OpenTimeout: 500 * time.Millisecond}
+				if _, err := eng.Probe(ctx, "rtsp://192.0.2.1:554/race", opts); err != nil {
+					// Expected failure on blackhole address.
+				}
 			}()
 		}
 
@@ -296,7 +306,7 @@ func TestEngineStopRacesInFlightProbe(t *testing.T) {
 // 快照晚用的那一步就会对已释放句柄调用 Zhulong_engine_stop。
 // 用空句柄（不碰 C 内存）只验证 destroyed 标志的读写被串行化 —— 裸读写会被 -race 抓到。
 func TestProbeContextStopDestroyAreSerialized(t *testing.T) {
-	for iteration := 0; iteration < 200; iteration++ {
+	for iteration := range 200 {
 		pCtx := &probeContext{}
 
 		var both sync.WaitGroup

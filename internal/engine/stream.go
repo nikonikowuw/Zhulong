@@ -155,7 +155,13 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 	// 此处持有 s.mu 做一次 CGO 调用，与 Engine 的「mu 下不做 CGO」不矛盾：
 	// 原生 subscribe 只是注册回调表项，不阻塞拉流；而「closed 判定 + 单订阅不变量 +
 	// 句柄发布」必须原子，拆锁反而要引入回滚分支。
-	subID, token, err := s.engine.subscribe(s.generation, s.id, s.consumerID, mask, sub)
+	subID, token, err := s.engine.subscribe(
+		s.generation,
+		s.id,
+		s.consumerID,
+		mask,
+		sub,
+	)
 	if err != nil {
 		cancelCtrl()
 		s.mu.Unlock()
@@ -256,7 +262,12 @@ func (s *Stream) SubscribeAIResults(ctx context.Context) (*AIResultSubscription,
 	eng := s.engine
 
 	ctrlCtx, cancelCtrl := context.WithCancel(ctx)
-	sub := newAIResultSubscription(s, streamID, gen, defaultAIResultCapacity)
+	sub := newAIResultSubscription(
+		s,
+		streamID,
+		gen,
+		defaultAIResultCapacity,
+	)
 	sub.cancelControl = cancelCtrl
 
 	subID, token, err := eng.subscribeAIResults(gen, streamID, sub)

@@ -286,7 +286,9 @@ func (e *Engine) stopLocked() error {
 	for _, s := range e.activeStreamSet() {
 		// 流的注销错误在这里无可上报之处：物理流即将随引擎一起消失，
 		// 终态由各自的订阅通道保证可见。
-		_ = s.Close()
+		if err := s.Close(); err != nil {
+			// Intentionally ignored: stream is closing with the engine.
+		}
 	}
 
 	// 3. 停止常驻引擎实例（回收底层工作线程、排空回调）
@@ -406,7 +408,12 @@ func (e *Engine) Close() error {
 }
 
 // Acquire 获取或复用物理 RTSP 流。
-func (e *Engine) Acquire(ctx context.Context, uri string, consumer Consumer, options StreamOptions) (*Stream, error) {
+func (e *Engine) Acquire(
+	ctx context.Context,
+	uri string,
+	consumer Consumer,
+	options StreamOptions,
+) (*Stream, error) {
 	// 只带 cancel、没有 deadline 的 ctx 不会被 clampToDeadline 拦下，必须在这里挡：
 	// 否则已取消的调用仍会发起最长 maxAllowedTimeout 的阻塞式 native open。
 	if err := ctx.Err(); err != nil {
@@ -476,8 +483,14 @@ func (e *Engine) adoptStream(lease handleLease, stream *Stream) error {
 	if handleMissing || notRunning || generationChanged {
 		e.mu.Unlock()
 		// 回滚失败无可上报之处：引擎已停机，该引用会随 Zhulong_engine_destroy 一并释放。
-		// 用显式 `_ =` 而不是裸调用，让「已检查并有意丢弃」与「忘了接返回值」在代码上可区分。
-		_ = C.Zhulong_stream_release(lease.handle, stream.id, C.uint64_t(stream.consumerID))
+		status := C.Zhulong_stream_release(
+			lease.handle,
+			stream.id,
+			C.uint64_t(stream.consumerID),
+		)
+		if status != C.Zhulong_OK {
+			// Rollback failure is non-actionable as the engine handle is torn down.
+		}
 		return ErrNotRunning
 	}
 	e.streamsMu.Lock()
@@ -590,7 +603,7 @@ func callAudioInfo(
 	buffer := C.malloc(C.size_t(capacity))
 	defer C.free(buffer)
 
-	result := audioInfoResult{}
+	var result audioInfoResult
 	view := C.Zhulong_audio_view{
 		extradata:          (*C.uint8_t)(buffer),
 		extradata_capacity: C.size_t(capacity),
@@ -820,7 +833,7 @@ func extractVideoInfo(result C.Zhulong_probe_result_h) (VideoInfo, error) {
 		)
 	}
 
-	var extra []byte
+	extra := []byte{}
 	if view.extradata_size > 0 {
 		if view.extradata == nil {
 			return VideoInfo{}, fmt.Errorf("%w: probe result extradata pointer is nil", ErrInternal)
@@ -841,7 +854,12 @@ func extractVideoInfo(result C.Zhulong_probe_result_h) (VideoInfo, error) {
 
 // BroadcastAIMessage 向指定流的 FrameBroker 投递一条带类型的控制载荷
 // （如 MSG_GALLERY_*），以触达已连接的算法 runner；streamID 为 0 时广播给全部活跃流。
-func (e *Engine) BroadcastAIMessage(ctx context.Context, streamID uint64, msgType uint16, payload []byte) error {
+func (e *Engine) BroadcastAIMessage(
+	ctx context.Context,
+	streamID uint64,
+	msgType uint16,
+	payload []byte,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

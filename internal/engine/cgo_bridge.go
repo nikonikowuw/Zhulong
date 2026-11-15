@@ -71,7 +71,8 @@ func zhulongGoAIResultCallback(
 	jsonPayload *C.char,
 	payloadLen C.size_t,
 ) {
-	if token == 0 || jsonPayload == nil || payloadLen == 0 {
+	invalidPayload := token == 0 || jsonPayload == nil || payloadLen == 0
+	if invalidPayload {
 		return
 	}
 

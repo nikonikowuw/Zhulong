@@ -46,7 +46,7 @@ func validateConsumer(consumer Consumer) error {
 		return fmt.Errorf("%w: consumer ID must be non-zero", ErrInvalidArgument)
 	}
 	if !consumer.Kind.IsValid() {
-		return fmt.Errorf("%w: invalid consumer kind %s", ErrInvalidArgument, consumer.Kind)
+		return fmt.Errorf("%w: invalid consumer kind %q", ErrInvalidArgument, consumer.Kind.String())
 	}
 	return nil
 }
@@ -60,7 +60,12 @@ type subscriptionLimits struct {
 
 // validate 把调用方给出的上限收敛成确定值：0 取默认值，超过硬上限即拒绝。
 func (l subscriptionLimits) validate() (subscriptionLimits, error) {
-	maxPackets, err := resolveLimit(l.maxPackets, DefaultMaxPackets, HardLimitMaxPackets, "MaxPackets")
+	maxPackets, err := resolveLimit(
+		l.maxPackets,
+		DefaultMaxPackets,
+		HardLimitMaxPackets,
+		"MaxPackets",
+	)
 	if err != nil {
 		return subscriptionLimits{}, err
 	}
@@ -93,10 +98,15 @@ func (l subscriptionLimits) validate() (subscriptionLimits, error) {
 }
 
 // resolveLimit 收敛单项预设：0 表示「用默认值」，负值与超过硬上限一律拒绝。
-func resolveLimit(value, defaultValue, hardLimit int, name string) (int, error) {
+func resolveLimit(
+	value int,
+	defaultValue int,
+	hardLimit int,
+	name string,
+) (int, error) {
 	if value < 0 || value > hardLimit {
 		return 0, fmt.Errorf(
-			"%w: %s must be within [0, %d] (0 keeps the default)",
+			"%w: %q must be within [0, %d] (0 keeps the default)",
 			ErrInvalidArgument,
 			name,
 			hardLimit,

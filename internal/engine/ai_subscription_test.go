@@ -7,7 +7,12 @@ import (
 )
 
 func TestAIResultSubscription_DropOldest(t *testing.T) {
-	sub := newAIResultSubscription(nil, 1, 1, 3)
+	sub := newAIResultSubscription(
+		nil,
+		1,
+		1,
+		3,
+	)
 
 	// 推入 5 条数据到容量为 3 的队列
 	sub.onResult(1, []byte(`{"frame":1}`))
@@ -48,7 +53,12 @@ func TestAIResultSubscription_DropOldest(t *testing.T) {
 }
 
 func TestAIResultSubscription_ContextCancel(t *testing.T) {
-	sub := newAIResultSubscription(nil, 1, 1, 3)
+	sub := newAIResultSubscription(
+		nil,
+		1,
+		1,
+		3,
+	)
 	defer sub.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -61,7 +71,12 @@ func TestAIResultSubscription_ContextCancel(t *testing.T) {
 }
 
 func TestAIResultSubscription_CloseAfterTerminalState(t *testing.T) {
-	sub := newAIResultSubscription(nil, 1, 1, 3)
+	sub := newAIResultSubscription(
+		nil,
+		1,
+		1,
+		3,
+	)
 
 	sub.core.closeWithErr(ErrIO)
 
@@ -73,12 +88,21 @@ func TestAIResultSubscription_CloseAfterTerminalState(t *testing.T) {
 	}
 
 	if _, err := sub.Next(context.Background()); err != ErrIO {
-		t.Fatalf("expected terminal error %v, got %v", ErrIO, err)
+		t.Fatalf(
+			"expected terminal error %v, got %v",
+			ErrIO,
+			err,
+		)
 	}
 }
 
 func TestAIResultSubscription_ControlLoopCancel(t *testing.T) {
-	sub := newAIResultSubscription(nil, 1, 1, 3)
+	sub := newAIResultSubscription(
+		nil,
+		1,
+		1,
+		3,
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

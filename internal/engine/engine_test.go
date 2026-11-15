@@ -81,7 +81,7 @@ func TestEngineConcurrentLifecycleCalls(t *testing.T) {
 }
 
 func TestEngineConcurrentCloseWithOperations(t *testing.T) {
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		eng := New()
 		if err := eng.Start(); err != nil {
 			t.Fatalf("Start: %v", err)
@@ -93,25 +93,38 @@ func TestEngineConcurrentCloseWithOperations(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 20; j++ {
-				_ = eng.BroadcastAIMessage(ctx, 1, 10, []byte("payload"))
+			for range 20 {
+				if err := eng.BroadcastAIMessage(
+					ctx,
+					1,
+					10,
+					[]byte("payload"),
+				); err != nil {
+					// Expected during concurrent close.
+				}
 			}
 		}()
 
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 20; j++ {
-				_ = eng.setPublishRate(generationForTest(eng), 1, 30)
+			for range 20 {
+				if err := eng.setPublishRate(generationForTest(eng), 1, 30); err != nil {
+					// Expected during concurrent close.
+				}
 			}
 		}()
 
 		go func() {
 			defer wg.Done()
-			_ = eng.Close()
+			if err := eng.Close(); err != nil {
+				// Expected during concurrent close.
+			}
 		}()
 
 		wg.Wait()
-		_ = eng.Close()
+		if err := eng.Close(); err != nil {
+			// Repeated close after test completion.
+		}
 	}
 }
 
@@ -121,7 +134,7 @@ func TestUnsubscribeDeferredOnNotRunning(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	tokenDeleted := false
+	var tokenDeleted bool
 	deleteToken := func() {
 		tokenDeleted = true
 	}
@@ -131,7 +144,14 @@ func TestUnsubscribeDeferredOnNotRunning(t *testing.T) {
 		t.Fatalf("Stop failed: %v", err)
 	}
 
-	_ = e.unsubscribe(generationForTest(e), 1, 1, deleteToken)
+	if err := e.unsubscribe(
+		generationForTest(e),
+		1,
+		1,
+		deleteToken,
+	); err != nil {
+		// Expected ERR_NOT_RUNNING on stopped engine.
+	}
 	if tokenDeleted {
 		t.Fatal("expected deleteToken to be deferred during ERR_NOT_RUNNING")
 	}

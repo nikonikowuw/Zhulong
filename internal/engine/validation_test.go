@@ -17,17 +17,17 @@ func TestValidateRTSPURI(t *testing.T) {
 		uri     string
 		wantErr bool
 	}{
-		{"valid standard", "rtsp://127.0.0.1:8554/live", false},
-		{"valid with credentials", "rtsp://admin:secret@192.168.1.100:554/stream1", false},
-		{"empty URI", "", true},
-		{"embedded NUL", "rtsp://127.0.0.1:8554/live\x00extra", true},
-		{"whitespace space", "rtsp://127.0.0.1:8554/ live", true},
-		{"whitespace tab", "rtsp://127.0.0.1:8554/\tlive", true},
-		{"whitespace newline", "rtsp://127.0.0.1:8554/live\n", true},
-		{"fragment", "rtsp://127.0.0.1:8554/live#frag", true},
-		{"unsupported scheme http", "http://127.0.0.1:8554/live", true},
-		{"unsupported scheme rtmp", "rtmp://127.0.0.1:8554/live", true},
-		{"missing host", "rtsp:///live", true},
+		{name: "valid standard", uri: "rtsp://127.0.0.1:8554/live", wantErr: false},
+		{name: "valid with credentials", uri: "rtsp://admin:secret@192.168.1.100:554/stream1", wantErr: false},
+		{name: "empty URI", uri: "", wantErr: true},
+		{name: "embedded NUL", uri: "rtsp://127.0.0.1:8554/live\x00extra", wantErr: true},
+		{name: "whitespace space", uri: "rtsp://127.0.0.1:8554/ live", wantErr: true},
+		{name: "whitespace tab", uri: "rtsp://127.0.0.1:8554/\tlive", wantErr: true},
+		{name: "whitespace newline", uri: "rtsp://127.0.0.1:8554/live\n", wantErr: true},
+		{name: "fragment", uri: "rtsp://127.0.0.1:8554/live#frag", wantErr: true},
+		{name: "unsupported scheme http", uri: "http://127.0.0.1:8554/live", wantErr: true},
+		{name: "unsupported scheme rtmp", uri: "rtmp://127.0.0.1:8554/live", wantErr: true},
+		{name: "missing host", uri: "rtsp:///live", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -48,8 +48,8 @@ func TestValidateConsumer(t *testing.T) {
 		name     string
 		consumer Consumer
 	}{
-		{"zero ID", Consumer{ID: 0, Kind: ConsumerPreview}},
-		{"unknown kind", Consumer{ID: 1, Kind: ConsumerKind(99)}},
+		{name: "zero ID", consumer: Consumer{ID: 0, Kind: ConsumerPreview}},
+		{name: "unknown kind", consumer: Consumer{ID: 1, Kind: ConsumerKind(99)}},
 	}
 	for _, c := range invalid {
 		t.Run(c.name, func(t *testing.T) {
@@ -78,13 +78,13 @@ func TestNormalizeTimeoutMs(t *testing.T) {
 		want    uint32
 		wantErr error
 	}{
-		{"zero uses default", 0, defaultTimeoutMs, nil},
-		{"positive preserved", 3 * time.Second, 3000, nil},
+		{name: "zero uses default", in: 0, want: defaultTimeoutMs, wantErr: nil},
+		{name: "positive preserved", in: 3 * time.Second, want: 3000, wantErr: nil},
 		// 截断后归零必须捉升到 1ms：0 在 ABI 上表示「用底层默认超时」。
-		{"sub-millisecond rounds up", 300 * time.Microsecond, 1, nil},
-		{"negative rejected", -time.Second, 0, ErrInvalidArgument},
+		{name: "sub-millisecond rounds up", in: 300 * time.Microsecond, want: 1, wantErr: nil},
+		{name: "negative rejected", in: -time.Second, want: 0, wantErr: ErrInvalidArgument},
 		// >maxAllowedTimeout（停机阻塞上界）必须拒绝，否则优雅停机会被拖死。
-		{"over max rejected", 3 * time.Minute, 0, ErrInvalidArgument},
+		{name: "over max rejected", in: 3 * time.Minute, want: 0, wantErr: ErrInvalidArgument},
 	}
 
 	for _, c := range cases {
@@ -166,24 +166,24 @@ func TestSentinelErrorsMatching(t *testing.T) {
 		code   StatusCode
 		target error
 	}{
-		{StatusInvalidArgument, ErrInvalidArgument},
-		{StatusOutOfMemory, ErrOutOfMemory},
-		{StatusUnsupported, ErrUnsupported},
-		{StatusNotFound, ErrNotFound},
-		{StatusDuplicate, ErrDuplicate},
-		{StatusConfigConflict, ErrConfigConflict},
-		{StatusTimeout, ErrTimeout},
-		{StatusNotRunning, ErrNotRunning},
-		{StatusBusy, ErrBusy},
-		{StatusIO, ErrIO},
-		{StatusCancelled, ErrCancelled},
-		{StatusBufferTooSmall, ErrBufferTooSmall},
-		{StatusInternal, ErrInternal},
-		{StatusClosed, ErrClosed},
-		{StatusBackpressure, ErrBackpressure},
-		{StatusPacketTooLarge, ErrPacketTooLarge},
-		{StatusStaleResource, ErrStaleResource},
-		{StatusSnapshotUnavailable, ErrSnapshotUnavailable},
+		{code: StatusInvalidArgument, target: ErrInvalidArgument},
+		{code: StatusOutOfMemory, target: ErrOutOfMemory},
+		{code: StatusUnsupported, target: ErrUnsupported},
+		{code: StatusNotFound, target: ErrNotFound},
+		{code: StatusDuplicate, target: ErrDuplicate},
+		{code: StatusConfigConflict, target: ErrConfigConflict},
+		{code: StatusTimeout, target: ErrTimeout},
+		{code: StatusNotRunning, target: ErrNotRunning},
+		{code: StatusBusy, target: ErrBusy},
+		{code: StatusIO, target: ErrIO},
+		{code: StatusCancelled, target: ErrCancelled},
+		{code: StatusBufferTooSmall, target: ErrBufferTooSmall},
+		{code: StatusInternal, target: ErrInternal},
+		{code: StatusClosed, target: ErrClosed},
+		{code: StatusBackpressure, target: ErrBackpressure},
+		{code: StatusPacketTooLarge, target: ErrPacketTooLarge},
+		{code: StatusStaleResource, target: ErrStaleResource},
+		{code: StatusSnapshotUnavailable, target: ErrSnapshotUnavailable},
 	}
 
 	for _, c := range cases {
@@ -241,14 +241,24 @@ func TestBroadcastAIMessageValidation(t *testing.T) {
 
 	// 1. 超限载荷 (> algoipc.MaxIpcPayloadSize) 必须返回 ErrInvalidArgument
 	tooLargePayload := make([]byte, algoipc.MaxIpcPayloadSize+1)
-	err := e.BroadcastAIMessage(ctx, 1, 10, tooLargePayload)
+	err := e.BroadcastAIMessage(
+		ctx,
+		1,
+		10,
+		tooLargePayload,
+	)
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for payload exceeding limit, got %v", err)
 	}
 
 	// 2. 引擎未启动时返回 ErrNotRunning
 	validPayload := make([]byte, algoipc.MaxIpcPayloadSize)
-	err = e.BroadcastAIMessage(ctx, 1, 10, validPayload)
+	err = e.BroadcastAIMessage(
+		ctx,
+		1,
+		10,
+		validPayload,
+	)
 	if !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("expected ErrNotRunning for unstarted engine, got %v", err)
 	}
@@ -264,12 +274,12 @@ func TestPlanTokenRelease(t *testing.T) {
 		status int32
 		want   releaseTiming
 	}{
-		{"success", int32(StatusOK), releaseNow},
-		{"subscription gone", int32(StatusNotFound), releaseNow},
-		{"engine stopping", int32(StatusNotRunning), releaseAfterStop},
-		{"callback context", int32(StatusCallbackContext), releaseAfterStop},
-		{"busy", int32(StatusBusy), releaseAfterStop},
-		{"unknown code", -777, releaseAfterStop},
+		{name: "success", status: int32(StatusOK), want: releaseNow},
+		{name: "subscription gone", status: int32(StatusNotFound), want: releaseNow},
+		{name: "engine stopping", status: int32(StatusNotRunning), want: releaseAfterStop},
+		{name: "callback context", status: int32(StatusCallbackContext), want: releaseAfterStop},
+		{name: "busy", status: int32(StatusBusy), want: releaseAfterStop},
+		{name: "unknown code", status: -777, want: releaseAfterStop},
 	}
 
 	for _, c := range cases {

@@ -33,7 +33,12 @@ type AIResultSubscription struct {
 // defaultAIResultCapacity 是 AI 结果队列的默认深度（丢最旧策略，不宜过深）。
 const defaultAIResultCapacity = 32
 
-func newAIResultSubscription(s *Stream, streamID C.Zhulong_stream_id, gen uint64, capacity int) *AIResultSubscription {
+func newAIResultSubscription(
+	s *Stream,
+	streamID C.Zhulong_stream_id,
+	gen uint64,
+	capacity int,
+) *AIResultSubscription {
 	if capacity <= 0 {
 		capacity = defaultAIResultCapacity
 	}
@@ -52,7 +57,12 @@ func newAIResultSubscription(s *Stream, streamID C.Zhulong_stream_id, gen uint64
 // 否则拿不到 generation / streamID，也就无法安全注销。
 // 导出是为了让 internal/camera 的 hub 测试能注入假结果流，本包不应在运行时路径上引用它。
 func NewAIResultSubscriptionForTest(capacity int) (*AIResultSubscription, func(data []byte)) {
-	sub := newAIResultSubscription(nil, 1, 1, capacity)
+	sub := newAIResultSubscription(
+		nil,
+		1,
+		1,
+		capacity,
+	)
 	return sub, func(data []byte) { sub.onResult(1, data) }
 }
 
@@ -136,6 +146,8 @@ func (s *AIResultSubscription) Close() error {
 func (s *AIResultSubscription) runControlLoop(ctx context.Context) {
 	s.core.watch(ctx, s.stream, func() {
 		// 同 Subscription：退出路径无处上报注销错误，终态由 core 保证可见。
-		_ = s.Close()
+		if err := s.Close(); err != nil {
+			// Intentionally ignored: subscription termination is already observable via core.
+		}
 	})
 }

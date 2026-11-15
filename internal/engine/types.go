@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -20,7 +20,7 @@ func (t Transport) String() string {
 	case TransportUDP:
 		return "udp"
 	default:
-		return fmt.Sprintf("transport(%d)", int32(t))
+		return "transport(" + strconv.Itoa(int(t)) + ")"
 	}
 }
 
@@ -42,7 +42,7 @@ func (k ConsumerKind) String() string {
 	case ConsumerAI:
 		return "ai"
 	default:
-		return fmt.Sprintf("consumer(%d)", int32(k))
+		return "consumer(" + strconv.Itoa(int(k)) + ")"
 	}
 }
 
@@ -93,7 +93,7 @@ func (c Codec) String() string {
 	case CodecPCMU:
 		return "pcmu"
 	default:
-		return fmt.Sprintf("codec(%d)", int32(c))
+		return "codec(" + strconv.Itoa(int(c)) + ")"
 	}
 }
 
@@ -122,7 +122,7 @@ func (t TrackType) String() string {
 	case TrackAudio:
 		return "audio"
 	default:
-		return fmt.Sprintf("track(%d)", uint32(t))
+		return "track(" + strconv.FormatUint(uint64(t), 10) + ")"
 	}
 }
 
@@ -199,7 +199,7 @@ func (f FrameClass) String() string {
 		return "non_reference"
 	default:
 		// 越界取值不当成 FrameUnknown：那样会把「原生侧越界」隐形为合法值。
-		return fmt.Sprintf("frame_class(%d)", int32(f))
+		return "frame_class(" + strconv.Itoa(int(f)) + ")"
 	}
 }
 
@@ -242,7 +242,7 @@ func (s StreamState) String() string {
 	case StreamFailed:
 		return "failed"
 	default:
-		return fmt.Sprintf("stream_state(%d)", int32(s))
+		return "stream_state(" + strconv.Itoa(int(s)) + ")"
 	}
 }
 
@@ -267,7 +267,7 @@ func (r Rational) Float64() float64 {
 }
 
 func (r Rational) String() string {
-	return fmt.Sprintf("%d/%d", r.Num, r.Den)
+	return strconv.Itoa(int(r.Num)) + "/" + strconv.Itoa(int(r.Den))
 }
 
 // MaxExtraDataBytes 是探测结果 extradata（VPS/SPS/PPS 等参数集）允许的最大字节数。

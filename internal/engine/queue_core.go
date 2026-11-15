@@ -91,7 +91,7 @@ func (q *queueCore[T]) pushDropOldest(item T, capacity int) int {
 		q.mu.Unlock()
 		return 0
 	}
-	dropped := 0
+	var dropped int
 	if len(q.queue) >= capacity {
 		q.buffered -= q.cost(q.queue[0])
 		q.queue[0] = zeroOf[T]()

@@ -58,7 +58,7 @@ type inboundPacket struct {
 //
 // ⚠️ 借用指针只在同步回调期间有效，必须在这里完成拷贝，绝不外传。
 func (in inboundPacket) toPacket() Packet {
-	var data []byte
+	data := []byte{}
 	if in.Size > 0 {
 		data = make([]byte, in.Size)
 		copy(data, in.Data)
@@ -88,7 +88,8 @@ func (s *Subscription) onPacket(packet *C.Zhulong_packet_view) {
 	}
 
 	size := int(packet.size)
-	if size < 0 || (size > 0 && packet.data == nil) {
+	invalidSize := size < 0 || (size > 0 && packet.data == nil)
+	if invalidSize {
 		s.core.closeWithErr(ErrInvalidArgument)
 		return
 	}
@@ -204,6 +205,8 @@ func (s *Subscription) runControlLoop(ctx context.Context) {
 	s.core.watch(ctx, s.stream, func() {
 		// 控制循环的退出路径无处上报注销错误：订阅终态已由 core 记录，
 		// 资源回收失败由原生侧日志兜底。
-		_ = s.Close()
+		if err := s.Close(); err != nil {
+			// Intentionally ignored: teardown errors are logged by native runtime and terminal state recorded by core.
+		}
 	})
 }

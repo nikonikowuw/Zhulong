@@ -120,7 +120,11 @@ func TestBridgeIntegration_StreamReuseAndGrace(t *testing.T) {
 		t.Fatalf("Acquire s2 failed: %v", err)
 	}
 	if s1.id != s2.id {
-		t.Fatalf("expected physical stream reuse, got stream IDs %d and %d", s1.id, s2.id)
+		t.Fatalf(
+			"expected physical stream reuse, got stream IDs %d and %d",
+			s1.id,
+			s2.id,
+		)
 	}
 
 	// 重复 consumerID 应当拒绝
@@ -149,7 +153,11 @@ func TestBridgeIntegration_StreamReuseAndGrace(t *testing.T) {
 		t.Fatalf("Acquire s3 during grace failed: %v", err)
 	}
 	if s3.id != s1.id {
-		t.Fatalf("expected grace period reuse of stream ID %d, got %d", s1.id, s3.id)
+		t.Fatalf(
+			"expected grace period reuse of stream ID %d, got %d",
+			s1.id,
+			s3.id,
+		)
 	}
 
 	if err := s3.Close(); err != nil {
@@ -343,7 +351,9 @@ func TestBridgeIntegration_ProbeDoesNotAffectActiveStream(t *testing.T) {
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer probeCancel()
 
-	_, _ = e.Probe(probeCtx, baseURL+"/stall-open", StreamOptions{})
+	if _, err := e.Probe(probeCtx, baseURL+"/stall-open", StreamOptions{}); err != nil {
+		// Probe cancellation expected.
+	}
 
 	// 3. 验证正常流依旧稳定接收视频包
 	nextCtx, nextCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -381,44 +391,52 @@ func TestBridgeIntegration_AIConsumerAndBrokerPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire AI consumer failed: %v", err)
 	}
+	defer func() {
+		if err := s.Close(); err != nil {
+			// Best-effort cleanup in test.
+		}
+	}()
 
 	// 2. 查询 Broker Socket 路径
 	brokerPath, err := s.BrokerPath(ctx)
 	if err != nil {
-		_ = s.Close()
 		t.Fatalf("BrokerPath failed: %v", err)
 	}
 	if brokerPath == "" {
-		_ = s.Close()
 		t.Fatal("expected non-empty broker path")
 	}
 
 	// 3. 动态设置发布节流率
 	if err := s.SetPublishRate(ctx, 10); err != nil {
-		_ = s.Close()
 		t.Fatalf("SetPublishRate failed: %v", err)
 	}
 
 	// 4. 验证 Socket 文件存在
 	if _, err := os.Stat(brokerPath); err != nil {
-		_ = s.Close()
 		t.Fatalf("stat broker socket failed: %v", err)
 	}
 
 	// 5. 订阅 AI 推理结果流
 	aiSub, err := s.SubscribeAIResults(ctx)
 	if err != nil {
-		_ = s.Close()
 		t.Fatalf("SubscribeAIResults failed: %v", err)
 	}
+	defer func() {
+		if err := aiSub.Close(); err != nil {
+			// Best-effort cleanup in test.
+		}
+	}()
 
 	// 连接到 Broker UDS 并发送一条 MSG_RESULT
 	conn, err := net.Dial("unix", brokerPath)
 	if err != nil {
-		_ = aiSub.Close()
-		_ = s.Close()
 		t.Fatalf("dial broker socket failed: %v", err)
 	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			// Best-effort cleanup in test.
+		}
+	}()
 
 	// 发送握手请求 (msg_type = 1)
 	handshakePayload := make([]byte, 40)
@@ -434,18 +452,12 @@ func TestBridgeIntegration_AIConsumerAndBrokerPath(t *testing.T) {
 	binary.LittleEndian.PutUint32(reqMsg[12:16], 1)
 	copy(reqMsg[16:], handshakePayload)
 	if _, err := conn.Write(reqMsg); err != nil {
-		_ = conn.Close()
-		_ = aiSub.Close()
-		_ = s.Close()
 		t.Fatalf("send handshake failed: %v", err)
 	}
 
 	// 读取握手响应 (16字节头 + 80字节体)
 	respBuf := make([]byte, 96)
 	if _, err := io.ReadFull(conn, respBuf); err != nil {
-		_ = conn.Close()
-		_ = aiSub.Close()
-		_ = s.Close()
 		t.Fatalf("read handshake resp failed: %v", err)
 	}
 
@@ -459,42 +471,33 @@ func TestBridgeIntegration_AIConsumerAndBrokerPath(t *testing.T) {
 	binary.LittleEndian.PutUint32(resultMsg[12:16], 2)
 	copy(resultMsg[16:], testResultJSON)
 	if _, err := conn.Write(resultMsg); err != nil {
-		_ = conn.Close()
-		_ = aiSub.Close()
-		_ = s.Close()
 		t.Fatalf("send result failed: %v", err)
 	}
-	_ = conn.Close()
 
 	// 验证 AIResultSubscription 成功收到该结果
 	recvResult, err := aiSub.Next(ctx)
 	if err != nil {
-		_ = aiSub.Close()
-		_ = s.Close()
 		t.Fatalf("aiSub.Next failed: %v", err)
 	}
 	if string(recvResult) != string(testResultJSON) {
-		_ = aiSub.Close()
-		_ = s.Close()
-		t.Fatalf("expected result %s, got %s", testResultJSON, recvResult)
+		t.Fatalf(
+			"expected result %s, got %s",
+			testResultJSON,
+			recvResult,
+		)
 	}
 
 	// 5.5 验证真实解码帧快照抓取
 	time.Sleep(300 * time.Millisecond)
 	images, err := s.Snapshot(ctx, SnapshotOptions{Quality: 85})
 	if err != nil {
-		_ = aiSub.Close()
-		_ = s.Close()
 		t.Fatalf("Snapshot failed: %v", err)
 	}
 	if len(images) == 0 {
-		_ = aiSub.Close()
-		_ = s.Close()
 		t.Fatal("expected at least 1 snapshot image")
 	}
 
 	if err := aiSub.Close(); err != nil {
-		_ = s.Close()
 		t.Fatalf("aiSub.Close failed: %v", err)
 	}
 
@@ -576,7 +579,8 @@ func TestBridgeIntegration_AudioTrack(t *testing.T) {
 	if len(pkt.Data) != 160 {
 		t.Fatalf("expected 160-byte G.711 payload, got %d", len(pkt.Data))
 	}
-	if pkt.KeyFrame || pkt.FrameClass != FrameUnknown || pkt.GOPID != 0 {
+	hasVideoFraming := pkt.KeyFrame || pkt.FrameClass != FrameUnknown || pkt.GOPID != 0
+	if hasVideoFraming {
 		t.Fatalf("audio packet must not carry video framing: key=%v class=%v gop=%d",
 			pkt.KeyFrame, pkt.FrameClass, pkt.GOPID)
 	}
@@ -607,8 +611,12 @@ func TestBridgeIntegration_AudioAbsent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	s, err := e.Acquire(ctx, baseURL+"/live", Consumer{ID: 3101, Kind: ConsumerPreview},
-		StreamOptions{Transport: TransportTCP})
+	s, err := e.Acquire(
+		ctx,
+		baseURL+"/live",
+		Consumer{ID: 3101, Kind: ConsumerPreview},
+		StreamOptions{Transport: TransportTCP},
+	)
 	if err != nil {
 		t.Fatalf("Acquire failed: %v", err)
 	}

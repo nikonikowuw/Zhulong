@@ -70,7 +70,12 @@ func (e *Engine) setView(gen uint64, streamID C.Zhulong_stream_id, rect *ViewRec
 	var state C.Zhulong_view_state
 	// 交给 C 的是 cRect（Go 栈上的 C 结构体），cgo 保证它在调用期间存活且 C 不保留它；
 	// 这里不需要 runtime.KeepAlive(rect)——rect 在构造 cRect 时就已经取完值。
-	st := C.Zhulong_stream_set_view(lease.handle, streamID, rectPtr, &state)
+	st := C.Zhulong_stream_set_view(
+		lease.handle,
+		streamID,
+		rectPtr,
+		&state,
+	)
 	if st != C.Zhulong_OK {
 		return ViewState{}, mapNativeStatus("set_view", int32(st))
 	}

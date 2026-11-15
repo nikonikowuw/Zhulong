@@ -25,7 +25,12 @@ func (e *Engine) getBrokerPath(gen uint64, streamID C.Zhulong_stream_id) (string
 
 	var buf [brokerPathBufferBytes]C.char
 	inoutLen := C.size_t(len(buf))
-	st := C.Zhulong_stream_get_broker_path(lease.handle, streamID, &buf[0], &inoutLen)
+	st := C.Zhulong_stream_get_broker_path(
+		lease.handle,
+		streamID,
+		&buf[0],
+		&inoutLen,
+	)
 	if st != C.Zhulong_OK {
 		return "", mapNativeStatus("get_broker_path", int32(st))
 	}

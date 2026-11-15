@@ -60,8 +60,14 @@ func TestSubscriptionQueueAndNext(t *testing.T) {
 	if pkt.PTS != 1000 || pkt.DTS != 1000 {
 		t.Fatalf("unexpected PTS/DTS: %d/%d", pkt.PTS, pkt.DTS)
 	}
-	if !pkt.HasPTS || !pkt.HasDTS || !pkt.KeyFrame {
-		t.Fatalf("unexpected flags: hasPTS=%v, hasDTS=%v, keyFrame=%v", pkt.HasPTS, pkt.HasDTS, pkt.KeyFrame)
+	missingTimingFlags := !pkt.HasPTS || !pkt.HasDTS || !pkt.KeyFrame
+	if missingTimingFlags {
+		t.Fatalf(
+			"unexpected flags: hasPTS=%v, hasDTS=%v, keyFrame=%v",
+			pkt.HasPTS,
+			pkt.HasDTS,
+			pkt.KeyFrame,
+		)
 	}
 	if string(pkt.Data) != "test_h264_payload" {
 		t.Fatalf("deep copy failed, expected 'test_h264_payload', got %q", string(pkt.Data))
@@ -94,8 +100,12 @@ func TestSubscriptionBackpressureMaxPackets(t *testing.T) {
 
 	// Next 消费完积压后，最后应当返回背压终态
 	ctx := context.Background()
-	_, _ = sub.Next(ctx)
-	_, _ = sub.Next(ctx)
+	if _, err := sub.Next(ctx); err != nil {
+		t.Fatalf("first Next failed: %v", err)
+	}
+	if _, err := sub.Next(ctx); err != nil {
+		t.Fatalf("second Next failed: %v", err)
+	}
 	_, err := sub.Next(ctx)
 	if !errors.Is(err, ErrBackpressure) {
 		t.Fatalf("expected ErrBackpressure after draining queue, got %v", err)

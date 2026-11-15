@@ -139,7 +139,12 @@ func (e *Engine) snapshot(
 	defer release()
 
 	var result C.Zhulong_snapshot_h
-	st := C.Zhulong_stream_snapshot(lease.handle, streamID, req, &result)
+	st := C.Zhulong_stream_snapshot(
+		lease.handle,
+		streamID,
+		req,
+		&result,
+	)
 	if st != C.Zhulong_OK {
 		// 把「构建不支持抓拍」与「本次抓拍失败」区分开：前者重试无意义。
 		if StatusCode(st) == StatusUnsupported {
@@ -161,7 +166,8 @@ func (e *Engine) snapshot(
 	for i := range count {
 		view := C.Zhulong_snapshot_at(result, C.int32_t(i))
 		// 索引区间由 count 保证；取不到或空图说明原生侧违反了契约，跳过而不是崩。
-		if view == nil || view.data == nil || view.size == 0 {
+		invalidView := view == nil || view.data == nil || view.size == 0
+		if invalidView {
 			continue
 		}
 		images = append(images, SnapshotImage{

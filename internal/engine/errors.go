@@ -127,7 +127,12 @@ func sentinel(code StatusCode) *NativeError {
 //
 // Code 决定 errors.Is 的匹配，Message 只供人读；细节必须是固定文案或不含敏感信息的值
 // —— 原始 URL 与凭据绝不能进这里。
-func nativeErrorf(op string, code StatusCode, format string, args ...any) *NativeError {
+func nativeErrorf(
+	op string,
+	code StatusCode,
+	format string,
+	args ...any,
+) *NativeError {
 	return &NativeError{
 		Op:      op,
 		Code:    code,
@@ -180,7 +185,12 @@ var ErrABIMismatch = errors.New("native engine ABI version mismatch")
 // 异常不能穿越 ABI，但也绝不能被 recover 静默吞掉 —— 那会让「偶发丢帧」
 // 变成没有日志、没有错误码的幽灵问题。这里把它转成订阅终态。
 func nativeCallbackPanic(op string, recovered any) error {
-	return nativeErrorf(op, StatusInternal, "callback panicked: %v", recovered)
+	return nativeErrorf(
+		op,
+		StatusInternal,
+		"callback panicked: %v",
+		recovered,
+	)
 }
 
 // mapNativeStatus 把原生状态码映射为结构化错误；OK 返回 nil。

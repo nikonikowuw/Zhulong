@@ -14,10 +14,15 @@ func TestStreamCloseRace(t *testing.T) {
 	defer e.Close()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 300; i++ {
+	for range 300 {
 		generation := generationForTest(e)
 		s := &Stream{engine: e, id: 424242, consumerID: 7, generation: generation}
-		aiSub := newAIResultSubscription(s, 424242, generation, 16)
+		aiSub := newAIResultSubscription(
+			s,
+			424242,
+			generation,
+			16,
+		)
 		wg.Add(1)
 		go func(s *Stream, sub *AIResultSubscription) {
 			defer wg.Done()
@@ -26,7 +31,9 @@ func TestStreamCloseRace(t *testing.T) {
 			s.mu.Unlock()
 			s.onAISubClosed(sub)
 		}(s, aiSub)
-		_ = s.Close()
+		if err := s.Close(); err != nil {
+			// Expected in test close race.
+		}
 	}
 	wg.Wait()
 }

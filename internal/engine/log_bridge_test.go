@@ -31,10 +31,10 @@ func TestNativeLogLevelMappings(t *testing.T) {
 		zap    zapcore.Level
 		native nativelog.Level
 	}{
-		{0, zapcore.DebugLevel, nativelog.Debug},
-		{1, zapcore.InfoLevel, nativelog.Info},
-		{2, zapcore.WarnLevel, nativelog.Warn},
-		{3, zapcore.ErrorLevel, nativelog.Error},
+		{cLevel: 0, zap: zapcore.DebugLevel, native: nativelog.Debug},
+		{cLevel: 1, zap: zapcore.InfoLevel, native: nativelog.Info},
+		{cLevel: 2, zap: zapcore.WarnLevel, native: nativelog.Warn},
+		{cLevel: 3, zap: zapcore.ErrorLevel, native: nativelog.Error},
 	}
 	for _, test := range levels {
 		if got := zapLevel(test.cLevel); got != test.zap {
@@ -78,18 +78,18 @@ func TestNativeLogTrampolineCopiesAndValidatesBounds(t *testing.T) {
 		reason string
 		call   logCallbackCall
 	}{
-		{"empty module", logCallbackCall{}},
-		{"module exceeds maxLogModuleBytes", logCallbackCall{Module: []byte(strings.Repeat("m", 129))}},
+		{reason: "empty module", call: logCallbackCall{}},
+		{reason: "module exceeds maxLogModuleBytes", call: logCallbackCall{Module: []byte(strings.Repeat("m", 129))}},
 		{
-			"text exceeds maxLogTextBytes",
-			logCallbackCall{Module: []byte("unit.module"), Text: []byte(strings.Repeat("x", 2049)), TextLen: 2049},
+			reason: "text exceeds maxLogTextBytes",
+			call:   logCallbackCall{Module: []byte("unit.module"), Text: []byte(strings.Repeat("x", 2049)), TextLen: 2049},
 		},
-		{"null module pointer", logCallbackCall{NullModule: true}},
+		{reason: "null module pointer", call: logCallbackCall{NullModule: true}},
 		{
-			"null text pointer with non-zero length",
-			logCallbackCall{Module: []byte("unit.module"), Text: []byte("x"), NullText: true, TextLen: 1},
+			reason: "null text pointer with non-zero length",
+			call:   logCallbackCall{Module: []byte("unit.module"), Text: []byte("x"), NullText: true, TextLen: 1},
 		},
-		{"non utf8 text", logCallbackCall{Module: []byte("unit.module"), Text: []byte{0xff}, TextLen: 1}},
+		{reason: "non utf8 text", call: logCallbackCall{Module: []byte("unit.module"), Text: []byte{0xff}, TextLen: 1}},
 	}
 	for _, test := range invalidCalls {
 		t.Logf("invalid call: %s", test.reason)
@@ -118,7 +118,11 @@ func TestNativeLogTrampolineCopiesAndValidatesBounds(t *testing.T) {
 	}
 
 	if got, want := queue.Dropped(), uint64(6); got != want {
-		t.Fatalf("invalid native callback records dropped = %d, want %d", got, want)
+		t.Fatalf(
+			"invalid native callback records dropped = %d, want %d",
+			got,
+			want,
+		)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -131,7 +135,10 @@ func TestNativeLogTrampolineCopiesAndValidatesBounds(t *testing.T) {
 		t.Fatalf("queued valid records = %d, want 5", len(entries))
 	}
 	fields := entries[0].ContextMap()
-	if fields["module"] != "unit.module" || fields["message"] != "copied text" || fields["streamId"] != uint64(42) {
+	mismatchedFields := fields["module"] != "unit.module" ||
+		fields["message"] != "copied text" ||
+		fields["streamId"] != uint64(42)
+	if mismatchedFields {
 		t.Fatalf("copied native record fields = %#v", fields)
 	}
 	if fields["seenAt"] == nil {
@@ -171,7 +178,7 @@ func TestNativeLogCABILifecycle(t *testing.T) {
 		t.Fatalf("queue Stop: %v", err)
 	}
 
-	found := false
+	var found bool
 	for _, entry := range observed.All() {
 		fields := entry.ContextMap()
 		if fields["module"] == "pipeline.engine" && fields["message"] == "engine_started" {
@@ -213,7 +220,7 @@ func BenchmarkNativeLogTrampoline(b *testing.B) {
 	handle := cgo.NewHandle(&nativeLogBridge{queue: queue})
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		invokeNativeLogCallbackStaticForBenchmark(uintptr(handle))
 	}
 	b.StopTimer()

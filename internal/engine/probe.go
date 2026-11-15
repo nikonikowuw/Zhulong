@@ -131,7 +131,12 @@ func (e *Engine) Probe(ctx context.Context, uri string, options StreamOptions) (
 	}
 	defer e.unregisterProbe(pCtx)
 
-	return runProbe(ctx, pCtx, uri, cOptions)
+	return runProbe(
+		ctx,
+		pCtx,
+		uri,
+		cOptions,
+	)
 }
 
 // newProbeContext 创建并启动一个隔离的私有引擎实例。
@@ -188,7 +193,12 @@ func runProbe(
 
 	go func() {
 		var out C.Zhulong_probe_result_h
-		st := C.Zhulong_engine_probe(handle, cURI, &options, &out)
+		st := C.Zhulong_engine_probe(
+			handle,
+			cURI,
+			&options,
+			&out,
+		)
 		resChan <- probeResult{result: out, status: st}
 	}()
 
