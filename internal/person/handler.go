@@ -606,7 +606,7 @@ func (h *Handler) GetFaceImportFailedReport(c *gin.Context) {
 // @Tags         person
 // @Accept       json
 // @Produce      json
-// @Param        request body CreateFaceReextractJobRequest false "Optional person IDs; omit for full gallery"
+// @Param        request  body      CreateFaceReextractJobRequest  false  "Optional list of person IDs; omit or leave empty for full gallery"
 // @Success      202  {object}  httputil.Response{data=FaceReextractJobResponse}
 // @Failure      400  {object}  httputil.Response
 // @Failure      409  {object}  httputil.Response
