@@ -14,7 +14,12 @@ import (
 )
 
 func TestInferenceResultJSONEmptySlices(t *testing.T) {
-	res := aitypes.NewDetectionResult("cam_01", "safety_detector", 1000, 25)
+	res := aitypes.NewDetectionResult(
+		"cam_01",
+		"safety_detector",
+		1000,
+		25,
+	)
 	data, err := json.Marshal(res)
 	if err != nil {
 		t.Fatalf("json.Marshal failed: %v", err)
@@ -42,20 +47,50 @@ func TestResultConstructorsInitializeEmptySlices(t *testing.T) {
 		taskType  string
 		newResult func(string, string, int64, int64) aitypes.InferenceResult
 	}{
-		{"detection", aitypes.TaskTypeDetection, aitypes.NewDetectionResult},
-		{"classification", aitypes.TaskTypeClassification, aitypes.NewClassificationResult},
-		{"person_structure", aitypes.TaskTypePersonStructure, aitypes.NewPersonStructureResult},
-		{"scene_structure", aitypes.TaskTypeSceneStructure, aitypes.NewSceneStructureResult},
-		{"vehicle_structure", aitypes.TaskTypeVehicleStructure, aitypes.NewVehicleStructureResult},
+		{
+			name:      "detection",
+			taskType:  aitypes.TaskTypeDetection,
+			newResult: aitypes.NewDetectionResult,
+		},
+		{
+			name:      "classification",
+			taskType:  aitypes.TaskTypeClassification,
+			newResult: aitypes.NewClassificationResult,
+		},
+		{
+			name:      "person_structure",
+			taskType:  aitypes.TaskTypePersonStructure,
+			newResult: aitypes.NewPersonStructureResult,
+		},
+		{
+			name:      "scene_structure",
+			taskType:  aitypes.TaskTypeSceneStructure,
+			newResult: aitypes.NewSceneStructureResult,
+		},
+		{
+			name:      "vehicle_structure",
+			taskType:  aitypes.TaskTypeVehicleStructure,
+			newResult: aitypes.NewVehicleStructureResult,
+		},
 	}
 
 	for _, constructor := range constructors {
 		t.Run(constructor.name, func(t *testing.T) {
-			res := constructor.newResult("cam_01", "algo_01", 123, 7)
+			res := constructor.newResult(
+				"cam_01",
+				"algo_01",
+				123,
+				7,
+			)
 			if res.TaskType != constructor.taskType {
 				t.Fatalf("expected task type %q, got %q", constructor.taskType, res.TaskType)
 			}
-			if res.Detections == nil || res.Classifications == nil || res.Persons == nil || res.Faces == nil || res.Vehicles == nil {
+			hasNilSlice := res.Detections == nil ||
+				res.Classifications == nil ||
+				res.Persons == nil ||
+				res.Faces == nil ||
+				res.Vehicles == nil
+			if hasNilSlice {
 				t.Fatalf("expected all result slices to be initialized: %+v", res)
 			}
 		})
@@ -63,7 +98,12 @@ func TestResultConstructorsInitializeEmptySlices(t *testing.T) {
 }
 
 func TestPersonStructureResultWithTopK(t *testing.T) {
-	res := aitypes.NewPersonStructureResult("cam_gate_01", "face_reid", 1728800000123, 42)
+	res := aitypes.NewPersonStructureResult(
+		"cam_gate_01",
+		"face_reid",
+		1728800000123,
+		42,
+	)
 	res.Persons = append(res.Persons, aitypes.PersonItem{
 		TrackID:   101,
 		BodyBox:   [4]float64{0.25, 0.12, 0.45, 0.85},
@@ -116,13 +156,18 @@ func TestPersonStructureResultWithTopK(t *testing.T) {
 		t.Fatalf("expected 1 face, got %d", len(p.Faces))
 	}
 	face := p.Faces[0]
-	if face.PersonID != "emp_9527" || face.PersonName != "张三" || face.MatchedFaceID != "face_img_01" {
+	isTop1Match := face.PersonID == "emp_9527" &&
+		face.PersonName == "张三" &&
+		face.MatchedFaceID == "face_img_01"
+	if !isTop1Match {
 		t.Errorf("unexpected top-1 match: %+v", face)
 	}
 	if len(face.Candidates) != 2 {
 		t.Fatalf("expected 2 candidates in top-k, got %d", len(face.Candidates))
 	}
-	if face.Candidates[0].FaceID != "face_img_01" || face.Candidates[1].FaceID != "face_img_02" {
+	hasValidCandidateIDs := face.Candidates[0].FaceID == "face_img_01" &&
+		face.Candidates[1].FaceID == "face_img_02"
+	if !hasValidCandidateIDs {
 		t.Errorf("unexpected candidates face_id list: %+v", face.Candidates)
 	}
 	if p.Attributes["gender"] != "male" {
@@ -132,7 +177,17 @@ func TestPersonStructureResultWithTopK(t *testing.T) {
 
 func TestParseInferenceResult(t *testing.T) {
 	// 1. Detection
-	detJSON := []byte(`{"stream_id":1,"pts":1000,"cost_ms":12,"task_type":"detection","detections":[{"box":[0.1,0.2,0.3,0.4],"label":"person","score":0.95}],"classifications":[],"persons":[]}`)
+	detJSON := []byte(`{
+		"stream_id": 1,
+		"pts": 1000,
+		"cost_ms": 12,
+		"task_type": "detection",
+		"detections": [
+			{"box": [0.1, 0.2, 0.3, 0.4], "label": "person", "score": 0.95}
+		],
+		"classifications": [],
+		"persons": []
+	}`)
 	detRes, err := aitypes.ParseInferenceResult("cam_1", "algo_det", detJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult detection failed: %v", err)
@@ -145,7 +200,17 @@ func TestParseInferenceResult(t *testing.T) {
 	}
 
 	// 2. Classification
-	clsJSON := []byte(`{"stream_id":1,"pts":2000,"cost_ms":8,"task_type":"classification","detections":[],"classifications":[{"label":"cat","score":0.88}],"persons":[]}`)
+	clsJSON := []byte(`{
+		"stream_id": 1,
+		"pts": 2000,
+		"cost_ms": 8,
+		"task_type": "classification",
+		"detections": [],
+		"classifications": [
+			{"label": "cat", "score": 0.88}
+		],
+		"persons": []
+	}`)
 	clsRes, err := aitypes.ParseInferenceResult("cam_1", "algo_cls", clsJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult classification failed: %v", err)
@@ -157,16 +222,53 @@ func TestParseInferenceResult(t *testing.T) {
 	// 3. Person structure with capture_time_ms, matched_face_id and candidates face_id
 	// 入口单向归一化：TaskTypePersonStructure 转换为 TaskTypeSceneStructure，faces 提取至顶层，回填 PersonIndex
 	captureMs := int64(1729000000123)
-	psJSON := []byte(`{"stream_id":1,"pts":3000,"capture_time_ms":1729000000123,"cost_ms":25,"task_type":"person_structure","detections":[],"classifications":[],"persons":[{"track_id":10,"body_box":[0.1,0.1,0.5,0.8],"body_score":0.9,"faces":[{"box":[0.2,0.2,0.3,0.3],"quality":0.95,"landmarks":[[0.22,0.25],[0.28,0.25],[0.25,0.27],[0.23,0.29],[0.27,0.29]],"matched":true,"similarity":0.91,"person_id":"user_1","person_name":"Bob","matched_face_id":"face_bob_01","candidates":[{"person_id":"user_1","person_name":"Bob","face_id":"face_bob_01","similarity":0.91}]}]}]}`)
+	psJSON := []byte(`{
+		"stream_id": 1,
+		"pts": 3000,
+		"capture_time_ms": 1729000000123,
+		"cost_ms": 25,
+		"task_type": "person_structure",
+		"detections": [],
+		"classifications": [],
+		"persons": [
+			{
+				"track_id": 10,
+				"body_box": [0.1, 0.1, 0.5, 0.8],
+				"body_score": 0.9,
+				"faces": [
+					{
+						"box": [0.2, 0.2, 0.3, 0.3],
+						"quality": 0.95,
+						"landmarks": [[0.22, 0.25], [0.28, 0.25], [0.25, 0.27], [0.23, 0.29], [0.27, 0.29]],
+						"matched": true,
+						"similarity": 0.91,
+						"person_id": "user_1",
+						"person_name": "Bob",
+						"matched_face_id": "face_bob_01",
+						"candidates": [
+							{"person_id": "user_1", "person_name": "Bob", "face_id": "face_bob_01", "similarity": 0.91}
+						]
+					}
+				]
+			}
+		]
+	}`)
 	psRes, err := aitypes.ParseInferenceResult("cam_1", "algo_face", psJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult person structure failed: %v", err)
 	}
-	if psRes.TaskType != aitypes.TaskTypeSceneStructure || len(psRes.Persons) != 1 || len(psRes.Faces) != 1 {
+	hasValidSceneStructure := psRes.TaskType == aitypes.TaskTypeSceneStructure &&
+		len(psRes.Persons) == 1 &&
+		len(psRes.Faces) == 1
+	if !hasValidSceneStructure {
 		t.Fatalf("unexpected person structure normalized result: %+v", psRes)
 	}
 	if psRes.Timestamp.UnixMilli() != captureMs {
-		t.Errorf("expected Timestamp UnixMilli to match capture_time_ms %d, got %d", captureMs, psRes.Timestamp.UnixMilli())
+		t.Errorf(
+			"expected Timestamp UnixMilli to match capture_time_ms %d, got %d",
+			captureMs,
+			psRes.Timestamp.UnixMilli(),
+		)
 	}
 	if psRes.Persons[0].TrackID != 10 || len(psRes.Persons[0].Faces) != 0 {
 		t.Errorf("expected clean person without nested faces: %+v", psRes.Persons[0])
@@ -182,7 +284,21 @@ func TestParseInferenceResult(t *testing.T) {
 	}
 
 	// 3b. Person structure 退化伪人体物理剔除测试
-	degenJSON := []byte(`{"stream_id":1,"pts":3050,"task_type":"person_structure","persons":[{"track_id":0,"body_box":[0.2,0.2,0.3,0.3],"body_score":0.92,"faces":[{"box":[0.2,0.2,0.3,0.3],"quality":0.92,"matched":false}]}]}`)
+	degenJSON := []byte(`{
+		"stream_id": 1,
+		"pts": 3050,
+		"task_type": "person_structure",
+		"persons": [
+			{
+				"track_id": 0,
+				"body_box": [0.2, 0.2, 0.3, 0.3],
+				"body_score": 0.92,
+				"faces": [
+					{"box": [0.2, 0.2, 0.3, 0.3], "quality": 0.92, "matched": false}
+				]
+			}
+		]
+	}`)
 	degenRes, err := aitypes.ParseInferenceResult("cam_1", "algo_face", degenJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult degen failed: %v", err)
@@ -190,25 +306,48 @@ func TestParseInferenceResult(t *testing.T) {
 	if len(degenRes.Persons) != 0 {
 		t.Errorf("expected degen pseudo-person to be physically eliminated, got %d persons", len(degenRes.Persons))
 	}
-	if len(degenRes.Faces) != 1 || degenRes.Faces[0].PersonIndex != -1 {
+	isIsolatedFace := len(degenRes.Faces) == 1 && degenRes.Faces[0].PersonIndex == -1
+	if !isIsolatedFace {
 		t.Errorf("expected isolated face with PersonIndex=-1, got: %+v", degenRes.Faces)
 	}
 
 	// 3c. Scene structure (Type 5) 原生平级解析
-	sceneJSON := []byte(`{"stream_id":1,"pts":3100,"task_type":"scene_structure","persons":[{"track_id":101,"body_box":[0.1,0.2,0.5,0.9],"body_score":0.88}],"faces":[{"box":[0.2,0.25,0.35,0.45],"quality":0.96,"person_index":0,"matched":true,"person_name":"Alice"}]}`)
+	sceneJSON := []byte(`{
+		"stream_id": 1,
+		"pts": 3100,
+		"task_type": "scene_structure",
+		"persons": [
+			{"track_id": 101, "body_box": [0.1, 0.2, 0.5, 0.9], "body_score": 0.88}
+		],
+		"faces": [
+			{"box": [0.2, 0.25, 0.35, 0.45], "quality": 0.96, "person_index": 0, "matched": true, "person_name": "Alice"}
+		]
+	}`)
 	sceneRes, err := aitypes.ParseInferenceResult("cam_1", "algo_face", sceneJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult scene structure failed: %v", err)
 	}
-	if sceneRes.TaskType != aitypes.TaskTypeSceneStructure || len(sceneRes.Persons) != 1 || len(sceneRes.Faces) != 1 {
+	hasValidSceneCounts := sceneRes.TaskType == aitypes.TaskTypeSceneStructure &&
+		len(sceneRes.Persons) == 1 &&
+		len(sceneRes.Faces) == 1
+	if !hasValidSceneCounts {
 		t.Fatalf("unexpected scene structure result: %+v", sceneRes)
 	}
-	if sceneRes.Persons[0].TrackID != 101 || sceneRes.Faces[0].PersonName != "Alice" || sceneRes.Faces[0].PersonIndex != 0 {
+	hasValidSceneFields := sceneRes.Persons[0].TrackID == 101 &&
+		sceneRes.Faces[0].PersonName == "Alice" &&
+		sceneRes.Faces[0].PersonIndex == 0
+	if !hasValidSceneFields {
 		t.Errorf("unexpected scene fields: %+v", sceneRes)
 	}
 
 	// 4. Algorithm ID resolution from payload or fallback
-	withAlgoIDJSON := []byte(`{"stream_id":1,"pts":1000,"task_type":"detection","algorithm_id":"algo_from_payload","detections":[]}`)
+	withAlgoIDJSON := []byte(`{
+		"stream_id": 1,
+		"pts": 1000,
+		"task_type": "detection",
+		"algorithm_id": "algo_from_payload",
+		"detections": []
+	}`)
 	resWithAlgo, err := aitypes.ParseInferenceResult("cam_1", "fallback_algo", withAlgoIDJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult failed: %v", err)
@@ -217,7 +356,12 @@ func TestParseInferenceResult(t *testing.T) {
 		t.Errorf("expected algorithm_id 'algo_from_payload', got %q", resWithAlgo.AlgorithmID)
 	}
 
-	withoutAlgoIDJSON := []byte(`{"stream_id":1,"pts":1000,"task_type":"detection","detections":[]}`)
+	withoutAlgoIDJSON := []byte(`{
+		"stream_id": 1,
+		"pts": 1000,
+		"task_type": "detection",
+		"detections": []
+	}`)
 	resWithoutAlgo, err := aitypes.ParseInferenceResult("cam_1", "fallback_algo", withoutAlgoIDJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult failed: %v", err)
@@ -227,7 +371,33 @@ func TestParseInferenceResult(t *testing.T) {
 	}
 
 	// 5. Vehicle structure
-	vehJSON := []byte(`{"stream_id":1,"pts":4000,"cost_ms":18,"task_type":"vehicle_structure","detections":[],"classifications":[],"persons":[],"vehicles":[{"track_id":42,"vehicle_box":[0.1,0.2,0.6,0.7],"vehicle_score":0.93,"vehicle_type":"suv","vehicle_color":"black","plates":[{"box":[0.25,0.55,0.45,0.65],"score":0.97,"plate_number":"粤B88888","plate_color":"蓝色","plate_type":0}]}]}`)
+	vehJSON := []byte(`{
+		"stream_id": 1,
+		"pts": 4000,
+		"cost_ms": 18,
+		"task_type": "vehicle_structure",
+		"detections": [],
+		"classifications": [],
+		"persons": [],
+		"vehicles": [
+			{
+				"track_id": 42,
+				"vehicle_box": [0.1, 0.2, 0.6, 0.7],
+				"vehicle_score": 0.93,
+				"vehicle_type": "suv",
+				"vehicle_color": "black",
+				"plates": [
+					{
+						"box": [0.25, 0.55, 0.45, 0.65],
+						"score": 0.97,
+						"plate_number": "粤B88888",
+						"plate_color": "蓝色",
+						"plate_type": 0
+					}
+				]
+			}
+		]
+	}`)
 	vehRes, err := aitypes.ParseInferenceResult("cam_1", "algo_plate", vehJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult vehicle structure failed: %v", err)
@@ -236,14 +406,20 @@ func TestParseInferenceResult(t *testing.T) {
 		t.Fatalf("unexpected vehicle structure result: %+v", vehRes)
 	}
 	v := vehRes.Vehicles[0]
-	if v.TrackID != 42 || v.VehicleType != "suv" || v.VehicleColor != "black" {
+	hasValidVehicle := v.TrackID == 42 &&
+		v.VehicleType == "suv" &&
+		v.VehicleColor == "black"
+	if !hasValidVehicle {
 		t.Errorf("unexpected vehicle fields: %+v", v)
 	}
-	if len(v.Plates) != 1 || v.Plates[0].PlateNumber != "粤B88888" || v.Plates[0].PlateColor != "蓝色" {
+	hasValidPlates := len(v.Plates) == 1 &&
+		v.Plates[0].PlateNumber == "粤B88888" &&
+		v.Plates[0].PlateColor == "蓝色"
+	if !hasValidPlates {
 		t.Errorf("unexpected plates content: %+v", v.Plates)
 	}
 
-	// 5. Invalid or empty
+	// 6. Invalid or empty
 	if _, err := aitypes.ParseInferenceResult("cam_1", "algo", nil); err == nil {
 		t.Errorf("expected error for nil payload")
 	}
@@ -251,7 +427,7 @@ func TestParseInferenceResult(t *testing.T) {
 		t.Errorf("expected error for invalid json")
 	}
 
-	// 6. PTSUS fidelity (pts_us = 0 preserved, positive preserved, missing omitted) & non-null nested slices
+	// 7. PTSUS fidelity (pts_us = 0 preserved, positive preserved, missing omitted) & non-null nested slices
 	ptsCases := []struct {
 		name      string
 		raw       string
@@ -259,21 +435,44 @@ func TestParseInferenceResult(t *testing.T) {
 		wantPTSUS int64
 	}{
 		{
-			name:      "first_frame_zero_pts_us",
-			raw:       `{"stream_id":1,"pts":1000,"pts_us":0,"task_type":"scene_structure","persons":[{"track_id":7,"body_box":[0.1,0.2,0.4,0.8],"body_score":0.9}],"faces":[{"box":[0.15,0.22,0.25,0.35],"quality":0.92,"person_index":0,"matched":false}]}`,
+			name: "first_frame_zero_pts_us",
+			raw: `{
+				"stream_id": 1,
+				"pts": 1000,
+				"pts_us": 0,
+				"task_type": "scene_structure",
+				"persons": [
+					{"track_id": 7, "body_box": [0.1, 0.2, 0.4, 0.8], "body_score": 0.9}
+				],
+				"faces": [
+					{"box": [0.15, 0.22, 0.25, 0.35], "quality": 0.92, "person_index": 0, "matched": false}
+				]
+			}`,
 			wantNil:   false,
 			wantPTSUS: 0,
 		},
 		{
-			name:      "positive_pts_us",
-			raw:       `{"stream_id":1,"pts":4600,"pts_us":40000,"task_type":"detection","detections":[]}`,
+			name: "positive_pts_us",
+			raw: `{
+				"stream_id": 1,
+				"pts": 4600,
+				"pts_us": 40000,
+				"task_type": "detection",
+				"detections": []
+			}`,
 			wantNil:   false,
 			wantPTSUS: 40000,
 		},
 		{
-			name:    "omitted_pts_us",
-			raw:     `{"stream_id":1,"pts":4600,"task_type":"detection","detections":[]}`,
-			wantNil: true,
+			name: "omitted_pts_us",
+			raw: `{
+				"stream_id": 1,
+				"pts": 4600,
+				"task_type": "detection",
+				"detections": []
+			}`,
+			wantNil:   true,
+			wantPTSUS: 0,
 		},
 	}
 
@@ -332,7 +531,19 @@ func TestFaceFeatureVectorDecodeAndBroadcastIsolation(t *testing.T) {
 	zeroB64 := base64.StdEncoding.EncodeToString(zeroBytes)
 
 	t.Run("scene_structure_valid_feature", func(t *testing.T) {
-		raw := fmt.Sprintf(`{"stream_id":1,"pts":100,"task_type":"scene_structure","faces":[{"box":[0.1,0.2,0.3,0.4],"quality":0.95,"matched":false,"feature_b64":%q}]}`, validB64)
+		raw := fmt.Sprintf(`{
+			"stream_id": 1,
+			"pts": 100,
+			"task_type": "scene_structure",
+			"faces": [
+				{
+					"box": [0.1, 0.2, 0.3, 0.4],
+					"quality": 0.95,
+					"matched": false,
+					"feature_b64": %q
+				}
+			]
+		}`, validB64)
 		res, err := aitypes.ParseInferenceResult("cam_1", "face_algo", []byte(raw))
 		if err != nil {
 			t.Fatalf("ParseInferenceResult failed: %v", err)
@@ -364,15 +575,39 @@ func TestFaceFeatureVectorDecodeAndBroadcastIsolation(t *testing.T) {
 			name string
 			b64  string
 		}{
-			{"nan", nanB64},
-			{"zero_norm", zeroB64},
-			{"corrupted_base64", "not-a-valid-base64!!!"},
-			{"too_short", base64.StdEncoding.EncodeToString([]byte{1, 2, 3})},
+			{
+				name: "nan",
+				b64:  nanB64,
+			},
+			{
+				name: "zero_norm",
+				b64:  zeroB64,
+			},
+			{
+				name: "corrupted_base64",
+				b64:  "not-a-valid-base64!!!",
+			},
+			{
+				name: "too_short",
+				b64:  base64.StdEncoding.EncodeToString([]byte{1, 2, 3}),
+			},
 		}
 
 		for _, tc := range invalidCases {
 			t.Run(tc.name, func(t *testing.T) {
-				raw := fmt.Sprintf(`{"stream_id":1,"pts":100,"task_type":"scene_structure","faces":[{"box":[0.1,0.2,0.3,0.4],"quality":0.95,"matched":false,"feature_b64":%q}]}`, tc.b64)
+				raw := fmt.Sprintf(`{
+					"stream_id": 1,
+					"pts": 100,
+					"task_type": "scene_structure",
+					"faces": [
+						{
+							"box": [0.1, 0.2, 0.3, 0.4],
+							"quality": 0.95,
+							"matched": false,
+							"feature_b64": %q
+						}
+					]
+				}`, tc.b64)
 				res, err := aitypes.ParseInferenceResult("cam_1", "face_algo", []byte(raw))
 				if err != nil {
 					t.Fatalf("ParseInferenceResult should succeed even with invalid feature, got: %v", err)
@@ -388,7 +623,27 @@ func TestFaceFeatureVectorDecodeAndBroadcastIsolation(t *testing.T) {
 	})
 
 	t.Run("person_structure_fallback_copies_feature_vector", func(t *testing.T) {
-		raw := fmt.Sprintf(`{"stream_id":1,"pts":100,"task_type":"person_structure","persons":[{"track_id":10,"body_box":[0.1,0.1,0.8,0.8],"body_score":0.9,"faces":[{"box":[0.2,0.2,0.4,0.4],"quality":0.88,"matched":true,"person_id":"p1","feature_b64":%q}]}]}`, validB64)
+		raw := fmt.Sprintf(`{
+			"stream_id": 1,
+			"pts": 100,
+			"task_type": "person_structure",
+			"persons": [
+				{
+					"track_id": 10,
+					"body_box": [0.1, 0.1, 0.8, 0.8],
+					"body_score": 0.9,
+					"faces": [
+						{
+							"box": [0.2, 0.2, 0.4, 0.4],
+							"quality": 0.88,
+							"matched": true,
+							"person_id": "p1",
+							"feature_b64": %q
+						}
+					]
+				}
+			]
+		}`, validB64)
 		res, err := aitypes.ParseInferenceResult("cam_1", "face_algo", []byte(raw))
 		if err != nil {
 			t.Fatalf("ParseInferenceResult failed: %v", err)

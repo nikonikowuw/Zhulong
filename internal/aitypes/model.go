@@ -1,3 +1,4 @@
+// Package aitypes defines domain data structures and parsing utilities for AI inference results.
 package aitypes
 
 import (
@@ -15,32 +16,6 @@ const (
 	FaceFeatureDimension = 512
 	FaceFeatureByteLen   = FaceFeatureDimension * 4 // 2048 bytes (float32 little-endian)
 )
-
-// decodeFeatureVector decodes and validates a Base64-encoded little-endian IEEE-754 float32[512] vector.
-// Returns nil if b64 is empty, malformed, not exactly 2048 bytes, contains non-finite numbers (NaN/Inf),
-// or has zero/sub-epsilon norm.
-func decodeFeatureVector(b64 string) []byte {
-	if b64 == "" {
-		return nil
-	}
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil || len(raw) != FaceFeatureByteLen {
-		return nil
-	}
-	var normSq float32
-	for i := 0; i < FaceFeatureByteLen; i += 4 {
-		bits := binary.LittleEndian.Uint32(raw[i : i+4])
-		val := math.Float32frombits(bits)
-		if math.IsNaN(float64(val)) || math.IsInf(float64(val), 0) {
-			return nil
-		}
-		normSq += val * val
-	}
-	if normSq <= 1e-6 {
-		return nil
-	}
-	return raw
-}
 
 // Common Task Types
 const (
@@ -217,43 +192,57 @@ type InferenceResult struct {
 
 // NewDetectionResult creates an empty detection inference result.
 func NewDetectionResult(cameraID, algorithmID string, pts, costMs int64) InferenceResult {
-	return newInferenceResult(cameraID, algorithmID, pts, costMs, TaskTypeDetection)
+	return newInferenceResult(
+		cameraID,
+		algorithmID,
+		pts,
+		costMs,
+		TaskTypeDetection,
+	)
 }
 
 // NewClassificationResult creates an empty classification inference result.
 func NewClassificationResult(cameraID, algorithmID string, pts, costMs int64) InferenceResult {
-	return newInferenceResult(cameraID, algorithmID, pts, costMs, TaskTypeClassification)
+	return newInferenceResult(
+		cameraID,
+		algorithmID,
+		pts,
+		costMs,
+		TaskTypeClassification,
+	)
 }
 
 // NewPersonStructureResult creates an empty person-structure inference result.
 func NewPersonStructureResult(cameraID, algorithmID string, pts, costMs int64) InferenceResult {
-	return newInferenceResult(cameraID, algorithmID, pts, costMs, TaskTypePersonStructure)
+	return newInferenceResult(
+		cameraID,
+		algorithmID,
+		pts,
+		costMs,
+		TaskTypePersonStructure,
+	)
 }
 
 // NewSceneStructureResult creates an empty scene-structure inference result.
 func NewSceneStructureResult(cameraID, algorithmID string, pts, costMs int64) InferenceResult {
-	return newInferenceResult(cameraID, algorithmID, pts, costMs, TaskTypeSceneStructure)
+	return newInferenceResult(
+		cameraID,
+		algorithmID,
+		pts,
+		costMs,
+		TaskTypeSceneStructure,
+	)
 }
 
 // NewVehicleStructureResult creates an empty vehicle-structure inference result.
 func NewVehicleStructureResult(cameraID, algorithmID string, pts, costMs int64) InferenceResult {
-	return newInferenceResult(cameraID, algorithmID, pts, costMs, TaskTypeVehicleStructure)
-}
-
-func newInferenceResult(cameraID, algorithmID string, pts, costMs int64, taskType string) InferenceResult {
-	return InferenceResult{
-		CameraID:        cameraID,
-		AlgorithmID:     algorithmID,
-		PTS:             pts,
-		Timestamp:       time.Now().UTC(),
-		TaskType:        taskType,
-		CostMs:          costMs,
-		Detections:      make([]DetectionItem, 0),
-		Classifications: make([]ClassificationItem, 0),
-		Persons:         make([]PersonItem, 0),
-		Faces:           make([]FaceStructureItem, 0),
-		Vehicles:        make([]VehicleItem, 0),
-	}
+	return newInferenceResult(
+		cameraID,
+		algorithmID,
+		pts,
+		costMs,
+		TaskTypeVehicleStructure,
+	)
 }
 
 // RawInferencePayload models the JSON payload serialized by an algorithm package process.
@@ -296,19 +285,34 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 	var res InferenceResult
 	switch payload.TaskType {
 	case TaskTypeDetection:
-		res = NewDetectionResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
+		res = NewDetectionResult(
+			cameraID,
+			effectiveAlgoID,
+			payload.PTS,
+			payload.CostMs,
+		)
 		res.Timestamp = captureTime
 		if len(payload.Detections) > 0 {
 			res.Detections = payload.Detections
 		}
 	case TaskTypeClassification:
-		res = NewClassificationResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
+		res = NewClassificationResult(
+			cameraID,
+			effectiveAlgoID,
+			payload.PTS,
+			payload.CostMs,
+		)
 		res.Timestamp = captureTime
 		if len(payload.Classifications) > 0 {
 			res.Classifications = payload.Classifications
 		}
 	case TaskTypeSceneStructure:
-		res = NewSceneStructureResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
+		res = NewSceneStructureResult(
+			cameraID,
+			effectiveAlgoID,
+			payload.PTS,
+			payload.CostMs,
+		)
 		res.Timestamp = captureTime
 		if len(payload.Persons) > 0 {
 			cleanPersons := make([]PersonItem, len(payload.Persons))
@@ -332,59 +336,35 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		// 宿主反序列化入口单向归一化 (兼容期旧包 type 3)：
 		// 1. 若 p.IsFaceCloseup() == true（退化伪人体）：仅提取其人脸为孤立人脸（PersonIndex = -1），物理剔除伪人体；
 		// 2. 若 p.IsFaceCloseup() == false（真实人体）：保留进入 res.Persons，人脸提取至顶层并关联真实 personIndex。
-		res = NewSceneStructureResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
+		res = NewSceneStructureResult(
+			cameraID,
+			effectiveAlgoID,
+			payload.PTS,
+			payload.CostMs,
+		)
 		res.Timestamp = captureTime
 		for _, p := range payload.Persons {
 			if p.IsFaceCloseup() {
 				if len(p.Faces) > 0 {
-					f := p.Faces[0]
-					landmarks := f.Landmarks
-					if landmarks == nil {
-						landmarks = make([][2]float64, 0)
-					}
-					res.Faces = append(res.Faces, FaceStructureItem{
-						Box:           f.Box,
-						Quality:       f.Quality,
-						Landmarks:     landmarks,
-						Matched:       f.Matched,
-						Similarity:    f.Similarity,
-						PersonIndex:   -1,
-						PersonID:      f.PersonID,
-						PersonName:    f.PersonName,
-						MatchedFaceID: f.MatchedFaceID,
-						IsFused:       f.IsFused,
-						Candidates:    f.Candidates,
-						FeatureVector: f.FeatureVector,
-					})
+					res.Faces = append(res.Faces, toFaceStructureItem(p.Faces[0], -1))
 				}
-			} else {
-				personIdx := int32(len(res.Persons))
-				for _, f := range p.Faces {
-					landmarks := f.Landmarks
-					if landmarks == nil {
-						landmarks = make([][2]float64, 0)
-					}
-					res.Faces = append(res.Faces, FaceStructureItem{
-						Box:           f.Box,
-						Quality:       f.Quality,
-						Landmarks:     landmarks,
-						Matched:       f.Matched,
-						Similarity:    f.Similarity,
-						PersonIndex:   personIdx,
-						PersonID:      f.PersonID,
-						PersonName:    f.PersonName,
-						MatchedFaceID: f.MatchedFaceID,
-						IsFused:       f.IsFused,
-						Candidates:    f.Candidates,
-						FeatureVector: f.FeatureVector,
-					})
-				}
-				p.Faces = make([]FaceSubItem, 0)
-				res.Persons = append(res.Persons, p)
+				continue
 			}
+
+			personIdx := int32(len(res.Persons))
+			for _, f := range p.Faces {
+				res.Faces = append(res.Faces, toFaceStructureItem(f, personIdx))
+			}
+			p.Faces = make([]FaceSubItem, 0)
+			res.Persons = append(res.Persons, p)
 		}
 	case TaskTypeVehicleStructure:
-		res = NewVehicleStructureResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
+		res = NewVehicleStructureResult(
+			cameraID,
+			effectiveAlgoID,
+			payload.PTS,
+			payload.CostMs,
+		)
 		res.Timestamp = captureTime
 		if len(payload.Vehicles) > 0 {
 			cleanVehicles := make([]VehicleItem, len(payload.Vehicles))
@@ -431,4 +411,74 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		res.PTSUS = &ptsUS
 	}
 	return res, nil
+}
+
+func newInferenceResult(
+	cameraID string,
+	algorithmID string,
+	pts int64,
+	costMs int64,
+	taskType string,
+) InferenceResult {
+	return InferenceResult{
+		CameraID:        cameraID,
+		AlgorithmID:     algorithmID,
+		PTS:             pts,
+		Timestamp:       time.Now().UTC(),
+		TaskType:        taskType,
+		CostMs:          costMs,
+		Detections:      make([]DetectionItem, 0),
+		Classifications: make([]ClassificationItem, 0),
+		Persons:         make([]PersonItem, 0),
+		Faces:           make([]FaceStructureItem, 0),
+		Vehicles:        make([]VehicleItem, 0),
+	}
+}
+
+// toFaceStructureItem converts a FaceSubItem to a top-level FaceStructureItem.
+func toFaceStructureItem(f FaceSubItem, personIdx int32) FaceStructureItem {
+	landmarks := f.Landmarks
+	if landmarks == nil {
+		landmarks = make([][2]float64, 0)
+	}
+	return FaceStructureItem{
+		Box:           f.Box,
+		Quality:       f.Quality,
+		Landmarks:     landmarks,
+		Matched:       f.Matched,
+		Similarity:    f.Similarity,
+		PersonIndex:   personIdx,
+		PersonID:      f.PersonID,
+		PersonName:    f.PersonName,
+		MatchedFaceID: f.MatchedFaceID,
+		IsFused:       f.IsFused,
+		Candidates:    f.Candidates,
+		FeatureVector: f.FeatureVector,
+	}
+}
+
+// decodeFeatureVector decodes and validates a Base64-encoded little-endian IEEE-754 float32[512] vector.
+// Returns nil if b64 is empty, malformed, not exactly 2048 bytes, contains non-finite numbers (NaN/Inf),
+// or has zero/sub-epsilon norm.
+func decodeFeatureVector(b64 string) []byte {
+	if b64 == "" {
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil || len(raw) != FaceFeatureByteLen {
+		return nil
+	}
+	var normSq float32
+	for i := 0; i < FaceFeatureByteLen; i += 4 {
+		bits := binary.LittleEndian.Uint32(raw[i : i+4])
+		val := math.Float32frombits(bits)
+		if math.IsNaN(float64(val)) || math.IsInf(float64(val), 0) {
+			return nil
+		}
+		normSq += val * val
+	}
+	if normSq <= 1e-6 {
+		return nil
+	}
+	return raw
 }
