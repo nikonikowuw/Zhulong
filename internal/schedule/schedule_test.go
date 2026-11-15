@@ -30,8 +30,16 @@ func TestParseAndNormalize(t *testing.T) {
 			alwaysActive: true,
 		},
 		{
-			name:          "valid schedule normalizes and merges contiguous",
-			input:         `{"enabled": true, "days": {"monday": [{"start": "08:00", "end": "10:00"}, {"start": "10:00", "end": "12:00"}]}}`,
+			name: "valid schedule normalizes and merges contiguous",
+			input: `{
+				"enabled": true,
+				"days": {
+					"monday": [
+						{"start": "08:00", "end": "10:00"},
+						{"start": "10:00", "end": "12:00"}
+					]
+				}
+			}`,
 			alwaysActive:  false,
 			expectedDays:  1,
 			expectedRange: "08:00-12:00",
@@ -113,12 +121,25 @@ func TestIsActiveAt(t *testing.T) {
 	}
 
 	loc := time.UTC
-	mon0859 := time.Date(2026, 10, 19, 8, 59, 0, 0, loc)
-	mon0900 := time.Date(2026, 10, 19, 9, 0, 0, 0, loc)
-	mon1759 := time.Date(2026, 10, 19, 17, 59, 0, 0, loc)
-	mon1800 := time.Date(2026, 10, 19, 18, 0, 0, 0, loc)
-	fri2359 := time.Date(2026, 10, 23, 23, 59, 0, 0, loc)
-	tue1000 := time.Date(2026, 10, 20, 10, 0, 0, 0, loc)
+	testTime := func(day, hour, min int) time.Time {
+		return time.Date(
+			2026,
+			time.October,
+			day,
+			hour,
+			min,
+			0,
+			0,
+			loc,
+		)
+	}
+
+	mon0859 := testTime(19, 8, 59)
+	mon0900 := testTime(19, 9, 0)
+	mon1759 := testTime(19, 17, 59)
+	mon1800 := testTime(19, 18, 0)
+	fri2359 := testTime(23, 23, 59)
+	tue1000 := testTime(20, 10, 0)
 
 	if s.IsActiveAt(mon0859) {
 		t.Errorf("08:59 should be inactive")
@@ -140,11 +161,66 @@ func TestIsActiveAt(t *testing.T) {
 	}
 }
 
+func TestWeeklyIntervals(t *testing.T) {
+	t.Run("always active returns entire week", func(t *testing.T) {
+		s := &WeekSchedule{Enabled: false}
+		ivs := s.WeeklyIntervals()
+		if len(ivs) != 1 || ivs[0].StartMinute != 0 || ivs[0].EndMinute != MinutesPerWeek {
+			t.Fatalf("unexpected intervals: %+v", ivs)
+		}
+	})
+
+	t.Run("empty schedule returns empty non-nil slice", func(t *testing.T) {
+		s := &WeekSchedule{
+			Enabled: true,
+			Days:    map[string][]TimeRange{},
+		}
+		ivs := s.WeeklyIntervals()
+		if ivs == nil {
+			t.Fatalf("expected non-nil slice, got nil")
+		}
+		if len(ivs) != 0 {
+			t.Fatalf("expected 0 intervals, got %d", len(ivs))
+		}
+	})
+
+	t.Run("scheduled days converted with weekday offset", func(t *testing.T) {
+		s, err := Parse(`{"enabled": true, "days": {"monday": [{"start": "01:00", "end": "02:00"}]}}`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		ivs := s.WeeklyIntervals()
+		if len(ivs) != 1 {
+			t.Fatalf("expected 1 interval, got %d", len(ivs))
+		}
+		expectedStart := MinutesPerDay + 60
+		expectedEnd := MinutesPerDay + 120
+		if ivs[0].StartMinute != expectedStart || ivs[0].EndMinute != expectedEnd {
+			t.Errorf(
+				"expected [%d, %d), got [%d, %d)",
+				expectedStart,
+				expectedEnd,
+				ivs[0].StartMinute,
+				ivs[0].EndMinute,
+			)
+		}
+	})
+}
+
 func TestCalculatePeakPoints(t *testing.T) {
-	schedA, _ := Parse(`{"enabled": true, "days": {"monday": [{"start": "08:00", "end": "18:00"}]}}`)
-	schedB, _ := Parse(`{"enabled": true, "days": {"monday": [{"start": "18:00", "end": "24:00"}]}}`)
-	schedOverlap, _ := Parse(`{"enabled": true, "days": {"monday": [{"start": "12:00", "end": "20:00"}]}}`)
-	schedAlways, _ := Parse(`{}`)
+	mustParse := func(t *testing.T, raw string) *WeekSchedule {
+		t.Helper()
+		s, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("unexpected parse error for %q: %v", raw, err)
+		}
+		return s
+	}
+
+	schedA := mustParse(t, `{"enabled": true, "days": {"monday": [{"start": "08:00", "end": "18:00"}]}}`)
+	schedB := mustParse(t, `{"enabled": true, "days": {"monday": [{"start": "18:00", "end": "24:00"}]}}`)
+	schedOverlap := mustParse(t, `{"enabled": true, "days": {"monday": [{"start": "12:00", "end": "20:00"}]}}`)
+	schedAlways := mustParse(t, `{}`)
 
 	t.Run("non-overlapping handover", func(t *testing.T) {
 		items := []SchedulableItem{

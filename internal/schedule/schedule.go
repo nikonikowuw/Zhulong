@@ -1,9 +1,10 @@
 package schedule
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -54,7 +55,7 @@ func Parse(raw string) (*WeekSchedule, error) {
 	if trimmed == "" || trimmed == "{}" {
 		return &WeekSchedule{
 			Enabled: false,
-			Days:    make(map[string][]TimeRange),
+			Days:    map[string][]TimeRange{},
 		}, nil
 	}
 
@@ -72,10 +73,7 @@ func Parse(raw string) (*WeekSchedule, error) {
 
 // IsAlwaysActive returns true if the schedule is disabled or nil (representing 24/7 unconstrained operation).
 func (s *WeekSchedule) IsAlwaysActive() bool {
-	if s == nil || !s.Enabled {
-		return true
-	}
-	return false
+	return s == nil || !s.Enabled
 }
 
 // Normalize validates and normalizes all daily time ranges:
@@ -87,7 +85,7 @@ func (s *WeekSchedule) Normalize() error {
 		return nil
 	}
 	if s.Days == nil {
-		s.Days = make(map[string][]TimeRange)
+		s.Days = map[string][]TimeRange{}
 		return nil
 	}
 
@@ -102,16 +100,34 @@ func (s *WeekSchedule) Normalize() error {
 		for _, r := range ranges {
 			startMin, err := parseTimeToMinutes(r.Start)
 			if err != nil {
-				return fmt.Errorf("invalid start time %q for %s: %w", r.Start, dayKey, err)
+				return fmt.Errorf(
+					"invalid start time %q for %q: %w",
+					r.Start,
+					dayKey,
+					err,
+				)
 			}
 			endMin, err := parseTimeToMinutes(r.End)
 			if err != nil {
-				return fmt.Errorf("invalid end time %q for %s: %w", r.End, dayKey, err)
+				return fmt.Errorf(
+					"invalid end time %q for %q: %w",
+					r.End,
+					dayKey,
+					err,
+				)
 			}
 			if startMin >= endMin {
-				return fmt.Errorf("start time %q must be strictly before end time %q for %s", r.Start, r.End, dayKey)
+				return fmt.Errorf(
+					"start time %q must be strictly before end time %q for %q",
+					r.Start,
+					r.End,
+					dayKey,
+				)
 			}
-			intervals = append(intervals, Interval{StartMinute: startMin, EndMinute: endMin})
+			intervals = append(intervals, Interval{
+				StartMinute: startMin,
+				EndMinute:   endMin,
+			})
 		}
 
 		merged := mergeIntervals(intervals)
@@ -146,8 +162,14 @@ func (s *WeekSchedule) IsActiveAt(t time.Time) bool {
 
 	currentMinute := t.Hour()*60 + t.Minute()
 	for _, r := range ranges {
-		startMin, _ := parseTimeToMinutes(r.Start)
-		endMin, _ := parseTimeToMinutes(r.End)
+		startMin, err := parseTimeToMinutes(r.Start)
+		if err != nil {
+			continue
+		}
+		endMin, err := parseTimeToMinutes(r.End)
+		if err != nil {
+			continue
+		}
 		if currentMinute >= startMin && currentMinute < endMin {
 			return true
 		}
@@ -163,13 +185,19 @@ func (s *WeekSchedule) WeeklyIntervals() []Interval {
 		return []Interval{{StartMinute: 0, EndMinute: MinutesPerWeek}}
 	}
 
-	var all []Interval
+	all := []Interval{}
 	for weekdayIdx, dayKey := range DayKeys {
 		ranges := s.Days[dayKey]
 		dayOffset := weekdayIdx * MinutesPerDay
 		for _, r := range ranges {
-			startMin, _ := parseTimeToMinutes(r.Start)
-			endMin, _ := parseTimeToMinutes(r.End)
+			startMin, err := parseTimeToMinutes(r.Start)
+			if err != nil {
+				continue
+			}
+			endMin, err := parseTimeToMinutes(r.End)
+			if err != nil {
+				continue
+			}
 			all = append(all, Interval{
 				StartMinute: dayOffset + startMin,
 				EndMinute:   dayOffset + endMin,
@@ -195,7 +223,7 @@ type sweepEvent struct {
 // using a sweep-line algorithm over the 7x24h time axis.
 func CalculatePeakPoints(items []SchedulableItem) int64 {
 	var basePoints int64
-	var events []sweepEvent
+	events := []sweepEvent{}
 
 	for _, item := range items {
 		if item.Points <= 0 {
@@ -208,7 +236,8 @@ func CalculatePeakPoints(items []SchedulableItem) int64 {
 
 		intervals := item.Schedule.WeeklyIntervals()
 		for _, iv := range intervals {
-			events = append(events,
+			events = append(
+				events,
 				sweepEvent{minute: iv.StartMinute, delta: item.Points},
 				sweepEvent{minute: iv.EndMinute, delta: -item.Points},
 			)
@@ -223,11 +252,11 @@ func CalculatePeakPoints(items []SchedulableItem) int64 {
 	// 1. By minute ascending;
 	// 2. If same minute, negative delta (interval ending) before positive delta (interval starting)
 	//    so that handover between adjacent intervals does not create a false transient spike.
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].minute != events[j].minute {
-			return events[i].minute < events[j].minute
+	slices.SortFunc(events, func(a, b sweepEvent) int {
+		if c := cmp.Compare(a.minute, b.minute); c != 0 {
+			return c
 		}
-		return events[i].delta < events[j].delta
+		return cmp.Compare(a.delta, b.delta)
 	})
 
 	current := basePoints
@@ -235,9 +264,7 @@ func CalculatePeakPoints(items []SchedulableItem) int64 {
 
 	for _, ev := range events {
 		current += ev.delta
-		if current > peak {
-			peak = current
-		}
+		peak = max(peak, current)
 	}
 
 	return peak
@@ -280,15 +307,14 @@ func parseTimeToMinutes(s string) (int, error) {
 		return 0, fmt.Errorf("invalid minute %q", parts[1])
 	}
 
-	total := hour*60 + min
 	if hour == 24 {
 		if min != 0 {
-			return 0, fmt.Errorf("24:00 is max allowed bound, got %s", s)
+			return 0, fmt.Errorf("24:00 is max allowed bound, got %q", s)
 		}
-		total = MinutesPerDay
+		return MinutesPerDay, nil
 	}
 
-	return total, nil
+	return hour*60 + min, nil
 }
 
 func minutesToTimeString(m int) string {
@@ -301,31 +327,33 @@ func minutesToTimeString(m int) string {
 }
 
 func mergeIntervals(intervals []Interval) []Interval {
-	if len(intervals) <= 1 {
+	if len(intervals) == 0 {
+		return []Interval{}
+	}
+	if len(intervals) == 1 {
 		return intervals
 	}
 
-	sort.Slice(intervals, func(i, j int) bool {
-		if intervals[i].StartMinute != intervals[j].StartMinute {
-			return intervals[i].StartMinute < intervals[j].StartMinute
+	slices.SortFunc(intervals, func(a, b Interval) int {
+		if c := cmp.Compare(a.StartMinute, b.StartMinute); c != 0 {
+			return c
 		}
-		return intervals[i].EndMinute < intervals[j].EndMinute
+		return cmp.Compare(a.EndMinute, b.EndMinute)
 	})
 
 	merged := make([]Interval, 0, len(intervals))
 	curr := intervals[0]
 
-	for i := 1; i < len(intervals); i++ {
-		next := intervals[i]
+	for _, next := range intervals[1:] {
 		if next.StartMinute <= curr.EndMinute {
 			// Overlapping or contiguous: extend current end
 			if next.EndMinute > curr.EndMinute {
 				curr.EndMinute = next.EndMinute
 			}
-		} else {
-			merged = append(merged, curr)
-			curr = next
+			continue
 		}
+		merged = append(merged, curr)
+		curr = next
 	}
 	merged = append(merged, curr)
 	return merged
