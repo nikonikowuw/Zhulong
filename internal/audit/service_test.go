@@ -3,7 +3,7 @@ package audit
 import (
 	"context"
 	"errors"
-	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -30,11 +30,11 @@ func TestServiceAsyncBatchAndDrain(t *testing.T) {
 	}
 
 	// Record 8 entries (5 should flush immediately by batch, 3 on ticker or drain)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		svc.Record(Entry{
 			IP:       "127.0.0.1",
 			Action:   ActionCameraCreate,
-			Target:   fmt.Sprintf("camera:%d", i),
+			Target:   "camera:" + strconv.Itoa(i),
 			Status:   StatusSuccess,
 			Username: "admin",
 		})
@@ -68,7 +68,7 @@ func TestServiceBufferFullNonBlocking(t *testing.T) {
 	// Enqueue 5 items - should not block or panic even though queue capacity is 2
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			svc.Record(Entry{
 				Action: ActionAuthLogin,
 				Target: "admin",
@@ -102,10 +102,10 @@ func TestServicePruneOnBatch(t *testing.T) {
 	}
 
 	// Record 10 entries with small delays to ensure monotonic CreatedAt
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		svc.Record(Entry{
 			Action:    ActionCameraUpdate,
-			Target:    fmt.Sprintf("camera:%d", i),
+			Target:    "camera:" + strconv.Itoa(i),
 			CreatedAt: time.Now().UTC().Add(time.Duration(i) * time.Millisecond),
 		})
 	}
@@ -138,10 +138,33 @@ func TestServiceRecordEventResolvesActorFromContext(t *testing.T) {
 	}
 
 	authed := WithActor(ctx, Actor{IP: "10.1.2.3", Username: "operator", Source: SourceWeb})
-	svc.RecordEvent(authed, ActionCameraCreate, "camera:1", "created", nil)
-	svc.RecordEvent(authed, ActionCameraDelete, "camera:2", "", errSentinel)
-	svc.RecordEvent(ctx, ActionAuthLogout, "user:someone", "", nil)
-	svc.RecordSystem("time.rtc_heal", "system_time", "restored", nil)
+	svc.RecordEvent(
+		authed,
+		ActionCameraCreate,
+		"camera:1",
+		"created",
+		nil,
+	)
+	svc.RecordEvent(
+		authed,
+		ActionCameraDelete,
+		"camera:2",
+		"",
+		errSentinel,
+	)
+	svc.RecordEvent(
+		ctx,
+		ActionAuthLogout,
+		"user:someone",
+		"",
+		nil,
+	)
+	svc.RecordSystem(
+		"time.rtc_heal",
+		"system_time",
+		"restored",
+		nil,
+	)
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -202,13 +225,17 @@ func TestServiceClearWithAuditUsesContextActor(t *testing.T) {
 	svc := NewService(store, zap.NewNop(), Config{})
 	ctx := context.Background()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := svc.RecordSync(ctx, Entry{Action: ActionCameraCreate, Target: "camera:x"}); err != nil {
 			t.Fatalf("seed failed: %v", err)
 		}
 	}
 
-	cleared, err := svc.ClearWithAudit(WithActor(ctx, Actor{IP: "172.16.0.8", Username: "operator"}), "audit_logs", nil)
+	cleared, err := svc.ClearWithAudit(
+		WithActor(ctx, Actor{IP: "172.16.0.8", Username: "operator"}),
+		"audit_logs",
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("ClearWithAudit failed: %v", err)
 	}

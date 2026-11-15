@@ -32,7 +32,13 @@ func TestFromContextNilContext(t *testing.T) {
 }
 
 func TestEventEntryWithoutActorIsUnknown(t *testing.T) {
-	entry := eventEntry(context.Background(), ActionCameraCreate, "camera:1", "created", nil)
+	entry := eventEntry(
+		context.Background(),
+		ActionCameraCreate,
+		"camera:1",
+		"created",
+		nil,
+	)
 
 	if entry.Username != UsernameUnknown {
 		t.Fatalf("expected username %q, got %q", UsernameUnknown, entry.Username)
@@ -48,7 +54,13 @@ func TestEventEntryWithoutActorIsUnknown(t *testing.T) {
 func TestEventEntryKeepsActorIP(t *testing.T) {
 	ctx := WithActor(context.Background(), Actor{IP: "10.0.0.9", Username: "operator", Source: SourceWeb})
 
-	entry := eventEntry(ctx, ActionCameraUpdate, "camera:7", "updated", nil)
+	entry := eventEntry(
+		ctx,
+		ActionCameraUpdate,
+		"camera:7",
+		"updated",
+		nil,
+	)
 
 	if entry.IP != "10.0.0.9" {
 		t.Fatalf("expected actor IP to be preserved, got %q", entry.IP)
@@ -62,7 +74,13 @@ func TestEventEntryWithEmptyUsernameActorIsUnknown(t *testing.T) {
 	// An actor carrying only an IP must still not produce an empty username.
 	ctx := WithActor(context.Background(), Actor{IP: "10.0.0.9", Source: SourceWeb})
 
-	entry := eventEntry(ctx, ActionCameraDelete, "camera:7", "", nil)
+	entry := eventEntry(
+		ctx,
+		ActionCameraDelete,
+		"camera:7",
+		"",
+		nil,
+	)
 
 	if entry.Username != UsernameUnknown {
 		t.Fatalf("expected username %q, got %q", UsernameUnknown, entry.Username)
@@ -73,7 +91,13 @@ func TestEventEntryWithEmptyUsernameActorIsUnknown(t *testing.T) {
 }
 
 func TestEventEntryFailureStatus(t *testing.T) {
-	entry := eventEntry(context.Background(), ActionAuthLogin, "user:x", "", errSentinel)
+	entry := eventEntry(
+		context.Background(),
+		ActionAuthLogin,
+		"user:x",
+		"",
+		errSentinel,
+	)
 
 	if entry.Status != StatusFailed {
 		t.Fatalf("expected failed status, got %q", entry.Status)
@@ -86,7 +110,12 @@ func TestEventEntryFailureStatus(t *testing.T) {
 func TestSystemEntryHasNoClientOrigin(t *testing.T) {
 	// Action names are owned by their business modules (storage/systemtime);
 	// the audit core must not import them, so the test uses the literal value.
-	entry := systemEntry("storage.emergency_stop", "media_storage", "watermark breach", nil)
+	entry := systemEntry(
+		"storage.emergency_stop",
+		"media_storage",
+		"watermark breach",
+		nil,
+	)
 
 	if entry.Username != UsernameSystem {
 		t.Fatalf("expected username %q, got %q", UsernameSystem, entry.Username)
@@ -100,7 +129,12 @@ func TestSystemEntryHasNoClientOrigin(t *testing.T) {
 }
 
 func TestSystemEntryFailureStatus(t *testing.T) {
-	entry := systemEntry("time.ntp_sync", "system_time", "", errSentinel)
+	entry := systemEntry(
+		"time.ntp_sync",
+		"system_time",
+		"",
+		errSentinel,
+	)
 
 	if entry.Status != StatusFailed {
 		t.Fatalf("expected failed status, got %q", entry.Status)

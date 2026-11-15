@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -89,27 +90,6 @@ func (s *Store) CreateBatch(ctx context.Context, logs []*AuditLog) error {
 	return nil
 }
 
-// normalizeAuditLog fills mandatory defaults on log so direct Store callers
-// never trigger the SQLite column default ("admin") or store a zero timestamp.
-func normalizeAuditLog(log *AuditLog, now time.Time) {
-	log.CreatedAt = normalizeCreatedAt(log.CreatedAt, now)
-	if log.Username == "" {
-		log.Username = UsernameUnknown
-	}
-	if log.Status == "" {
-		log.Status = StatusSuccess
-	}
-}
-
-// normalizeCreatedAt returns a UTC creation time, substituting now for a zero
-// value so every persisted row carries an explicit timestamp.
-func normalizeCreatedAt(createdAt, now time.Time) time.Time {
-	if createdAt.IsZero() {
-		return now
-	}
-	return createdAt.UTC()
-}
-
 // List queries audit logs matching the given filter with pagination.
 func (s *Store) List(ctx context.Context, filter Filter) ([]AuditLog, int64, error) {
 	db, err := s.db(ctx)
@@ -118,9 +98,10 @@ func (s *Store) List(ctx context.Context, filter Filter) ([]AuditLog, int64, err
 	}
 	g := gorm.G[AuditLog](db).Scopes()
 
-	if len(filter.Actions) > 0 {
+	switch {
+	case len(filter.Actions) > 0:
 		g = g.Where("action IN ?", filter.Actions)
-	} else if filter.Action != "" {
+	case filter.Action != "":
 		g = g.Where("action = ?", filter.Action)
 	}
 	if filter.Status != "" {
@@ -231,7 +212,7 @@ func (s *Store) ClearWithAudit(ctx context.Context, entry *AuditLog, before *tim
 		if entry == nil {
 			return nil
 		}
-		entry.Detail = fmt.Sprintf("deleted=%d", cleared)
+		entry.Detail = "deleted=" + strconv.FormatInt(cleared, 10)
 		normalizeAuditLog(entry, time.Now().UTC())
 		if err := gorm.G[AuditLog](tx).Create(ctx, entry); err != nil {
 			return fmt.Errorf("persist audit clear record: %w", err)
@@ -243,4 +224,25 @@ func (s *Store) ClearWithAudit(ctx context.Context, entry *AuditLog, before *tim
 	}
 
 	return cleared, nil
+}
+
+// normalizeAuditLog fills mandatory defaults on log so direct Store callers
+// never trigger the SQLite column default ("admin") or store a zero timestamp.
+func normalizeAuditLog(log *AuditLog, now time.Time) {
+	log.CreatedAt = normalizeCreatedAt(log.CreatedAt, now)
+	if log.Username == "" {
+		log.Username = UsernameUnknown
+	}
+	if log.Status == "" {
+		log.Status = StatusSuccess
+	}
+}
+
+// normalizeCreatedAt returns a UTC creation time, substituting now for a zero
+// value so every persisted row carries an explicit timestamp.
+func normalizeCreatedAt(createdAt, now time.Time) time.Time {
+	if createdAt.IsZero() {
+		return now
+	}
+	return createdAt.UTC()
 }

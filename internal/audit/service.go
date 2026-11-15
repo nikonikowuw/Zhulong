@@ -9,14 +9,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Config specifies settings for AuditService.
-type Config struct {
-	BufferSize    int
-	BatchSize     int
-	FlushInterval time.Duration
-	MaxEntries    int
-}
-
 // Default batch-writing settings. DefaultMaxEntries and DefaultBufferSize live
 // in model.go because they bound the persisted data and the queue respectively.
 const (
@@ -26,6 +18,14 @@ const (
 	// the worker forever and leave the queue to overflow.
 	flushTimeout = 5 * time.Second
 )
+
+// Config specifies settings for AuditService.
+type Config struct {
+	BufferSize    int
+	BatchSize     int
+	FlushInterval time.Duration
+	MaxEntries    int
+}
 
 // DefaultConfig returns recommended production defaults.
 func DefaultConfig() Config {
@@ -131,30 +131,40 @@ func (s *Service) isStopped() bool {
 	return s.stopped
 }
 
-// entryToLog converts an external Entry to an internal AuditLog with defaults.
-// An empty username becomes "unknown" rather than "admin": the system has a
-// single configurable account, and defaulting to a fixed name silently
-// misattributes unattributed events. The persisted column keeps its own SQL
-// default, so an explicit value is always written here.
-func entryToLog(entry Entry) *AuditLog {
-	log := &AuditLog{
-		CreatedAt: entry.CreatedAt,
-		IP:        entry.IP,
-		Username:  entry.Username,
-		Action:    entry.Action,
-		Target:    entry.Target,
-		Detail:    entry.Detail,
-		Status:    entry.Status,
-		ErrorMsg:  entry.ErrorMsg,
+// Record queues an audit entry asynchronously without blocking the caller.
+// If the buffer is full, it logs a warning and drops the entry to protect the host.
+func (s *Service) Record(entry Entry) {
+	if s.isStopped() {
+		return
 	}
-	log.CreatedAt = normalizeCreatedAt(log.CreatedAt, time.Now().UTC())
-	if log.Username == "" {
-		log.Username = UsernameUnknown
+
+	log := entryToLog(entry)
+
+	select {
+	case s.queue <- log:
+	default:
+		s.logger.Warn(
+			"audit log queue is full, dropping entry",
+			zap.String("action", log.Action),
+			zap.String("target", log.Target),
+		)
 	}
-	if log.Status == "" {
-		log.Status = StatusSuccess
+}
+
+// RecordSync writes an audit entry synchronously.
+func (s *Service) RecordSync(ctx context.Context, entry Entry) error {
+	log := entryToLog(entry)
+
+	if err := s.store.Create(ctx, log); err != nil {
+		return err
 	}
-	return log
+	// Pruning is best-effort here: the record is already committed, but a
+	// recurring prune failure would let the table grow unbounded, so it must
+	// not be discarded silently.
+	if _, pruneErr := s.store.Prune(ctx, s.cfg.MaxEntries); pruneErr != nil {
+		s.logger.Warn("failed to prune audit records", zap.Error(pruneErr))
+	}
+	return nil
 }
 
 // RecordEvent queues an audit entry derived from the request context and the
@@ -192,6 +202,113 @@ func (s *Service) RecordSystem(
 		detail,
 		opErr,
 	))
+}
+
+// List queries audit logs matching the given filter with pagination.
+func (s *Service) List(ctx context.Context, filter Filter) ([]AuditLog, int64, error) {
+	return s.store.List(ctx, filter)
+}
+
+// ClearWithAudit deletes matching records and persists the audit.clear
+// self-audit entry in one transaction, then returns the deleted count.
+//
+// The actor is resolved from ctx exactly like RecordEvent: an unattributed
+// caller is recorded as unknown with an empty IP, never as a system event.
+// A nil before clears everything prunable.
+func (s *Service) ClearWithAudit(ctx context.Context, target string, before *time.Time) (int64, error) {
+	actor := ActorFromContext(ctx)
+
+	entry := entryToLog(Entry{
+		IP:       actor.IP,
+		Username: actor.Username,
+		Action:   ActionAuditClear,
+		Target:   target,
+		Status:   StatusSuccess,
+	})
+
+	cleared, err := s.store.ClearWithAudit(ctx, entry, before)
+	if err != nil {
+		return 0, err
+	}
+	return cleared, nil
+}
+
+// worker batches audit logs and periodically flushes them to the store.
+func (s *Service) worker() {
+	defer close(s.workerDone)
+
+	ticker := time.NewTicker(s.cfg.FlushInterval)
+	defer ticker.Stop()
+
+	batch := make([]*AuditLog, 0, s.cfg.BatchSize)
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		toWrite := batch
+		batch = make([]*AuditLog, 0, s.cfg.BatchSize)
+
+		ctx, cancel := context.WithTimeout(context.Background(), flushTimeout)
+		defer cancel()
+
+		if err := s.store.CreateBatch(ctx, toWrite); err != nil {
+			s.logger.Error(
+				"failed to persist audit batch",
+				zap.Error(err),
+				zap.Int("count", len(toWrite)),
+			)
+			// Skip pruning: trimming the table after a failed write would delete
+			// older evidence to make room for rows that were never stored.
+			return
+		}
+		if _, pruneErr := s.store.Prune(ctx, s.cfg.MaxEntries); pruneErr != nil {
+			s.logger.Warn("failed to prune audit records", zap.Error(pruneErr))
+		}
+	}
+
+	for {
+		select {
+		case item := <-s.queue:
+			batch = append(batch, item)
+			if len(batch) >= s.cfg.BatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		case <-s.done:
+			// Drain remaining in queue
+			for {
+				select {
+				case item := <-s.queue:
+					batch = append(batch, item)
+				default:
+					flush()
+					return
+				}
+			}
+		}
+	}
+}
+
+// entryToLog converts an external Entry to an internal AuditLog with defaults.
+// An empty username becomes "unknown" rather than "admin": the system has a
+// single configurable account, and defaulting to a fixed name silently
+// misattributes unattributed events. The persisted column keeps its own SQL
+// default, so an explicit value is always written here.
+func entryToLog(entry Entry) *AuditLog {
+	log := &AuditLog{
+		CreatedAt: entry.CreatedAt,
+		IP:        entry.IP,
+		Username:  entry.Username,
+		Action:    entry.Action,
+		Target:    entry.Target,
+		Detail:    entry.Detail,
+		Status:    entry.Status,
+		ErrorMsg:  entry.ErrorMsg,
+	}
+	normalizeAuditLog(log, time.Now().UTC())
+	return log
 }
 
 // newEntry builds an Entry for actor and maps the operation outcome onto the
@@ -252,122 +369,4 @@ func systemEntry(
 		detail,
 		opErr,
 	)
-}
-
-// Record queues an audit entry asynchronously without blocking the caller.
-// If the buffer is full, it logs a warning and drops the entry to protect the host.
-func (s *Service) Record(entry Entry) {
-	if s.isStopped() {
-		return
-	}
-
-	log := entryToLog(entry)
-
-	select {
-	case s.queue <- log:
-	default:
-		s.logger.Warn("audit log queue is full, dropping entry",
-			zap.String("action", log.Action),
-			zap.String("target", log.Target),
-		)
-	}
-}
-
-// RecordSync writes an audit entry synchronously.
-func (s *Service) RecordSync(ctx context.Context, entry Entry) error {
-	log := entryToLog(entry)
-
-	if err := s.store.Create(ctx, log); err != nil {
-		return err
-	}
-	// Pruning is best-effort here: the record is already committed, but a
-	// recurring prune failure would let the table grow unbounded, so it must
-	// not be discarded silently.
-	if _, pruneErr := s.store.Prune(ctx, s.cfg.MaxEntries); pruneErr != nil {
-		s.logger.Warn("failed to prune audit records", zap.Error(pruneErr))
-	}
-	return nil
-}
-
-// List queries audit logs matching the given filter with pagination.
-func (s *Service) List(ctx context.Context, filter Filter) ([]AuditLog, int64, error) {
-	return s.store.List(ctx, filter)
-}
-
-// ClearWithAudit deletes matching records and persists the audit.clear
-// self-audit entry in one transaction, then returns the deleted count.
-//
-// The actor is resolved from ctx exactly like RecordEvent: an unattributed
-// caller is recorded as unknown with an empty IP, never as a system event.
-// A nil before clears everything prunable.
-func (s *Service) ClearWithAudit(ctx context.Context, target string, before *time.Time) (int64, error) {
-	actor := ActorFromContext(ctx)
-
-	entry := entryToLog(Entry{
-		IP:       actor.IP,
-		Username: actor.Username,
-		Action:   ActionAuditClear,
-		Target:   target,
-		Status:   StatusSuccess,
-	})
-
-	cleared, err := s.store.ClearWithAudit(ctx, entry, before)
-	if err != nil {
-		return 0, err
-	}
-	return cleared, nil
-}
-
-// worker batches audit logs and periodically flushes them to the store.
-func (s *Service) worker() {
-	defer close(s.workerDone)
-
-	ticker := time.NewTicker(s.cfg.FlushInterval)
-	defer ticker.Stop()
-
-	batch := make([]*AuditLog, 0, s.cfg.BatchSize)
-
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		toWrite := batch
-		batch = make([]*AuditLog, 0, s.cfg.BatchSize)
-
-		ctx, cancel := context.WithTimeout(context.Background(), flushTimeout)
-		defer cancel()
-
-		if err := s.store.CreateBatch(ctx, toWrite); err != nil {
-			s.logger.Error("failed to persist audit batch", zap.Error(err), zap.Int("count", len(toWrite)))
-			// Skip pruning: trimming the table after a failed write would delete
-			// older evidence to make room for rows that were never stored.
-			return
-		}
-		if _, pruneErr := s.store.Prune(ctx, s.cfg.MaxEntries); pruneErr != nil {
-			s.logger.Warn("failed to prune audit records", zap.Error(pruneErr))
-		}
-	}
-
-	for {
-		select {
-		case item := <-s.queue:
-			batch = append(batch, item)
-			if len(batch) >= s.cfg.BatchSize {
-				flush()
-			}
-		case <-ticker.C:
-			flush()
-		case <-s.done:
-			// Drain remaining in queue
-			for {
-				select {
-				case item := <-s.queue:
-					batch = append(batch, item)
-				default:
-					flush()
-					return
-				}
-			}
-		}
-	}
 }

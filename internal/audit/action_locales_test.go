@@ -11,6 +11,11 @@ import (
 	"testing"
 )
 
+// auditActionPattern matches the `ActionSomething = "domain.verb"` constant style used by
+// every domain model.go. Only dotted lowercase values are taken: those are the audit
+// action strings persisted in the audit log.
+var auditActionPattern = regexp.MustCompile(`(?m)^\s*Action[A-Za-z0-9]+\s*=\s*"([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)"`)
+
 // 审计动作的显示名只存在于前端 locales，Go 侧没有任何编译期约束：
 // 一旦新增 Action* 常量却忘了补文案，审计列表会静默回退成裸 key（如 task.update）。
 // 这个测试把「后端写什么」和「前端怎么显示」钉在一起：
@@ -32,25 +37,23 @@ func TestAuditActionLocalesCoverBackendActions(t *testing.T) {
 		t.Run(locale, func(t *testing.T) {
 			actionNames := loadActionNames(t, repoRoot, locale)
 
-			var missing []string
+			missing := []string{}
 			for _, action := range backendActions {
 				if _, ok := actionNames[action]; !ok {
 					missing = append(missing, action)
 				}
 			}
 			if len(missing) > 0 {
-				t.Fatalf("%s is missing actionNames entries for backend actions %v; "+
-					"the audit list would render the raw key instead of a label",
-					locale, missing)
+				t.Fatalf(
+					"%s is missing actionNames entries for backend actions %v; "+
+						"the audit list would render the raw key instead of a label",
+					locale,
+					missing,
+				)
 			}
 		})
 	}
 }
-
-// auditActionPattern matches the `ActionSomething = "domain.verb"` constant style used by
-// every domain model.go. Only dotted lowercase values are taken: those are the audit
-// action strings persisted in the audit log.
-var auditActionPattern = regexp.MustCompile(`(?m)^\s*Action[A-Za-z0-9]+\s*=\s*"([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)"`)
 
 func collectBackendAuditActions(t *testing.T, repoRoot string) []string {
 	t.Helper()
@@ -62,7 +65,10 @@ func collectBackendAuditActions(t *testing.T, repoRoot string) []string {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		isDir := entry.IsDir()
+		isGoSource := strings.HasSuffix(path, ".go")
+		isTest := strings.HasSuffix(path, "_test.go")
+		if isDir || !isGoSource || isTest {
 			return nil
 		}
 		content, readErr := os.ReadFile(path)
@@ -75,7 +81,7 @@ func collectBackendAuditActions(t *testing.T, repoRoot string) []string {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("scan %s: %v", internalDir, err)
+		t.Fatalf("scan %q: %v", internalDir, err)
 	}
 
 	actions := make([]string, 0, len(seen))
@@ -92,16 +98,16 @@ func loadActionNames(t *testing.T, repoRoot, locale string) map[string]string {
 	path := filepath.Join(repoRoot, "web", "src", "features", "audit", "locales", locale)
 	content, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		t.Fatalf("read %q: %v", path, err)
 	}
 	var payload struct {
 		ActionNames map[string]string `json:"actionNames"`
 	}
 	if err = json.Unmarshal(content, &payload); err != nil {
-		t.Fatalf("decode %s: %v", path, err)
+		t.Fatalf("decode %q: %v", path, err)
 	}
 	if len(payload.ActionNames) == 0 {
-		t.Fatalf("%s has no actionNames entries", path)
+		t.Fatalf("%q has no actionNames entries", path)
 	}
 	return payload.ActionNames
 }

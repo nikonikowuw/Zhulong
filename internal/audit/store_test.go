@@ -2,7 +2,7 @@ package audit
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -83,7 +83,16 @@ func TestStoreFilterByActionStatusAndDate(t *testing.T) {
 	store := setupTestStore(t)
 
 	ctx := context.Background()
-	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	baseTime := time.Date(
+		2025,
+		1,
+		1,
+		10,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
 
 	logs := []*AuditLog{
 		{
@@ -151,7 +160,16 @@ func TestStoreFilterByMultipleActionsStatusAndDate(t *testing.T) {
 	store := setupTestStore(t)
 
 	ctx := context.Background()
-	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	baseTime := time.Date(
+		2025,
+		1,
+		1,
+		10,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
 	logs := []*AuditLog{
 		{CreatedAt: baseTime.Add(time.Minute), Action: ActionAuthLogin, Status: StatusSuccess},
 		{CreatedAt: baseTime.Add(2 * time.Minute), Action: ActionCameraDelete, Status: StatusSuccess},
@@ -180,7 +198,7 @@ func TestStoreFilterByMultipleActionsStatusAndDate(t *testing.T) {
 		t.Fatalf("expected 2 filtered rows and 1 paginated item, got total=%d items=%d", total, len(items))
 	}
 	if items[0].Action != ActionAuthLogin {
-		t.Fatalf("expected second matching row after pagination to be auth.login, got %s", items[0].Action)
+		t.Fatalf("expected second matching row after pagination to be auth.login, got %q", items[0].Action)
 	}
 }
 
@@ -188,17 +206,26 @@ func TestStorePruneFIFO(t *testing.T) {
 	store := setupTestStore(t)
 
 	ctx := context.Background()
-	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	baseTime := time.Date(
+		2025,
+		1,
+		1,
+		10,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
 
 	// Create 10 entries with distinct timestamps
 	logs := []*AuditLog{}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		logs = append(logs, &AuditLog{
 			CreatedAt: baseTime.Add(time.Duration(i) * time.Minute),
 			IP:        "127.0.0.1",
 			Username:  "admin",
 			Action:    ActionCameraUpdate,
-			Target:    fmt.Sprintf("camera:cam_%d", i),
+			Target:    "camera:cam_" + strconv.Itoa(i),
 			Status:    StatusSuccess,
 		})
 	}
@@ -229,11 +256,11 @@ func TestStorePruneFIFO(t *testing.T) {
 	}
 	// Oldest remaining should be cam_4
 	if remaining[5].Target != "camera:cam_4" {
-		t.Fatalf("expected oldest remaining to be cam_4, got %s", remaining[5].Target)
+		t.Fatalf("expected oldest remaining to be cam_4, got %q", remaining[5].Target)
 	}
 	// Newest should be cam_9
 	if remaining[0].Target != "camera:cam_9" {
-		t.Fatalf("expected newest to be cam_9, got %s", remaining[0].Target)
+		t.Fatalf("expected newest to be cam_9, got %q", remaining[0].Target)
 	}
 
 	// Prune again when count is within maxEntries -> should do nothing
@@ -255,7 +282,7 @@ func TestPruneBoundsPrunableRowsWhenClearRecordsDominate(t *testing.T) {
 	ctx := context.Background()
 	base := time.Now().UTC()
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if err := store.Create(ctx, &AuditLog{
 			CreatedAt: base.Add(-time.Hour + time.Duration(i)*time.Millisecond),
 			Action:    ActionAuditClear,
@@ -264,7 +291,7 @@ func TestPruneBoundsPrunableRowsWhenClearRecordsDominate(t *testing.T) {
 			t.Fatalf("seed audit.clear %d failed: %v", i, err)
 		}
 	}
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		if err := store.Create(ctx, &AuditLog{
 			CreatedAt: base.Add(time.Duration(i) * time.Millisecond),
 			Action:    ActionCameraUpdate,
@@ -316,7 +343,16 @@ func TestStoreClearAllPreservesSelfAudit(t *testing.T) {
 	store := setupTestStore(t)
 
 	ctx := context.Background()
-	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	baseTime := time.Date(
+		2025,
+		1,
+		1,
+		10,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
 
 	logs := []*AuditLog{
 		{
@@ -400,7 +436,11 @@ func TestStoreUnreadyDatabase(t *testing.T) {
 			if _, err := tc.store.Prune(ctx, 10); err == nil {
 				t.Errorf("%s: expected error on Prune, got nil", tc.name)
 			}
-			if _, err := tc.store.ClearWithAudit(ctx, &AuditLog{Action: ActionAuditClear}, nil); err == nil {
+			if _, err := tc.store.ClearWithAudit(
+				ctx,
+				&AuditLog{Action: ActionAuditClear},
+				nil,
+			); err == nil {
 				t.Errorf("%s: expected error on ClearWithAudit, got nil", tc.name)
 			}
 		})
@@ -425,11 +465,11 @@ func TestPruneExemptsAuditClear(t *testing.T) {
 
 	// More ordinary records than the retention limit allows.
 	const maxEntries = 5
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		if err := store.Create(ctx, &AuditLog{
 			CreatedAt: base.Add(time.Duration(i) * time.Millisecond),
 			Action:    ActionCameraUpdate,
-			Target:    fmt.Sprintf("camera:%d", i),
+			Target:    "camera:" + strconv.Itoa(i),
 			Username:  UsernameUnknown,
 			Status:    StatusSuccess,
 		}); err != nil {
@@ -457,10 +497,10 @@ func TestClearWithAuditPersistsSelfAudit(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := store.Create(ctx, &AuditLog{
 			Action:   ActionCameraDelete,
-			Target:   fmt.Sprintf("camera:%d", i),
+			Target:   "camera:" + strconv.Itoa(i),
 			Username: UsernameUnknown,
 			Status:   StatusSuccess,
 		}); err != nil {
@@ -621,7 +661,11 @@ func TestStoreCreateNilAndCreateBatchSkipsNilAndNormalizesDefaults(t *testing.T)
 		t.Fatalf("expected 1 persisted item, got total=%d len=%d", total, len(items))
 	}
 	if items[0].Username != UsernameUnknown {
-		t.Fatalf("expected direct Store write to normalize empty username to %q, got %q", UsernameUnknown, items[0].Username)
+		t.Fatalf(
+			"expected direct Store write to normalize empty username to %q, got %q",
+			UsernameUnknown,
+			items[0].Username,
+		)
 	}
 	if items[0].Status != StatusSuccess {
 		t.Fatalf("expected default status %q, got %q", StatusSuccess, items[0].Status)
@@ -634,13 +678,22 @@ func TestStoreCreateNilAndCreateBatchSkipsNilAndNormalizesDefaults(t *testing.T)
 func TestStoreListWithZeroLimitAndNonZeroOffset(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
-	base := time.Date(2025, 2, 1, 10, 0, 0, 0, time.UTC)
+	base := time.Date(
+		2025,
+		2,
+		1,
+		10,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if err := store.Create(ctx, &AuditLog{
 			CreatedAt: base.Add(time.Duration(i) * time.Minute),
 			Action:    ActionCameraUpdate,
-			Target:    fmt.Sprintf("camera:%d", i),
+			Target:    "camera:" + strconv.Itoa(i),
 		}); err != nil {
 			t.Fatalf("seed %d failed: %v", i, err)
 		}
