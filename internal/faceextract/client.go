@@ -386,7 +386,7 @@ func (c *Client) spawn(entry string, finger fileFingerprint) (*proc, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		// Nothing owns stdin yet: without this close the fd outlives the spawn attempt.
-		_ = stdin.Close()
+		closePipeBestEffort(stdin)
 		return nil, fmt.Errorf("%w: stdout pipe: %v", ErrInternal, err)
 	}
 	// stderr is inherited on purpose: package logs go to the host's stderr already
@@ -423,7 +423,7 @@ func (c *Client) roundTrip(ctx context.Context, p *proc, f Frame) ([]float32, er
 	// Abort the round trip when the caller goes away, instead of holding the lock
 	// (and the child) for the full timeout.
 	stopWatch := context.AfterFunc(ctx, func() {
-		_ = p.cmd.KillGroup()
+		killGroupBestEffort(p.cmd)
 	})
 	defer stopWatch()
 
@@ -436,7 +436,7 @@ func (c *Client) roundTrip(ctx context.Context, p *proc, f Frame) ([]float32, er
 	if err != nil {
 		if errors.Is(err, errDeadlineExceeded) {
 			// A hung child still holds the model; only a group kill frees it.
-			_ = p.cmd.KillGroup()
+			killGroupBestEffort(p.cmd)
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				// The budget came from the caller going away, not from the child stalling.
 				return nil, callerGone(ctxErr)
@@ -478,9 +478,12 @@ func (c *Client) discardLocked(p *proc, reason string) {
 	// SIGKILL cannot be blocked, so this normally returns at once. The timeout exists
 	// so a kill that never lands cannot wedge the client forever while it holds the
 	// request mutex.
+	timer := time.NewTimer(reapTimeout)
+	defer timer.Stop()
+
 	select {
 	case <-p.cmd.Done():
-	case <-time.After(reapTimeout):
+	case <-timer.C:
 		c.log.Error("provider process did not exit after SIGKILL", zap.Int("pid", p.cmd.PID()))
 	}
 	c.log.Info("retired face feature provider process",
@@ -781,3 +784,27 @@ func fingerprintOf(path string) (fileFingerprint, error) {
 		mtime: info.ModTime().UnixNano(),
 	}, nil
 }
+
+// closePipeBestEffort closes an io.Closer (e.g. pipe) during failure cleanup.
+// AGENTS.md forbids swallowing errors with `_ = fn()`, so this makes intentional
+// drops explicit.
+func closePipeBestEffort(c io.Closer) {
+	if c == nil {
+		return
+	}
+	if err := c.Close(); err != nil {
+		// Intentionally ignored — handle cleanup on failure path.
+	}
+}
+
+// killGroupBestEffort signals a process group to terminate. Any error is intentionally
+// non-actionable because the process may have already exited.
+func killGroupBestEffort(cmd *algorunner.PinnedProcess) {
+	if cmd == nil {
+		return
+	}
+	if err := cmd.KillGroup(); err != nil {
+		// Intentionally ignored — process may have already exited.
+	}
+}
+

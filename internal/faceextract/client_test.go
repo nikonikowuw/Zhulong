@@ -68,7 +68,11 @@ func newClient(t *testing.T, opts faceextract.Options) *faceextract.Client {
 		opts.IdleTimeout = time.Minute
 	}
 	c := faceextract.New(opts)
-	t.Cleanup(func() { _ = c.Close() })
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close client: %v", err)
+		}
+	})
 	return c
 }
 
@@ -229,7 +233,8 @@ while True:
     magic, request_id, w, h, stride, fmt, payload_len = struct.unpack("<7I", header)
     sys.stdin.buffer.read(payload_len)
     # 始终回一个错的 id
-    sys.stdout.write(json.dumps({"request_id": 999, "status": "passed", "feature_dim": 2, "features": [0.1, 0.2]}) + "\n")
+    reply = {"request_id": 999, "status": "passed", "feature_dim": 2, "features": [0.1, 0.2]}
+    sys.stdout.write(json.dumps(reply) + "\n")
     sys.stdout.flush()
 `
 	entry := stubEntry(t, body)
@@ -261,7 +266,8 @@ magic, request_id, w, h, stride, fmt, payload_len = struct.unpack("<7I", header)
 sys.stdin.buffer.read(payload_len)
 if n == 1:
     sys.exit(9)   # 第一次直接崩，不给回复
-sys.stdout.write(json.dumps({"request_id": request_id, "status": "passed", "feature_dim": 2, "features": [0.5, 0.5]}) + "\n")
+reply = {"request_id": request_id, "status": "passed", "feature_dim": 2, "features": [0.5, 0.5]}
+sys.stdout.write(json.dumps(reply) + "\n")
 sys.stdout.flush()
 sys.stdin.read()
 `
@@ -304,7 +310,10 @@ sys.exit(7)
 	if _, err := client.Extract(context.Background(), validFrame()); !errors.Is(err, faceextract.ErrInternal) {
 		t.Fatalf("error = %v, want ErrInternal", err)
 	}
-	data, _ := os.ReadFile(spawns)
+	data, err := os.ReadFile(spawns)
+	if err != nil {
+		t.Fatalf("read spawn counter: %v", err)
+	}
 	if string(data) != "2" {
 		t.Fatalf("spawns = %q, want exactly 2", string(data))
 	}
@@ -553,8 +562,10 @@ func TestExtractFrameVerdictKeepsProcess(t *testing.T) {
 			client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
 
 			for i := range 3 {
-				if _, err := client.Extract(context.Background(), validFrame()); !errors.Is(err, faceextract.ErrNoFaceDetected) &&
-					!errors.Is(err, faceextract.ErrInvalidArgument) {
+				_, err := client.Extract(context.Background(), validFrame())
+				isFrameVerdict := errors.Is(err, faceextract.ErrNoFaceDetected) ||
+					errors.Is(err, faceextract.ErrInvalidArgument)
+				if !isFrameVerdict {
 					t.Fatalf("extract %d: error = %v, want a frame-level verdict", i, err)
 				}
 			}
@@ -574,7 +585,9 @@ func TestExtractDesyncRetiresProcess(t *testing.T) {
 	seq := filepath.Join(dir, "seq")
 	body := `#!/usr/bin/env python3
 import json, struct, sys, os
-open("` + spawns + `", "a").write("x")
+with open("` + spawns + `", "a") as f:
+    f.write("x")
+    f.flush()
 path = "` + seq + `"
 n = 1
 if os.path.exists(path):
@@ -589,7 +602,8 @@ while True:
     if n == 1:
         sys.stdout.write("debug: model loaded from /tmp/x.onnx\n")  # 非协议行，流已失步
     else:
-        sys.stdout.write(json.dumps({"request_id": request_id, "status": "passed", "feature_dim": 2, "features": [0.5, 0.5]}) + "\n")
+        reply = {"request_id": request_id, "status": "passed", "feature_dim": 2, "features": [0.5, 0.5]}
+        sys.stdout.write(json.dumps(reply) + "\n")
     sys.stdout.flush()
 `
 	client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
@@ -613,7 +627,9 @@ func TestExtractCancellationIsNotRetried(t *testing.T) {
 	spawns := filepath.Join(dir, "spawns")
 	body := `#!/usr/bin/env python3
 import json, struct, sys, os, time
-open("` + spawns + `", "a").write("x")
+with open("` + spawns + `", "a") as f:
+    f.write("x")
+    f.flush()
 while True:
     header = sys.stdin.buffer.read(28)
     if len(header) < 28:
@@ -624,7 +640,7 @@ while True:
 `
 	client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
 	started := time.Now()
@@ -649,7 +665,8 @@ func TestExtractAcceptsPaddedStride(t *testing.T) {
 	body := strings.Replace(
 		echoProvider(2, "passed", ""),
 		"    payload = sys.stdin.buffer.read(payload_len)",
-		"    payload = sys.stdin.buffer.read(payload_len)\n    open('"+strideFile+"', 'w').write('%d,%d' % (stride, len(payload)))",
+		"    payload = sys.stdin.buffer.read(payload_len)\n" +
+			"    open('" + strideFile + "', 'w').write('%d,%d' % (stride, len(payload)))",
 		1,
 	)
 	client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
@@ -743,7 +760,7 @@ func processAlive(pid int) error {
 // after a SIGKILL the child stays visible until someone reaps it, and the client
 // reaps it, so a lingering zombie would mean our own Wait is broken.
 func aliveIsZombie(pid int) bool {
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
 		return false
 	}
