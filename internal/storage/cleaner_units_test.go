@@ -25,7 +25,6 @@ func snapshotFile(t *testing.T, mediaDir, name string, age time.Duration) string
 	return path
 }
 
-
 func TestCleaner_EmergencyStopCoversPercentTrigger(t *testing.T) {
 	mediaDir := t.TempDir()
 	first := snapshotFile(
