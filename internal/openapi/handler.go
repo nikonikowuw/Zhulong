@@ -92,10 +92,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 
 // GetStatus returns a sanitized point-in-time liveness and workload snapshot.
 // @Summary      Get device health and workload status
-// @Description  Returns a sanitized point-in-time liveness, resource,
-// @Description  storage, and workload snapshot for this host.
-// @Description  Degraded subsystems still return HTTP 200 with status="degraded"
-// @Description  and machine-readable reasons.
+// @Description  Returns a sanitized point-in-time liveness, resource, storage, and workload snapshot for this host.
+// @Description  Degraded subsystems still return HTTP 200 with status="degraded" and machine-readable reasons.
 // @Tags         OpenAPI
 // @Produce      json
 // @Security     BearerAuth
@@ -139,8 +137,7 @@ func (h *Handler) GetStatus(c *gin.Context) {
 
 // UpsertPerson creates or updates a person by external personId.
 // @Summary      Create or update person
-// @Description  Provisions a person by their external personId.
-// @Description  Returns 201 on creation and 200 on update.
+// @Description  Provisions a person by their external personId. Returns 201 on creation and 200 on update.
 // @Tags         OpenAPI
 // @Accept       json
 // @Produce      json
