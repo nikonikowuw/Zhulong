@@ -7,11 +7,12 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/logsafe"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // sourceWeb marks every event as originating in the browser, set by the server
@@ -66,7 +67,15 @@ func (h *Handler) Ingest(c *gin.Context) {
 	reader := io.LimitReader(c.Request.Body, MaxRequestBodyBytes+1)
 	body, err := io.ReadAll(reader)
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_FORMAT", "Invalid request format", err))
+		httputil.WriteError(
+			c,
+			httputil.NewError(
+				http.StatusBadRequest,
+				"INVALID_FORMAT",
+				"Invalid request format",
+				err,
+			),
+		)
 		return
 	}
 	if int64(len(body)) > MaxRequestBodyBytes {
@@ -78,12 +87,24 @@ func (h *Handler) Ingest(c *gin.Context) {
 	if err != nil {
 		var validation *validationError
 		if errors.As(err, &validation) {
-			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: validation.field, Code: validation.code},
-			}))
+			httputil.WriteError(
+				c,
+				httputil.NewValidationError(
+					"Validation failed",
+					[]httputil.FieldDetail{
+						{Field: validation.field, Code: validation.code},
+					},
+				),
+			)
 			return
 		}
-		httputil.WriteError(c, httputil.NewValidationError("Validation failed", nil))
+		httputil.WriteError(
+			c,
+			httputil.NewValidationError(
+				"Validation failed",
+				[]httputil.FieldDetail{},
+			),
+		)
 		return
 	}
 
@@ -129,7 +150,8 @@ func (h *Handler) Ingest(c *gin.Context) {
 	// The client-reported drop count is an aggregate signal, logged once per
 	// batch and never allowed to bypass the entry or request limits.
 	if dropped != nil && *dropped > 0 {
-		h.logger.Warn("client.batch.dropped",
+		h.logger.Warn(
+			"client.batch.dropped",
 			zap.String("source", sourceWeb),
 			zap.String("clientIp", clientIP),
 			zap.Uint64("dropped", *dropped),

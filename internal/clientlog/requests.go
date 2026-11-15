@@ -18,6 +18,7 @@
 package clientlog
 
 import (
+	"bytes"
 	"encoding/json"
 	"regexp"
 	"strconv"
@@ -114,7 +115,7 @@ func (e *validationError) Error() string { return e.field + ": " + e.code }
 // plus the client-reported drop count (nil when absent).
 func validate(body []byte) ([]validatedEntry, *uint64, error) {
 	var payload request
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
 		return nil, nil, &validationError{field: "body", code: "INVALID_FORMAT"}
@@ -146,36 +147,38 @@ func validate(body []byte) ([]validatedEntry, *uint64, error) {
 }
 
 func validateEntry(raw entry, index int) (validatedEntry, error) {
+	prefix := "entries[" + strconv.Itoa(index) + "]"
+
 	if raw.Level != levelWarn && raw.Level != levelError {
 		return validatedEntry{}, &validationError{
-			field: "entries[" + strconv.Itoa(index) + "].level",
+			field: prefix + ".level",
 			code:  "INVALID_VALUE",
 		}
 	}
 
 	if len(raw.Msg) == 0 {
 		return validatedEntry{}, &validationError{
-			field: "entries[" + strconv.Itoa(index) + "].msg",
+			field: prefix + ".msg",
 			code:  "REQUIRED",
 		}
 	}
 	if len(raw.Msg) > MaxEventIDBytes || !eventIDPattern.MatchString(raw.Msg) {
 		return validatedEntry{}, &validationError{
-			field: "entries[" + strconv.Itoa(index) + "].msg",
+			field: prefix + ".msg",
 			code:  "INVALID_EVENT_ID",
 		}
 	}
 
 	if raw.Route != "" && !routePattern.MatchString(raw.Route) {
 		return validatedEntry{}, &validationError{
-			field: "entries[" + strconv.Itoa(index) + "].route",
+			field: prefix + ".route",
 			code:  "INVALID_ROUTE_CATEGORY",
 		}
 	}
 
 	if len(raw.Fields) > MaxFieldsPerEntry {
 		return validatedEntry{}, &validationError{
-			field: "entries[" + strconv.Itoa(index) + "].fields",
+			field: prefix + ".fields",
 			code:  "MAX_ITEMS",
 		}
 	}
@@ -184,32 +187,34 @@ func validateEntry(raw entry, index int) (validatedEntry, error) {
 	for key, rawValue := range raw.Fields {
 		if _, ok := allowedFields[key]; !ok {
 			return validatedEntry{}, &validationError{
-				field: "entries[" + strconv.Itoa(index) + "].fields." + key,
+				field: prefix + ".fields." + key,
 				code:  "UNKNOWN_FIELD",
 			}
 		}
 		value, err := scalarValue(rawValue)
 		if err != nil {
 			return validatedEntry{}, &validationError{
-				field: "entries[" + strconv.Itoa(index) + "].fields." + key,
-				code:  err.(*validationError).code,
+				field: prefix + ".fields." + key,
+				code:  err.code,
 			}
 		}
 		fields = append(fields, Field{Key: key, Value: value})
 	}
 
-	return validatedEntry{Level: raw.Level, Msg: raw.Msg, Route: raw.Route, Fields: fields}, nil
+	return validatedEntry{
+		Level:  raw.Level,
+		Msg:    raw.Msg,
+		Route:  raw.Route,
+		Fields: fields,
+	}, nil
 }
 
 // scalarValue accepts only a bounded string or a JSON number and returns its
 // textual form. Objects and arrays are rejected: they are unbounded and have no
 // reviewed log representation.
-func scalarValue(raw json.RawMessage) (string, error) {
+func scalarValue(raw json.RawMessage) (string, *validationError) {
 	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" {
-		return "", &validationError{code: "INVALID_VALUE"}
-	}
-	if trimmed == "null" {
+	if trimmed == "" || trimmed == "null" {
 		return "", &validationError{code: "INVALID_VALUE"}
 	}
 

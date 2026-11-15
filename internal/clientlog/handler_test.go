@@ -9,11 +9,12 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
-	"github.com/nikonikowuw/Zhulong/internal/logsafe"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
+	"github.com/nikonikowuw/Zhulong/internal/logsafe"
 )
 
 // newTestServer builds the route with an observable logger and no rate limiting,
@@ -60,7 +61,10 @@ func payload(entries ...map[string]any) string {
 	if len(entries) == 0 {
 		entries = []map[string]any{validEntry()}
 	}
-	body, _ := json.Marshal(map[string]any{"entries": entries})
+	body, err := json.Marshal(map[string]any{"entries": entries})
+	if err != nil {
+		return "{}"
+	}
 	return string(body)
 }
 
@@ -139,7 +143,7 @@ func TestIngestRejectsTooManyFields(t *testing.T) {
 	router, _ := newTestServer(t)
 	entry := validEntry()
 	fields := map[string]any{}
-	for i := 0; i < 17; i++ {
+	for i := range 17 {
 		fields[fmt.Sprintf("status%d", i)] = i
 	}
 	entry["fields"] = fields
@@ -162,13 +166,16 @@ func TestIngestRejectsOversizedBody(t *testing.T) {
 	entry := validEntry()
 	entry["fields"] = map[string]any{"code": strings.Repeat("x", 200)}
 	// Build a body beyond 64 KiB while staying valid JSON structurally.
+	rawPayload := payload(entry)
+	content := rawPayload[len(`{"entries":[`):len(rawPayload)-len(`]}`)]
+
 	var builder strings.Builder
 	builder.WriteString(`{"entries":[`)
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		if i > 0 {
 			builder.WriteString(",")
 		}
-		builder.WriteString(payload(entry)[len(`{"entries":[`) : len(payload(entry))-len(`]}`)])
+		builder.WriteString(content)
 	}
 	builder.WriteString(`]}`)
 	if builder.Len() <= int(MaxRequestBodyBytes) {
@@ -319,7 +326,9 @@ func TestIngestCreatesNoAuditRecord(t *testing.T) {
 func TestRateLimitedEndpointReturns429(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	limiter := httpmiddleware.NewIPRateLimiter(httpmiddleware.RateLimitConfig{
-		PerMinute: 60, Burst: 1, MaxKeys: 8,
+		PerMinute: 60,
+		Burst:     1,
+		MaxKeys:   8,
 	})
 	handler := NewHandler(zap.NewNop(), limiter)
 
