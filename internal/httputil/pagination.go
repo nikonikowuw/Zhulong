@@ -73,7 +73,11 @@ func (q *PaginationQuery) Normalize() PageWindow {
 	if page > MaxPage {
 		page = MaxPage
 	}
-	return PageWindow{Page: page, PageSize: pageSize, Offset: (page - 1) * pageSize}
+	return PageWindow{
+		Page:     page,
+		PageSize: pageSize,
+		Offset:   (page - 1) * pageSize,
+	}
 }
 
 // PaginatedData represents standard paginated response payload.
@@ -90,7 +94,12 @@ type PaginatedData[T any] struct {
 
 // PaginatedSuccess writes a standard HTTP 200 paginated response envelope.
 // Ensures items is never null and echoes back the exact window that was queried.
-func PaginatedSuccess[T any](c *gin.Context, items []T, total int64, window PageWindow) {
+func PaginatedSuccess[T any](
+	c *gin.Context,
+	items []T,
+	total int64,
+	window PageWindow,
+) {
 	if items == nil {
 		items = []T{}
 	}

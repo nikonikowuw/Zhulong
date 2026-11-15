@@ -7,11 +7,6 @@ import (
 	"golang.org/x/text/language"
 )
 
-func setLanguageHeaders(c *gin.Context, locale string) {
-	c.Header("Content-Language", locale)
-	c.Writer.Header().Add("Vary", "Accept-Language")
-}
-
 var (
 	preferredLanguages = []language.Tag{
 		language.English,
@@ -152,6 +147,21 @@ func RegisterMessages(custom map[string]map[string]string) {
 	}
 }
 
+// LookupMessage returns the localized message for code and locale if registered.
+func LookupMessage(code, locale string) (string, bool) {
+	return lookupMessage(code, locale)
+}
+
+// ResolveLocale maps an Accept-Language header onto the closest supported locale.
+func ResolveLocale(acceptLanguage string) string {
+	return requestLocale(acceptLanguage)
+}
+
+func setLanguageHeaders(c *gin.Context, locale string) {
+	c.Header("Content-Language", locale)
+	c.Writer.Header().Add("Vary", "Accept-Language")
+}
+
 func requestLocale(acceptLanguage string) string {
 	tags, _, err := language.ParseAcceptLanguage(acceptLanguage)
 	if err != nil || len(tags) == 0 {
@@ -169,16 +179,6 @@ func requestLocale(acceptLanguage string) string {
 	}
 }
 
-// LookupMessage returns the localized message for code and locale if registered.
-func LookupMessage(code, locale string) (string, bool) {
-	return lookupMessage(code, locale)
-}
-
-// ResolveLocale maps an Accept-Language header onto the closest supported locale.
-func ResolveLocale(acceptLanguage string) string {
-	return requestLocale(acceptLanguage)
-}
-
 func localizedMessage(code, locale string) string {
 	messagesMu.RLock()
 	defer messagesMu.RUnlock()
@@ -188,17 +188,20 @@ func localizedMessage(code, locale string) string {
 func lookupMessage(code, locale string) (string, bool) {
 	messagesMu.RLock()
 	defer messagesMu.RUnlock()
-	if translations, ok := messages[code]; ok {
-		if message, ok := translations[locale]; ok {
-			return message, true
-		}
+	translations, ok := messages[code]
+	if !ok {
+		return "", false
 	}
-	return "", false
+	message, ok := translations[locale]
+	if !ok {
+		return "", false
+	}
+	return message, true
 }
 
 func localizedCatalogMessage(code, locale string) string {
 	if translations, ok := messages[code]; ok {
-		if message, ok := translations[locale]; ok {
+		if message, found := translations[locale]; found {
 			return message
 		}
 	}
@@ -208,8 +211,9 @@ func localizedCatalogMessage(code, locale string) string {
 func localizedValidationMessage(code, locale string) string {
 	messagesMu.RLock()
 	defer messagesMu.RUnlock()
-	if _, ok := messages[code]; !ok {
-		code = "INVALID_VALUE"
+	targetCode := code
+	if _, ok := messages[targetCode]; !ok {
+		targetCode = "INVALID_VALUE"
 	}
-	return localizedCatalogMessage(code, locale)
+	return localizedCatalogMessage(targetCode, locale)
 }

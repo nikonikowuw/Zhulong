@@ -34,13 +34,24 @@ func (e *AppError) Unwrap() error {
 }
 
 // NewError creates a non-validation HTTP error.
-func NewError(status int, code, message string, err error) *AppError {
-	return &AppError{Status: status, Code: code, Message: message, Err: err}
+func NewError(
+	status int,
+	code string,
+	message string,
+	err error,
+) *AppError {
+	return &AppError{
+		Status:  status,
+		Code:    code,
+		Message: message,
+		Err:     err,
+	}
 }
 
 // NewValidationError creates an HTTP 422 error with localized field details.
 func NewValidationError(message string, details []FieldDetail) *AppError {
-	copiedDetails := append([]FieldDetail(nil), details...)
+	copiedDetails := make([]FieldDetail, len(details))
+	copy(copiedDetails, details)
 	return &AppError{
 		Status:  http.StatusUnprocessableEntity,
 		Code:    "VALIDATION_FAILED",
@@ -51,7 +62,15 @@ func NewValidationError(message string, details []FieldDetail) *AppError {
 
 // WritePayloadTooLarge writes the standard response for requests exceeding the API body limit.
 func WritePayloadTooLarge(c *gin.Context) {
-	WriteError(c, NewError(http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "Request body too large", nil))
+	WriteError(
+		c,
+		NewError(
+			http.StatusRequestEntityTooLarge,
+			"PAYLOAD_TOO_LARGE",
+			"Request body too large",
+			nil,
+		),
+	)
 }
 
 // KindToHTTPStatus maps an apperr.Kind to its standard HTTP status code.
@@ -89,12 +108,18 @@ func WriteError(c *gin.Context, err error) {
 
 // WriteErrorWithLogger writes the standard sanitized response and emits its
 // single server-side Error event through logger.
-func WriteErrorWithLogger(c *gin.Context, err error, logger *zap.Logger, extraFields ...zap.Field) {
+func WriteErrorWithLogger(
+	c *gin.Context,
+	err error,
+	logger *zap.Logger,
+	extraFields ...zap.Field,
+) {
 	var appError *AppError
 	var appErr *apperr.Error
 	var fallbackMsg string
 
-	if errors.As(err, &appErr) && appErr != nil {
+	switch {
+	case errors.As(err, &appErr) && appErr != nil:
 		status := KindToHTTPStatus(appErr.Kind)
 		fallbackMsg = appErr.Message
 		appError = &AppError{
@@ -103,23 +128,34 @@ func WriteErrorWithLogger(c *gin.Context, err error, logger *zap.Logger, extraFi
 			Message: appErr.Message,
 			Err:     appErr.Err,
 		}
-	} else if !errors.As(err, &appError) || appError == nil {
-		appError = NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", err)
+	case errors.As(err, &appError) && appError != nil:
+		// appError populated by errors.As
+	default:
+		appError = NewError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Internal server error",
+			err,
+		)
 	}
 
 	status := appError.Status
 	if status < http.StatusBadRequest || status > 599 {
 		status = http.StatusInternalServerError
-		appError = NewError(status, "INTERNAL_ERROR", "Internal server error", appError.Err)
+		appError = NewError(
+			status,
+			"INTERNAL_ERROR",
+			"Internal server error",
+			appError.Err,
+		)
 	}
 
 	locale := requestLocale(c.GetHeader("Accept-Language"))
 	setLanguageHeaders(c, locale)
 	msg, found := lookupMessage(appError.Code, locale)
 	if !found {
-		if fallbackMsg != "" {
-			msg = fallbackMsg
-		} else {
+		msg = fallbackMsg
+		if msg == "" {
 			msg = localizedMessage("REQUEST_FAILED", locale)
 		}
 	}
@@ -140,10 +176,12 @@ func WriteErrorWithLogger(c *gin.Context, err error, logger *zap.Logger, extraFi
 		if c.Request != nil {
 			ctx = c.Request.Context()
 		}
-		fields := []zap.Field{
+		fields := make([]zap.Field, 0, 3+len(extraFields))
+		fields = append(
+			fields,
 			zap.String("code", appError.Code),
 			zap.Int("status", status),
-		}
+		)
 		if appError.Err != nil {
 			fields = append(fields, zap.Error(appError.Err))
 		}

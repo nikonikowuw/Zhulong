@@ -126,7 +126,12 @@ func TestPaginatedSuccess(t *testing.T) {
 		c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 
 		var nilItems []string
-		PaginatedSuccess(c, nilItems, 0, PageWindow{Page: 1, PageSize: 20, Offset: 0})
+		PaginatedSuccess(
+			c,
+			nilItems,
+			0,
+			PageWindow{Page: 1, PageSize: 20, Offset: 0},
+		)
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected status 200, got %d", w.Code)
@@ -163,7 +168,11 @@ func TestPaginatedSuccess(t *testing.T) {
 		if resp.Data.Limit == nil || resp.Data.Offset == nil {
 			t.Fatalf("limit/offset must always be present, got %s", w.Body.String())
 		}
-		if resp.Data.Page != 1 || resp.Data.PageSize != 20 || *resp.Data.Limit != 20 || *resp.Data.Offset != 0 {
+		hasUnexpectedMetadata := resp.Data.Page != 1 ||
+			resp.Data.PageSize != 20 ||
+			*resp.Data.Limit != 20 ||
+			*resp.Data.Offset != 0
+		if hasUnexpectedMetadata {
 			t.Errorf("unexpected pagination metadata: %+v", resp.Data)
 		}
 	})
@@ -175,7 +184,12 @@ func TestPaginatedSuccess(t *testing.T) {
 
 		items := []string{"cam-1", "cam-2"}
 		// legacy 非对齐 offset：回显必须与查询一致，而不是回显取整后的页码推导值。
-		PaginatedSuccess(c, items, 42, PageWindow{Page: 2, PageSize: 20, Offset: 30})
+		PaginatedSuccess(
+			c,
+			items,
+			42,
+			PageWindow{Page: 2, PageSize: 20, Offset: 30},
+		)
 
 		var resp struct {
 			Code string `json:"code"`
@@ -192,7 +206,10 @@ func TestPaginatedSuccess(t *testing.T) {
 			t.Fatalf("failed to unmarshal response: %v", err)
 		}
 
-		if resp.Data.Total != 42 || resp.Data.Page != 2 || resp.Data.PageSize != 20 {
+		hasUnexpectedWindow := resp.Data.Total != 42 ||
+			resp.Data.Page != 2 ||
+			resp.Data.PageSize != 20
+		if hasUnexpectedWindow {
 			t.Errorf("unexpected pagination metadata: %+v", resp.Data)
 		}
 		if resp.Data.Offset != 30 || resp.Data.Limit != 20 {

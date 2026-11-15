@@ -17,14 +17,6 @@ type SafeError struct {
 	Message string
 }
 
-// setSafeError records the sanitized error metadata on the request context.
-// WriteError is the only caller, so every error response produced through the
-// standard path is observable without reaching into raw error values.
-func setSafeError(c *gin.Context, code, message string) {
-	c.Set(errorCodeKey, code)
-	c.Set(errorMessageKey, message)
-}
-
 // SafeErrorFromContext returns the sanitized error metadata written by
 // WriteError, if any. The boolean is false when the request did not produce a
 // standard error response.
@@ -36,11 +28,23 @@ func SafeErrorFromContext(c *gin.Context) (SafeError, bool) {
 	if !exists {
 		return SafeError{}, false
 	}
-	code, _ := codeValue.(string)
-	if code == "" {
+	code, ok := codeValue.(string)
+	if !ok || code == "" {
 		return SafeError{}, false
 	}
-	messageValue, _ := c.Get(errorMessageKey)
-	message, _ := messageValue.(string)
+	var message string
+	if messageValue, exists := c.Get(errorMessageKey); exists {
+		if msg, ok := messageValue.(string); ok {
+			message = msg
+		}
+	}
 	return SafeError{Code: code, Message: message}, true
+}
+
+// setSafeError records the sanitized error metadata on the request context.
+// WriteError is the only caller, so every error response produced through the
+// standard path is observable without reaching into raw error values.
+func setSafeError(c *gin.Context, code, message string) {
+	c.Set(errorCodeKey, code)
+	c.Set(errorMessageKey, message)
 }

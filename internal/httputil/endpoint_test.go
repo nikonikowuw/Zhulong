@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
 
@@ -30,7 +31,10 @@ func TestHandleJSON_Success(t *testing.T) {
 		return sampleResponse{Greeting: "Hello " + req.DisplayName}, nil
 	}))
 
-	body, _ := json.Marshal(sampleRequest{DisplayName: "Alice", Age: 25})
+	body, err := json.Marshal(sampleRequest{DisplayName: "Alice", Age: 25})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -60,7 +64,10 @@ func TestHandleJSON_ValidationFailureWithJSONTags(t *testing.T) {
 		return sampleResponse{}, nil
 	}))
 
-	body, _ := json.Marshal(sampleRequest{DisplayName: "Al", Age: 12})
+	body, err := json.Marshal(sampleRequest{DisplayName: "Al", Age: 12})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -84,7 +91,7 @@ func TestHandleJSON_ValidationFailureWithJSONTags(t *testing.T) {
 		t.Fatalf("expected 2 field details, got %d", len(resp.Details))
 	}
 
-	fields := map[string]string{}
+	fields := make(map[string]string, len(resp.Details))
 	for _, d := range resp.Details {
 		fields[d.Field] = d.Code
 	}
@@ -104,7 +111,10 @@ func TestHandleJSON_DomainErrorUnauthenticated(t *testing.T) {
 		return sampleResponse{}, apperr.Unauthenticated("INVALID_CREDENTIALS", "invalid credentials", nil)
 	}))
 
-	body, _ := json.Marshal(sampleRequest{DisplayName: "Alice", Age: 25})
+	body, err := json.Marshal(sampleRequest{DisplayName: "Alice", Age: 25})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -165,10 +175,13 @@ func TestHandleJSON_MaxBodyLimit(t *testing.T) {
 		return sampleResponse{}, nil
 	}))
 
-	bigJSON, _ := json.Marshal(map[string]string{
+	bigJSON, err := json.Marshal(map[string]string{
 		"displayName": "Alice",
 		"padding":     strings.Repeat("a", 100),
 	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/limited", bytes.NewReader(bigJSON))
 	req.Header.Set("Content-Type", "application/json")
@@ -219,5 +232,54 @@ func TestWriteError_UnregisteredDomainCodePreservesFallbackMessage(t *testing.T)
 	}
 	if resp.Message != customMsg {
 		t.Fatalf("expected message %q, got %q", customMsg, resp.Message)
+	}
+}
+
+type customValidatedRequest struct {
+	Tag string `json:"tag" binding:"required"`
+}
+
+func TestRegisterValidationMapper(t *testing.T) {
+	// RegisterValidationMapper with nil should be a safe no-op.
+	RegisterValidationMapper(nil)
+
+	RegisterValidationMapper(func(fe validator.FieldError) string {
+		if fe.Field() == "tag" && fe.Tag() == "required" {
+			return "CUSTOM_TAG_REQUIRED"
+		}
+		return ""
+	})
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/custom-validation", HandleJSON(func(c *gin.Context, req customValidatedRequest) (sampleResponse, error) {
+		return sampleResponse{Greeting: req.Tag}, nil
+	}))
+
+	body, err := json.Marshal(customValidatedRequest{Tag: ""})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/custom-validation", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d", recorder.Code)
+	}
+
+	var resp struct {
+		Code    string        `json:"code"`
+		Details []FieldDetail `json:"details"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Details) != 1 {
+		t.Fatalf("expected 1 detail, got %d", len(resp.Details))
+	}
+	if resp.Details[0].Field != "tag" || resp.Details[0].Code != "CUSTOM_TAG_REQUIRED" {
+		t.Fatalf("expected tag / CUSTOM_TAG_REQUIRED, got %+v", resp.Details[0])
 	}
 }

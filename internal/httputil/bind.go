@@ -74,7 +74,15 @@ func HandleBindError(c *gin.Context, err error) {
 		return
 	}
 
-	WriteError(c, NewError(http.StatusBadRequest, "INVALID_FORMAT", "Invalid request format", err))
+	WriteError(
+		c,
+		NewError(
+			http.StatusBadRequest,
+			"INVALID_FORMAT",
+			"Invalid request format",
+			err,
+		),
+	)
 }
 
 func toLowerCamel(s string) string {
@@ -86,15 +94,21 @@ func toLowerCamel(s string) string {
 	return string(runes)
 }
 
-func validationCode(fieldError validator.FieldError) string {
+func customValidationCode(fieldError validator.FieldError) string {
 	validationMappersMu.RLock()
+	defer validationMappersMu.RUnlock()
 	for _, mapper := range validationMappers {
 		if code := mapper(fieldError); code != "" {
-			validationMappersMu.RUnlock()
 			return code
 		}
 	}
-	validationMappersMu.RUnlock()
+	return ""
+}
+
+func validationCode(fieldError validator.FieldError) string {
+	if code := customValidationCode(fieldError); code != "" {
+		return code
+	}
 
 	switch fieldError.Tag() {
 	case "required":
