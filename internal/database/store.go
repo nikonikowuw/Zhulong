@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	// Register SQLite3 driver for database/sql and golang-migrate.
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"

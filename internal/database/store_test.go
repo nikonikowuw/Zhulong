@@ -35,8 +35,10 @@ func TestOpenAndMigrateCreatesVersionedSchema(t *testing.T) {
 		t.Fatal("database should be ready after migration")
 	}
 
+	tableQuery := "SELECT name FROM sqlite_master WHERE type = ? AND name = ?"
+
 	var metadataTable string
-	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "system_metadata").Scan(&metadataTable).Error; err != nil {
+	if err := store.db.Raw(tableQuery, "table", "system_metadata").Scan(&metadataTable).Error; err != nil {
 		t.Fatalf("query migrated table system_metadata: %v", err)
 	}
 	if metadataTable != "system_metadata" {
@@ -44,7 +46,7 @@ func TestOpenAndMigrateCreatesVersionedSchema(t *testing.T) {
 	}
 
 	var usersTable string
-	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "users").Scan(&usersTable).Error; err != nil {
+	if err := store.db.Raw(tableQuery, "table", "users").Scan(&usersTable).Error; err != nil {
 		t.Fatalf("query migrated table users: %v", err)
 	}
 	if usersTable != "users" {
@@ -52,7 +54,7 @@ func TestOpenAndMigrateCreatesVersionedSchema(t *testing.T) {
 	}
 
 	var camerasTable string
-	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "cameras").Scan(&camerasTable).Error; err != nil {
+	if err := store.db.Raw(tableQuery, "table", "cameras").Scan(&camerasTable).Error; err != nil {
 		t.Fatalf("query migrated table cameras: %v", err)
 	}
 	if camerasTable != "cameras" {
@@ -60,7 +62,7 @@ func TestOpenAndMigrateCreatesVersionedSchema(t *testing.T) {
 	}
 
 	var streamsTable string
-	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "camera_streams").Scan(&streamsTable).Error; err != nil {
+	if err := store.db.Raw(tableQuery, "table", "camera_streams").Scan(&streamsTable).Error; err != nil {
 		t.Fatalf("query migrated table camera_streams: %v", err)
 	}
 	if streamsTable != "camera_streams" {
@@ -68,7 +70,7 @@ func TestOpenAndMigrateCreatesVersionedSchema(t *testing.T) {
 	}
 
 	var auditLogsTable string
-	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "audit_logs").Scan(&auditLogsTable).Error; err != nil {
+	if err := store.db.Raw(tableQuery, "table", "audit_logs").Scan(&auditLogsTable).Error; err != nil {
 		t.Fatalf("query migrated table audit_logs: %v", err)
 	}
 	if auditLogsTable != "audit_logs" {
@@ -114,7 +116,8 @@ func TestSystemMetadataTimestampDefaults(t *testing.T) {
 		t.Fatalf("insert setting: %v", err)
 	}
 	var createdAt, updatedAt string
-	if err := store.db.Raw("SELECT created_at, updated_at FROM system_metadata WHERE key = ?", key).Row().Scan(&createdAt, &updatedAt); err != nil {
+	row := store.db.Raw("SELECT created_at, updated_at FROM system_metadata WHERE key = ?", key).Row()
+	if err := row.Scan(&createdAt, &updatedAt); err != nil {
 		t.Fatalf("read timestamps: %v", err)
 	}
 	if createdAt == "" || updatedAt == "" {
@@ -175,7 +178,12 @@ func TestAuditLogsMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -186,9 +194,12 @@ func TestAuditLogsMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("migrator Migrate(4): %v", err)
 	}
 
+	tableQuery := "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'"
+	indexQuery := "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_audit_logs_%'"
+
 	// Verify audit_logs table and indexes exist
 	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'").Scan(&count); err != nil {
+	if err := db.QueryRow(tableQuery).Scan(&count); err != nil {
 		t.Fatalf("query audit_logs table: %v", err)
 	}
 	if count != 1 {
@@ -196,7 +207,7 @@ func TestAuditLogsMigrationUpAndDownSymmetry(t *testing.T) {
 	}
 
 	var indexCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_audit_logs_%'").Scan(&indexCount); err != nil {
+	if err := db.QueryRow(indexQuery).Scan(&indexCount); err != nil {
 		t.Fatalf("query audit_logs indexes: %v", err)
 	}
 	if indexCount != 3 {
@@ -209,14 +220,14 @@ func TestAuditLogsMigrationUpAndDownSymmetry(t *testing.T) {
 	}
 
 	// Verify audit_logs table and indexes are dropped
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'").Scan(&count); err != nil {
+	if err := db.QueryRow(tableQuery).Scan(&count); err != nil {
 		t.Fatalf("query audit_logs table after down: %v", err)
 	}
 	if count != 0 {
 		t.Fatalf("expected audit_logs table to be dropped after rollback, got count=%d", count)
 	}
 
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_audit_logs_%'").Scan(&indexCount); err != nil {
+	if err := db.QueryRow(indexQuery).Scan(&indexCount); err != nil {
 		t.Fatalf("query audit_logs indexes after down: %v", err)
 	}
 	if indexCount != 0 {
@@ -229,7 +240,7 @@ func TestAuditLogsMigrationUpAndDownSymmetry(t *testing.T) {
 	}
 
 	// Verify audit_logs table exists again
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'").Scan(&count); err != nil {
+	if err := db.QueryRow(tableQuery).Scan(&count); err != nil {
 		t.Fatalf("query audit_logs table after re-up: %v", err)
 	}
 	if count != 1 {
@@ -258,7 +269,12 @@ func TestSystemTimeConfigsMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -269,9 +285,11 @@ func TestSystemTimeConfigsMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("migrator Migrate(5): %v", err)
 	}
 
+	checkTableQuery := "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'system_time_configs'"
+
 	// Verify system_time_configs table exists
 	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'system_time_configs'").Scan(&count); err != nil {
+	if err := db.QueryRow(checkTableQuery).Scan(&count); err != nil {
 		t.Fatalf("query system_time_configs table: %v", err)
 	}
 	if count != 1 {
@@ -284,7 +302,7 @@ func TestSystemTimeConfigsMigrationUpAndDownSymmetry(t *testing.T) {
 	}
 
 	// Verify system_time_configs table is dropped
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'system_time_configs'").Scan(&count); err != nil {
+	if err := db.QueryRow(checkTableQuery).Scan(&count); err != nil {
 		t.Fatalf("query system_time_configs table after down: %v", err)
 	}
 	if count != 0 {
@@ -296,7 +314,7 @@ func TestSystemTimeConfigsMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("migrator Steps(1): %v", err)
 	}
 
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'system_time_configs'").Scan(&count); err != nil {
+	if err := db.QueryRow(checkTableQuery).Scan(&count); err != nil {
 		t.Fatalf("query system_time_configs table after re-up: %v", err)
 	}
 	if count != 1 {
@@ -325,7 +343,12 @@ func TestAlgorithmTablesMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -336,11 +359,13 @@ func TestAlgorithmTablesMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("migrator Migrate(7): %v", err)
 	}
 
+	checkTableQuery := "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+
 	// Verify algorithm tables exist
 	tables := []string{"algorithms", "analysis_tasks"}
 	for _, tbl := range tables {
 		var count int
-		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+		if err := db.QueryRow(checkTableQuery, tbl).Scan(&count); err != nil {
 			t.Fatalf("query table %s: %v", tbl, err)
 		}
 		if count != 1 {
@@ -356,7 +381,7 @@ func TestAlgorithmTablesMigrationUpAndDownSymmetry(t *testing.T) {
 	// Verify algorithm tables are dropped
 	for _, tbl := range tables {
 		var count int
-		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+		if err := db.QueryRow(checkTableQuery, tbl).Scan(&count); err != nil {
 			t.Fatalf("query table %s after down: %v", tbl, err)
 		}
 		if count != 0 {
@@ -371,7 +396,7 @@ func TestAlgorithmTablesMigrationUpAndDownSymmetry(t *testing.T) {
 
 	for _, tbl := range tables {
 		var count int
-		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+		if err := db.QueryRow(checkTableQuery, tbl).Scan(&count); err != nil {
 			t.Fatalf("query table %s after re-up: %v", tbl, err)
 		}
 		if count != 1 {
@@ -401,7 +426,12 @@ func TestPersonsTablesMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -412,11 +442,13 @@ func TestPersonsTablesMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("migrator Migrate(6): %v", err)
 	}
 
+	checkTableQuery := "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+
 	// Verify person tables exist
 	tables := []string{"persons", "person_faces"}
 	for _, tbl := range tables {
 		var count int
-		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+		if err := db.QueryRow(checkTableQuery, tbl).Scan(&count); err != nil {
 			t.Fatalf("query table %s: %v", tbl, err)
 		}
 		if count != 1 {
@@ -432,7 +464,7 @@ func TestPersonsTablesMigrationUpAndDownSymmetry(t *testing.T) {
 	// Verify person tables are dropped
 	for _, tbl := range tables {
 		var count int
-		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+		if err := db.QueryRow(checkTableQuery, tbl).Scan(&count); err != nil {
 			t.Fatalf("query table %s after down: %v", tbl, err)
 		}
 		if count != 0 {
@@ -447,7 +479,7 @@ func TestPersonsTablesMigrationUpAndDownSymmetry(t *testing.T) {
 
 	for _, tbl := range tables {
 		var count int
-		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+		if err := db.QueryRow(checkTableQuery, tbl).Scan(&count); err != nil {
 			t.Fatalf("query table %s after re-up: %v", tbl, err)
 		}
 		if count != 1 {
@@ -477,7 +509,12 @@ func TestPrimaryFaceIDMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -499,7 +536,14 @@ func TestPrimaryFaceIDMigrationUpAndDownSymmetry(t *testing.T) {
 			var name, ctype string
 			var notnull, pk int
 			var dfltValue sql.NullString
-			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			if err := rows.Scan(
+				&cid,
+				&name,
+				&ctype,
+				&notnull,
+				&dfltValue,
+				&pk,
+			); err != nil {
 				t.Fatalf("scan pragma row: %v", err)
 			}
 			if name == "primary_face_id" {
@@ -553,7 +597,12 @@ func TestMigration000009_DecouplePersonID(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -572,7 +621,8 @@ func TestMigration000009_DecouplePersonID(t *testing.T) {
 		t.Fatalf("insert real person: %v", err)
 	}
 	// Insert face for p_dummy to verify CASCADE did not delete faces
-	if _, err := db.Exec(`INSERT INTO person_faces (id, person_id, feature_vector) VALUES ('f_1', 'p_dummy', x'0001');`); err != nil {
+	insertFaceSQL := `INSERT INTO person_faces (id, person_id, feature_vector) VALUES ('f_1', 'p_dummy', x'0001');`
+	if _, err := db.Exec(insertFaceSQL); err != nil {
 		t.Fatalf("insert face: %v", err)
 	}
 	// Enrolling a face auto-assigns it as the primary face, so a realistic
@@ -648,10 +698,12 @@ func TestMigration000009_DecouplePersonID(t *testing.T) {
 		t.Fatalf("expected rolled back person_id 'p_dummy', got %v", rolledBackID)
 	}
 
+	primaryFaceSQL := `SELECT primary_face_id FROM persons WHERE id = 'p_dummy'`
+
 	// The down migration recreates persons too, so the primary face pointer and
 	// the enrolled face must both survive the round trip.
 	var rolledBackPrimaryFace sql.NullString
-	if err := db.QueryRow(`SELECT primary_face_id FROM persons WHERE id = 'p_dummy'`).Scan(&rolledBackPrimaryFace); err != nil {
+	if err := db.QueryRow(primaryFaceSQL).Scan(&rolledBackPrimaryFace); err != nil {
 		t.Fatalf("query rolled back primary_face_id: %v", err)
 	}
 	if !rolledBackPrimaryFace.Valid || rolledBackPrimaryFace.String != "f_1" {
@@ -672,7 +724,7 @@ func TestMigration000009_DecouplePersonID(t *testing.T) {
 
 	// The re-applied up migration must preserve the pointer as well.
 	var reappliedPrimaryFace sql.NullString
-	if err := db.QueryRow(`SELECT primary_face_id FROM persons WHERE id = 'p_dummy'`).Scan(&reappliedPrimaryFace); err != nil {
+	if err := db.QueryRow(primaryFaceSQL).Scan(&reappliedPrimaryFace); err != nil {
 		t.Fatalf("query re-applied primary_face_id: %v", err)
 	}
 	if !reappliedPrimaryFace.Valid || reappliedPrimaryFace.String != "f_1" {
@@ -698,7 +750,12 @@ func TestMigration000010NormalizeAuditActions(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -723,8 +780,11 @@ func TestMigration000010NormalizeAuditActions(t *testing.T) {
 		"system.storage.emergency_resume",
 		"camera.create", // should remain untouched
 	}
+	insertLegacyQuery := `INSERT INTO audit_logs
+		(id, action, target, detail, status)
+		VALUES (?, ?, 'target', '', 'success')`
 	for i, action := range legacyRecords {
-		if _, err := db.Exec(`INSERT INTO audit_logs (id, action, target, detail, status) VALUES (?, ?, 'target', '', 'success')`, i+1, action); err != nil {
+		if _, err := db.Exec(insertLegacyQuery, i+1, action); err != nil {
 			t.Fatalf("insert legacy audit log %q: %v", action, err)
 		}
 	}
@@ -754,7 +814,12 @@ func TestMigration000010NormalizeAuditActions(t *testing.T) {
 			t.Fatalf("query normalized action for id %d: %v", id, err)
 		}
 		if action != expectedAction {
-			t.Errorf("id %d: expected action %q, got %q", id, expectedAction, action)
+			t.Errorf(
+				"id %d: expected action %q, got %q",
+				id,
+				expectedAction,
+				action,
+			)
 		}
 	}
 
@@ -799,7 +864,12 @@ func TestPerceptionAndAlarmTablesMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -866,7 +936,12 @@ func TestRegionConfigMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -888,10 +963,15 @@ func TestRegionConfigMigrationUpAndDownSymmetry(t *testing.T) {
 			var name, colType string
 			var notnull, pk int
 			var dfltValue sql.NullString
-			if err := rows.Scan(&cid, &name, &colType, &notnull, &dfltValue, &pk); err == nil {
-				if name == colName {
-					return true
-				}
+			if err := rows.Scan(
+				&cid,
+				&name,
+				&colType,
+				&notnull,
+				&dfltValue,
+				&pk,
+			); err == nil && name == colName {
+				return true
 			}
 		}
 		return false
@@ -941,7 +1021,12 @@ func TestChannelMultiAlgoTaskMigrationSymmetry(t *testing.T) {
 		t.Fatalf("create source driver: %v", err)
 	}
 
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -967,11 +1052,19 @@ func TestChannelMultiAlgoTaskMigrationSymmetry(t *testing.T) {
 	// cam_1 has 2 algorithms (algo_1 enabled, algo_2 disabled), algo_1 has region_config_json
 	// cam_2 has 1 algorithm (algo_1 enabled)
 	_, err = db.Exec(`
-		INSERT INTO analysis_tasks (id, camera_id, algorithm_id, enabled, sample_fps, config_json, region_config_json, created_at, updated_at)
-		VALUES 
-			('task_01ARZ3NDEKTSV4RRFFQ69G5FAV', 'cam_1', 'algo_1', 1, 10, '{"thresh":0.5}', '{"roi":[[0.1,0.1,0.9,0.9]]}', '2026-10-18 10:00:00', '2026-10-18 10:00:00'),
-			('task_01ARZ3NDEKTSV4RRFFQ69G5FAW', 'cam_1', 'algo_2', 0, 5, '{}', '{}', '2026-10-18 10:05:00', '2026-10-18 10:05:00'),
-			('task_01ARZ3NDEKTSV4RRFFQ69G5FAX', 'cam_2', 'algo_1', 1, 15, '{"thresh":0.8}', '{"mask":[[0.2,0.2,0.5,0.5]]}', '2026-10-18 11:00:00', '2026-10-18 11:00:00')
+		INSERT INTO analysis_tasks (
+			id, camera_id, algorithm_id, enabled, sample_fps,
+			config_json, region_config_json, created_at, updated_at
+		) VALUES 
+			('task_01ARZ3NDEKTSV4RRFFQ69G5FAV', 'cam_1', 'algo_1', 1, 10,
+			 '{"thresh":0.5}', '{"roi":[[0.1,0.1,0.9,0.9]]}',
+			 '2026-10-18 10:00:00', '2026-10-18 10:00:00'),
+			('task_01ARZ3NDEKTSV4RRFFQ69G5FAW', 'cam_1', 'algo_2', 0, 5,
+			 '{}', '{}',
+			 '2026-10-18 10:05:00', '2026-10-18 10:05:00'),
+			('task_01ARZ3NDEKTSV4RRFFQ69G5FAX', 'cam_2', 'algo_1', 1, 15,
+			 '{"thresh":0.8}', '{"mask":[[0.2,0.2,0.5,0.5]]}',
+			 '2026-10-18 11:00:00', '2026-10-18 11:00:00')
 	`)
 	if err != nil {
 		t.Fatalf("insert test tasks at v12: %v", err)
@@ -1003,7 +1096,8 @@ func TestChannelMultiAlgoTaskMigrationSymmetry(t *testing.T) {
 	// Verify cam_1's task id reuses MIN(id): 'task_01ARZ3NDEKTSV4RRFFQ69G5FAV'
 	var cam1TaskID string
 	var cam1Enabled bool
-	if err := db.QueryRow("SELECT id, enabled FROM analysis_tasks WHERE camera_id = 'cam_1'").Scan(&cam1TaskID, &cam1Enabled); err != nil {
+	queryCam1 := "SELECT id, enabled FROM analysis_tasks WHERE camera_id = 'cam_1'"
+	if err := db.QueryRow(queryCam1).Scan(&cam1TaskID, &cam1Enabled); err != nil {
 		t.Fatalf("query cam_1 task: %v", err)
 	}
 	if cam1TaskID != "task_01ARZ3NDEKTSV4RRFFQ69G5FAV" {
@@ -1015,7 +1109,8 @@ func TestChannelMultiAlgoTaskMigrationSymmetry(t *testing.T) {
 
 	// Verify region_config_json is preserved on task_algorithms
 	var algo1Region string
-	if err := db.QueryRow("SELECT region_config_json FROM task_algorithms WHERE id = 'task_01ARZ3NDEKTSV4RRFFQ69G5FAV'").Scan(&algo1Region); err != nil {
+	queryAlgo1 := "SELECT region_config_json FROM task_algorithms WHERE id = 'task_01ARZ3NDEKTSV4RRFFQ69G5FAV'"
+	if err := db.QueryRow(queryAlgo1).Scan(&algo1Region); err != nil {
 		t.Fatalf("query algo1 region: %v", err)
 	}
 	if algo1Region != `{"roi":[[0.1,0.1,0.9,0.9]]}` {
@@ -1043,7 +1138,8 @@ func TestChannelMultiAlgoTaskMigrationSymmetry(t *testing.T) {
 
 	// Verify algo_2 for cam_1 still has enabled=0
 	var cam1Algo2Enabled bool
-	if err := db.QueryRow("SELECT enabled FROM analysis_tasks WHERE camera_id = 'cam_1' AND algorithm_id = 'algo_2'").Scan(&cam1Algo2Enabled); err != nil {
+	queryAlgo2 := "SELECT enabled FROM analysis_tasks WHERE camera_id = 'cam_1' AND algorithm_id = 'algo_2'"
+	if err := db.QueryRow(queryAlgo2).Scan(&cam1Algo2Enabled); err != nil {
 		t.Fatalf("query restored cam_1 algo_2: %v", err)
 	}
 	if cam1Algo2Enabled {
@@ -1091,7 +1187,12 @@ func TestMigration000014_PerceptionForeignKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source driver: %v", err)
 	}
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -1259,7 +1360,12 @@ func TestMigration000016_CaptureAlgorithmRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source driver: %v", err)
 	}
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -1374,7 +1480,12 @@ func TestMigration000017_PurgeNTPHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source driver: %v", err)
 	}
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -1390,18 +1501,21 @@ func TestMigration000017_PurgeNTPHeartbeat(t *testing.T) {
 		username string
 		ip       string
 	}{
-		{1, "time.ntp_sync", "system", ""},               // background heartbeat
-		{2, "time.ntp_sync", "system", ""},               // background heartbeat
-		{3, "time.ntp_sync", "anonymous", "192.168.1.9"}, // user pressed sync
-		{4, "time.ntp_sync", "admin", "192.168.1.10"},    // authenticated user sync
-		{5, "camera.create", "admin", "192.168.1.10"},    // must survive
-		{6, "time.clock_step", "system", ""},             // new-style event, must survive
+		{id: 1, action: "time.ntp_sync", username: "system", ip: ""},               // background heartbeat
+		{id: 2, action: "time.ntp_sync", username: "system", ip: ""},               // background heartbeat
+		{id: 3, action: "time.ntp_sync", username: "anonymous", ip: "192.168.1.9"}, // user pressed sync
+		{id: 4, action: "time.ntp_sync", username: "admin", ip: "192.168.1.10"},    // authenticated user sync
+		{id: 5, action: "camera.create", username: "admin", ip: "192.168.1.10"},    // must survive
+		{id: 6, action: "time.clock_step", username: "system", ip: ""},             // new-style event, must survive
 	}
 	for _, s := range seeds {
 		if _, err := db.Exec(
 			`INSERT INTO audit_logs (id, action, username, ip, target, detail, status)
 			 VALUES (?, ?, ?, ?, 'system_time', '', 'success')`,
-			s.id, s.action, s.username, s.ip,
+			s.id,
+			s.action,
+			s.username,
+			s.ip,
 		); err != nil {
 			t.Fatalf("seed audit log %d: %v", s.id, err)
 		}
@@ -1479,7 +1593,13 @@ func TestSQLiteDSNCarriesPerformancePragmas(t *testing.T) {
 	}
 	for key, want := range cases {
 		if got := params.Get(key); got != want {
-			t.Errorf("DSN %s = %q, want %q (full DSN: %s)", key, got, want, dsn)
+			t.Errorf(
+				"DSN %s = %q, want %q (full DSN: %s)",
+				key,
+				got,
+				want,
+				dsn,
+			)
 		}
 	}
 }
@@ -1558,7 +1678,12 @@ func TestGB28181MigrationUpAndDownSymmetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source driver: %v", err)
 	}
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -1571,7 +1696,8 @@ func TestGB28181MigrationUpAndDownSymmetry(t *testing.T) {
 	tableExists := func(name string) bool {
 		t.Helper()
 		var count int
-		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count); err != nil {
+		query := "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+		if err := db.QueryRow(query, name).Scan(&count); err != nil {
 			t.Fatalf("query table %s: %v", name, err)
 		}
 		return count == 1
@@ -1586,9 +1712,14 @@ func TestGB28181MigrationUpAndDownSymmetry(t *testing.T) {
 	// config would make a fresh box try to bind SIP 5060 without an operator.
 	var enabled, requireRegisteredDevice int
 	var portMin, portMax int
-	if err := db.QueryRow(
-		"SELECT enabled, rtp_port_min, rtp_port_max, require_registered_device FROM gb28181_configs WHERE id = 1").
-		Scan(&enabled, &portMin, &portMax, &requireRegisteredDevice); err != nil {
+	queryConfig := `SELECT enabled, rtp_port_min, rtp_port_max, require_registered_device
+		FROM gb28181_configs WHERE id = 1`
+	if err := db.QueryRow(queryConfig).Scan(
+		&enabled,
+		&portMin,
+		&portMax,
+		&requireRegisteredDevice,
+	); err != nil {
 		t.Fatalf("read singleton config: %v", err)
 	}
 	if enabled != 0 {
@@ -1632,12 +1763,14 @@ func TestGB28181MigrationUpAndDownSymmetry(t *testing.T) {
 	// table is the last line of defence for a state machine about to be added in S1.
 	if _, err := db.Exec(`INSERT INTO gb_devices
 		(device_id, name, transport, expires_seconds, state, created_at, updated_at)
-		VALUES ('34020000001320000009', '未知状态', 'udp', 3600, 'unknown', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+		VALUES ('34020000001320000009', '未知状态', 'udp', 3600, 'unknown',
+		        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
 		t.Error("expected the state CHECK to reject an unknown session state")
 	}
 	if _, err := db.Exec(`INSERT INTO gb_devices
 		(device_id, name, transport, expires_seconds, state, created_at, updated_at)
-		VALUES ('34020000001320000008', '过期时间过短', 'udp', 30, 'offline', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+		VALUES ('34020000001320000008', '过期时间过短', 'udp', 30, 'offline',
+		        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
 		t.Error("expected the expires_seconds CHECK to reject a registration shorter than 60s")
 	}
 
@@ -1701,7 +1834,12 @@ func TestSpatialCanvasTablesMigrationUpAndDownSymmetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create iofs driver: %v", err)
 	}
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -1714,7 +1852,8 @@ func TestSpatialCanvasTablesMigrationUpAndDownSymmetry(t *testing.T) {
 
 	tableExists := func(name string) bool {
 		var count int
-		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&count); err != nil {
+		query := "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?"
+		if err := db.QueryRow(query, name).Scan(&count); err != nil {
 			t.Fatalf("query sqlite_master for %s: %v", name, err)
 		}
 		return count > 0
@@ -1758,7 +1897,8 @@ func TestSpatialCanvasTablesMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("delete map: %v", err)
 	}
 	var posCount int
-	if err := db.QueryRow("SELECT COUNT(*) FROM camera_canvas_positions WHERE map_id = 'map-1'").Scan(&posCount); err != nil {
+	posQuery := "SELECT COUNT(*) FROM camera_canvas_positions WHERE map_id = 'map-1'"
+	if err := db.QueryRow(posQuery).Scan(&posCount); err != nil {
 		t.Fatalf("count positions: %v", err)
 	}
 	if posCount != 0 {
@@ -1808,7 +1948,12 @@ func TestSupportsMotionGateMigrationUpAndDownSymmetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create iofs driver: %v", err)
 	}
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("create migrator: %v", err)
 	}
@@ -1830,7 +1975,14 @@ func TestSupportsMotionGateMigrationUpAndDownSymmetry(t *testing.T) {
 			var name, ctype string
 			var notnull, pk int
 			var dfltValue sql.NullString
-			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			if err := rows.Scan(
+				&cid,
+				&name,
+				&ctype,
+				&notnull,
+				&dfltValue,
+				&pk,
+			); err != nil {
 				t.Fatalf("scan pragma row: %v", err)
 			}
 			if name == "supports_motion_gate" {
@@ -1853,7 +2005,8 @@ func TestSupportsMotionGateMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("insert algorithm: %v", err)
 	}
 	var supportsGate bool
-	if err := db.QueryRow("SELECT supports_motion_gate FROM algorithms WHERE id = 'test_algo'").Scan(&supportsGate); err != nil {
+	queryGate := "SELECT supports_motion_gate FROM algorithms WHERE id = 'test_algo'"
+	if err := db.QueryRow(queryGate).Scan(&supportsGate); err != nil {
 		t.Fatalf("query supports_motion_gate: %v", err)
 	}
 	if !supportsGate {
@@ -1886,7 +2039,11 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		if closeErr := db.Close(); closeErr != nil && !errors.Is(closeErr, sql.ErrConnDone) {
+			t.Errorf("db.Close: %v", closeErr)
+		}
+	})
 
 	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
 	if err != nil {
@@ -1896,11 +2053,24 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("iofs driver: %v", err)
 	}
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("migrator: %v", err)
 	}
-	t.Cleanup(func() { _, _ = migrator.Close() })
+	t.Cleanup(func() {
+		srcErr, dbErr := migrator.Close()
+		if srcErr != nil {
+			t.Errorf("migrator source close: %v", srcErr)
+		}
+		if dbErr != nil {
+			t.Errorf("migrator db close: %v", dbErr)
+		}
+	})
 
 	// 1. Run migrations through 29 (29 is rolled back first below)
 	if err := migrator.Migrate(29); err != nil && !errors.Is(err, migrate.ErrNoChange) {
@@ -1940,7 +2110,8 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 		t.Fatalf("rollback 29: %v", err)
 	}
 	var count int
-	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='pending_snapshot_deletes'").Scan(&count); err != nil {
+	queryPending := "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='pending_snapshot_deletes'"
+	if err := db.QueryRow(queryPending).Scan(&count); err != nil {
 		t.Fatalf("check pending_snapshot_deletes dropped: %v", err)
 	}
 	if count != 0 {
@@ -1951,7 +2122,8 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 	if err := migrator.Steps(-1); err != nil {
 		t.Fatalf("rollback 28: %v", err)
 	}
-	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='api_tokens'").Scan(&count); err != nil {
+	queryTokens := "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='api_tokens'"
+	if err := db.QueryRow(queryTokens).Scan(&count); err != nil {
 		t.Fatalf("check api_tokens dropped: %v", err)
 	}
 	if count != 0 {
@@ -1970,7 +2142,7 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 	if err := migrator.Steps(3); err != nil {
 		t.Fatalf("re-apply 27, 28 & 29: %v", err)
 	}
-	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='api_tokens'").Scan(&count); err != nil || count == 0 {
+	if err := db.QueryRow(queryTokens).Scan(&count); err != nil || count == 0 {
 		t.Fatalf("expected api_tokens table after re-Up")
 	}
 }
@@ -1995,26 +2167,50 @@ func TestAlertDestinationsMigrationSymmetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("iofs driver: %v", err)
 	}
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("migrator: %v", err)
 	}
-	t.Cleanup(func() { _, _ = migrator.Close() })
+	t.Cleanup(func() {
+		srcErr, dbErr := migrator.Close()
+		if srcErr != nil {
+			t.Errorf("migrator source close: %v", srcErr)
+		}
+		if dbErr != nil {
+			t.Errorf("migrator db close: %v", dbErr)
+		}
+	})
 
 	// 1. Run migrations through 30
 	if err := migrator.Migrate(30); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		t.Fatalf("migrator Migrate(30): %v", err)
 	}
 
-	// Verify alert_destinations table exists and accepts insertion
-	if _, err := db.Exec(`INSERT INTO alert_destinations (id, name, channel_type, enabled, image_mode, config_json, filter_json, secret_ciphertext, created_at, updated_at)
-		VALUES ('dest_1', 'webhook_test', 'webhook', 1, 'url', '{}', '{}', X'010203', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+	insertDest := `INSERT INTO alert_destinations (
+		id, name, channel_type, enabled, image_mode,
+		config_json, filter_json, secret_ciphertext, created_at, updated_at
+	) VALUES (
+		'dest_1', 'webhook_test', 'webhook', 1, 'url',
+		'{}', '{}', X'010203', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+	)`
+	if _, err := db.Exec(insertDest); err != nil {
 		t.Fatalf("insert alert_destination: %v", err)
 	}
 
 	// Duplicate name must violate UNIQUE constraint
-	if _, err := db.Exec(`INSERT INTO alert_destinations (id, name, channel_type, enabled, image_mode, config_json, filter_json, secret_ciphertext, created_at, updated_at)
-		VALUES ('dest_2', 'webhook_test', 'webhook', 1, 'url', '{}', '{}', X'010203', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+	insertDup := `INSERT INTO alert_destinations (
+		id, name, channel_type, enabled, image_mode,
+		config_json, filter_json, secret_ciphertext, created_at, updated_at
+	) VALUES (
+		'dest_2', 'webhook_test', 'webhook', 1, 'url',
+		'{}', '{}', X'010203', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+	)`
+	if _, err := db.Exec(insertDup); err == nil {
 		t.Fatalf("expected duplicate name to violate unique constraint")
 	}
 
@@ -2023,7 +2219,8 @@ func TestAlertDestinationsMigrationSymmetry(t *testing.T) {
 		t.Fatalf("rollback 30: %v", err)
 	}
 	var count int
-	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='alert_destinations'").Scan(&count); err != nil {
+	queryDest := "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='alert_destinations'"
+	if err := db.QueryRow(queryDest).Scan(&count); err != nil {
 		t.Fatalf("check alert_destinations dropped: %v", err)
 	}
 	if count != 0 {
@@ -2034,7 +2231,7 @@ func TestAlertDestinationsMigrationSymmetry(t *testing.T) {
 	if err := migrator.Steps(1); err != nil {
 		t.Fatalf("re-apply 30: %v", err)
 	}
-	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='alert_destinations'").Scan(&count); err != nil || count == 0 {
+	if err := db.QueryRow(queryDest).Scan(&count); err != nil || count == 0 {
 		t.Fatalf("expected alert_destinations table after re-Up")
 	}
 }
@@ -2058,11 +2255,24 @@ func TestSystemSettingsMigrationSymmetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("iofs driver: %v", err)
 	}
-	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
 	if err != nil {
 		t.Fatalf("migrator: %v", err)
 	}
-	t.Cleanup(func() { _, _ = migrator.Close() })
+	t.Cleanup(func() {
+		srcErr, dbErr := migrator.Close()
+		if srcErr != nil {
+			t.Errorf("migrator source close: %v", srcErr)
+		}
+		if dbErr != nil {
+			t.Errorf("migrator db close: %v", dbErr)
+		}
+	})
 
 	if err := migrator.Migrate(31); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		t.Fatalf("migrator Migrate(31): %v", err)

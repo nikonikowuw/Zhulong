@@ -15,7 +15,8 @@ var migrationNamePattern = regexp.MustCompile(`^(\d{6})_(.+)\.(up|down)\.sql$`)
 //  3. 文件名只能是 6 位补零的 NNNNNN_name.(up|down).sql。这条同时保证目录遍历顺序
 //     等于版本序，所以不需要再单独比较文件名与版本号的排序。
 //
-// 版本号**不要求连续**：仓库里存在 000026 空洞，断言连续性会让正常的历史缺口把构建卡死。
+// 版本号**不要求连续**：仓库里存在 000026 空洞，
+// 断言连续性会让正常的历史缺口把构建卡死。
 func TestMigrationFilesArePairedAndUnique(t *testing.T) {
 	entries, err := fs.ReadDir(migrationFiles, "migrations")
 	if err != nil {
@@ -43,7 +44,12 @@ func TestMigrationFilesArePairedAndUnique(t *testing.T) {
 		item := pairs[key]
 		if item == nil {
 			if other, exists := owner[version]; exists {
-				t.Fatalf("migration version %s is used by both %q and %q", version, other, key)
+				t.Fatalf(
+					"migration version %s is used by both %q and %q",
+					version,
+					other,
+					key,
+				)
 			}
 			owner[version] = key
 			item = &pair{}
@@ -69,8 +75,12 @@ func TestMigrationFilesArePairedAndUnique(t *testing.T) {
 	}
 	for key, item := range pairs {
 		if !item.up || !item.down {
-			t.Fatalf("migration %s must have both .up.sql and .down.sql (up=%v down=%v)",
-				key, item.up, item.down)
+			t.Fatalf(
+				"migration %s must have both .up.sql and .down.sql (up=%v down=%v)",
+				key,
+				item.up,
+				item.down,
+			)
 		}
 	}
 }

@@ -43,7 +43,12 @@ func (r embeddedMigrationRunner) up(ctx context.Context, dsn string) error {
 	if err != nil {
 		return errors.Join(fmt.Errorf("create embedded migration source: %w", err), databaseDriver.Close())
 	}
-	migrator, err := migrate.NewWithInstance("iofs", sourceDriver, "sqlite3", databaseDriver)
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		sourceDriver,
+		"sqlite3",
+		databaseDriver,
+	)
 	if err != nil {
 		return errors.Join(fmt.Errorf("create migration runner: %w", err), sourceDriver.Close(), databaseDriver.Close())
 	}
