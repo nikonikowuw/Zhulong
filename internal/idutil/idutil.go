@@ -1,3 +1,4 @@
+// Package idutil provides thread-safe Crockford Base32 monotonic ULID generation, parsing, and validation.
 package idutil
 
 import (
@@ -9,6 +10,8 @@ import (
 
 	"github.com/oklog/ulid/v2"
 )
+
+const encodedLength = ulid.EncodedSize
 
 var (
 	defaultEntropyMu sync.Mutex
@@ -30,7 +33,7 @@ func Parse(s string) (ulid.ULID, error) {
 
 // IsValid checks if s is a valid Crockford Base32 26-character ULID.
 func IsValid(s string) bool {
-	if len(s) != 26 {
+	if len(s) != encodedLength {
 		return false
 	}
 	_, err := ulid.ParseStrict(s)
@@ -41,7 +44,7 @@ func IsValid(s string) bool {
 func Time(s string) (time.Time, error) {
 	u, err := ulid.ParseStrict(s)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse ulid: %w", err)
+		return time.Time{}, fmt.Errorf("parse ulid %q: %w", s, err)
 	}
 	return time.UnixMilli(int64(u.Time())).UTC(), nil
 }
