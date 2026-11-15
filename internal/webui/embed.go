@@ -1,7 +1,9 @@
+// Package webui provides embedded static frontend assets for Zhulong.
 package webui
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 	"net/http"
 )
@@ -13,7 +15,7 @@ var embeddedFiles embed.FS
 func FileSystem() http.FileSystem {
 	distribution, err := fs.Sub(embeddedFiles, "dist")
 	if err != nil {
-		panic(err)
+		panic(fmt.Errorf("sub embedded dist directory: %w", err))
 	}
 	return http.FS(distribution)
 }
