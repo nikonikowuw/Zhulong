@@ -2,6 +2,7 @@ package apperr
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 )
@@ -214,6 +215,29 @@ func TestAppError_Factories(t *testing.T) {
 			wantKind: KindInternal,
 			wantCode: "INTERNAL_ERROR",
 		},
+		{
+			name:     "BadRequest",
+			err:      BadRequest("BAD_REQUEST", "bad request", nil),
+			wantKind: KindBadRequest,
+			wantCode: "BAD_REQUEST",
+		},
+		{
+			name:     "PayloadTooLarge",
+			err:      PayloadTooLarge("PAYLOAD_TOO_LARGE", "payload too large", nil),
+			wantKind: KindPayloadTooLarge,
+			wantCode: "PAYLOAD_TOO_LARGE",
+		},
+		{
+			name: "New",
+			err: New(
+				KindInternal,
+				"CUSTOM_CODE",
+				"custom message",
+				nil,
+			),
+			wantKind: KindInternal,
+			wantCode: "CUSTOM_CODE",
+		},
 	}
 
 	for _, tt := range tests {
@@ -278,5 +302,57 @@ func TestAppError_IsMatching(t *testing.T) {
 	}
 	if nilReceiver.Is(internalErr) {
 		t.Errorf("expected (*Error)(nil).Is(non-nil) to be false")
+	}
+}
+
+func TestCodeOf(t *testing.T) {
+	cause := errors.New("underlying cause")
+	appErr := Conflict("RESOURCE_CONFLICT", "conflict", cause)
+
+	var typedNil *Error
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: "",
+		},
+		{
+			name: "typed nil *Error",
+			err:  typedNil,
+			want: "",
+		},
+		{
+			name: "non-app error",
+			err:  cause,
+			want: "",
+		},
+		{
+			name: "direct *Error",
+			err:  appErr,
+			want: "RESOURCE_CONFLICT",
+		},
+		{
+			name: "wrapped *Error",
+			err:  fmt.Errorf("wrapped: %w", appErr),
+			want: "RESOURCE_CONFLICT",
+		},
+		{
+			name: "*Error with empty code",
+			err:  &Error{Kind: KindInternal},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CodeOf(tt.err); got != tt.want {
+				t.Errorf("CodeOf() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

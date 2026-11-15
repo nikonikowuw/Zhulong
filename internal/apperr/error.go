@@ -124,66 +124,121 @@ func New(kind Kind, code, message string, err error) *Error {
 
 // Invalid creates a validation or malformed-input domain error.
 func Invalid(code, message string, err error) *Error {
-	return New(KindInvalid, code, message, err)
+	return New(
+		KindInvalid,
+		code,
+		message,
+		err,
+	)
 }
 
 // Unauthenticated creates an authentication-required or invalid-credentials error.
 func Unauthenticated(code, message string, err error) *Error {
-	return New(KindUnauthenticated, code, message, err)
+	return New(
+		KindUnauthenticated,
+		code,
+		message,
+		err,
+	)
 }
 
 // PermissionDenied creates an authorization-denied or access-forbidden error.
 func PermissionDenied(code, message string, err error) *Error {
-	return New(KindPermissionDenied, code, message, err)
+	return New(
+		KindPermissionDenied,
+		code,
+		message,
+		err,
+	)
 }
 
 // NotFound creates a resource-not-found error.
 func NotFound(code, message string, err error) *Error {
-	return New(KindNotFound, code, message, err)
+	return New(
+		KindNotFound,
+		code,
+		message,
+		err,
+	)
 }
 
 // Conflict creates a resource-conflict or state-collision error.
 func Conflict(code, message string, err error) *Error {
-	return New(KindConflict, code, message, err)
+	return New(
+		KindConflict,
+		code,
+		message,
+		err,
+	)
 }
 
 // Precondition creates an unsatisfied precondition error.
 func Precondition(code, message string, err error) *Error {
-	return New(KindPrecondition, code, message, err)
+	return New(
+		KindPrecondition,
+		code,
+		message,
+		err,
+	)
 }
 
 // RateLimited creates a rate-limiting or too-many-attempts error.
 func RateLimited(code, message string, err error) *Error {
-	return New(KindRateLimited, code, message, err)
+	return New(
+		KindRateLimited,
+		code,
+		message,
+		err,
+	)
 }
 
 // Unavailable creates a service-unavailable error (e.g. hardware unavailable, dependency down).
 func Unavailable(code, message string, err error) *Error {
-	return New(KindUnavailable, code, message, err)
+	return New(
+		KindUnavailable,
+		code,
+		message,
+		err,
+	)
 }
 
 // Internal creates a server-side unexpected error.
 func Internal(code, message string, err error) *Error {
-	return New(KindInternal, code, message, err)
+	return New(
+		KindInternal,
+		code,
+		message,
+		err,
+	)
 }
 
 // BadRequest creates a malformed-request error that carries no field-level details.
 func BadRequest(code, message string, err error) *Error {
-	return New(KindBadRequest, code, message, err)
+	return New(
+		KindBadRequest,
+		code,
+		message,
+		err,
+	)
 }
 
 // PayloadTooLarge creates a request-body-too-large error.
 func PayloadTooLarge(code, message string, err error) *Error {
-	return New(KindPayloadTooLarge, code, message, err)
+	return New(
+		KindPayloadTooLarge,
+		code,
+		message,
+		err,
+	)
 }
 
 // CodeOf returns the stable machine code carried by err, or "" when err carries no
 // application code. Callers that only need to translate between error shapes (an async
 // job report, for instance) use it instead of matching error strings.
 func CodeOf(err error) string {
-	var appError *Error
-	if errors.As(err, &appError) {
-		return appError.Code
+	var appErr *Error
+	if errors.As(err, &appErr) && appErr != nil {
+		return appErr.Code
 	}
 	return ""
 }
