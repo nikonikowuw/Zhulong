@@ -25,7 +25,9 @@ type stubStatusHardware struct {
 	resp *systeminfo.SystemHardwareResponse
 }
 
-func (s stubStatusHardware) GetHardwareStatus(_ context.Context) (*systeminfo.SystemHardwareResponse, error) {
+func (s stubStatusHardware) GetHardwareStatus(
+	_ context.Context,
+) (*systeminfo.SystemHardwareResponse, error) {
 	return s.resp, nil
 }
 

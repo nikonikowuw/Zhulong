@@ -103,7 +103,8 @@ func openLogSink(output string, rotation RotationConfig) (loggerOutput, error) {
 	if rotation.MaxTotalSizeMB <= 0 {
 		return nil, errors.New("file logging requires a positive logging.rotation.max_total_size_mb")
 	}
-	if rotation.MaxSizeMB > math.MaxInt64/mebibyte || rotation.MaxTotalSizeMB > math.MaxInt64/mebibyte {
+	if rotation.MaxSizeMB > math.MaxInt64/mebibyte ||
+		rotation.MaxTotalSizeMB > math.MaxInt64/mebibyte {
 		return nil, errors.New("logging.rotation size exceeds the supported byte range")
 	}
 	maxSize := rotation.MaxSizeMB * mebibyte
@@ -168,18 +169,28 @@ func (s *boundedFileSink) prepareLocked() error {
 	}
 	info, err = file.Stat()
 	if err != nil {
-		_ = file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			// Intentionally ignored in failure path.
+		}
 		return s.failLocked(fmt.Errorf("stat log output: %w", err))
 	}
 	s.file = file
 	s.fileSize = info.Size()
 	if s.fileSize > s.maxTotalSize {
-		_ = s.file.Close()
+		if closeErr := s.file.Close(); closeErr != nil {
+			// Intentionally ignored in failure path.
+		}
 		s.file = nil
-		return s.failLocked(fmt.Errorf("active log file exceeds total storage budget (%d > %d bytes)", s.fileSize, s.maxTotalSize))
+		return s.failLocked(fmt.Errorf(
+			"active log file exceeds total storage budget (%d > %d bytes)",
+			s.fileSize,
+			s.maxTotalSize,
+		))
 	}
 	if err := s.pruneLocked(0); err != nil {
-		_ = s.file.Close()
+		if closeErr := s.file.Close(); closeErr != nil {
+			// Intentionally ignored in failure path.
+		}
 		s.file = nil
 		return s.failLocked(err)
 	}
@@ -213,7 +224,11 @@ func (s *boundedFileSink) Write(data []byte) (int, error) {
 		return 0, errors.New("file log sink has not been prepared by the application lifecycle")
 	}
 	if int64(len(data)) > s.maxSize {
-		return 0, s.failWriteLocked(fmt.Errorf("log entry exceeds per-file size limit (%d > %d bytes)", len(data), s.maxSize))
+		return 0, s.failWriteLocked(fmt.Errorf(
+			"log entry exceeds per-file size limit (%d > %d bytes)",
+			len(data),
+			s.maxSize,
+		))
 	}
 	if int64(len(data)) > s.maxSize-s.fileSize {
 		if err := s.rotateLocked(); err != nil {
@@ -282,7 +297,10 @@ func (s *boundedFileSink) rotateLocked() error {
 	}
 	archiveSize := s.fileSize
 	s.archives = append(s.archives, rotatedArchive{
-		path: archivePath, size: archiveSize, created: created, sequence: sequence,
+		path:     archivePath,
+		size:     archiveSize,
+		created:  created,
+		sequence: sequence,
 	})
 	sortArchivesLocked(s.archives)
 	s.fileSize = 0
@@ -373,7 +391,11 @@ func (s *boundedFileSink) readArchivesLocked() ([]rotatedArchive, error) {
 			return nil, fmt.Errorf("log archive %q is not a regular file", candidate)
 		}
 		archives = append(archives, rotatedArchive{
-			path: candidate, size: info.Size(), created: created, sequence: sequence, compressed: compressed,
+			path:       candidate,
+			size:       info.Size(),
+			created:    created,
+			sequence:   sequence,
+			compressed: compressed,
 		})
 	}
 	sortArchivesLocked(archives)
@@ -399,7 +421,8 @@ func (s *boundedFileSink) pruneLocked(extraBytes int64) error {
 	now := time.Now().UTC()
 	for i := 0; i < len(s.archives); {
 		archive := s.archives[i]
-		if s.maxAge <= 0 || now.Sub(archive.created) <= s.maxAge || s.archiveCompressingLocked(archive.path) {
+		isFresh := s.maxAge <= 0 || now.Sub(archive.created) <= s.maxAge
+		if isFresh || s.archiveCompressingLocked(archive.path) {
 			i++
 			continue
 		}
@@ -416,7 +439,11 @@ func (s *boundedFileSink) pruneLocked(extraBytes int64) error {
 			return err
 		}
 	}
-	for total := s.totalSizeLocked(); extraBytes > s.maxTotalSize-total; total = s.totalSizeLocked() {
+	for {
+		total := s.totalSizeLocked()
+		if extraBytes <= s.maxTotalSize-total {
+			break
+		}
 		index := s.oldestRemovableArchiveLocked()
 		if index < 0 {
 			if s.compression != nil {
@@ -482,7 +509,13 @@ func (s *boundedFileSink) failLocked(err error) error {
 		if s.diagnostic == nil {
 			s.diagnostic = os.Stderr
 		}
-		_, _ = fmt.Fprintf(s.diagnostic, "zhulong: file log sink disabled: %v\n", err)
+		if _, diagErr := fmt.Fprintf(
+			s.diagnostic,
+			"zhulong: file log sink disabled: %v\n",
+			err,
+		); diagErr != nil {
+			// Intentionally ignored: diagnostic output to stderr is best-effort.
+		}
 	}
 	return s.failed
 }

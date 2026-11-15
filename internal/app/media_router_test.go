@@ -13,11 +13,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
-	"go.uber.org/zap"
 )
 
 // TestMediaRoutesProduceNoAuditRecords pins the audit boundary of the media
@@ -41,15 +42,30 @@ func TestMediaRoutesProduceNoAuditRecords(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("database migration failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
-
-	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore.Close error: %v", err)
+		}
 	})
+
+	auditSvc := audit.NewService(
+		audit.NewStore(dbStore),
+		zap.NewNop(),
+		audit.Config{
+			BufferSize:    100,
+			BatchSize:     10,
+			FlushInterval: 5 * time.Millisecond,
+			MaxEntries:    1000,
+		},
+	)
 	if err := auditSvc.Start(context.Background()); err != nil {
 		t.Fatalf("start audit service: %v", err)
 	}
-	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := auditSvc.Stop(context.Background()); err != nil {
+			t.Logf("auditSvc.Stop error: %v", err)
+		}
+	})
 
 	mediaRoot := t.TempDir()
 	mediaFile := filepath.Join(mediaRoot, "exports", "task-1.mp4")
@@ -68,7 +84,12 @@ func TestMediaRoutesProduceNoAuditRecords(t *testing.T) {
 	// Point the single source of truth for the media root at the fixture.
 	cfg := storage.DefaultStorageConfig()
 	cfg.MediaDirectory = mediaRoot
-	if _, err := storageSvc.UpdateConfig(context.Background(), cfg, "tester", "127.0.0.1"); err != nil {
+	if _, err := storageSvc.UpdateConfig(
+		context.Background(),
+		cfg,
+		"tester",
+		"127.0.0.1",
+	); err != nil {
 		t.Fatalf("configure media root: %v", err)
 	}
 
@@ -87,12 +108,15 @@ func TestMediaRoutesProduceNoAuditRecords(t *testing.T) {
 	})
 
 	router := newRouter(RouterParams{
-		Logger:          zap.NewNop(),
-		DatabaseReady:   readinessStub(true),
-		NativeReady:     readinessStub(true),
-		AuditService:    auditSvc,
-		ProtectedRoutes: []RouteRegistrar{mediaComp.ProtectedRoutes, storageComp.ProtectedRoutes},
-		Assets:          assets,
+		Logger:        zap.NewNop(),
+		DatabaseReady: readinessStub(true),
+		NativeReady:   readinessStub(true),
+		AuditService:  auditSvc,
+		ProtectedRoutes: []RouteRegistrar{
+			mediaComp.ProtectedRoutes,
+			storageComp.ProtectedRoutes,
+		},
+		Assets: assets,
 	})
 
 	// A range request, the shape a real player issues repeatedly.
@@ -103,7 +127,11 @@ func TestMediaRoutesProduceNoAuditRecords(t *testing.T) {
 	router.ServeHTTP(recorder, req)
 
 	if recorder.Code != http.StatusPartialContent {
-		t.Fatalf("expected 206 for the range request, got %d: %s", recorder.Code, recorder.Body.String())
+		t.Fatalf(
+			"expected 206 for the range request, got %d: %s",
+			recorder.Code,
+			recorder.Body.String(),
+		)
 	}
 
 	// Also exercise the metadata endpoint and the root probe: all three must
@@ -117,7 +145,12 @@ func TestMediaRoutesProduceNoAuditRecords(t *testing.T) {
 		probeRecorder := httptest.NewRecorder()
 		router.ServeHTTP(probeRecorder, probe)
 		if probeRecorder.Code != http.StatusOK {
-			t.Fatalf("expected 200 for %s, got %d: %s", target, probeRecorder.Code, probeRecorder.Body.String())
+			t.Fatalf(
+				"expected 200 for %s, got %d: %s",
+				target,
+				probeRecorder.Code,
+				probeRecorder.Body.String(),
+			)
 		}
 	}
 
@@ -136,7 +169,11 @@ func TestMediaRoutesProduceNoAuditRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode control body: %v", err)
 	}
-	control := httptest.NewRequest(http.MethodPut, "/api/v1/system/storage/config", bytes.NewReader(controlBody))
+	control := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/system/storage/config",
+		bytes.NewReader(controlBody),
+	)
 	control.Header.Set("Content-Type", "application/json")
 	control.RemoteAddr = "192.168.12.12:9999"
 	controlRecorder := httptest.NewRecorder()
@@ -157,6 +194,10 @@ func TestMediaRoutesProduceNoAuditRecords(t *testing.T) {
 		}
 	}
 	if !sawControl {
-		t.Fatalf("positive control failed: no storage update record, so the audit chain was not mounted (entries: %+v)", entries)
+		t.Fatalf(
+			"positive control failed: no storage update record, "+
+				"so the audit chain was not mounted (entries: %+v)",
+			entries,
+		)
 	}
 }

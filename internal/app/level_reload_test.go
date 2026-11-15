@@ -75,7 +75,8 @@ func TestLogLevelReloaderReportsRestartOnlyPolicyChanges(t *testing.T) {
 	writeReloadPolicyConfig(t, path, "[logging]\nlevel = \"debug\"\nformat = \"json\"\n")
 	sendReloadSignal(t)
 	waitForLevel(t, level, zapcore.DebugLevel)
-	if got := logs.FilterMessage("logging policy changed on disk; restart required to apply").Len(); got != 0 {
+	restartMsg := "logging policy changed on disk; restart required to apply"
+	if got := logs.FilterMessage(restartMsg).Len(); got != 0 {
 		t.Fatalf("level-only reload reported a restart requirement: %d", got)
 	}
 

@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/fx"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -18,8 +21,6 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/fx"
-	"go.uber.org/zap"
 )
 
 // DecodeStatus describes current video decoder metrics and admission state.
@@ -93,7 +94,10 @@ func newRouter(p RouterParams) *gin.Engine {
 	// Recovery stays outermost per the middleware guidelines. The audit
 	// observer is notified after the sanitized 500 response is written, which
 	// is the only point where a panicking request can be recorded as failed.
-	router.Use(httpmiddleware.Recovery(p.Logger, audithttp.NewPanicObserver(p.AuditService)), httpmiddleware.RequestID())
+	router.Use(
+		httpmiddleware.Recovery(p.Logger, audithttp.NewPanicObserver(p.AuditService)),
+		httpmiddleware.RequestID(),
+	)
 
 	api := router.Group("/api/v1")
 	api.Use(httpmiddleware.AccessLog(p.Logger), httpmiddleware.MaxBodyLimit())
@@ -150,8 +154,13 @@ func newRouter(p RouterParams) *gin.Engine {
 	// audit and RequireAuth appear twice — any middleware meant to cover every
 	// /api/v1 endpoint has to be added to both groups.
 	upload := router.Group("/api/v1")
-	upload.Use(httpmiddleware.AccessLog(p.Logger),
-		httpmiddleware.MaxBodyLimitWithLimitAndCode(algorithm.MaxUploadRequestBodySize, "FILE_TOO_LARGE"))
+	upload.Use(
+		httpmiddleware.AccessLog(p.Logger),
+		httpmiddleware.MaxBodyLimitWithLimitAndCode(
+			algorithm.MaxUploadRequestBodySize,
+			"FILE_TOO_LARGE",
+		),
+	)
 	// The upload group is mounted separately, so it needs its own audit
 	// middleware to cover algorithm installation.
 	if p.AuditService != nil {
@@ -178,7 +187,12 @@ func newRouter(p RouterParams) *gin.Engine {
 		openapi.Use(apitoken.RequireBearer(p.APITokenService, p.Logger, p.AuditService))
 	} else {
 		openapi.Use(func(c *gin.Context) {
-			httputil.WriteError(c, apperr.New(apperr.KindInternal, "INTERNAL_ERROR", "API token service is not initialized", nil))
+			httputil.WriteError(c, apperr.New(
+				apperr.KindInternal,
+				"INTERNAL_ERROR",
+				"API token service is not initialized",
+				nil,
+			))
 			c.Abort()
 		})
 	}
@@ -190,7 +204,12 @@ func newRouter(p RouterParams) *gin.Engine {
 	router.NoRoute(func(c *gin.Context) {
 		requestPath := c.Request.URL.Path
 		if isReservedPath(requestPath) {
-			httputil.WriteError(c, httputil.NewError(http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", nil))
+			httputil.WriteError(c, httputil.NewError(
+				http.StatusNotFound,
+				"ROUTE_NOT_FOUND",
+				"Route not found",
+				nil,
+			))
 			return
 		}
 		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
@@ -204,7 +223,12 @@ func newRouter(p RouterParams) *gin.Engine {
 	})
 	router.NoMethod(func(c *gin.Context) {
 		if isReservedPath(c.Request.URL.Path) {
-			httputil.WriteError(c, httputil.NewError(http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", nil))
+			httputil.WriteError(c, httputil.NewError(
+				http.StatusNotFound,
+				"ROUTE_NOT_FOUND",
+				"Route not found",
+				nil,
+			))
 			return
 		}
 		c.Status(http.StatusNotFound)
@@ -233,7 +257,12 @@ func healthHandler(p healthParams) gin.HandlerFunc {
 		dbReady := p.Database != nil && p.Database.Ready()
 		nativeReady := p.Native != nil && p.Native.Ready()
 		if !dbReady || !nativeReady {
-			httputil.WriteError(c, httputil.NewError(http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Service is not ready", nil))
+			httputil.WriteError(c, httputil.NewError(
+				http.StatusServiceUnavailable,
+				"SERVICE_UNAVAILABLE",
+				"Service is not ready",
+				nil,
+			))
 			return
 		}
 		components := map[string]string{
@@ -265,7 +294,8 @@ func healthHandler(p healthParams) gin.HandlerFunc {
 					MaxSessions:       stats.MaxSessions,
 					RejectedRequests:  stats.RejectedRequests,
 				}
-				if (backend == "mpp" || !p.Config.Decode.AllowSoftwareFallback) && !stats.HardwareAvailable {
+				isSoftwareForbidden := backend == "mpp" || !p.Config.Decode.AllowSoftwareFallback
+				if isSoftwareForbidden && !stats.HardwareAvailable {
 					components["engine"] = "degraded"
 				}
 			}

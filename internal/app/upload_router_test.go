@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
@@ -25,7 +27,6 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/person"
-	"go.uber.org/zap"
 )
 
 // stubPersonExtractor satisfies person.FaceFeatureExtractor so app-level route
@@ -60,12 +61,13 @@ func createUncompressedTestTarGz(t *testing.T, payloadBytes int) string {
 		"platform": {"arch": "x86_64", "target": "onnx"},
 		"resources": {"compute_cost": 20, "memory_mb": 64}
 	}`)
-	// 包根可执行文件：名字必须等于 manifest.id。它要能应答安装期的 --verify 探针，
+	// 包根可执行文件：名字必须等于 manifest.id。
+	// 它要能应答安装期的 --verify 探针，
 	// 所以内容是一段会打印报告的脚本（不是 elf 桩）。
-	entryScript := []byte("#!/bin/sh\n" +
-		"case \"$1\" in\n" +
-		"  --verify) printf '%s\\n' '{\"status\":\"passed\",\"sample_decoded\":false,\"width\":0,\"height\":0,\"result_type\":1,\"count\":0}'; exit 0;;\n" +
-		"esac\nexit 0\n")
+	verifyScript := "  --verify) printf '%s\\n' " +
+		`'{"status":"passed","sample_decoded":false,"width":0,"height":0,"result_type":1,"count":0}'; ` +
+		"exit 0;;\n"
+	entryScript := []byte("#!/bin/sh\ncase \"$1\" in\n" + verifyScript + "esac\nexit 0\n")
 	files := map[string][]byte{
 		"manifest.json": manifestContent,
 		"e2e_large_pkg": entryScript,
@@ -173,7 +175,12 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 		}
 	})
 
-	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: dataDir}, algorithm.HostPlatform{Arch: "x86_64", Target: "onnx"}, zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(
+		dbStore,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		algorithm.HostPlatform{Arch: "x86_64", Target: "onnx"},
+		zap.NewNop(),
+	)
 
 	assets := http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},
@@ -208,7 +215,11 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201 Created for > 8 MiB upload on real router, got status %d, body: %s", w.Code, w.Body.String())
+		t.Fatalf(
+			"expected 201 Created for > 8 MiB upload on real router, got status %d, body: %s",
+			w.Code,
+			w.Body.String(),
+		)
 	}
 
 	var resp httputil.Response
@@ -226,7 +237,11 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 	router.ServeHTTP(wOverLimit, reqOverLimit)
 
 	if wOverLimit.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("expected 413 Request Entity Too Large when exceeding limit, got %d, body: %s", wOverLimit.Code, wOverLimit.Body.String())
+		t.Fatalf(
+			"expected 413 Request Entity Too Large when exceeding limit, got %d, body: %s",
+			wOverLimit.Code,
+			wOverLimit.Body.String(),
+		)
 	}
 
 	var respOverLimit httputil.Response
@@ -255,7 +270,11 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 	routerWithAuth.ServeHTTP(wUnauth, reqUnauth)
 
 	if wUnauth.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 Unauthorized for unauthenticated upload, got %d, body: %s", wUnauth.Code, wUnauth.Body.String())
+		t.Fatalf(
+			"expected 401 Unauthorized for unauthenticated upload, got %d, body: %s",
+			wUnauth.Code,
+			wUnauth.Body.String(),
+		)
 	}
 
 	// 4. Verify standard API route still rejects body > 1 MiB with PAYLOAD_TOO_LARGE
@@ -272,7 +291,11 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 	})
 
 	oversizedJSON := fmt.Sprintf(`{"padding":"%s"}`, string(make([]byte, 2*1024*1024)))
-	reqJSON := httptest.NewRequest(http.MethodPost, "/api/v1/auth/init", bytes.NewReader([]byte(oversizedJSON)))
+	reqJSON := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/auth/init",
+		bytes.NewReader([]byte(oversizedJSON)),
+	)
 	reqJSON.Header.Set("Content-Type", "application/json")
 	wJSON := httptest.NewRecorder()
 	routerWithAuthRoutes.ServeHTTP(wJSON, reqJSON)
@@ -299,7 +322,11 @@ func TestUploadRouteProducesAuditRecord(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("database migration failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if closeErr := dbStore.Close(); closeErr != nil {
+			t.Logf("cleanup dbStore close: %v", closeErr)
+		}
+	})
 
 	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
 		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
@@ -307,9 +334,18 @@ func TestUploadRouteProducesAuditRecord(t *testing.T) {
 	if err := auditSvc.Start(context.Background()); err != nil {
 		t.Fatalf("start audit service: %v", err)
 	}
-	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if stopErr := auditSvc.Stop(context.Background()); stopErr != nil {
+			t.Logf("cleanup auditSvc stop: %v", stopErr)
+		}
+	})
 
-	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: dataDir}, algorithm.HostPlatform{Arch: "x86_64", Target: "onnx"}, zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(
+		dbStore,
+		algorunner.Runtime{AlgorithmsDir: dataDir},
+		algorithm.HostPlatform{Arch: "x86_64", Target: "onnx"},
+		zap.NewNop(),
+	)
 
 	assets := http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},
@@ -365,9 +401,18 @@ func TestPersonFaceUploadRouterAllowsLargeImage(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("database migration failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
+	t.Cleanup(func() {
+		if closeErr := dbStore.Close(); closeErr != nil {
+			t.Logf("cleanup dbStore close: %v", closeErr)
+		}
+	})
 
-	personComp := person.NewPersonComponents(dbStore, filepath.Join(dataDir, "faces"), zap.NewNop(), person.Options{Extractor: stubPersonExtractor{}})
+	personComp := person.NewPersonComponents(
+		dbStore,
+		filepath.Join(dataDir, "faces"),
+		zap.NewNop(),
+		person.Options{Extractor: stubPersonExtractor{}},
+	)
 
 	assets := http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},
@@ -394,7 +439,9 @@ func TestPersonFaceUploadRouterAllowsLargeImage(t *testing.T) {
 	var created struct {
 		Data person.PersonResponse `json:"data"`
 	}
-	_ = json.Unmarshal(w.Body.Bytes(), &created)
+	if unmarshalErr := json.Unmarshal(w.Body.Bytes(), &created); unmarshalErr != nil {
+		t.Fatalf("unmarshal created person: %v", unmarshalErr)
+	}
 	personID := created.Data.ID
 
 	// Create 2.5 MiB image payload (> 1 MiB MaxAPIRequestBodyBytes)
@@ -405,10 +452,19 @@ func TestPersonFaceUploadRouterAllowsLargeImage(t *testing.T) {
 		t.Fatalf("create form file failed: %v", err)
 	}
 	// JPEG magic header + 2.5MB payload
-	_, _ = part.Write([]byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb\x00C\x00"))
+	jpegHeader := []byte(
+		"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb\x00C\x00",
+	)
+	if _, writeErr := part.Write(jpegHeader); writeErr != nil {
+		t.Fatalf("write jpeg header failed: %v", writeErr)
+	}
 	largePayload := make([]byte, int(2.5*1024*1024))
-	_, _ = part.Write(largePayload)
-	_ = writer.Close()
+	if _, writeErr := part.Write(largePayload); writeErr != nil {
+		t.Fatalf("write payload failed: %v", writeErr)
+	}
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Fatalf("close writer failed: %v", closeErr)
+	}
 
 	uploadReq := httptest.NewRequest(http.MethodPost, "/api/v1/persons/"+personID+"/faces", &body)
 	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
@@ -416,6 +472,10 @@ func TestPersonFaceUploadRouterAllowsLargeImage(t *testing.T) {
 	router.ServeHTTP(uploadW, uploadReq)
 
 	if uploadW.Code != http.StatusCreated {
-		t.Fatalf("expected 201 Created for 2.5MB face image, got %d: %s", uploadW.Code, uploadW.Body.String())
+		t.Fatalf(
+			"expected 201 Created for 2.5MB face image, got %d: %s",
+			uploadW.Code,
+			uploadW.Body.String(),
+		)
 	}
 }

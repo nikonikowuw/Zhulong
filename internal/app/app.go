@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"go.uber.org/fx"
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/alertpush"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
@@ -33,8 +36,6 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/systemtime"
 	"github.com/nikonikowuw/Zhulong/internal/task"
 	"github.com/nikonikowuw/Zhulong/internal/webui"
-	"go.uber.org/fx"
-	"go.uber.org/zap"
 )
 
 // --- Database Module ---
@@ -207,7 +208,8 @@ func provideCamera(p cameraParams) cameraOut {
 	prober := camera.NewProbeService(p.Engine)
 	describeClient := camera.NewDescribeClient()
 	scheduler := camera.NewHealthScheduler(camStore, lazyC, reg, hub, describeClient, p.Logger)
-	// 活跃流 4 秒超时判定只对 Go 侧逐包可见的预览流成立（见 PacketActivitySource）。
+	// 活跃流 4 秒超时判定只对 Go 侧逐包可见的预览流成立
+	// （见 PacketActivitySource）。
 	scheduler.SetPacketActivitySource(streamHub)
 	camSvc := camera.NewCameraService(camStore, lazyC, prober, reg, hub, scheduler, p.Logger)
 	// authSvc is a required dependency of this provider (provideAuth always
@@ -337,7 +339,11 @@ type systemTimeOut struct {
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
 }
 
-func provideSystemTime(dbProvider database.DBProvider, auditSvc *audit.Service, logger *zap.Logger) systemTimeOut {
+func provideSystemTime(
+	dbProvider database.DBProvider,
+	auditSvc *audit.Service,
+	logger *zap.Logger,
+) systemTimeOut {
 	comp := systemtime.NewTimeComponents(dbProvider, auditSvc, logger)
 	return systemTimeOut{
 		Driver:          comp.Driver,
@@ -395,7 +401,11 @@ type storageOut struct {
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
 }
 
-func provideStorage(dbProvider database.DBProvider, auditSvc *audit.Service, logger *zap.Logger) storageOut {
+func provideStorage(
+	dbProvider database.DBProvider,
+	auditSvc *audit.Service,
+	logger *zap.Logger,
+) storageOut {
 	comp := storage.NewStorageComponents(dbProvider, auditSvc, logger)
 	return storageOut{
 		Repository:      comp.Repository,
@@ -426,7 +436,11 @@ type mediaFileOut struct {
 // provideMediaFile wires the read-only media file service onto the storage
 // service, which owns the media root configuration and the filesystem
 // telemetry used for fallthrough detection.
-func provideMediaFile(storageSvc *storage.Service, inspector storage.PathInspector, logger *zap.Logger) mediaFileOut {
+func provideMediaFile(
+	storageSvc *storage.Service,
+	inspector storage.PathInspector,
+	logger *zap.Logger,
+) mediaFileOut {
 	comp := mediafile.NewMediaFileComponents(
 		mediafile.NewMediaRootProvider(storageSvc),
 		mediafile.NewDeviceInspector(inspector),
@@ -503,7 +517,10 @@ func provideAlgorithm(p algorithmParams) algorithmOut {
 	comp.Supervisor.SetBrokerSubscriptionResolver(taskBrokerResolver)
 	// 任务级配置（逐路流的 task_algorithms.config_json）走 Broker 广播 + 握手重放，
 	// 进程级配置走 argv `--config`：argv 无法表达 per-stream 值。
-	comp.Supervisor.SetTaskConfig(taskBrokerResolver, algorunner.NewTaskConfigBroadcaster(p.Engine, p.Logger))
+	comp.Supervisor.SetTaskConfig(
+		taskBrokerResolver,
+		algorunner.NewTaskConfigBroadcaster(p.Engine, p.Logger),
+	)
 	galleryBroadcaster := algorunner.NewGalleryBroadcaster(p.Engine, p.Logger)
 	return algorithmOut{
 		Store:              comp.Store,
@@ -557,7 +574,8 @@ func provideTaskComponents(p taskParams) taskOut {
 		p.AlgoService,
 		configCache,
 	}
-	// 任务级裁剪：Store 直接满足 camera.TaskCropProvider；保存后由监听器刷新媒体层。
+	// 任务级裁剪：Store 直接满足 camera.TaskCropProvider；
+	// 保存后由监听器刷新媒体层。
 	// 必须在 Service 构造后注册（保存事件在 UpdateTask/SaveTask 内同步广播）。
 	p.StreamHub.SetTaskCropProvider(p.Store)
 	service := task.NewService(p.Store, p.AlgoService, listeners, p.Logger)
@@ -763,8 +781,10 @@ type recordParams struct {
 func provideRecord(p recordParams) recordOut {
 	comp := record.NewRecordComponents(p.DBProvider, p.Logger)
 
-	// 感知记录库表行的保留期与抓拍图 TTL 同源：图没了，行就只剩指向空文件的悬空引用。
-	// 保留天数由 storage 域持有（用户在存储设置里改的就是这个值），这里只做转译。
+	// 感知记录库表行的保留期与抓拍图 TTL 同源：
+	// 图没了，行就只剩指向空文件的悬空引用。
+	// 保留天数由 storage 域持有（用户在存储设置里改的就是这个值），
+	// 这里只做转译。
 	comp.Pruner.SetRetentionDaysProvider(recordRetentionDaysProvider{storage: p.Storage})
 	comp.Pruner.SetSnapshotFileChecker(recordSnapshotFileChecker{media: p.MediaFiles})
 	p.Storage.SetAfterPrune(func(ctx context.Context, prunedUnitIDs []string) {
@@ -778,10 +798,14 @@ func provideRecord(p recordParams) recordOut {
 					zap.Error(err),
 					zap.Int("ids", len(prunedUnitIDs)),
 				)
-				if deleted, directErr := comp.Pruner.DeleteBySnapshotIDs(ctx, prunedUnitIDs); directErr != nil {
+				deleted, directErr := comp.Pruner.DeleteBySnapshotIDs(ctx, prunedUnitIDs)
+				if directErr != nil {
 					p.Logger.Warn("direct snapshot row delete after enqueue failure failed", zap.Error(directErr))
 				} else if deleted > 0 {
-					p.Logger.Info("deleted snapshot rows without durable outbox", zap.Int64("deleted_rows", deleted))
+					p.Logger.Info(
+						"deleted snapshot rows without durable outbox",
+						zap.Int64("deleted_rows", deleted),
+					)
 				}
 			}
 		}
@@ -789,15 +813,19 @@ func provideRecord(p recordParams) recordOut {
 		if result, err := comp.Pruner.PruneNow(ctx); err != nil {
 			p.Logger.Warn("reconcile perception records after storage cleanup failed", zap.Error(err))
 		} else if result.Total() > 0 {
-			p.Logger.Info("reconciled perception records after storage cleanup",
-				zap.Int64("deleted_rows", result.Total()))
+			p.Logger.Info(
+				"reconciled perception records after storage cleanup",
+				zap.Int64("deleted_rows", result.Total()),
+			)
 		}
 		// 3. 消费 pending（含本轮与历史残留）。
 		if deleted, err := comp.Pruner.ProcessPendingSnapshotDeletes(ctx, 0); err != nil {
 			p.Logger.Warn("process pending snapshot deletes failed", zap.Error(err))
 		} else if deleted > 0 {
-			p.Logger.Info("deleted pending snapshot records",
-				zap.Int64("deleted_rows", deleted))
+			p.Logger.Info(
+				"deleted pending snapshot records",
+				zap.Int64("deleted_rows", deleted),
+			)
 		}
 	})
 

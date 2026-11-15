@@ -110,7 +110,10 @@ type lifecycleRecordingCore struct {
 
 func (c *lifecycleRecordingCore) Enabled(zapcore.Level) bool        { return true }
 func (c *lifecycleRecordingCore) With([]zapcore.Field) zapcore.Core { return c }
-func (c *lifecycleRecordingCore) Check(entry zapcore.Entry, checked *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+func (c *lifecycleRecordingCore) Check(
+	entry zapcore.Entry,
+	checked *zapcore.CheckedEntry,
+) *zapcore.CheckedEntry {
 	return checked.AddCore(entry, c)
 }
 func (c *lifecycleRecordingCore) Write(entry zapcore.Entry, _ []zapcore.Field) error {
@@ -255,8 +258,10 @@ func (s spatialLifecycleStub) Stop(context.Context) error {
 }
 
 // TestAIShutdownOrderPrecedesNativeClose 守护跨层停机顺序：
-// camera（AI 消费者与 StreamHub）→ algorithm（runner 子进程）→ native（broker 宿主）。
-// 该顺序是「broker 先于 native 停止」的载体（见 dependency-injection.md §2 与 design.md §3.1）：
+// camera（AI 消费者与 StreamHub）→ algorithm（runner 子进程）
+// → native（broker 宿主）。
+// 该顺序是「broker 先于 native 停止」的载体
+// （见 dependency-injection.md §2 与 design.md §3.1）：
 // 顺序被改坏时必须在这里失败，而不是在真实板端产生 use-after-free。
 func TestAIShutdownOrderPrecedesNativeClose(t *testing.T) {
 	events := &eventLog{}
@@ -314,25 +319,39 @@ func TestAIShutdownOrderPrecedesNativeClose(t *testing.T) {
 		return -1
 	}
 	if index("camera.stop") > index("algorithm.stop") {
-		t.Fatal("camera must stop before algorithm: AI consumers must disappear before runner subprocesses")
+		t.Fatal(
+			"camera must stop before algorithm: " +
+				"AI consumers must disappear before runner subprocesses",
+		)
 	}
 	if index("algorithm.stop") > index("engine.close") {
-		t.Fatal("algorithm must stop before engine.close: runner clients must be drained before the broker host is destroyed")
+		t.Fatal(
+			"algorithm must stop before engine.close: " +
+				"runner clients must be drained before the broker host is destroyed",
+		)
 	}
 	// 后台任务执行体调用 person 与 native，必须在两者释放之前静默下来。
 	if index("asyncjobs.stop") > index("person.stop") {
-		t.Fatal("async jobs must stop before person: a running handler still calls person services")
+		t.Fatal(
+			"async jobs must stop before person: " +
+				"a running handler still calls person services",
+		)
 	}
 	if index("asyncjobs.stop") > index("engine.close") {
-		t.Fatal("async jobs must stop before engine.close: a running handler may still use the native engine")
+		t.Fatal(
+			"async jobs must stop before engine.close: " +
+				"a running handler may still use the native engine",
+		)
 	}
 }
 
 // TestStartupRollbackSharesShutdownOrder 守护「只有一份停机顺序」。
 //
-// Start 失败回滚与正常 Stop 必须走同一条序列：它们曾经是两份手写清单，一次 listen
-// 失败会把 algorithm 排在 camera 之前释放，而正常停机的顺序恰好相反。这里对同一组已
-// 就绪的域分别跑两条路径，要求事件轨迹除去 HTTP 排空外逐项相等。
+// Start 失败回滚与正常 Stop 必须走同一条序列：
+// 它们曾经是两份手写清单，一次 listen 失败
+// 会把 algorithm 排在 camera 之前释放，而正常停机的顺序恰好相反。
+// 这里对同一组已就绪的域分别跑两条路径，
+// 要求事件轨迹除去 HTTP 排空外逐项相等。
 func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
 	build := func(events *eventLog) *lifecycleRuntime {
 		return &lifecycleRuntime{
@@ -395,7 +414,8 @@ func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
 
 // TestAsyncJobWorkerBracketsPerson 守护后台任务 worker 的启动/停止边界：
 // handler 会调用 person 服务与 native 引擎，因此 worker 必须在 person 之后启动、
-// 在 person 与 engine 之前停止。改坏这条边界会在真实板端变成 use-after-close。
+// 在 person 与 engine 之前停止。
+// 改坏这条边界会在真实板端变成 use-after-close。
 func TestAsyncJobWorkerBracketsPerson(t *testing.T) {
 	events := &eventLog{}
 	server := &http.Server{Addr: "127.0.0.1:0"}
@@ -442,8 +462,9 @@ func TestAsyncJobWorkerBracketsPerson(t *testing.T) {
 }
 
 // TestDegradedSubsystemStartIsRecordedAndStillStopped 守护降级启动语义：
-// 可选域的 Start 失败既不能让整机启不了机，也不能被悄悄吞掉——它要进退化清单，
-// 并且仍被标记 ready，因为只有该域自己的 Stop 能释放它申请了一半的资源。
+// 可选域的 Start 失败既不能让整机启不了机，也不能被悄悄吞掉——
+// 它要进退化清单，并且仍被标记 ready，
+// 因为只有该域自己的 Stop 能释放它申请了一半的资源。
 func TestDegradedSubsystemStartIsRecordedAndStillStopped(t *testing.T) {
 	events := &eventLog{}
 	storageErr := errors.New("media root is not mounted")
@@ -510,8 +531,9 @@ func TestMigrationFailurePreventsHTTPListener(t *testing.T) {
 	if runtime.listener != nil {
 		t.Fatal("listener was created despite migration failure")
 	}
-	if got, want := events.snapshot(), []string{"database.open", "database.close"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("unexpected startup/rollback order: got %v, want %v", got, want)
+	wantMigration := []string{"database.open", "database.close"}
+	if got := events.snapshot(); !reflect.DeepEqual(got, wantMigration) {
+		t.Fatalf("unexpected startup/rollback order: got %v, want %v", got, wantMigration)
 	}
 }
 
@@ -578,8 +600,11 @@ func TestShutdownDrainsHTTPBeforeClosingNativeAndDatabase(t *testing.T) {
 		t.Fatalf("Stop returned before the active HTTP request drained: %v", err)
 	default:
 	}
-	if got, want := events.snapshot(), []string{"database.open", "engine.start", "http.listen", "http.shutdown"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("resources closed before HTTP drain: got %v, want %v", got, want)
+	wantHTTP := []string{
+		"database.open", "engine.start", "http.listen", "http.shutdown",
+	}
+	if got := events.snapshot(); !reflect.DeepEqual(got, wantHTTP) {
+		t.Fatalf("resources closed before HTTP drain: got %v, want %v", got, wantHTTP)
 	}
 
 	close(releaseRequest)
@@ -600,8 +625,12 @@ func TestShutdownDrainsHTTPBeforeClosingNativeAndDatabase(t *testing.T) {
 		t.Fatal("Stop did not finish")
 	}
 
-	if got, want := events.snapshot(), []string{"database.open", "engine.start", "http.listen", "http.shutdown", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("unexpected shutdown order: got %v, want %v", got, want)
+	wantOrder := []string{
+		"database.open", "engine.start", "http.listen",
+		"http.shutdown", "engine.close", "database.close",
+	}
+	if got := events.snapshot(); !reflect.DeepEqual(got, wantOrder) {
+		t.Fatalf("unexpected shutdown order: got %v, want %v", got, wantOrder)
 	}
 }
 
@@ -622,8 +651,12 @@ func TestListenerFailureRollsBackNativeAndDatabase(t *testing.T) {
 	if err := runtime.Start(context.Background()); !errors.Is(err, listenErr) {
 		t.Fatalf("expected listener error, got %v", err)
 	}
-	if got, want := events.snapshot(), []string{"database.open", "engine.start", "http.listen", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("unexpected startup rollback order: got %v, want %v", got, want)
+	wantRollback := []string{
+		"database.open", "engine.start", "http.listen",
+		"engine.close", "database.close",
+	}
+	if got := events.snapshot(); !reflect.DeepEqual(got, wantRollback) {
+		t.Fatalf("unexpected startup rollback order: got %v, want %v", got, wantRollback)
 	}
 }
 
@@ -689,7 +722,14 @@ func TestCameraInitCipherFailureRollsBackNativeAndDatabase(t *testing.T) {
 	if runtime.listener != nil {
 		t.Fatal("listener was created despite camera cipher failure")
 	}
-	if got, want := events.snapshot(), []string{"database.open", "engine.start", "camera.cipher", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
+	want := []string{
+		"database.open",
+		"engine.start",
+		"camera.cipher",
+		"engine.close",
+		"database.close",
+	}
+	if got := events.snapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected startup/rollback order: got %v, want %v", got, want)
 	}
 }
@@ -719,7 +759,13 @@ func TestCameraShutdownOrderAfterHTTPDrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected stop error: %v", err)
 	}
-	if got, want := events.snapshot(), []string{"http.shutdown", "camera.stop", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
+	want := []string{
+		"http.shutdown",
+		"camera.stop",
+		"engine.close",
+		"database.close",
+	}
+	if got := events.snapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected shutdown order: got %v, want %v", got, want)
 	}
 }
@@ -767,7 +813,14 @@ func TestAuditShutdownOrderAfterHTTPDrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected stop error: %v", err)
 	}
-	if got, want := events.snapshot(), []string{"http.shutdown", "camera.stop", "audit.stop", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
+	want := []string{
+		"http.shutdown",
+		"camera.stop",
+		"audit.stop",
+		"engine.close",
+		"database.close",
+	}
+	if got := events.snapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected shutdown order with audit: got %v, want %v", got, want)
 	}
 }
@@ -877,7 +930,15 @@ func TestLogSinkPreparedBeforeServicesAndClosedAfterShutdown(t *testing.T) {
 	if err := runtime.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	want := []string{"log.prepare", "database.open", "engine.start", "http.listen", "engine.close", "database.close", "log.close"}
+	want := []string{
+		"log.prepare",
+		"database.open",
+		"engine.start",
+		"http.listen",
+		"engine.close",
+		"database.close",
+		"log.close",
+	}
 	if got := events.snapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected log sink lifecycle: got %v, want %v", got, want)
 	}
@@ -896,14 +957,24 @@ func TestLogSinkPrepareFailureStopsStartupAndClosesSink(t *testing.T) {
 	if err := runtime.Start(context.Background()); !errors.Is(err, prepareErr) {
 		t.Fatalf("expected log sink startup error, got %v", err)
 	}
-	if got, want := events.snapshot(), []string{"log.prepare", "log.close"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("services started or sink was not closed after prepare failure: got %v, want %v", got, want)
+	wantPrepareClose := []string{"log.prepare", "log.close"}
+	if got := events.snapshot(); !reflect.DeepEqual(got, wantPrepareClose) {
+		t.Fatalf(
+			"services started or sink was not closed after prepare failure: got %v, want %v",
+			got,
+			wantPrepareClose,
+		)
 	}
-	if err := runtime.Start(context.Background()); err == nil || err.Error() != "application is already started" {
+	err := runtime.Start(context.Background())
+	if err == nil || err.Error() != "application is already started" {
 		t.Fatalf("second Start after failed preparation = %v, want already-started error", err)
 	}
-	if got, want := events.snapshot(), []string{"log.prepare", "log.close"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("retry after failed preparation restarted services: got %v, want %v", got, want)
+	if got := events.snapshot(); !reflect.DeepEqual(got, wantPrepareClose) {
+		t.Fatalf(
+			"retry after failed preparation restarted services: got %v, want %v",
+			got,
+			wantPrepareClose,
+		)
 	}
 }
 
@@ -985,7 +1056,9 @@ func TestStorageWriteStatePressureIsAppliedAndReleasedOnce(t *testing.T) {
 	if got := strings.Count(logs.String(), "run log volume reduced"); got != 1 {
 		t.Fatalf("reduction reported %d times, want 1: %s", got, logs.String())
 	}
-	if strings.Contains(logs.String(), "debug-during-emergency") || strings.Contains(logs.String(), "info-during-emergency") {
+	hasEmergencyDebug := strings.Contains(logs.String(), "debug-during-emergency")
+	hasEmergencyInfo := strings.Contains(logs.String(), "info-during-emergency")
+	if hasEmergencyDebug || hasEmergencyInfo {
 		t.Fatalf("debug/info survived an emergency stop: %s", logs.String())
 	}
 	if !strings.Contains(logs.String(), "warn-during-emergency") {
@@ -1130,7 +1203,9 @@ func TestLifecycleRuntimeStartsAutoTLS(t *testing.T) {
 		t.Fatalf("runtime.Start with auto TLS failed: %v", err)
 	}
 	defer func() {
-		_ = runtime.Stop(context.Background())
+		if stopErr := runtime.Stop(context.Background()); stopErr != nil {
+			t.Errorf("runtime.Stop failed: %v", stopErr)
+		}
 	}()
 
 	client := &http.Client{

@@ -8,12 +8,13 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/openapi"
 	"github.com/nikonikowuw/Zhulong/internal/person"
-	"go.uber.org/zap"
 )
 
 type dummyExtractor struct{}
@@ -28,14 +29,27 @@ func TestOpenAPIAndTokenWiring(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate: %v", err)
 	}
-	defer dbStore.Close()
+	defer func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore.Close error: %v", err)
+		}
+	}()
 
 	tokenStore := apitoken.NewStore(dbStore)
 	tokenSvc := apitoken.NewService(tokenStore, zap.NewNop())
-	defer tokenSvc.Close()
+	defer func() {
+		if err := tokenSvc.Close(); err != nil {
+			t.Logf("tokenSvc.Close error: %v", err)
+		}
+	}()
 
 	personStore := person.NewStore(dbStore)
-	personSvc := person.NewService(personStore, tempDir, zap.NewNop(), person.Options{Extractor: dummyExtractor{}})
+	personSvc := person.NewService(
+		personStore,
+		tempDir,
+		zap.NewNop(),
+		person.Options{Extractor: dummyExtractor{}},
+	)
 
 	auditStore := audit.NewStore(dbStore)
 	auditSvc := audit.NewService(auditStore, zap.NewNop(), audit.DefaultConfig())
@@ -54,7 +68,11 @@ func TestOpenAPIAndTokenWiring(t *testing.T) {
 	}
 
 	limiter := openapi.NewUploadLimiter()
-	openAPIHandler := openapi.NewHandler(personSvc, limiter, openapi.WithStatusProvider(statusAdapter))
+	openAPIHandler := openapi.NewHandler(
+		personSvc,
+		limiter,
+		openapi.WithStatusProvider(statusAdapter),
+	)
 	tokenHandler := apitoken.NewHandler(tokenSvc, zap.NewNop())
 
 	router := newRouter(RouterParams{
@@ -96,7 +114,11 @@ func TestOpenAPIAndTokenWiring(t *testing.T) {
 	wAuth := httptest.NewRecorder()
 	router.ServeHTTP(wAuth, reqAuth)
 	if wAuth.Code != http.StatusCreated {
-		t.Fatalf("expected 201 for authenticated openapi upsert, got %d: %s", wAuth.Code, wAuth.Body.String())
+		t.Fatalf(
+			"expected 201 for authenticated openapi upsert, got %d: %s",
+			wAuth.Code,
+			wAuth.Body.String(),
+		)
 	}
 
 	// 4. Verify person source in DB
@@ -108,14 +130,19 @@ func TestOpenAPIAndTokenWiring(t *testing.T) {
 		t.Errorf("unexpected source tracking: %s / %s", p.Source, p.SourceName)
 	}
 
-	// 5. GET /api/v1/openapi/status with valid token -> 200 OK & ZERO audit_logs rows for status polling!
+	// 5. GET /api/v1/openapi/status with valid token -> 200 OK &
+	// ZERO audit_logs rows for status polling!
 	for range 3 {
 		reqStatus := httptest.NewRequest(http.MethodGet, "/api/v1/openapi/status", nil)
 		reqStatus.Header.Set("Authorization", "Bearer "+rawToken)
 		wStatus := httptest.NewRecorder()
 		router.ServeHTTP(wStatus, reqStatus)
 		if wStatus.Code != http.StatusOK {
-			t.Fatalf("expected 200 OK on GET /openapi/status, got %d: %s", wStatus.Code, wStatus.Body.String())
+			t.Fatalf(
+				"expected 200 OK on GET /openapi/status, got %d: %s",
+				wStatus.Code,
+				wStatus.Body.String(),
+			)
 		}
 	}
 

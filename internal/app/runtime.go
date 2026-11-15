@@ -119,9 +119,10 @@ type spatialLifecycle interface {
 
 // snapshotLifecycle 管理抓拍写盘 worker 的起停。
 //
-// ⚠️ 必须在 record 之前启动、在 record 之后停止：record 的 Stop 之后不再有新的
-// 抓拍任务入队，但队列里已接收的任务仍需被执行完，否则这些记录会留下指向不存在
-// 文件的路径。
+// ⚠️ 必须在 record 之前启动、在 record 之后停止：
+// record 的 Stop 之后不再有新的抓拍任务入队，
+// 但队列里已接收的任务仍需被执行完，
+// 否则这些记录会留下指向不存在文件的路径。
 type snapshotLifecycle interface {
 	Start()
 	Stop()
@@ -349,8 +350,9 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.asyncJobsReady = true
 	}
 
-	// 底图目录的创建属于 spatial 的启动职责（构造函数保持纯粹）。失败降级而不是
-	// 阻断：控制台仍要能起来，上传与读图会各自返回 5xx 而不是整机不可用。
+	// 底图目录的创建属于 spatial 的启动职责（构造函数保持纯粹）。
+	// 失败降级而不是阻断：控制台仍要能起来，
+	// 上传与读图会各自返回 5xx 而不是整机不可用。
 	if r.spatial != nil {
 		if err := r.spatial.Start(ctx); err != nil {
 			r.degradedStart("spatial", err)
@@ -358,8 +360,9 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.spatialReady = true
 	}
 
-	// 抓拍 worker 必须先于 record 启动：record 在 Start 之后就可能开始接收 AI 结果
-	// 并登记抓拍任务，worker 未就绪会让队列迅速积满并持续丢弃。
+	// 抓拍 worker 必须先于 record 启动：
+	// record 在 Start 之后就可能开始接收 AI 结果并登记抓拍任务，
+	// worker 未就绪会让队列迅速积满并持续丢弃。
 	if r.snapshot != nil {
 		r.snapshot.Start()
 		r.snapshotReady = true
@@ -381,7 +384,10 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.nativeLogReady = true
 		logEngine, ok := r.native.(nativeLogEngineLifecycle)
 		if !ok {
-			return r.failStart(errors.New("native engine does not support log callback lifecycle"), r.rollback(ctx)...)
+			return r.failStart(
+				errors.New("native engine does not support log callback lifecycle"),
+				r.rollback(ctx)...,
+			)
 		}
 		if err := logEngine.SetNativeLogSink(r.nativeLog); err != nil {
 			return r.failStart(fmt.Errorf("register native log callback: %w", err), r.rollback(ctx)...)
@@ -404,7 +410,8 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.cameraReady = true
 	}
 
-	// GB28181 接入属于可降级子系统：配置无效或 listener bind 失败时只记录降级，
+	// GB28181 接入属于可降级子系统：
+	// 配置无效或 listener bind 失败时只记录降级，
 	// 不能连带整个 Web 管理面起不来（现场只能通过 UI 修改该配置）。
 	// ready 置位表示「必须执行 Stop」，不是「启动成功」。
 	if r.gb28181 != nil {
@@ -423,7 +430,8 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	}
 
 	// 算法管理必须在 native 引擎启动与 camera 初始化之后启动：
-	// 这样开机自动拉起 active 算法时，能够成功解密 URI 并通过 Engine.AcquireStream 建立 AI 物理流。
+	// 这样开机自动拉起 active 算法时，能够成功解密 URI
+	// 并通过 Engine.AcquireStream 建立 AI 物理流。
 	if r.algorithm != nil {
 		if err := r.algorithm.Start(ctx); err != nil {
 			r.degradedStart("algorithm", err)
@@ -459,7 +467,11 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.levelReload.Start()
 	}
 	if tlsConfig != nil {
-		r.logger.Info("HTTPS (TLS) server started", zap.String("address", listener.Addr().String()), zap.String("tls_mode", r.config.TLSMode))
+		r.logger.Info(
+			"HTTPS (TLS) server started",
+			zap.String("address", listener.Addr().String()),
+			zap.String("tls_mode", r.config.TLSMode),
+		)
 	} else {
 		r.logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
 	}
@@ -535,7 +547,10 @@ func (r *lifecycleRuntime) degradedStart(subsystem string, startErr error) {
 
 func (r *lifecycleRuntime) failStart(startupErr error, cleanup ...error) error {
 	if r.nativeReady || r.nativeLogRegistered || r.nativeLogReady {
-		cleanup = append(cleanup, errors.New("native logging may still be active; application logger retained"))
+		cleanup = append(
+			cleanup,
+			errors.New("native logging may still be active; application logger retained"),
+		)
 	} else {
 		cleanup = append(cleanup, r.syncLogger(), r.closeLogSink())
 	}
@@ -625,7 +640,10 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 		}
 	}
 	if r.nativeReady || r.nativeLogRegistered || r.nativeLogReady {
-		stopErrors = append(stopErrors, errors.New("native logging may still be active; application logger retained"))
+		stopErrors = append(
+			stopErrors,
+			errors.New("native logging may still be active; application logger retained"),
+		)
 	} else {
 		if err := r.syncLogger(); err != nil {
 			stopErrors = append(stopErrors, err)
@@ -895,7 +913,9 @@ func (r *lifecycleRuntime) syncLogger() error {
 	if r.logger == nil {
 		return nil
 	}
-	if err := r.logger.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTTY) {
+	err := r.logger.Sync()
+	isIgnorableSyncErr := errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTTY)
+	if err != nil && !isIgnorableSyncErr {
 		return fmt.Errorf("sync application logger: %w", err)
 	}
 	return nil

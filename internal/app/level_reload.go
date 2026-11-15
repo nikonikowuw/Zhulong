@@ -29,7 +29,12 @@ type logLevelReloader struct {
 	stopped bool
 }
 
-func newLogLevelReloader(path string, config Config, level zap.AtomicLevel, logger *zap.Logger) *logLevelReloader {
+func newLogLevelReloader(
+	path string,
+	config Config,
+	level zap.AtomicLevel,
+	logger *zap.Logger,
+) *logLevelReloader {
 	return &logLevelReloader{
 		path:    path,
 		level:   level,
@@ -98,8 +103,10 @@ func (r *logLevelReloader) reload() {
 		// Half-applying a sink policy would be worse than not applying it: the file
 		// would claim one destination while the encoder writes to another. Say what
 		// needs a restart instead of leaving the operator to discover it.
-		r.logger.Warn("logging policy changed on disk; restart required to apply",
-			zap.Strings("fields", changed))
+		r.logger.Warn(
+			"logging policy changed on disk; restart required to apply",
+			zap.Strings("fields", changed),
+		)
 	}
 }
 

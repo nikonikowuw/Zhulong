@@ -5,10 +5,11 @@ import (
 	"errors"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/gb28181"
-	"go.uber.org/zap"
 )
 
 // gbWiringCipher stands in for the AES-GCM cipher: the subject of this test is the
@@ -36,7 +37,11 @@ func TestProvideGB28181RegistersEncryptedDataProbe(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	defer func() { _ = dbStore.Close() }()
+	defer func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore.Close error: %v", err)
+		}
+	}()
 
 	// Seed exactly one GB28181 device credential and nothing else.
 	seedStore := gb28181.NewStore(dbStore, gbWiringCipher{})
@@ -52,7 +57,9 @@ func TestProvideGB28181RegistersEncryptedDataProbe(t *testing.T) {
 		camera.NewCameraStore(dbStore),
 		camera.NewKeyManager(dataDir),
 		camera.NewLazyCipher(),
-		nil, nil, nil,
+		nil,
+		nil,
+		nil,
 	)
 	provideGB28181(gb28181Params{
 		DBProvider:    dbStore,
@@ -63,6 +70,9 @@ func TestProvideGB28181RegistersEncryptedDataProbe(t *testing.T) {
 
 	err := manager.InitCipher(context.Background())
 	if !errors.Is(err, camera.ErrKeyMissingWithExistingData) {
-		t.Fatalf("expected InitCipher to refuse regenerating camera.key while GB credentials exist, got %v", err)
+		t.Fatalf(
+			"expected InitCipher to refuse regenerating camera.key while GB credentials exist, got %v",
+			err,
+		)
 	}
 }

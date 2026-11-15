@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/nikonikowuw/Zhulong/internal/faceextract"
@@ -67,21 +68,29 @@ func newStubAdapter(t *testing.T, body string) *faceFeatureExtractorAdapter {
 	client := faceextract.New(faceextract.Options{
 		Entry: func(context.Context) (string, error) { return entry, nil },
 	})
-	t.Cleanup(func() { _ = client.Close() })
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Logf("client.Close error: %v", err)
+		}
+	})
 	return &faceFeatureExtractorAdapter{client: client}
 }
 
-// TestFaceFeatureExtractorAdapter_MapsInputFailuresToDomainSentinels 锁定适配器的错误翻译契约：
-// 上传输入本身的问题（解不开）必须变成 person 包的哨兵，让 HTTP 层回答 4xx；
-// 「照片里没人脸」同理；其余错误一律透传，避免把服务端故障伪装成「照片有问题」。
+// TestFaceFeatureExtractorAdapter_MapsInputFailuresToDomainSentinels
+// 锁定适配器的错误翻译契约：
+// 上传输入本身的问题（解不开）必须变成 person 包的哨兵，
+// 让 HTTP 层回答 4xx；
+// 「照片里没人脸」同理；
+// 其余错误一律透传，避免把服务端故障伪装成「照片有问题」。
 //
-// 这是 internal/person 与 internal/faceextract 之间唯一的翻译点，它一旦漏掉某个哨兵，
-// 客户端就会收到 500。
+// 这是 internal/person 与 internal/faceextract 之间唯一的翻译点，
+// 它一旦漏掉某个哨兵，客户端就会收到 500。
 func TestFaceFeatureExtractorAdapter_MapsInputFailuresToDomainSentinels(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("undecodable bytes map to ErrUnsupportedImageFormat", func(t *testing.T) {
-		// 解码在 Go 侧完成，坏字节永远到不了 provider —— 不需要进程就能断言。
+		// 解码在 Go 侧完成，坏字节永远到不了 provider ——
+		// 不需要进程就能断言。
 		adapter := newStubAdapter(t, `{"status":"passed","feature_dim":512,"features":[]}`)
 		_, err := adapter.ExtractFaceFeature(ctx, []byte("not-an-image"))
 		if !errors.Is(err, person.ErrUnsupportedImageFormat) {
@@ -106,15 +115,21 @@ func TestFaceFeatureExtractorAdapter_MapsInputFailuresToDomainSentinels(t *testi
 	})
 
 	t.Run("multiple faces map to ErrMultipleFaces", func(t *testing.T) {
-		// 合影不是「照片坏了」也不是「服务坏了」：它是必须退回人工复核的输入裁决，
+		// 合影不是「照片坏了」也不是「服务坏了」：
+		// 它是必须退回人工复核的输入裁决，
 		// 所以既不能落到 ErrInternal（500），也不能落到 ErrUnsupportedImageFormat。
 		adapter := newStubAdapter(t, `{"status":"failed","code":"MULTIPLE_FACES"}`)
 		_, err := adapter.ExtractFaceFeature(ctx, blackPNG(t))
 		if !errors.Is(err, person.ErrMultipleFaces) {
 			t.Fatalf("want person.ErrMultipleFaces, got %v", err)
 		}
-		if errors.Is(err, person.ErrNoFaceDetected) || errors.Is(err, person.ErrUnsupportedImageFormat) {
-			t.Fatalf("a group photo must not be reported as an input-format problem, got %v", err)
+		hasWrongError := errors.Is(err, person.ErrNoFaceDetected) ||
+			errors.Is(err, person.ErrUnsupportedImageFormat)
+		if hasWrongError {
+			t.Fatalf(
+				"a group photo must not be reported as an input-format problem, got %v",
+				err,
+			)
 		}
 	})
 
@@ -138,7 +153,10 @@ func TestFaceFeatureExtractorAdapter_MapsInputFailuresToDomainSentinels(t *testi
 		for i := range features {
 			features[i] = "0.01"
 		}
-		adapter := newStubAdapter(t, `{"status":"passed","feature_dim":512,"features":[`+joinComma(features)+`]}`)
+		adapter := newStubAdapter(
+			t,
+			`{"status":"passed","feature_dim":512,"features":[`+strings.Join(features, ",")+`]}`,
+		)
 
 		got, err := adapter.ExtractFaceFeature(ctx, data)
 		if err != nil {
@@ -148,15 +166,4 @@ func TestFaceFeatureExtractorAdapter_MapsInputFailuresToDomainSentinels(t *testi
 			t.Fatalf("want 512 features, got %d", len(got))
 		}
 	})
-}
-
-func joinComma(items []string) string {
-	out := ""
-	for i, item := range items {
-		if i != 0 {
-			out += ","
-		}
-		out += item
-	}
-	return out
 }

@@ -67,9 +67,11 @@ func EnsureSelfSignedCert(dataDir string) (string, string, error) {
 			Organization: []string{"Zhulong Edge Security"},
 			CommonName:   "Zhulong Edge Self-Signed",
 		},
-		NotBefore:             now.Add(-1 * time.Hour),
-		NotAfter:              now.Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		NotBefore: now.Add(-1 * time.Hour),
+		NotAfter:  now.Add(365 * 24 * time.Hour),
+		KeyUsage: x509.KeyUsageKeyEncipherment |
+			x509.KeyUsageDigitalSignature |
+			x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -77,7 +79,13 @@ func EnsureSelfSignedCert(dataDir string) (string, string, error) {
 		DNSNames:              dnsNames,
 	}
 
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	derBytes, err := x509.CreateCertificate(
+		rand.Reader,
+		&template,
+		&template,
+		&privKey.PublicKey,
+		privKey,
+	)
 	if err != nil {
 		return "", "", fmt.Errorf("create self-signed certificate: %w", err)
 	}
@@ -91,7 +99,9 @@ func EnsureSelfSignedCert(dataDir string) (string, string, error) {
 		return "", "", fmt.Errorf("write private key: %w", err)
 	}
 	if err := os.Rename(tmpKeyPath, keyPath); err != nil {
-		_ = os.Remove(tmpKeyPath)
+		if rmErr := os.Remove(tmpKeyPath); rmErr != nil {
+			// Intentionally ignored: temporary cleanup after commit failure is best-effort.
+		}
 		return "", "", fmt.Errorf("commit private key file: %w", err)
 	}
 
@@ -100,7 +110,9 @@ func EnsureSelfSignedCert(dataDir string) (string, string, error) {
 		return "", "", fmt.Errorf("write certificate: %w", err)
 	}
 	if err := os.Rename(tmpCertPath, certPath); err != nil {
-		_ = os.Remove(tmpCertPath)
+		if rmErr := os.Remove(tmpCertPath); rmErr != nil {
+			// Intentionally ignored: temporary cleanup after commit failure is best-effort.
+		}
 		return "", "", fmt.Errorf("commit certificate file: %w", err)
 	}
 

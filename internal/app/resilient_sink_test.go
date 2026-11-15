@@ -270,7 +270,11 @@ func TestResilientSinkSyncFlushesQueuedRecords(t *testing.T) {
 	if got := len(primary.written); got != 8 {
 		t.Fatalf("Sync flushed %d of 8 queued records", got)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 }
 
 func TestResilientSinkCloseDrainsQueuedRecords(t *testing.T) {
@@ -327,7 +331,9 @@ func TestResilientSinkHealthNeverTouchesAStalledDestination(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = sink.Health()
+		if healthErr, dropped := sink.Health(); healthErr != nil || dropped > 0 {
+			t.Logf("sink.Health: err=%v, dropped=%d", healthErr, dropped)
+		}
 	}()
 	select {
 	case <-done:
@@ -335,7 +341,11 @@ func TestResilientSinkHealthNeverTouchesAStalledDestination(t *testing.T) {
 		t.Fatal("Health blocked behind a stalled destination")
 	}
 	close(primary.block)
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 }
 
 func healthErrOrNil(sink *resilientSink) error {

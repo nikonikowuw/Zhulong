@@ -65,12 +65,14 @@ type Config struct {
 	// reinstalling the package needs no configuration change.
 	ExtractorAlgorithm string
 	// TLSMode controls whether the HTTP listener is wrapped with TLS.
-	// Valid values are "off" (plain HTTP), "auto" (self-signed cert with local/LAN SANs), and "manual".
+	// Valid values are "off" (plain HTTP), "auto" (self-signed cert with local/LAN SANs),
+	// and "manual".
 	TLSMode     string
 	TLSCertFile string
 	TLSKeyFile  string
 
-	// AlertPushPublicBaseURL is the externally reachable base URL of the host used for signed image URLs.
+	// AlertPushPublicBaseURL is the externally reachable base URL of the host used
+	// for signed image URLs.
 	AlertPushPublicBaseURL string
 	// AlertPushSignedURLTTL is the validity duration for signed media URLs (1m..168h).
 	AlertPushSignedURLTTL time.Duration
@@ -81,7 +83,10 @@ func ValidateAlertPushConfig(rawBaseURL, rawTTL string) (string, time.Duration, 
 	baseURL := strings.TrimRight(strings.TrimSpace(rawBaseURL), "/")
 	if baseURL != "" {
 		if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
-			return "", 0, fmt.Errorf("alertpush.public_base_url %q must have http:// or https:// scheme", rawBaseURL)
+			return "", 0, fmt.Errorf(
+				"alertpush.public_base_url %q must have http:// or https:// scheme",
+				rawBaseURL,
+			)
 		}
 	}
 

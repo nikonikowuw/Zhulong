@@ -121,7 +121,7 @@ func resolveLogPolicy(config Config) logPolicy {
 
 // diffLogPolicy names the fields that changed and that only a restart can apply.
 func diffLogPolicy(current, next logPolicy) []string {
-	var changed []string
+	changed := []string{}
 	if current.Format != next.Format {
 		changed = append(changed, "logging.format")
 	}
@@ -165,15 +165,17 @@ func buildLogger(config Config) (builtLogger, error) {
 	}
 
 	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:        "ts",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		FunctionKey:    zapcore.OmitKey,
-		MessageKey:     "msg",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeTime:     func(t time.Time, enc zapcore.PrimitiveArrayEncoder) { zapcore.ISO8601TimeEncoder(t.UTC(), enc) },
+		TimeKey:       "ts",
+		LevelKey:      "level",
+		NameKey:       "logger",
+		CallerKey:     "caller",
+		FunctionKey:   zapcore.OmitKey,
+		MessageKey:    "msg",
+		StacktraceKey: "stacktrace",
+		LineEnding:    zapcore.DefaultLineEnding,
+		EncodeTime: func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+			zapcore.ISO8601TimeEncoder(t.UTC(), enc)
+		},
 		EncodeDuration: zapcore.MillisDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
@@ -197,16 +199,30 @@ func buildLogger(config Config) (builtLogger, error) {
 	var core zapcore.Core = logsafe.NewSanitizingCore(zapcore.NewCore(encoder, sink, pressure))
 	if logging.Sampling.Enabled {
 		if logging.Sampling.Initial <= 0 || logging.Sampling.Thereafter <= 0 {
-			return builtLogger{}, errors.New("logging.sampling.initial and logging.sampling.thereafter must be positive when sampling is enabled")
+			return builtLogger{}, errors.New(
+				"logging.sampling.initial and logging.sampling.thereafter " +
+					"must be positive when sampling is enabled",
+			)
 		}
-		core = zapcore.NewSamplerWithOptions(core, time.Second, logging.Sampling.Initial, logging.Sampling.Thereafter)
+		core = zapcore.NewSamplerWithOptions(
+			core,
+			time.Second,
+			logging.Sampling.Initial,
+			logging.Sampling.Thereafter,
+		)
 	}
 
-	logger := zap.New(core,
+	logger := zap.New(
+		core,
 		zap.AddCaller(),
 		zap.AddStacktrace(zapcore.ErrorLevel),
 		zap.ErrorOutput(zapcore.Lock(os.Stderr)),
 	)
 	zap.ReplaceGlobals(logger)
-	return builtLogger{logger: logger, level: atomicLevel, pressure: pressure, sink: sink}, nil
+	return builtLogger{
+		logger:   logger,
+		level:    atomicLevel,
+		pressure: pressure,
+		sink:     sink,
+	}, nil
 }

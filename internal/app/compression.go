@@ -11,8 +11,12 @@ import (
 )
 
 var (
-	errCompressionReservation = errors.New("log write dropped while a compression reservation is protected")
-	errCompressionCancelled   = errors.New("log compression was skipped to preserve write capacity")
+	errCompressionReservation = errors.New(
+		"log write dropped while a compression reservation is protected",
+	)
+	errCompressionCancelled = errors.New(
+		"log compression was skipped to preserve write capacity",
+	)
 )
 
 const compressionOverheadReserve int64 = 64 << 10
@@ -29,13 +33,20 @@ func compressionReservation(sourceSize int64) int64 {
 }
 
 func (s *boundedFileSink) scheduleCompressionLocked(archive rotatedArchive) {
-	if !s.compress || s.closed || s.compression != nil || archive.compressed || archive.compressionAttempted {
+	isBlocked := !s.compress || s.closed || s.compression != nil
+	isProcessed := archive.compressed || archive.compressionAttempted
+	if isBlocked || isProcessed {
 		return
 	}
 	reservation := compressionReservation(archive.size)
 	used := s.totalSizeLocked()
 	if reservation > s.maxTotalSize-used {
-		s.reportDiagnosticLocked("compression skipped for %s: temporary reservation of %d bytes does not fit the %d byte budget", archive.path, reservation, s.maxTotalSize)
+		s.reportDiagnosticLocked(
+			"compression skipped for %s: temporary reservation of %d bytes does not fit the %d byte budget",
+			archive.path,
+			reservation,
+			s.maxTotalSize,
+		)
 		return
 	}
 	job := &compressionJob{
@@ -119,7 +130,11 @@ func compressArchive(job *compressionJob) (string, int64, error) {
 		return "", 0, fmt.Errorf("stat archive for compression: %w", err)
 	}
 	if info.Size() != job.archive.size {
-		return "", 0, fmt.Errorf("archive size changed before compression (%d != %d)", info.Size(), job.archive.size)
+		return "", 0, fmt.Errorf(
+			"archive size changed before compression (%d != %d)",
+			info.Size(),
+			job.archive.size,
+		)
 	}
 
 	temporary := job.archive.path + ".tmp"
@@ -202,7 +217,21 @@ func compressionCancelled(job *compressionJob) bool {
 	}
 }
 
-func (s *boundedFileSink) finishCompression(job *compressionJob, temporary string, compressedSize int64, compressionErr error) {
+func removeFileBestEffort(path string) {
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		// Intentionally ignored: temporary cleanup is best-effort.
+	}
+}
+
+func (s *boundedFileSink) finishCompression(
+	job *compressionJob,
+	temporary string,
+	compressedSize int64,
+	compressionErr error,
+) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	completed := false
@@ -214,23 +243,27 @@ func (s *boundedFileSink) finishCompression(job *compressionJob, temporary strin
 	}()
 	if s.compression != job {
 		if temporary != "" {
-			_ = os.Remove(temporary)
+			removeFileBestEffort(temporary)
 		}
 		return
 	}
 	if compressionErr != nil {
 		if temporary != "" {
-			_ = os.Remove(temporary)
+			removeFileBestEffort(temporary)
 		}
 		s.releaseLocked(job)
 		if !errors.Is(compressionErr, errCompressionCancelled) {
-			s.reportDiagnosticLocked("compression failed for %s; retaining source archive: %v", job.archive.path, compressionErr)
+			s.reportDiagnosticLocked(
+				"compression failed for %s; retaining source archive: %v",
+				job.archive.path,
+				compressionErr,
+			)
 		}
 		return
 	}
 	select {
 	case <-job.cancel:
-		_ = os.Remove(temporary)
+		removeFileBestEffort(temporary)
 		s.releaseLocked(job)
 		return
 	default:
@@ -239,28 +272,42 @@ func (s *boundedFileSink) finishCompression(job *compressionJob, temporary strin
 	destination := job.archive.path + ".gz"
 	_, err := os.Lstat(destination)
 	if err == nil {
-		_ = os.Remove(temporary)
+		removeFileBestEffort(temporary)
 		s.releaseLocked(job)
-		s.reportDiagnosticLocked("compression skipped for %s: destination already exists", job.archive.path)
+		s.reportDiagnosticLocked(
+			"compression skipped for %s: destination already exists",
+			job.archive.path,
+		)
 		return
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		_ = os.Remove(temporary)
+		removeFileBestEffort(temporary)
 		s.releaseLocked(job)
-		s.reportDiagnosticLocked("compression failed for %s: inspect destination: %v", job.archive.path, err)
+		s.reportDiagnosticLocked(
+			"compression failed for %s: inspect destination: %v",
+			job.archive.path,
+			err,
+		)
 		return
 	}
 	if err := os.Rename(temporary, destination); err != nil {
-		_ = os.Remove(temporary)
+		removeFileBestEffort(temporary)
 		s.releaseLocked(job)
-		s.reportDiagnosticLocked("compression failed for %s: rename output: %v", job.archive.path, err)
+		s.reportDiagnosticLocked(
+			"compression failed for %s: rename output: %v",
+			job.archive.path,
+			err,
+		)
 		return
 	}
 	if err := os.Remove(job.archive.path); err != nil {
 		if index := s.archiveIndexLocked(job.archive.path); index >= 0 {
 			s.archives = append(s.archives, rotatedArchive{
-				path: destination, size: compressedSize, created: job.archive.created,
-				sequence: job.archive.sequence, compressed: true,
+				path:       destination,
+				size:       compressedSize,
+				created:    job.archive.created,
+				sequence:   job.archive.sequence,
+				compressed: true,
 			})
 		}
 		s.releaseLocked(job)
@@ -274,8 +321,11 @@ func (s *boundedFileSink) finishCompression(job *compressionJob, temporary strin
 	}
 	if index := s.archiveIndexLocked(job.archive.path); index >= 0 {
 		s.archives[index] = rotatedArchive{
-			path: destination, size: compressedSize, created: job.archive.created,
-			sequence: job.archive.sequence, compressed: true,
+			path:       destination,
+			size:       compressedSize,
+			created:    job.archive.created,
+			sequence:   job.archive.sequence,
+			compressed: true,
 		}
 	}
 	s.releaseLocked(job)
@@ -300,7 +350,9 @@ func (s *boundedFileSink) reportDiagnosticLocked(format string, values ...any) {
 	if writer == nil {
 		writer = os.Stderr
 	}
-	_, _ = fmt.Fprintf(writer, "log sink: "+format+"\n", values...)
+	if _, err := fmt.Fprintf(writer, "log sink: "+format+"\n", values...); err != nil {
+		// Intentionally ignored: diagnostic output to stderr is best-effort.
+	}
 }
 
 func syncDirectory(path string) error {

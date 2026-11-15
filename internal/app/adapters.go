@@ -17,6 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/nikonikowuw/Zhulong/internal/alertpush"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
@@ -32,8 +35,6 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/systeminfo"
 	"github.com/nikonikowuw/Zhulong/internal/task"
-	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 type appBrokerPathResolver struct {
@@ -51,26 +52,38 @@ func (r *appBrokerPathResolver) log() *zap.Logger {
 	return r.logger
 }
 
-// TaskConfigsFor 解析某个算法包在每一路流上的任务级配置（stream_id → config_json）。
+// TaskConfigsFor 解析某个算法包在每一路流上的任务级配置
+// （stream_id → config_json）。
 //
-// 与 SyncBrokerSubscriptions 的分工：那边决定「订阅哪些流」，这边只回答「每路流的算法
-// 配置是什么」。两者都按 enabled + 排程过滤，否则会给一个休眠中的流推配置：那条流的
-// broker 已经不存在，推送只会换来一条无意义的 NOT_FOUND 告警。
+// 与 SyncBrokerSubscriptions 的分工：那边决定「订阅哪些流」，
+// 这边只回答「每路流的算法配置是什么」。
+// 两者都按 enabled + 排程过滤，否则会给一个休眠中的流推配置：
+// 那条流的 broker 已经不存在，推送只会换来一条无意义的 NOT_FOUND 告警。
 //
-// ⚠️ 同一个相机 + 同一个算法在库中只应有一条 enabled 任务（子表 UNIQUE(task_id, algorithm_id)，
-//
-//	但不同 task 仍可指向同一相机）。真的出现两份时取任务顺序里的第一条并告警：静默挑一个
-//	会让「改了配置没生效」变成无解问题。
-func (r *appBrokerPathResolver) TaskConfigsFor(ctx context.Context, algorithmID string) (map[uint64]string, error) {
+// ⚠️ 同一个相机 + 同一个算法在库中只应有一条 enabled 任务
+// （子表 UNIQUE(task_id, algorithm_id)，但不同 task 仍可指向同一相机）。
+// 真的出现两份时取任务顺序里的第一条并告警：
+// 静默挑一个会让「改了配置没生效」变成无解问题。
+func (r *appBrokerPathResolver) TaskConfigsFor(
+	ctx context.Context,
+	algorithmID string,
+) (map[uint64]string, error) {
 	return r.taskConfigsFor(ctx, algorithmID, false)
 }
 
 // TaskRegionsFor resolves the full-frame region snapshot independently of plugin parameters.
-func (r *appBrokerPathResolver) TaskRegionsFor(ctx context.Context, algorithmID string) (map[uint64]string, error) {
+func (r *appBrokerPathResolver) TaskRegionsFor(
+	ctx context.Context,
+	algorithmID string,
+) (map[uint64]string, error) {
 	return r.taskConfigsFor(ctx, algorithmID, true)
 }
 
-func (r *appBrokerPathResolver) taskConfigsFor(ctx context.Context, algorithmID string, regions bool) (map[uint64]string, error) {
+func (r *appBrokerPathResolver) taskConfigsFor(
+	ctx context.Context,
+	algorithmID string,
+	regions bool,
+) (map[uint64]string, error) {
 	if r.taskStore == nil || r.streamHub == nil {
 		return nil, nil
 	}
@@ -108,7 +121,8 @@ func (r *appBrokerPathResolver) taskConfigsFor(ctx context.Context, algorithmID 
 			}
 			if prev, ok := configs[streamID]; ok {
 				if prev != cfg {
-					r.log().Warn("duplicate task config for the same stream and algorithm; keeping the first",
+					r.log().Warn(
+						"duplicate task config for the same stream and algorithm; keeping the first",
 						zap.String("algorithm_id", algorithmID),
 						zap.Uint64("stream_id", streamID),
 						zap.String("kept_task_id", owner[streamID]),
@@ -124,17 +138,23 @@ func (r *appBrokerPathResolver) taskConfigsFor(ctx context.Context, algorithmID 
 	return configs, nil
 }
 
-// SyncBrokerSubscriptions 解析某个算法包当前应当订阅的全部 FrameBroker socket 路径，
+// SyncBrokerSubscriptions 解析某个算法包当前应当订阅的全部
+// FrameBroker socket 路径，
 // 并把该包的订阅关系同步到它在 DB 中的最新任务集合。
 //
-// 它同时承担三件事，且三者必须在同一次同步里完成，否则订阅关系会与 DB 中的任务集合漂移：
-//  1. 按该包 enabled 的任务解析出每一路相机的 AI 流路径（失败即整体失败）；
+// 它同时承担三件事，且三者必须在同一次同步里完成，
+// 否则订阅关系会与 DB 中的任务集合漂移：
+//  1. 按该包 enabled 的任务解析出每一路相机的 AI 流路径
+//     （失败即整体失败）；
 //  2. 提交订阅关系：新出现的相机 attach，已不在任务集合里的相机 release；
 //  3. 按「该相机上所有 enabled 任务的 max(sample_fps)」下发发布节流率。
 //
 // ⚠️ 解析失败时不提交任何订阅变更，也不会遗留已 acquire 的流：
 // 所有路径解析完毕后才进入提交阶段。
-func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error) {
+func (r *appBrokerPathResolver) SyncBrokerSubscriptions(
+	ctx context.Context,
+	algorithmID string,
+) ([]string, error) {
 	if r.taskStore == nil || r.streamHub == nil {
 		return nil, nil
 	}
@@ -143,7 +163,8 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 		return nil, fmt.Errorf("list tasks for algorithm %q: %w", algorithmID, err)
 	}
 
-	// 该包要求订阅的相机及其本包内的最大采样率；order 保持 DB 的稳定顺序。
+	// 该包要求订阅的相机及其本包内的最大采样率；
+	// order 保持 DB 的稳定顺序。
 	wanted := make(map[string]struct{}, len(tasks))
 	order := make([]string, 0, len(tasks))
 	for _, tsk := range tasks {
@@ -169,9 +190,9 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 
 	// 阶段 1：并发解析全部路径。任一路失败则整体失败，不触碰订阅关系。
 	//
-	// 并发不是「顺手优化」：解析可能为了等 Native 8 秒宽限期结束而阻塞（相机掉线后的
-	// 重连窗口），串行解析会把 N 台掉线相机的等待时间叠加成 N×10 秒，
-	// 而算法包重启路径就在这条链上。
+	// 并发不是「顺手优化」：解析可能为了等 Native 8 秒宽限期结束而阻塞
+	// （相机掉线后的重连窗口），串行解析会把 N 台掉线相机的等待时间
+	// 叠加成 N×10 秒，而算法包重启路径就在这条链上。
 	paths := make([]string, len(order))
 	group, groupCtx := errgroup.WithContext(ctx)
 	for i, cameraID := range order {
@@ -195,7 +216,8 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 	}
 	for _, cameraID := range existing {
 		if _, ok := wanted[cameraID]; !ok {
-			// 该相机已不在本包的任务集合中：注销订阅，最后一个订阅者离开时释放流与 broker。
+			// 该相机已不在本包的任务集合中：注销订阅，
+			// 最后一个订阅者离开时释放流与 broker。
 			r.streamHub.ReleaseAIStreamSubscriber(cameraID, algorithmID)
 		}
 	}
@@ -217,8 +239,9 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 
 // taskCropListener 把「任务已保存」翻译成媒体层的视图刷新。
 //
-// 为什么不用 TaskChangeListener：后者驱动算法包重启，crop-only 编辑不应重启进程
-// （Service 已按 sameTaskSemantics 过滤）；而这里只关心「窗口变了，AI 流要跟上」。
+// 为什么不用 TaskChangeListener：后者驱动算法包重启，
+// crop-only 编辑不应重启进程（Service 已按 sameTaskSemantics 过滤）；
+// 而这里只关心「窗口变了，AI 流要跟上」。
 type taskCropListener struct {
 	hub    *camera.StreamHub
 	logger *zap.Logger
@@ -226,8 +249,9 @@ type taskCropListener struct {
 
 // OnTaskSaved 在任务写库成功后刷新该相机的分析视图。
 //
-// ⚠️ 保存路径不能等媒体层：给刷新一个很小的上限，超时就放弃（日志留痕），
-// 下一次 acquire / 下一次保存会重新读取最新配置。宁可慢一拍生效，也不能让保存失败。
+// ⚠️ 保存路径不能等媒体层：给刷新一个很小的上限，超时就放弃
+// （日志留痕），下一次 acquire / 下一次保存会重新读取最新配置。
+// 宁可慢一拍生效，也不能让保存失败。
 func (l taskCropListener) OnTaskSaved(ctx context.Context, _, cameraID string) {
 	if l.hub == nil || cameraID == "" {
 		return
@@ -246,7 +270,9 @@ func (l taskCropListener) OnTaskSaved(ctx context.Context, _, cameraID string) {
 const taskCropRefreshTimeout = 200 * time.Millisecond
 
 // publishRateByCamera 返回每个相机上所有 enabled 分析任务的最大采样帧率。
-func (r *appBrokerPathResolver) publishRateByCamera(ctx context.Context) (map[string]uint32, error) {
+func (r *appBrokerPathResolver) publishRateByCamera(
+	ctx context.Context,
+) (map[string]uint32, error) {
 	tasks, err := r.taskStore.ListTasks(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list analysis tasks for publish rate: %w", err)
@@ -305,7 +331,10 @@ type personKeyBackfillerAdapter struct {
 	store *record.Store
 }
 
-func (a *personKeyBackfillerAdapter) BackfillPersonExternalID(ctx context.Context, personRowID, externalID string) (int64, error) {
+func (a *personKeyBackfillerAdapter) BackfillPersonExternalID(
+	ctx context.Context,
+	personRowID, externalID string,
+) (int64, error) {
 	if a.store == nil {
 		return 0, nil
 	}
@@ -316,7 +345,10 @@ type recordSnapshotFileChecker struct {
 	media *mediafile.Service
 }
 
-func (c recordSnapshotFileChecker) SnapshotFileExists(ctx context.Context, relativePath string) (bool, error) {
+func (c recordSnapshotFileChecker) SnapshotFileExists(
+	ctx context.Context,
+	relativePath string,
+) (bool, error) {
 	if c.media == nil {
 		return false, errors.New("media file service is unavailable")
 	}
@@ -336,8 +368,8 @@ func (c recordSnapshotFileChecker) SnapshotFileExists(ctx context.Context, relat
 // 存在的理由：record 只认得「证据图还能活几天」这一个整数，不应该依赖
 // storage.StorageConfig 或 storage.Service 的任何其他能力（保留天数每次现取，
 // 跟着 UpdateConfig 热生效，不得缓存）。
-// 未配置（nil service / 配置读不到）时返回 0，即「不启用清理」：宁可不删，
-// 也不能拿猜的天数去删证据。
+// 未配置（nil service / 配置读不到）时返回 0，即「不启用清理」：
+// 宁可不删，也不能拿猜的天数去删证据。
 type recordRetentionDaysProvider struct {
 	storage *storage.Service
 }
@@ -360,7 +392,9 @@ type supervisorGallerySyncAdapter struct {
 	service *person.Service
 }
 
-func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) ([]algorunner.GallerySyncItem, error) {
+func (a *supervisorGallerySyncAdapter) GetGallerySyncData(
+	ctx context.Context,
+) ([]algorunner.GallerySyncItem, error) {
 	if a.service == nil {
 		return nil, nil
 	}
@@ -400,7 +434,10 @@ type faceFeatureExtractorAdapter struct {
 	client *faceextract.Client
 }
 
-func (a *faceFeatureExtractorAdapter) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error) {
+func (a *faceFeatureExtractorAdapter) ExtractFaceFeature(
+	ctx context.Context,
+	imageBytes []byte,
+) ([]float32, error) {
 	if len(imageBytes) == 0 {
 		return nil, fmt.Errorf("%w: empty image", person.ErrUnsupportedImageFormat)
 	}
@@ -565,7 +602,9 @@ func (a *statusSnapshotAdapter) Snapshot(ctx context.Context) alertpush.Heartbea
 	}
 }
 
-func (a *statusSnapshotAdapter) DeviceStatus(ctx context.Context) (openapi.DeviceStatusResponse, error) {
+func (a *statusSnapshotAdapter) DeviceStatus(
+	ctx context.Context,
+) (openapi.DeviceStatusResponse, error) {
 	raw := a.collect(ctx)
 	return openapi.DeviceStatusResponse{
 		DeviceID:   raw.deviceID,
@@ -705,7 +744,10 @@ func (a *statusSnapshotAdapter) collectHardware(ctx context.Context, out *unifie
 	out.maxTemperatureC = round1Finite(hottest)
 }
 
-func (a *statusSnapshotAdapter) collectStorage(ctx context.Context, out *unifiedStatusSnapshot) bool {
+func (a *statusSnapshotAdapter) collectStorage(
+	ctx context.Context,
+	out *unifiedStatusSnapshot,
+) bool {
 	if a.storage == nil {
 		return false
 	}
@@ -752,7 +794,10 @@ func (a *statusSnapshotAdapter) collectRunners(ctx context.Context, out *unified
 	}
 }
 
-func (a *statusSnapshotAdapter) collectDecode(decodeBackend string, out *unifiedStatusSnapshot) bool {
+func (a *statusSnapshotAdapter) collectDecode(
+	decodeBackend string,
+	out *unifiedStatusSnapshot,
+) bool {
 	if a.decode == nil {
 		return false
 	}

@@ -55,7 +55,11 @@ func TestBoundedFileSinkKeepsActiveAndArchivesWithinBudget(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 
 	for i := 0; i < 20; i++ {
 		if _, err := sink.Write(bytes.Repeat([]byte{'x'}, 16)); err != nil {
@@ -103,7 +107,11 @@ func TestBoundedFileSinkStopsAfterEntryExceedsFileLimit(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 	if _, err := sink.Write([]byte("123456789")); err == nil {
 		t.Fatal("expected oversized log entry to disable the sink")
 	}
@@ -115,7 +123,10 @@ func TestBoundedFileSinkStopsAfterEntryExceedsFileLimit(t *testing.T) {
 		t.Fatalf("sink health = (%v, %d), want a failure and two refused writes", failure, lost)
 	}
 	if !strings.Contains(diagnostic.String(), "file log sink disabled") {
-		t.Fatalf("sink failure was not reported through the independent diagnostic writer: %q", diagnostic.String())
+		t.Fatalf(
+			"sink failure was not reported through the independent diagnostic writer: %q",
+			diagnostic.String(),
+		)
 	}
 	info, err := os.Stat(sink.path)
 	if err != nil {
@@ -144,7 +155,11 @@ func TestBoundedFileSinkExpiresArchivesByTimestamp(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 	if _, err := os.Stat(archivePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expired archive still exists, stat err=%v", err)
 	}
@@ -164,7 +179,11 @@ func TestBoundedFileSinkCompressesWithinReservedBudget(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 
 	original := bytes.Repeat([]byte("log-event-"), 102)
 	if _, err := sink.Write(original); err != nil {
@@ -211,12 +230,18 @@ func TestBoundedFileSinkCompressesWithinReservedBudget(t *testing.T) {
 	}
 	reader, err := gzip.NewReader(file)
 	if err != nil {
-		_ = file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			t.Logf("file.Close error: %v", closeErr)
+		}
 		t.Fatalf("open gzip reader: %v", err)
 	}
 	decoded, err := io.ReadAll(reader)
-	_ = reader.Close()
-	_ = file.Close()
+	if closeErr := reader.Close(); closeErr != nil {
+		t.Logf("reader.Close error: %v", closeErr)
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		t.Logf("file.Close error: %v", closeErr)
+	}
 	if err != nil {
 		t.Fatalf("read compressed archive: %v", err)
 	}
@@ -242,7 +267,11 @@ func TestBoundedFileSinkSkipsCompressionWhenReservationDoesNotFit(t *testing.T) 
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 	if _, err := sink.Write(bytes.Repeat([]byte("x"), 1024)); err != nil {
 		t.Fatalf("write active file: %v", err)
 	}
@@ -255,7 +284,7 @@ func TestBoundedFileSinkSkipsCompressionWhenReservationDoesNotFit(t *testing.T) 
 	if len(archives) != 1 || archives[0].compressed {
 		t.Fatalf("expected original uncompressed archive to be retained: %+v", archives)
 	}
-	if strings.Contains(diagnostic.String(), "reservation") == false {
+	if !strings.Contains(diagnostic.String(), "reservation") {
 		t.Fatalf("skipped compression was not reported: %q", diagnostic.String())
 	}
 	if _, err := os.Stat(archives[0].path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
@@ -268,7 +297,11 @@ func TestCompressionReservationIncludesActiveArchiveAndTemporaryOutput(t *testin
 	const archiveSize int64 = 8192
 	reservation := compressionReservation(archiveSize)
 	budget := activeSize + archiveSize + reservation
-	archive := rotatedArchive{path: filepath.Join(t.TempDir(), "service.log.20261020T120000Z.000001"), size: archiveSize}
+	archivePath := filepath.Join(t.TempDir(), "service.log.20261020T120000Z.000001")
+	archive := rotatedArchive{
+		path: archivePath,
+		size: archiveSize,
+	}
 	sink := &boundedFileSink{
 		maxTotalSize:    budget,
 		compress:        true,
@@ -280,7 +313,12 @@ func TestCompressionReservationIncludesActiveArchiveAndTemporaryOutput(t *testin
 
 	sink.scheduleCompressionLocked(archive)
 	if sink.compression == nil || sink.reservedBytes != reservation {
-		t.Fatalf("compression reservation = %d, job=%v; want %d and one queued job", sink.reservedBytes, sink.compression, reservation)
+		t.Fatalf(
+			"compression reservation = %d, job=%v; want %d and one queued job",
+			sink.reservedBytes,
+			sink.compression,
+			reservation,
+		)
 	}
 	if got := sink.totalSizeLocked(); got != budget {
 		t.Fatalf("active + archive + temporary reservation = %d, want hard budget %d", got, budget)
@@ -295,7 +333,11 @@ func TestCompressionReservationIncludesActiveArchiveAndTemporaryOutput(t *testin
 		t.Fatalf("write within compression reservation: %v", err)
 	}
 	if _, err := limited.Write([]byte{'x'}); err == nil || int64(output.Len()) > reservation {
-		t.Fatalf("temporary compression writer exceeded its reservation: size=%d err=%v", output.Len(), err)
+		t.Fatalf(
+			"temporary compression writer exceeded its reservation: size=%d err=%v",
+			output.Len(),
+			err,
+		)
 	}
 }
 
@@ -312,7 +354,8 @@ func TestBoundedFileSinkCloseWaitsForCompressionAndIsIdempotent(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if _, err := sink.Write(bytes.Repeat([]byte("log-event-"), (1<<20)/len("log-event-"))); err != nil {
+	repeatCount := (1 << 20) / len("log-event-")
+	if _, err := sink.Write(bytes.Repeat([]byte("log-event-"), repeatCount)); err != nil {
 		t.Fatalf("write active archive: %v", err)
 	}
 	if _, err := sink.Write([]byte("next")); err != nil {

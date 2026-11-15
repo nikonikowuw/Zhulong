@@ -56,12 +56,37 @@ func TestRouterSeparatesAPIAndSPA(t *testing.T) {
 		wantBody   string
 	}{
 		{name: "root SPA", path: "/", wantStatus: http.StatusOK, wantBody: "<!doctype html>"},
-		{name: "client route", path: "/settings/network", wantStatus: http.StatusOK, wantBody: "<!doctype html>"},
+		{
+			name:       "client route",
+			path:       "/settings/network",
+			wantStatus: http.StatusOK,
+			wantBody:   "<!doctype html>",
+		},
 		{name: "static asset", path: "/assets/app.js", wantStatus: http.StatusOK, wantBody: "window.app"},
-		{name: "missing API route", path: "/api/v1/missing", wantStatus: http.StatusNotFound, wantBody: `"code":"ROUTE_NOT_FOUND"`},
-		{name: "disabled Swagger route", path: "/swagger", wantStatus: http.StatusNotFound, wantBody: `"code":"ROUTE_NOT_FOUND"`},
-		{name: "disabled Swagger UI", path: "/swagger/index.html", wantStatus: http.StatusNotFound, wantBody: `"code":"ROUTE_NOT_FOUND"`},
-		{name: "missing static asset", path: "/assets/missing.js", wantStatus: http.StatusNotFound, wantBody: "404 page not found"},
+		{
+			name:       "missing API route",
+			path:       "/api/v1/missing",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"code":"ROUTE_NOT_FOUND"`,
+		},
+		{
+			name:       "disabled Swagger route",
+			path:       "/swagger",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"code":"ROUTE_NOT_FOUND"`,
+		},
+		{
+			name:       "disabled Swagger UI",
+			path:       "/swagger/index.html",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"code":"ROUTE_NOT_FOUND"`,
+		},
+		{
+			name:       "missing static asset",
+			path:       "/assets/missing.js",
+			wantStatus: http.StatusNotFound,
+			wantBody:   "404 page not found",
+		},
 	}
 
 	for _, test := range tests {
@@ -70,7 +95,12 @@ func TestRouterSeparatesAPIAndSPA(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, test.path, nil)
 			router.ServeHTTP(recorder, request)
 			if recorder.Code != test.wantStatus {
-				t.Fatalf("expected status %d, got %d: %s", test.wantStatus, recorder.Code, recorder.Body.String())
+				t.Fatalf(
+					"expected status %d, got %d: %s",
+					test.wantStatus,
+					recorder.Code,
+					recorder.Body.String(),
+				)
 			}
 			if !contains(recorder.Body.String(), test.wantBody) {
 				t.Fatalf("expected body to contain %q, got %s", test.wantBody, recorder.Body.String())
@@ -157,7 +187,8 @@ func TestUnknownErrorIsWrappedForClient(t *testing.T) {
 	context, _ := gin.CreateTestContext(recorder)
 	context.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 	httputil.WriteError(context, errors.New("private detail"))
-	if recorder.Code != http.StatusInternalServerError || contains(recorder.Body.String(), "private detail") {
+	hasPrivateDetail := contains(recorder.Body.String(), "private detail")
+	if recorder.Code != http.StatusInternalServerError || hasPrivateDetail {
 		t.Fatalf("unexpected error response: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -228,8 +259,13 @@ func TestRouterRejectsOversizedAPIRequestBodies(t *testing.T) {
 			}
 			router.ServeHTTP(recorder, request)
 
-			if recorder.Code != http.StatusRequestEntityTooLarge || !contains(recorder.Body.String(), `"code":"PAYLOAD_TOO_LARGE"`) {
-				t.Fatalf("expected localized 413 error response, got %d: %s", recorder.Code, recorder.Body.String())
+			hasCode := contains(recorder.Body.String(), `"code":"PAYLOAD_TOO_LARGE"`)
+			if recorder.Code != http.StatusRequestEntityTooLarge || !hasCode {
+				t.Fatalf(
+					"expected localized 413 error response, got %d: %s",
+					recorder.Code,
+					recorder.Body.String(),
+				)
 			}
 		})
 	}
@@ -294,17 +330,37 @@ func auditRouterFixture(t *testing.T) (*gin.Engine, *audit.Service, *auth.AuthSe
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
-	t.Cleanup(func() { _ = dbStore.Close() })
-
-	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore.Close error: %v", err)
+		}
 	})
+
+	auditSvc := audit.NewService(
+		audit.NewStore(dbStore),
+		zap.NewNop(),
+		audit.Config{
+			BufferSize:    100,
+			BatchSize:     10,
+			FlushInterval: 5 * time.Millisecond,
+			MaxEntries:    1000,
+		},
+	)
 	if err := auditSvc.Start(context.Background()); err != nil {
 		t.Fatalf("start audit service: %v", err)
 	}
-	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := auditSvc.Stop(context.Background()); err != nil {
+			t.Logf("auditSvc.Stop error: %v", err)
+		}
+	})
 
-	authSvc := auth.NewAuthService(auth.NewUserStore(dbStore), auth.NewMemorySessionStore(time.Hour), nil, zap.NewNop())
+	authSvc := auth.NewAuthService(
+		auth.NewUserStore(dbStore),
+		auth.NewMemorySessionStore(time.Hour),
+		nil,
+		zap.NewNop(),
+	)
 	authHandler := auth.NewHandler(authSvc)
 
 	assets := http.FS(fstest.MapFS{
@@ -347,7 +403,8 @@ func drainAuditRouter(t *testing.T, svc *audit.Service) []audit.AuditLog {
 func TestRouterAuditIgnoresForwardingHeaders(t *testing.T) {
 	router, auditSvc, _ := auditRouterFixture(t)
 
-	body := bytes.NewReader([]byte(`{"username":"admin","password":"password123","confirmPassword":"password123"}`))
+	bodyJSON := `{"username":"admin","password":"password123","confirmPassword":"password123"}`
+	body := bytes.NewReader([]byte(bodyJSON))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/init", body)
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "192.168.3.3:9999"
@@ -365,7 +422,10 @@ func TestRouterAuditIgnoresForwardingHeaders(t *testing.T) {
 		t.Fatalf("expected 1 audit entry, got %d", len(entries))
 	}
 	if entries[0].IP != "192.168.3.3" {
-		t.Fatalf("expected the TCP source IP, got %q: forwarding headers must not be trusted", entries[0].IP)
+		t.Fatalf(
+			"expected the TCP source IP, got %q: forwarding headers must not be trusted",
+			entries[0].IP,
+		)
 	}
 }
 
@@ -374,7 +434,8 @@ func TestRouterAuditIgnoresForwardingHeaders(t *testing.T) {
 func TestRouterAuditCoversPublicAndProtectedRoutes(t *testing.T) {
 	router, auditSvc, _ := auditRouterFixture(t)
 
-	initBody := bytes.NewReader([]byte(`{"username":"admin","password":"password123","confirmPassword":"password123"}`))
+	initPayload := `{"username":"admin","password":"password123","confirmPassword":"password123"}`
+	initBody := bytes.NewReader([]byte(initPayload))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/init", initBody)
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "10.20.30.40:1234"
@@ -418,7 +479,12 @@ func TestRouterAuditCoversPublicAndProtectedRoutes(t *testing.T) {
 			t.Errorf("expected the request IP on %s, got %q", e.Action, e.IP)
 		}
 	}
-	for _, action := range []string{audit.ActionAuthInit, audit.ActionAuthLogin, audit.ActionAuthLogout} {
+	actions := []string{
+		audit.ActionAuthInit,
+		audit.ActionAuthLogin,
+		audit.ActionAuthLogout,
+	}
+	for _, action := range actions {
 		entry, ok := seen[action]
 		if !ok {
 			t.Errorf("missing audit entry for %s", action)
@@ -502,7 +568,8 @@ func TestRouterMountsClientLogsAsPublicRoute(t *testing.T) {
 		}),
 	})
 
-	body := `{"entries":[{"level":"error","msg":"server.error","route":"cameras.list","fields":{"status":503}}]}`
+	body := `{"entries":[{"level":"error","msg":"server.error",` +
+		`"route":"cameras.list","fields":{"status":503}}]}`
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/client-logs", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -569,7 +636,11 @@ func TestHealthReportsDecodeStatsAndDegradedHardware(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
 			if recorder.Code != http.StatusOK {
-				t.Fatalf("GET /api/v1/health status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+				t.Fatalf(
+					"GET /api/v1/health status = %d, want 200; body=%s",
+					recorder.Code,
+					recorder.Body.String(),
+				)
 			}
 
 			var payload struct {
@@ -589,7 +660,11 @@ func TestHealthReportsDecodeStatsAndDegradedHardware(t *testing.T) {
 				t.Fatal("expected decode node in health payload, got nil")
 			}
 			if payload.Data.Decode.HardwareAvailable != tt.wantAvailable {
-				t.Fatalf("decode.hardware_available = %v, want %v", payload.Data.Decode.HardwareAvailable, tt.wantAvailable)
+				t.Fatalf(
+					"decode.hardware_available = %v, want %v",
+					payload.Data.Decode.HardwareAvailable,
+					tt.wantAvailable,
+				)
 			}
 		})
 	}

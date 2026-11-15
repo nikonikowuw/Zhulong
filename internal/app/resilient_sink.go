@@ -42,7 +42,9 @@ const (
 	logDrainTimeout = 5 * time.Second
 )
 
-var errLogSinkNotPrepared = errors.New("file log sink has not been prepared by the application lifecycle")
+var errLogSinkNotPrepared = errors.New(
+	"file log sink has not been prepared by the application lifecycle",
+)
 
 var errLogSinkClosed = errors.New("file log sink is closed")
 
@@ -192,7 +194,11 @@ func (s *resilientSink) Close() error {
 	case <-time.After(logDrainTimeout):
 		pending := len(s.queue)
 		s.dropped.Add(uint64(pending))
-		return fmt.Errorf("log sink did not drain within %s; %d records still queued", logDrainTimeout, pending)
+		return fmt.Errorf(
+			"log sink did not drain within %s; %d records still queued",
+			logDrainTimeout,
+			pending,
+		)
 	}
 }
 
@@ -220,14 +226,18 @@ func (s *resilientSink) run() {
 func (s *resilientSink) deliver(entry logQueueEntry) {
 	if len(entry.data) > 0 {
 		if s.fallbackMode.Load() {
-			_, _ = s.fallback.Write(entry.data)
+			if _, err := s.fallback.Write(entry.data); err != nil {
+				// Intentionally ignored: fallback destination write failure is non-actionable.
+			}
 		} else if _, err := s.primary.Write(entry.data); err != nil {
 			s.dropped.Add(1)
 			// Only a sticky failure belongs in Health; a transient budget refusal
 			// (compression reservation) must not demote the file destination.
 			if healthErr, _ := s.primary.Health(); healthErr != nil {
 				s.enterFallback(healthErr)
-				_, _ = s.fallback.Write(entry.data)
+				if _, writeErr := s.fallback.Write(entry.data); writeErr != nil {
+					// Intentionally ignored: fallback destination write failure is non-actionable.
+				}
 			}
 		}
 		s.putBuffer(entry.data)
@@ -246,7 +256,13 @@ func (s *resilientSink) enterFallback(cause error) {
 	s.mu.Unlock()
 	// Independent diagnostic channel: the encoded sink may be the thing that is
 	// broken, so this cannot go back through the logger core.
-	_, _ = fmt.Fprintf(os.Stderr, "zhulong: file log sink unavailable; continuing on stderr: %v\n", cause)
+	if _, err := fmt.Fprintf(
+		os.Stderr,
+		"zhulong: file log sink unavailable; continuing on stderr: %v\n",
+		cause,
+	); err != nil {
+		// Intentionally ignored: diagnostic stderr write failure is non-actionable.
+	}
 }
 
 func (s *resilientSink) buffer(size int) []byte {

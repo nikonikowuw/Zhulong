@@ -66,8 +66,15 @@ func TestNewLoggerUsesConfiguredLevelAndUTCEncoding(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
-	logger.Named("test.service").Debug("debug-visible", zap.Duration("latency_ms", 1500*time.Millisecond))
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
+	logger.Named("test.service").Debug(
+		"debug-visible",
+		zap.Duration("latency_ms", 1500*time.Millisecond),
+	)
 	level.SetLevel(zapcore.ErrorLevel)
 	logger.Info("filtered-info")
 	logger.Warn("filtered-warn")
@@ -81,7 +88,9 @@ func TestNewLoggerUsesConfiguredLevelAndUTCEncoding(t *testing.T) {
 		t.Fatalf("read log output: %v", err)
 	}
 	text := string(data)
-	if !strings.Contains(text, `"msg":"debug-visible"`) || !strings.Contains(text, `"msg":"error-visible"`) {
+	hasDebug := strings.Contains(text, `"msg":"debug-visible"`)
+	hasError := strings.Contains(text, `"msg":"error-visible"`)
+	if !hasDebug || !hasError {
 		t.Fatalf("configured levels did not reach output: %s", text)
 	}
 	if strings.Contains(text, "filtered-info") || strings.Contains(text, "filtered-warn") {
@@ -92,7 +101,10 @@ func TestNewLoggerUsesConfiguredLevelAndUTCEncoding(t *testing.T) {
 	if err := json.Unmarshal([]byte(firstLine), &fields); err != nil {
 		t.Fatalf("decode first JSON record: %v", err)
 	}
-	if fields["level"] != "debug" || fields["logger"] != "test.service" || fields["latency_ms"] != float64(1500) {
+	isExpectedLevel := fields["level"] == "debug"
+	isExpectedLogger := fields["logger"] == "test.service"
+	isExpectedLatency := fields["latency_ms"] == float64(1500)
+	if !isExpectedLevel || !isExpectedLogger || !isExpectedLatency {
 		t.Fatalf("unexpected encoded fields: %#v", fields)
 	}
 	ts, ok := fields["ts"].(string)
@@ -122,9 +134,15 @@ func TestNewLoggerConsoleFormatUsesColoredUppercaseLevel(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 	logger.Info("console-entry")
-	_ = logger.Sync()
+	if err := logger.Sync(); err != nil {
+		t.Logf("logger.Sync error: %v", err)
+	}
 	output, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read console output: %v", err)
@@ -156,11 +174,17 @@ func TestLoggerSamplingIsExplicitOptIn(t *testing.T) {
 			if err := sink.Prepare(); err != nil {
 				t.Fatalf("Prepare: %v", err)
 			}
-			t.Cleanup(func() { _ = sink.Close() })
-			for i := 0; i < 1000; i++ {
+			t.Cleanup(func() {
+				if err := sink.Close(); err != nil {
+					t.Logf("sink.Close error: %v", err)
+				}
+			})
+			for i := range 1000 {
 				logger.Info("repeated", zap.Int("index", i))
 			}
-			_ = logger.Sync()
+			if err := logger.Sync(); err != nil {
+				t.Logf("logger.Sync error: %v", err)
+			}
 			file, err := os.Open(path)
 			if err != nil {
 				t.Fatalf("open sampled output: %v", err)
@@ -203,7 +227,11 @@ func TestFileLoggerSinkRequiresLifecyclePrepare(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("file was not created during Prepare: %v", err)
 	}
@@ -255,7 +283,11 @@ func TestNewLoggerAppliesSanitizingCore(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 
 	// Write path: sensitive key, control characters and an error value.
 	logger.Info("camera started\r\ninjected",
@@ -329,7 +361,11 @@ func TestNewLoggerSanitizingCoreIsAlwaysEnabled(t *testing.T) {
 			if err := sink.Prepare(); err != nil {
 				t.Fatalf("Prepare: %v", err)
 			}
-			t.Cleanup(func() { _ = sink.Close() })
+			t.Cleanup(func() {
+				if err := sink.Close(); err != nil {
+					t.Logf("sink.Close error: %v", err)
+				}
+			})
 
 			// With sampling enabled the sampler must be the outer core and the
 			// wrapper must sit directly beneath it. If the wrapper were outer,
@@ -367,7 +403,11 @@ func TestNewLoggerSamplingStillApplies(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 	for i := 0; i < 1000; i++ {
 		logger.Info("repeated", zap.String("password", "hunter2"))
 	}
@@ -410,7 +450,11 @@ func TestNewLoggerWithoutSamplingWrapsDirectly(t *testing.T) {
 	if err := sink.Prepare(); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = sink.Close() })
+	t.Cleanup(func() {
+		if err := sink.Close(); err != nil {
+			t.Logf("sink.Close error: %v", err)
+		}
+	})
 	if got := typeName(logger.Core()); !strings.Contains(got, "SanitizingCore") {
 		t.Fatalf("unsampled assembly core = %s, want a SanitizingCore at the top", got)
 	}

@@ -4,11 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/task"
-	"go.uber.org/zap"
 )
 
 // TestSyncBrokerSubscriptionsRequiresWiring guards the defensive path: an unwired
@@ -57,7 +58,11 @@ func TestPublishRateUsesCrossPackageMax(t *testing.T) {
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer func() { _ = dbStore.Close() }()
+	defer func() {
+		if err := dbStore.Close(); err != nil {
+			t.Logf("dbStore.Close error: %v", err)
+		}
+	}()
 
 	store := algorithm.NewStore(dbStore)
 	taskStore := task.NewStore(dbStore)
@@ -66,10 +71,16 @@ func TestPublishRateUsesCrossPackageMax(t *testing.T) {
 
 	for _, id := range []string{"algo_fast", "algo_slow"} {
 		algo := &algorithm.Algorithm{
-			ID: id, Name: id, Version: "1.0.0",
-			TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategorySafety,
-			TargetArch: "x86_64", TargetDevice: "onnx", ComputeCost: 1,
-			MemoryMB: 64, Status: algorithm.StatusActive,
+			ID:           id,
+			Name:         id,
+			Version:      "1.0.0",
+			TaskType:     algorithm.TaskTypeDetection,
+			Category:     algorithm.CategorySafety,
+			TargetArch:   "x86_64",
+			TargetDevice: "onnx",
+			ComputeCost:  1,
+			MemoryMB:     64,
+			Status:       algorithm.StatusActive,
 		}
 		if err := store.CreateAlgorithm(ctx, algo); err != nil {
 			t.Fatalf("create algorithm %s: %v", id, err)
