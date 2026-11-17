@@ -532,22 +532,29 @@ extern "C" Zhulong_status_t Zhulong_stream_unsubscribe_ai_results(Zhulong_engine
  * @param msg_type 消息类型枚举
  * @param payload 报文负载指针
  * @param payload_size 负载大小（不得超过 64KB）
+ * @param[out] out_delivered 可为 NULL；成功时写入实际触达的 runner 连接数，0 表示无人接收
  * @return Zhulong_status_t 执行状态码
  */
 extern "C" Zhulong_status_t Zhulong_engine_broadcast_ai_message(Zhulong_engine_h engine,
-    Zhulong_stream_id stream, uint16_t msg_type, const void *payload, size_t payload_size) {
+    Zhulong_stream_id stream, uint16_t msg_type, const void *payload, size_t payload_size,
+    size_t *out_delivered) {
     return boundary([&] {
         require(engine);
+        // 失败路径一律留下 0：调用方不该把「异常没发生」误读成「有人收到」。
+        if (out_delivered) *out_delivered = 0;
         if (payload_size > zhulong::ipc::MAX_IPC_PAYLOAD_SIZE) {
             throw zhulong::Failure{Zhulong_ERR_INVALID_ARGUMENT};
         }
         if (payload_size > 0 && !payload) {
             throw zhulong::Failure{Zhulong_ERR_INVALID_ARGUMENT};
         }
-        Zhulong_status_t st = engine->implementation.broadcast_ai_message(stream, msg_type, payload, payload_size);
+        size_t delivered = 0;
+        Zhulong_status_t st = engine->implementation.broadcast_ai_message(
+            stream, msg_type, payload, payload_size, &delivered);
         if (st != Zhulong_OK) {
             throw zhulong::Failure{st};
         }
+        if (out_delivered) *out_delivered = delivered;
     });
 }
 

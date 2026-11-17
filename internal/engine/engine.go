@@ -854,17 +854,22 @@ func extractVideoInfo(result C.Zhulong_probe_result_h) (VideoInfo, error) {
 
 // BroadcastAIMessage 向指定流的 FrameBroker 投递一条带类型的控制载荷
 // （如 MSG_GALLERY_*），以触达已连接的算法 runner；streamID 为 0 时广播给全部活跃流。
+//
+// 返回的 delivered 是本次投递实际触达的 runner 连接数。**0 值不表示失败**：报文
+// 已经交给了 Broker，只是那一刻没有 runner 在收——FrameBroker 只对
+// MSG_TASK_CONFIG / MSG_TASK_REGIONS 做握手后重放，其余消息类型当场丢弃。典型场景
+// 是 runner 刚被拉起、还在加载推理模型。要求「必达」的调用方必须据 0 值重试。
 func (e *Engine) BroadcastAIMessage(
 	ctx context.Context,
 	streamID uint64,
 	msgType uint16,
 	payload []byte,
-) error {
+) (int, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	if len(payload) > algoipc.MaxIpcPayloadSize {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"%w: payload exceeds %d limit (%d bytes)",
 			ErrInvalidArgument,
 			algoipc.MaxIpcPayloadSize,
@@ -877,7 +882,7 @@ func (e *Engine) BroadcastAIMessage(
 		deniedError:    ErrNotRunning,
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer release()
 
@@ -886,17 +891,19 @@ func (e *Engine) BroadcastAIMessage(
 		ptr = unsafe.Pointer(&payload[0])
 	}
 
+	var delivered C.size_t
 	st := C.Zhulong_engine_broadcast_ai_message(
 		lease.handle,
 		C.Zhulong_stream_id(streamID),
 		C.uint16_t(msgType),
 		ptr,
 		C.size_t(len(payload)),
+		&delivered,
 	)
 	runtime.KeepAlive(payload)
 
 	if st != C.Zhulong_OK {
-		return mapNativeStatus("broadcast_ai_message", int32(st))
+		return 0, mapNativeStatus("broadcast_ai_message", int32(st))
 	}
-	return nil
+	return int(delivered), nil
 }

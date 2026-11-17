@@ -18,11 +18,15 @@ const (
 	// stopAlgorithmTimeout bounds one graceful runner shutdown.
 	stopAlgorithmTimeout = 3 * time.Second
 
-	// gallerySyncDelay gives a freshly started runner time to finish its own
-	// startup (broker connect, shm attach) before the gallery is pushed. A
-	// MSG_GALLERY_SYNC that arrives earlier lands on a socket nobody is reading
-	// yet, and the runner's gallery stays empty until the next enrolment.
-	gallerySyncDelay = 100 * time.Millisecond
+	// gallerySyncAttempts is how many times a cold-start gallery push is tried
+	// before giving up and logging an error. Retrying is the only reliable
+	// option: a freshly started runner spends seconds loading its inference
+	// models before it connects the broker socket, and the Broker keeps no
+	// replay cache for MSG_GALLERY_* — an early payload is not queued, it is
+	// dropped. Measured cold-connect latency on the RK3568 board is ~1.5s, and
+	// the ladder below spans about 30s, so slow flash or a busy NPU still fits.
+	gallerySyncRetryInterval = 500 * time.Millisecond
+	gallerySyncAttempts      = 60
 
 	// gallerySyncTimeout bounds one cold-start gallery push, including the
 	// provider query, so the goroutine always has an exit.
@@ -53,6 +57,16 @@ type Supervisor struct {
 	galleryBroadcaster  *GalleryBroadcaster
 	taskConfigProvider  TaskConfigProvider
 	taskConfigCast      *TaskConfigBroadcaster
+
+	// gallerySyncMu serializes full-snapshot pushes. Two ladders running at once
+	// interleave shards carrying different sync_ids into the same runner, and the
+	// runner resets its assembly context on every id change: the snapshot never
+	// completes, yet each ladder sees non-zero socket writes and stops believing
+	// the gallery landed. One push at a time keeps a sequence contiguous.
+	//
+	// It is never taken by StopAll, so a ladder waiting here cannot delay shutdown;
+	// the ladder itself re-checks stopCh once it holds the lock.
+	gallerySyncMu sync.Mutex
 
 	// stopCh is closed by StopAll so background goroutines (gallery sync) have a
 	// deterministic exit instead of only their own timeout.
@@ -202,39 +216,113 @@ func (s *Supervisor) triggerGallerySyncAsync() {
 	s.dispatchGallerySync(provider, broadcaster)
 }
 
+// dispatchGallerySync pushes the full face gallery until a runner confirms
+// receipt, or until the attempt budget is spent.
+//
+// The push cannot be a single fire-and-forget broadcast. The Broker accepts the
+// payload whether or not anyone is subscribed — and unlike MSG_TASK_CONFIG it
+// keeps no replay cache for MSG_GALLERY_* — so a push that races the runner's
+// model loading disappears without a trace and the gallery stays empty for the
+// life of that process.
 func (s *Supervisor) dispatchGallerySync(provider GallerySyncProvider, broadcaster *GalleryBroadcaster) {
 	if provider == nil || broadcaster == nil {
 		return
 	}
 
-	go func() {
-		select {
-		case <-time.After(gallerySyncDelay):
-		case <-s.stopCh:
-			return
-		}
+	go s.pushGalleryUntilDelivered(provider, broadcaster, gallerySyncRetryInterval, gallerySyncAttempts)
+}
 
-		ctx, cancel := context.WithTimeout(context.Background(), gallerySyncTimeout)
-		defer cancel()
+// pushGalleryUntilDelivered is the retry ladder behind dispatchGallerySync.
+//
+// Every attempt reloads the snapshot and mints a new sync_id: reusing either
+// would let a late-but-stale snapshot overwrite a face enrolled while the
+// previous attempt was in flight, and a reused sync_id would also collide with
+// the runner's 5s assembly window (it resets its context only on a new id).
+//
+// The retry cadence and budget are parameters rather than reads of the package
+// constants so white-box tests can drive the ladder without waiting 30s.
+func (s *Supervisor) pushGalleryUntilDelivered(
+	provider GallerySyncProvider,
+	broadcaster *GalleryBroadcaster,
+	retryInterval time.Duration,
+	attempts int,
+) {
+	// One snapshot at a time: see gallerySyncMu. The lock is taken before the
+	// stopCh check so a shutdown that lands mid-ladder still releases the queue.
+	s.gallerySyncMu.Lock()
+	defer s.gallerySyncMu.Unlock()
 
-		items, err := provider.GetGallerySyncData(ctx)
-		if err != nil {
-			s.logger.Warn("failed to fetch gallery sync data for cold-start", zap.Error(err))
-			return
-		}
-		syncID := "sync_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-		if err := broadcaster.BroadcastSync(ctx, syncID, items); err != nil {
-			s.logger.Warn("failed to broadcast cold-start gallery sync",
+	select {
+	case <-s.stopCh:
+		// 停机后排队的推送直接作废：下一个 runner 起来时会再走一遍。
+		return
+	default:
+	}
+
+	if attempts < 1 {
+		attempts = 1
+	}
+	if retryInterval < 0 {
+		retryInterval = 0
+	}
+
+	for attempt := 1; ; attempt++ {
+		items, syncID, delivered, err := s.pushGalleryOnce(provider, broadcaster)
+		if err == nil && delivered > 0 {
+			s.logger.Info("cold-start gallery sync delivered",
 				zap.String("sync_id", syncID),
+				zap.Int("items_count", len(items)),
+				zap.Int("delivered", delivered),
+				zap.Int("attempts", attempt),
+			)
+			return
+		}
+		if err != nil {
+			s.logger.Warn("cold-start gallery sync attempt failed",
+				zap.Int("attempt", attempt),
+				zap.Error(err),
+			)
+		}
+
+		if attempt >= attempts {
+			s.logger.Error("cold-start gallery sync never reached a runner",
+				zap.Int("attempts", attempt),
+				zap.String("sync_id", syncID),
+				zap.Int("items_count", len(items)),
+				zap.Duration("retry_interval", retryInterval),
 				zap.Error(err),
 			)
 			return
 		}
-		s.logger.Info("cold-start gallery sync broadcast completed",
-			zap.String("sync_id", syncID),
-			zap.Int("items_count", len(items)),
-		)
-	}()
+
+		select {
+		case <-time.After(retryInterval):
+		case <-s.stopCh:
+			// 停机打断的重试不是故障：下一个 runner 起来时会再走一遍。
+			return
+		}
+	}
+}
+
+// pushGalleryOnce runs one full-snapshot attempt and reports how many runners
+// assembled it (0 = nobody did, retry needed).
+func (s *Supervisor) pushGalleryOnce(
+	provider GallerySyncProvider,
+	broadcaster *GalleryBroadcaster,
+) (items []GallerySyncItem, syncID string, delivered int, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), gallerySyncTimeout)
+	defer cancel()
+
+	items, err = provider.GetGallerySyncData(ctx)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("fetch gallery snapshot: %w", err)
+	}
+	syncID = "sync_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	delivered, err = broadcaster.BroadcastSync(ctx, syncID, items)
+	if err != nil {
+		return items, syncID, 0, fmt.Errorf("broadcast gallery snapshot: %w", err)
+	}
+	return items, syncID, delivered, nil
 }
 
 // brokerResolver snapshots the configured broker subscription resolver under a
@@ -459,6 +547,11 @@ func (s *Supervisor) spawnWatcher(w *workerWatcher) error {
 		s.abortSpawn(w)
 		return ErrAlgorithmAlreadyRunning
 	}
+
+	// 底库走不了 Broker 缓存那条路（FrameBroker 只重放任务级配置），只能由宿主在
+	// 进程起来后反复推，直到有 runner 认领。放在注册之后：注册失败的分支已经 abort，
+	// 不该再为一个不存在的 runner 拉起重试循环。
+	s.triggerGallerySyncAsync()
 
 	go w.superviseLoop()
 	return nil

@@ -29,12 +29,12 @@ func (f *fakeBroadcaster) BroadcastAIMessage(
 	streamID uint64,
 	msgType uint16,
 	payload []byte,
-) error {
+) (int, error) {
 	if f.err != nil {
-		return f.err
+		return 0, f.err
 	}
 	f.records = append(f.records, recordedBroadcast{streamID: streamID, msgType: msgType, payload: payload})
-	return nil
+	return 1, nil
 }
 
 func TestTaskConfigBroadcasterRoutesPerStream(t *testing.T) {

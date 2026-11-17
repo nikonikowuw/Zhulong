@@ -241,7 +241,7 @@ func TestBroadcastAIMessageValidation(t *testing.T) {
 
 	// 1. 超限载荷 (> algoipc.MaxIpcPayloadSize) 必须返回 ErrInvalidArgument
 	tooLargePayload := make([]byte, algoipc.MaxIpcPayloadSize+1)
-	err := e.BroadcastAIMessage(
+	delivered, err := e.BroadcastAIMessage(
 		ctx,
 		1,
 		10,
@@ -250,10 +250,13 @@ func TestBroadcastAIMessageValidation(t *testing.T) {
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for payload exceeding limit, got %v", err)
 	}
+	if delivered != 0 {
+		t.Fatalf("expected 0 delivered on validation failure, got %d", delivered)
+	}
 
 	// 2. 引擎未启动时返回 ErrNotRunning
 	validPayload := make([]byte, algoipc.MaxIpcPayloadSize)
-	err = e.BroadcastAIMessage(
+	delivered, err = e.BroadcastAIMessage(
 		ctx,
 		1,
 		10,
@@ -261,6 +264,9 @@ func TestBroadcastAIMessageValidation(t *testing.T) {
 	)
 	if !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("expected ErrNotRunning for unstarted engine, got %v", err)
+	}
+	if delivered != 0 {
+		t.Fatalf("expected 0 delivered when the engine is not running, got %d", delivered)
 	}
 }
 

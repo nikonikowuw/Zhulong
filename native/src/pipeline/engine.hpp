@@ -344,9 +344,13 @@ struct Engine {
      * @param msg_type 消息类型（如 MSG_GALLERY_*）
      * @param payload 负载数据
      * @param payload_size 负载大小
+     * @param[out] out_delivered 累加各 broker 实际写出的客户端数；可为 NULL。
+     *             **0 表示没有任何 runner 收到**（迟到的 runner 等不到重放，见
+     *             FrameBroker::broadcast_message 的缓存白名单）。
      * @return 状态码
      */
-    Zhulong_status_t broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type, const void* payload, size_t payload_size);
+    Zhulong_status_t broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type,
+        const void* payload, size_t payload_size, size_t* out_delivered);
 
     /**
      * @brief 取指定流当前最新帧的只读引用（抓拍用）

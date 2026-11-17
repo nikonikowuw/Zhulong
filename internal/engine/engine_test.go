@@ -94,7 +94,7 @@ func TestEngineConcurrentCloseWithOperations(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 20 {
-				if err := eng.BroadcastAIMessage(
+				if _, err := eng.BroadcastAIMessage(
 					ctx,
 					1,
 					10,

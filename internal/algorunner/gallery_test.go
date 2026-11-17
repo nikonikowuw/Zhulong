@@ -83,6 +83,10 @@ type mockBroadcaster struct {
 		payload  []byte
 	}
 	err error
+	// delivered is what every BroadcastAIMessage call reports. Zero (the zero
+	// value) models the production failure mode: the Broker accepted the payload
+	// but no runner was subscribed, so nobody received it.
+	delivered int
 }
 
 func (m *mockBroadcaster) BroadcastAIMessage(
@@ -90,16 +94,16 @@ func (m *mockBroadcaster) BroadcastAIMessage(
 	streamID uint64,
 	msgType uint16,
 	payload []byte,
-) error {
+) (int, error) {
 	if m.err != nil {
-		return m.err
+		return 0, m.err
 	}
 	m.messages = append(m.messages, struct {
 		streamID uint64
 		msgType  uint16
 		payload  []byte
 	}{streamID: streamID, msgType: msgType, payload: payload})
-	return nil
+	return m.delivered, nil
 }
 
 func TestCreateGallerySyncShards_Empty(t *testing.T) {
@@ -237,14 +241,18 @@ func TestCreateGallerySyncShards_ShardBudgetHoldsForRealisticGallery(t *testing.
 }
 
 func TestGalleryBroadcaster_SyncUpsertDelete(t *testing.T) {
-	mock := &mockBroadcaster{}
+	mock := &mockBroadcaster{delivered: 1}
 	broadcaster := algorunner.NewGalleryBroadcaster(mock, zap.NewNop())
 	ctx := context.Background()
 
 	// 1. Sync
 	items := []algorunner.GallerySyncItem{{FaceID: "f1", PersonID: "p1", PersonName: "张三"}}
-	if err := broadcaster.BroadcastSync(ctx, "sync_test", items); err != nil {
+	delivered, err := broadcaster.BroadcastSync(ctx, "sync_test", items)
+	if err != nil {
 		t.Fatalf("BroadcastSync failed: %v", err)
+	}
+	if delivered != 1 {
+		t.Errorf("expected BroadcastSync to report 1 delivered runner, got %d", delivered)
 	}
 
 	// 2. Upsert

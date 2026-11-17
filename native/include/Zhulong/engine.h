@@ -809,8 +809,13 @@ Zhulong_status_t Zhulong_stream_unsubscribe_ai_results(Zhulong_engine_h engine,
  * @param msg_type 消息类型枚举（如 MSG_GALLERY_SYNC=10, MSG_GALLERY_UPSERT=11, MSG_GALLERY_DELETE=12）
  * @param payload 报文负载指针（可为 NULL）
  * @param payload_size 报文负载大小（不得超过 64KB）
+ * @param[out] out_delivered 可为 NULL。成功时写入本次投递实际触达的 runner 连接数。
+ *             **0 表示没有任何 runner 收到这条报文**——报文已被静默丢弃：FrameBroker
+ *             只为 MSG_TASK_CONFIG / MSG_TASK_REGIONS 保留重放缓存，其余消息类型
+ *             「无人连接 = 直接消失」。典型场景是 runner 刚被拉起、还在加载推理
+ *             模型或尚未完成握手。需要「必达」的调用方必须依据 0 值重试。
  * @return Zhulong_status_t 状态码：
- *         Zhulong_OK 成功；
+ *         Zhulong_OK 成功（但**不代表有人收到**，投递结果看 out_delivered）；
  *         Zhulong_ERR_INVALID_ARGUMENT 参数非法（如 payload_size > 64KB）；
  *         Zhulong_ERR_NOT_FOUND 指定流不存在或无运行中的 Broker；
  *         Zhulong_ERR_NOT_RUNNING 引擎未启动
@@ -820,7 +825,8 @@ Zhulong_status_t Zhulong_engine_broadcast_ai_message(
     Zhulong_stream_id stream,
     uint16_t msg_type,
     const void *payload,
-    size_t payload_size
+    size_t payload_size,
+    size_t *out_delivered
 );
 
 /* ========================================================================== */

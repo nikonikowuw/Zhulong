@@ -47,13 +47,19 @@ type BrokerSubscriptionResolver interface {
 }
 
 // AIMessageBroadcaster sends down-link control messages to runner subprocesses via Native Engine FrameBroker.
+//
+// BroadcastAIMessage reports how many runner connections actually received the
+// payload. Zero is not an error: only MSG_TASK_CONFIG / MSG_TASK_REGIONS are
+// cached and replayed after a handshake, so a payload sent while a runner is
+// still loading its models is accepted by the Broker and then dropped. Callers
+// that need the payload to land must retry on zero.
 type AIMessageBroadcaster interface {
 	BroadcastAIMessage(
 		ctx context.Context,
 		streamID uint64,
 		msgType uint16,
 		payload []byte,
-	) error
+	) (delivered int, err error)
 }
 
 // GallerySyncItem represents one registered face item in MSG_GALLERY_SYNC.

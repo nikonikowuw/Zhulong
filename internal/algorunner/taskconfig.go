@@ -139,7 +139,9 @@ func (b *TaskConfigBroadcaster) broadcast(
 			)
 			continue
 		}
-		if err := b.broadcaster.BroadcastAIMessage(
+		// 投递数在这里没有决策价值：Broker 会按 algorithm_id 缓存任务级配置，并在
+		// 握手后重放给迟到的 runner，所以「当场 0 个连接」是正常态而不是丢包。
+		if _, err := b.broadcaster.BroadcastAIMessage(
 			ctx,
 			streamID,
 			msgType,

@@ -1206,7 +1206,9 @@ HardwareFrame::ConstPtr Engine::find_frame(Zhulong_stream_id id, int64_t pts) {
     return publisher->find_frame(pts);
 }
 
-Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type, const void* payload, size_t payload_size) {
+Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type,
+    const void* payload, size_t payload_size, size_t* out_delivered) {
+    if (out_delivered) *out_delivered = 0;
     if (!running) return Zhulong_ERR_NOT_RUNNING;
 
     if (stream_id != 0) {
@@ -1215,7 +1217,8 @@ Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint1
             return Zhulong_ERR_NOT_FOUND;
         }
         // ⚠️ socket 写在全部锁外：慢 runner 只会拖慢本调用，不会卡住 control 与结果派发
-        broker->broadcast_message(msg_type, payload, payload_size);
+        const size_t delivered = broker->broadcast_message(msg_type, payload, payload_size);
+        if (out_delivered) *out_delivered = delivered;
         return Zhulong_OK;
     }
 
@@ -1228,11 +1231,17 @@ Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint1
             if (entry.second) targets.push_back(entry.second);
         }
     }
+    // 投递数取**各 broker 的最小值**：一条广播要么每个 broker 都有人收到，要么就是
+    // 有人在挨饿。相加会把「某个流没人连」掩盖成「另一个流多连了几个人」。
+    size_t min_delivered = 0;
+    bool first = true;
     for (const auto &broker : targets) {
-        if (broker->is_running()) {
-            broker->broadcast_message(msg_type, payload, payload_size);
-        }
+        if (!broker->is_running()) continue;
+        const size_t delivered = broker->broadcast_message(msg_type, payload, payload_size);
+        if (first || delivered < min_delivered) min_delivered = delivered;
+        first = false;
     }
+    if (out_delivered) *out_delivered = min_delivered;
     return Zhulong_OK;
 }
 

@@ -528,8 +528,10 @@ func (s *Service) removeFaceFile(imagePath string) {
 //
 // A failed broadcast is logged and swallowed deliberately: the enrollment is
 // already committed locally, so failing the request would report an error for
-// work that did happen. Runners rebuild their gallery from the full snapshot on
-// reconnect, so a dropped incremental update self-heals.
+// work that did happen. The runner keeps its gallery in memory, so a dropped
+// update leaves that process matching against a stale snapshot until the next
+// spawn: nothing re-sends the gallery to an already connected runner, and the
+// cold-start sync is what repairs it.
 func (s *Service) broadcastUpsert(ctx context.Context, item GalleryItem) {
 	if s.galleryNotifier == nil {
 		return

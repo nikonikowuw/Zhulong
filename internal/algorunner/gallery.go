@@ -198,25 +198,45 @@ func NewGalleryBroadcaster(broadcaster AIMessageBroadcaster, logger *zap.Logger)
 }
 
 // BroadcastSync performs cold-start or full synchronization of the face gallery to all active runners.
-func (b *GalleryBroadcaster) BroadcastSync(ctx context.Context, syncID string, items []GallerySyncItem) error {
+//
+// The returned delivered count is the **minimum** across every shard: a runner
+// that connects halfway through the shard sequence receives the tail and misses
+// the head, so the snapshot is only complete when every shard reached someone.
+// Zero therefore means "not one runner assembled this snapshot", and the caller
+// must retry rather than treat it as success.
+func (b *GalleryBroadcaster) BroadcastSync(
+	ctx context.Context,
+	syncID string,
+	items []GallerySyncItem,
+) (delivered int, err error) {
 	if b.broadcaster == nil {
-		return nil
+		return 0, nil
 	}
 	shards, err := CreateGallerySyncShards(syncID, items)
 	if err != nil {
-		return fmt.Errorf("create gallery sync shards: %w", err)
+		return 0, fmt.Errorf("create gallery sync shards: %w", err)
 	}
 	for i, shard := range shards {
-		if err := b.broadcaster.BroadcastAIMessage(
+		shardDelivered, err := b.broadcaster.BroadcastAIMessage(
 			ctx,
 			0,
 			algoipc.MsgGallerySync,
 			shard,
-		); err != nil {
-			return fmt.Errorf("broadcast sync shard %d/%d: %w", i, len(shards), err)
+		)
+		if err != nil {
+			return 0, fmt.Errorf("broadcast sync shard %d/%d: %w", i, len(shards), err)
+		}
+		// Zero on any single shard means the runner's assembly window can never
+		// reach is_complete(), so the whole snapshot is worthless — report 0
+		// instead of letting a later shard's count paper over the hole.
+		if shardDelivered == 0 {
+			return 0, nil
+		}
+		if i == 0 || shardDelivered < delivered {
+			delivered = shardDelivered
 		}
 	}
-	return nil
+	return delivered, nil
 }
 
 // BroadcastUpsert broadcasts an incremental face template enrollment or update.
@@ -228,12 +248,15 @@ func (b *GalleryBroadcaster) BroadcastUpsert(ctx context.Context, item GalleryUp
 	if err != nil {
 		return fmt.Errorf("marshal gallery upsert: %w", err)
 	}
-	return b.broadcaster.BroadcastAIMessage(
+	// Incremental updates are best-effort: the next full snapshot reconciles any
+	// runner that missed this one, so the delivery count carries no decision.
+	_, err = b.broadcaster.BroadcastAIMessage(
 		ctx,
 		0,
 		algoipc.MsgGalleryUpsert,
 		payload,
 	)
+	return err
 }
 
 // BroadcastDelete broadcasts face or person deletion.
@@ -245,10 +268,13 @@ func (b *GalleryBroadcaster) BroadcastDelete(ctx context.Context, faceID, person
 	if err != nil {
 		return fmt.Errorf("marshal gallery delete: %w", err)
 	}
-	return b.broadcaster.BroadcastAIMessage(
+	// Same contract as BroadcastUpsert: a missed delete is corrected by the next
+	// full snapshot, so only the transport error matters here.
+	_, err = b.broadcaster.BroadcastAIMessage(
 		ctx,
 		0,
 		algoipc.MsgGalleryDelete,
 		payload,
 	)
+	return err
 }
