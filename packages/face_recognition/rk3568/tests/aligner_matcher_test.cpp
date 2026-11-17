@@ -2797,6 +2797,100 @@ void test_track_identity_params() {
 
 } // namespace
 
+// ============================================================================
+// 13b. 帧库加权：相对质量 softmax × 锚点一致性、按效用淘汰、锚点不被挤出
+// ============================================================================
+
+void test_face_fusion_weighting() {
+    using namespace zhulong::face;
+    using Clock = std::chrono::steady_clock;
+    using std::chrono::milliseconds;
+
+    const Clock::time_point t0 = Clock::now();
+    const MatchParams params; // 纯特征 0.62 / 空间 0.40
+    const auto e0 = vec_with_cos(1.0f);
+    const std::array<float, 4> box{0.40f, 0.30f, 0.50f, 0.45f};
+    const std::array<float, 4> box_moved{0.42f, 0.31f, 0.52f, 0.46f};
+
+    // 1) 库未满时，经空间低门槛进来的低质侧脸不得明显拉偏模板
+    //    （旧线性权重 0.80 : 0.40 下融合特征与 e0 的余弦仅 ~0.956）
+    {
+        StreamFeatureFusionPool pool;
+        pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, params, t0);
+        const auto side60 = vec_with_cos(0.60f);
+        const auto r = pool.fuse_frame({FusionFaceObservation{&side60, 0.40f, box_moved, true}}, params,
+                                       t0 + milliseconds(100));
+        check(r[0].is_fused, "低质侧脸仍应维持轨迹连续（is_fused=true）");
+        check(dot_512(r[0].features, e0) > 0.995f, "比锚点低 0.40 质量的帧在相对质量权重下几乎不影响模板");
+    }
+
+    // 2) 标定无关：所有帧质量整体平移（onnx FP32 vs rk3568 INT8 的分数偏移）不改变融合结果
+    {
+        const auto near = vec_with_cos(0.85f);
+        auto run = [&](float q_hi, float q_lo) {
+            StreamFeatureFusionPool pool;
+            pool.fuse_frame({FusionFaceObservation{&e0, q_hi}}, params, t0);
+            return pool.fuse_frame({FusionFaceObservation{&near, q_lo}}, params, t0 + milliseconds(100))[0];
+        };
+        const auto high = run(0.80f, 0.70f);
+        const auto low = run(0.50f, 0.40f);
+        check(high.is_fused && low.is_fused, "两组质量下都应完成融合");
+        check(dot_512(high.features, low.features) > 0.99999f, "质量整体平移不得改变融合特征（只看相对质量差）");
+        check(dot_512(high.features, e0) < 0.999f, "质量差 0.10 的同人帧仍应真实参与融合");
+    }
+
+    // 3) 锚点一致性：等质量下，与锚点余弦 0.50 的帧只拿半权（旧逻辑等权 → 与 e0 余弦 0.866）
+    {
+        StreamFeatureFusionPool pool;
+        pool.fuse_frame({FusionFaceObservation{&e0, 0.70f, box, true}}, params, t0);
+        const auto side50 = vec_with_cos(0.50f);
+        const auto r = pool.fuse_frame({FusionFaceObservation{&side50, 0.70f, box_moved, true}}, params,
+                                       t0 + milliseconds(100));
+        const float cos_e0 = dot_512(r[0].features, e0);
+        // 权重 1 : 0.5 → acc = 1.25·e0 + 0.433·e1 → 余弦 ≈ 0.945
+        check(r[0].is_fused && cos_e0 > 0.94f && cos_e0 < 0.95f,
+              "与锚点余弦 0.50 的帧应按一致性降为半权参与融合");
+    }
+
+    // 4) 与锚点余弦 <= kFusionConsistencyLow 的帧（空间门槛被调到 0.20 时才可能关联）不贡献特征
+    {
+        MatchParams loose = params;
+        loose.fusion_spatial_similarity_threshold = 0.20f;
+        StreamFeatureFusionPool pool;
+        pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, loose, t0);
+        const auto v25 = vec_with_cos(0.25f);
+        const auto r = pool.fuse_frame({FusionFaceObservation{&v25, 0.80f, box_moved, true}}, loose,
+                                       t0 + milliseconds(100));
+        check(r[0].is_fused, "空间连续且过 0.20 否决门槛的观测仍应维持轨迹");
+        check(dot_512(r[0].features, e0) > 0.9999f, "与锚点余弦 0.25 的帧必须零权重，不得污染模板");
+    }
+
+    // 5) 满库等效用淘汰时锚点不得被挤出（旧逻辑会淘汰「等质量中最早入库」的锚点本身）
+    {
+        StreamFeatureFusionPool pool;
+        auto t = t0;
+        pool.fuse_frame({FusionFaceObservation{&e0, 0.80f}}, params, t); // 锚点 seq=0
+        for (size_t axis = 1; axis <= kFusionTopFrames; ++axis) {      // 4 帧填满 + 1 帧触发淘汰
+            t += milliseconds(100);
+            const auto v = vec_with_cos(0.90f, axis);
+            const auto r = pool.fuse_frame({FusionFaceObservation{&v, 0.80f}}, params, t);
+            check(r[0].is_fused, "与锚点余弦 0.90 的同人帧应正常融合");
+        }
+        // 与 e0 余弦 0.66 (>= 0.62)，与旧逻辑下的新锚点 vec(0.90, axis1) 余弦仅 0.594 (< 0.62)
+        const auto probe = vec_with_cos(0.66f, 9);
+        const auto r = pool.fuse_frame({FusionFaceObservation{&probe, 0.50f}}, params, t + milliseconds(100));
+        check(r[0].is_fused && pool.state_count() == 1, "锚点 e0 必须仍在库内并继续承担锚点门禁");
+    }
+
+    // 6) 效用函数边界
+    {
+        check(detail::fusion_utility(0.8f, 0.8f, 1.0f) == 1.0, "与锚点同质量且完全一致时效用为 1");
+        check(detail::fusion_utility(0.8f, 0.8f, kFusionConsistencyLow) == 0.0, "一致性下界处效用为 0");
+        check(detail::fusion_utility(0.8f, 0.8f, std::nanf("")) == 0.0, "非有限余弦效用为 0");
+        check(detail::fusion_utility(0.9f, 0.8f, 1.0f) > 1.0, "质量高于锚点的新帧效用 > 1（必然入库）");
+    }
+}
+
 int main() {
     test_similarity_transform_recovers_known_geometry();
     test_similarity_transform_rejects_degenerate_input();
@@ -2820,6 +2914,7 @@ int main() {
     test_drop_unmatched_persons();
     test_face_feature_fusion();
     test_face_track_spatial_fusion_and_topk();
+    test_face_fusion_weighting();
     test_track_identity_voting();
     test_track_identity_params();
     test_aligner_downscale_antialiasing();

@@ -11,9 +11,18 @@
  *      「融合特征」与「最高质量锚点」，阻断顺着均值渐变漂移串人。
  *   3. 整帧一对一贪心配对：按 `(空间一致 desc, sim_fused desc, sim_anchor desc, obs_idx asc, state_idx asc)`
  *      全局排序，同帧多张脸绝不串入同一状态，空间连续的真主优先夺得原状态。
- *   4. **Top-K 高质量帧库**：每状态只保留质量最高的 `kFusionTopFrames` 帧单位特征，融合 = 质量
- *      加权和 + 严格 L2 归一化。低质帧维持轨迹连续，但只有在比库内最差帧更好时才进入特征；
- *      锚点恒为库内最高质量帧（历史最高质量锚点永不被挤出）。
+ *   4. **Top-K 帧库 + 相对质量 × 锚点一致性加权**：每状态最多保留 `kFusionTopFrames` 帧单位特征，
+ *      第 k 帧的融合权重 `w_k = exp((q_k - q_anchor) / τ) · g(cos(f_k, anchor))`，融合 = 加权和 +
+ *      严格 L2 归一化：
+ *        - **相对质量**（softmax 温度 τ = `kFusionQualityTemperature`）：只看与锚点的质量差，
+ *          与质量分的绝对标定无关（onnx FP32 与 rk3568 INT8 的 eDifFIQA 分数存在整体偏移）；
+ *          旧的线性权重 `max(q, 0.05)` 让 0.35 的侧脸帧拿到 0.70 正脸帧一半的权重，早期
+ *          （库未满）融合特征会被首批困难帧明显拉偏。
+ *        - **锚点一致性** `g`：与锚点余弦从 `kFusionConsistencyLow` 到 `kFusionConsistencyHigh`
+ *          线性升到满权。空间低门槛（默认 0.40）放进来的困难帧只负责维持轨迹连续，
+ *          不再以满权污染模板。
+ *      满库时按同一效用淘汰（锚点除外，等效用先淘汰更早的帧）；新帧效用低于最差帧时只维持
+ *      轨迹、不进入特征。锚点恒为库内最高质量帧，且永不被挤出。
  *   5. 每状态挂一个 `TrackIdentityState`（见 face_track_identity.hpp），由调用方在比对后经
  *      `observe_identity` 推进；轨迹键 `track_key` **只在包内使用**，不得写入 IPC 的 `track_id`
  *      （spec：`track_id` 归宿主独占）。
@@ -50,8 +59,18 @@ inline constexpr size_t kMaxActiveStatesPerStream = 32;
 inline constexpr size_t kMaxTrackedStreams = 256;
 /** @brief 每状态参与融合的最高质量帧数（Top-K 帧库容量） */
 inline constexpr size_t kFusionTopFrames = 5;
-/** @brief 单次观测最小有效融合权重下界（防止 min_face_quality=0 时出现零权重除零退化） */
-inline constexpr float kMinFusionWeightFloor = 0.05f;
+/**
+ * @brief 相对质量权重的 softmax 温度：质量比锚点低 Δq 的帧权重为 `exp(-Δq / τ)`
+ *
+ * τ = 0.10 时 Δq = 0.05 → 0.61，0.10 → 0.37，0.20 → 0.14，0.30 → 0.05：同一姿态帧间
+ * ±0.03 级的质量噪声几乎不影响权重，而明显更差的帧迅速失去话语权。锚点权重恒为 1，
+ * 因此权重和恒 `>= 1`，不存在旧线性权重在 `min_face_quality = 0` 时的零权重退化。
+ */
+inline constexpr double kFusionQualityTemperature = 0.10;
+/** @brief 锚点一致性权重：与锚点余弦 `<=` 该值的帧不参与融合 */
+inline constexpr float kFusionConsistencyLow = 0.30f;
+/** @brief 锚点一致性权重：与锚点余弦 `>=` 该值的帧满权参与融合（同人正常帧间余弦通常更高） */
+inline constexpr float kFusionConsistencyHigh = 0.70f;
 /** @brief L2 模长有效下界 */
 inline constexpr double kFusionNormEpsilon = 1e-6;
 
@@ -187,12 +206,25 @@ inline double sanitize_fusion_ttl_seconds(float raw) noexcept {
     return static_cast<double>(clamped);
 }
 
-inline float sanitize_observation_weight(float quality) noexcept {
-    if (!std::isfinite(quality)) {
-        return kMinFusionWeightFloor;
+/**
+ * @brief 帧库内单帧的融合效用（即融合权重）：相对锚点质量的 softmax × 锚点一致性
+ *
+ * @param quality        该帧质量（已 sanitize 到 [0, 1]）
+ * @param anchor_quality 锚点质量（已 sanitize）
+ * @param cos_to_anchor  该帧与锚点的余弦；非有限按 0 处理
+ * @return `[0, +inf)`；锚点自身恒为 1。质量高于锚点（仅在评估「新帧能否入库」时出现）返回 `> 1`
+ */
+inline double fusion_utility(float quality, float anchor_quality, float cos_to_anchor) noexcept {
+    if (!std::isfinite(cos_to_anchor) || cos_to_anchor <= kFusionConsistencyLow) {
+        return 0.0;
     }
-    const float clamped = std::clamp(quality, 0.0f, 1.0f);
-    return std::max(clamped, kMinFusionWeightFloor);
+    const double consistency =
+        cos_to_anchor >= kFusionConsistencyHigh
+            ? 1.0
+            : static_cast<double>(cos_to_anchor - kFusionConsistencyLow) /
+                  static_cast<double>(kFusionConsistencyHigh - kFusionConsistencyLow);
+    const double delta_q = static_cast<double>(quality) - static_cast<double>(anchor_quality);
+    return std::exp(delta_q / kFusionQualityTemperature) * consistency;
 }
 
 inline const float* observation_view(const FusionFaceObservation& observation) noexcept {
@@ -515,22 +547,56 @@ private:
         return state;
     }
 
-    /** @brief 把新帧放进 Top-K 帧库：未满直接入库；满库时只替换比它更差（或等质量更早）的帧 */
+    /**
+     * @brief 帧库内某帧相对当前锚点的融合效用（锚点自身恒为 1，免受余弦舍入影响）
+     */
+    static double entry_utility(const FusionTrackState& state, size_t k) noexcept {
+        if (k == state.anchor_index) {
+            return 1.0;
+        }
+        return candidate_utility(state, state.bank[k].features, state.bank[k].quality);
+    }
+
+    /** @brief 任意单位特征（库内帧或待入库新帧）相对当前锚点的融合效用 */
+    static double candidate_utility(const FusionTrackState& state,
+                                    const std::array<float, kFusionFeatureDim>& unit_feat,
+                                    float quality) noexcept {
+        const BankEntry& anchor = state.bank[state.anchor_index];
+        float cos_to_anchor = 0.0f;
+        if (!detail::cosine_similarity_512(unit_feat, anchor.features, cos_to_anchor)) {
+            return 0.0;
+        }
+        return detail::fusion_utility(quality, anchor.quality, cos_to_anchor);
+    }
+
+    /**
+     * @brief 把新帧放进 Top-K 帧库
+     *
+     * 未满直接入库；满库时在**非锚点**帧里找效用最低者（等效用先淘汰更早入库的帧），新帧效用
+     * 不低于它才替换。按效用而不是按原始质量淘汰：锚点更换后与新锚点不一致的「死帧」权重
+     * 已经趋零，若仍按质量保留，就会长期占着名额却不贡献特征。
+     */
     static void insert_into_bank(FusionTrackState& state,
                                  const std::array<float, kFusionFeatureDim>& unit_feat,
                                  float quality) noexcept {
+        static_assert(kFusionTopFrames >= 2, "满库淘汰要求锚点之外至少还有一个候选槽位");
         size_t slot = state.bank_size;
         if (state.bank_size >= kFusionTopFrames) {
-            size_t victim = 0;
-            for (size_t k = 1; k < state.bank_size; ++k) {
-                const BankEntry& cur = state.bank[k];
-                const BankEntry& worst = state.bank[victim];
-                if (cur.quality < worst.quality || (cur.quality == worst.quality && cur.seq < worst.seq)) {
+            size_t victim = state.bank_size;
+            double victim_utility = 0.0;
+            for (size_t k = 0; k < state.bank_size; ++k) {
+                if (k == state.anchor_index) {
+                    continue;
+                }
+                const double u = entry_utility(state, k);
+                if (victim == state.bank_size || u < victim_utility ||
+                    (u == victim_utility && state.bank[k].seq < state.bank[victim].seq)) {
                     victim = k;
+                    victim_utility = u;
                 }
             }
-            if (quality < state.bank[victim].quality) {
-                return; // 比库里最差的帧还差：只维持轨迹，不进入特征
+            if (candidate_utility(state, unit_feat, quality) < victim_utility) {
+                return; // 效用不及库里最差的帧：只维持轨迹，不进入特征
             }
             slot = victim;
         } else {
@@ -553,11 +619,18 @@ private:
         state.anchor_index = best;
     }
 
-    /** @brief 以库内各帧质量加权求和并 L2 归一化；数值相消退化时退回锚点帧 */
+    /**
+     * @brief 以「相对质量 softmax × 锚点一致性」加权求和并 L2 归一化；数值相消退化时退回锚点帧
+     *
+     * 锚点权重恒为 1，所以权重和恒 `>= 1`；退化分支只防御理论上的数值异常。
+     */
     static void refresh_fused_features(FusionTrackState& state) noexcept {
         std::array<double, kFusionFeatureDim> acc{};
         for (size_t k = 0; k < state.bank_size; ++k) {
-            const double w = static_cast<double>(detail::sanitize_observation_weight(state.bank[k].quality));
+            const double w = entry_utility(state, k);
+            if (!(w > 0.0) || !std::isfinite(w)) {
+                continue;
+            }
             const auto& f = state.bank[k].features;
             for (size_t d = 0; d < kFusionFeatureDim; ++d) {
                 acc[d] += w * static_cast<double>(f[d]);
