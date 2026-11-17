@@ -17,7 +17,7 @@ namespace {
 /** @brief FPN 各层 stride；人脸 3 层、人体 5 层 */
 constexpr std::array<int, 3> kFaceFpnStrides{8, 16, 32};
 constexpr std::array<int, 5> kPersonFpnStrides{8, 16, 32, 64, 128};
-/** @brief 每格 anchor 数：det_500m 为 2，Person 2.5G 为 1 */
+/** @brief 每格 anchor 数：det_10g 为 2，Person 2.5G 为 1 */
 constexpr int kFaceAnchorsPerCell = 2;
 constexpr int kPersonAnchorsPerCell = 1;
 

@@ -2,7 +2,7 @@
   "id": "face_recognition",
   "name": "人脸识别算法",
   "version": "1.0.0",
-  "description": "基于 SCRFD 人体与人脸双检测协同与 512 维特征比对的高性能人员结构化算法包",
+  "description": "基于 SCRFD-10G 人体与人脸双检测协同与 ArcFace w600k_r50 512 维特征比对的人员结构化算法包",
   "task_type": "person_structure",
   "category": "safety",
   "platform": {
@@ -10,7 +10,7 @@
     "target": "rk3568"
   },
   "resources": {
-    "compute_cost": 45,
-    "memory_mb": 80
+    "compute_cost": 85,
+    "memory_mb": 180
   }
 }

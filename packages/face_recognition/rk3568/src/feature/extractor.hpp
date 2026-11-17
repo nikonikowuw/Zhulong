@@ -15,7 +15,7 @@ namespace zhulong::face {
 /** @brief 特征提取输入裁剪块尺寸（ArcFace 标准 112×112） */
 inline constexpr int kFeaturePatchWidth = 112;
 inline constexpr int kFeaturePatchHeight = 112;
-/** @brief 特征维度（FaceLiVTv2-L / ArcFace 均为 512） */
+/** @brief 特征维度（512；ArcFace 与 FaceLiVT 族均为 512） */
 inline constexpr size_t kFeatureDimension = 512;
 
 class FaceFeatureExtractor {

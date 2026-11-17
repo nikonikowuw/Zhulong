@@ -42,7 +42,7 @@
 
 namespace zhulong::face {
 
-/** @brief 人脸特征向量固定维度（与 FaceLiVTv2-L 输出一致） */
+/** @brief 人脸特征向量固定维度（与人脸特征提取模型输出一致） */
 inline constexpr size_t kFusionFeatureDim = 512;
 /** @brief 单路视频流同时维护的活跃人脸状态上限（满额时优先淘汰本帧未命中的状态） */
 inline constexpr size_t kMaxActiveStatesPerStream = 32;

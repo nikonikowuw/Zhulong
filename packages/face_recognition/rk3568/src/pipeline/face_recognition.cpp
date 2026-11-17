@@ -178,21 +178,21 @@ zhulong_status_t FaceRecognitionPlugin::init(const std::string& config_json) {
 
     // 1. 人体检测模型 (SCRFD scrfd_person_2.5g) —— 可选，缺失时退化为纯人脸语义
     person_model_ = load_target_model("models/scrfd_person_2.5g");
-    // 2. 人脸检测模型 (SCRFD det_500m)
-    det_model_ = load_target_model("models/det_500m");
+    // 2. 人脸检测模型 (SCRFD det_10g，动态输入 640×640 / 640×384)
+    det_model_ = load_target_model("models/det_10g");
     // 3. 人脸质量评估模型 (eDifFIQA-T)
     quality_model_ = load_target_model("models/ediffiqa_t");
-    // 4. 人脸特征提取模型 (FaceLiVTv2-L)
-    rec_model_ = load_target_model("models/facelivtv2-l");
+    // 4. 人脸特征提取模型 (ArcFace w600k_r50)
+    rec_model_ = load_target_model("models/w600k_r50");
 
     if (!det_model_.valid()) {
-        return model_unavailable_status("models/det_500m");
+        return model_unavailable_status("models/det_10g");
     }
     if (!quality_model_.valid()) {
         return model_unavailable_status("models/ediffiqa_t");
     }
     if (!rec_model_.valid()) {
-        return model_unavailable_status("models/facelivtv2-l");
+        return model_unavailable_status("models/w600k_r50");
     }
     return ZHULONG_PLUGIN_OK;
 }
@@ -254,7 +254,7 @@ bool FaceRecognitionPlugin::extract_qualified_face(
         return false;
     }
 
-    // 2. 5 点相似变换对齐至 112×112 RGB24（eDifFIQA-T 与 FaceLiVTv2-L 共用）
+    // 2. 5 点相似变换对齐至 112×112 RGB24（质量评估与特征提取共用）
     const auto src_pixels = pixel_landmarks(detection, image.width(), image.height());
     std::array<float, 6> affine_mat{};
     if (!Aligner::estimate_similarity_transform(src_pixels, affine_mat)) {
@@ -422,7 +422,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
             person_detections.end());
     }
 
-    // 2. 人脸检测与 5 点关键点定位 (SCRFD det_500m)
+    // 2. 人脸检测与 5 点关键点定位 (SCRFD det_10g)
     const std::vector<FaceDetection> face_detections = det_snapshot.detect(session, image, match_params.face_det_threshold);
     if (person_detections.empty() && face_detections.empty()) {
         return {};
@@ -668,7 +668,7 @@ zhulong_status_t FaceExtractorContext::init_locked() {
         return ZHULONG_PLUGIN_OK;
     }
     // 失败负缓存：模型装错/后端建不出会话是**环境问题**，不会因为下一帧就好。
-    // 不缓存的结果是每个登记请求都重新解析一遍权重（facelivtv2-l 就有 35 MB），
+    // 不缓存的结果是每个登记请求都重新解析一遍权重（w600k_r50 就有 54 MB），
     // 在宿主超时重试下变成重试风暴。`release()` 会清掉它（宿主 TTL 回收 = 重新探测）。
     if (init_status_ != ZHULONG_PLUGIN_OK) {
         return init_status_;
@@ -676,23 +676,23 @@ zhulong_status_t FaceExtractorContext::init_locked() {
 
     match_params_ = load_match_params_from_env();
 
-    // 1. 人脸检测模型 (SCRFD det_500m)
-    det_model_ = load_target_model("models/det_500m");
+    // 1. 人脸检测模型 (SCRFD det_10g，动态输入 640×640 / 640×384)
+    det_model_ = load_target_model("models/det_10g");
     // 2. 人脸质量评估模型 (eDifFIQA-T)
     quality_model_ = load_target_model("models/ediffiqa_t");
-    // 3. 人脸特征提取模型 (FaceLiVTv2-L)
-    rec_model_ = load_target_model("models/facelivtv2-l");
+    // 3. 人脸特征提取模型 (ArcFace w600k_r50)
+    rec_model_ = load_target_model("models/w600k_r50");
 
     // 模型缺失属于「能力不可用」，绝不等同于「图中没有人脸」：必须闭环报错，禁止伪造特征。
     // 任一侧权重不可用就把全部权重放掉：负缓存期间它们是白占内存的死引用，
     // 而下次重试（`release()` 之后）本来就要重新加载。
     if (!det_model_.valid() || !quality_model_.valid() || !rec_model_.valid()) {
         if (!det_model_.valid()) {
-            init_status_ = model_unavailable_status("models/det_500m");
+            init_status_ = model_unavailable_status("models/det_10g");
         } else if (!quality_model_.valid()) {
             init_status_ = model_unavailable_status("models/ediffiqa_t");
         } else {
-            init_status_ = model_unavailable_status("models/facelivtv2-l");
+            init_status_ = model_unavailable_status("models/w600k_r50");
         }
         det_model_ = zhulong::Model();
         quality_model_ = zhulong::Model();

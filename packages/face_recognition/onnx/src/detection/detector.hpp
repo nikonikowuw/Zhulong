@@ -113,7 +113,7 @@ public:
     }
 
     /**
-     * @brief 基于推理会话执行真实 NPU/ONNX 人脸检测 (SCRFD det_500m)
+     * @brief 基于推理会话执行真实 NPU/ONNX 人脸检测 (SCRFD)
      *
      * `const` 是刻意的：本对象被同一插件的多个 Worker 线程共享，`detect` 不得改动实例状态。
      *
