@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { formatRecordTime } from '../../data/format-time'
 import { type Recognition } from '../../data/schema'
+import { ClipIndicator } from '../common/clip-indicator'
 import { MediaImage } from '../common/media-image'
 
 interface RecognitionCardProps {
@@ -93,7 +94,8 @@ export const RecognitionCard = memo(function RecognitionCard({
           <span className='max-w-[120px] truncate font-semibold text-foreground'>
             {displayName}
           </span>
-          <span className='font-mono text-[11px] text-muted-foreground'>
+          <span className='flex items-center gap-1 font-mono text-[11px] text-muted-foreground'>
+            <ClipIndicator clip={item.clip} />
             {formattedTime}
           </span>
         </div>

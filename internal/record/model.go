@@ -88,6 +88,7 @@ type Capture struct {
 	TrackID          int64     `gorm:"column:track_id;not null;default:0"`
 	Score            float64   `gorm:"column:score;not null;default:0.0"`
 	BoxJSON          string    `gorm:"column:box_json;not null;default:'[]'"`
+	LandmarksJSON    string    `gorm:"column:landmarks_json;not null;default:'[]'"`
 	CropPath         string    `gorm:"column:crop_path;not null;default:''"`
 	ImagePath        string    `gorm:"column:image_path;not null;default:''"`
 	AttributesJSON   string    `gorm:"column:attributes_json;not null;default:'{}'"`

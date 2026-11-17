@@ -106,7 +106,7 @@ export function buildPreviewImages(
       id: 'full',
       url: getMediaUrl(record.imagePath),
       title: t('detail.fullImage'),
-      landmarks: rec?.landmarks,
+      landmarks: rec?.landmarks ?? cap?.landmarks,
     })
   }
 
@@ -166,6 +166,9 @@ export function buildPreviewImages(
       id: 'capture-crop',
       url: getMediaUrl(cap.cropPath),
       title: isVehicleCapture ? t('detail.vehicleCrop') : t('detail.snapshot'),
+      landmarks: !isVehicleCapture
+        ? projectLandmarksToCrop(cap.landmarks, cap.box)
+        : undefined,
     })
   }
 

@@ -72,6 +72,7 @@ func TestSameTaskSemanticsDetectsRealChanges(t *testing.T) {
 		{name: "config", mutate: func(t *Task) { t.Algorithms[0].ConfigJSON = `{"k":2}` }},
 		{name: "region", mutate: func(t *Task) { t.Algorithms[0].RegionConfigJSON = `{"roi":[[0,0,1,1]]}` }},
 		{name: "schedule", mutate: func(t *Task) { t.Algorithms[0].ScheduleJSON = `{"days":[1]}` }},
+		{name: "clip", mutate: func(t *Task) { t.Algorithms[0].ClipConfigJSON = `{"enabled":true}` }},
 		{name: "algorithm disabled", mutate: func(t *Task) { t.Algorithms[0].Enabled = false }},
 		{name: "algorithm replaced", mutate: func(t *Task) { t.Algorithms[0].AlgorithmID = "algo_z" }},
 	}

@@ -111,6 +111,7 @@ type captureSpec struct {
 	trackID    int64
 	score      float64
 	box        [4]float64
+	landmarks  [][2]float64
 	attrsJSON  string
 }
 
@@ -130,6 +131,7 @@ func buildCaptureRecordAndJob(f ingestFrame, spec captureSpec) (*Capture, snapsh
 		TrackID:          spec.trackID,
 		Score:            spec.score,
 		BoxJSON:          marshalBox(spec.box),
+		LandmarksJSON:    marshalSliceOrDefault(spec.landmarks),
 		CropPath:         cropPath,
 		ImagePath:        fullPath,
 		AttributesJSON:   spec.attrsJSON,

@@ -83,11 +83,15 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 		ID:             "cap_1",
 		CameraID:       "cam_1",
 		TargetType:     "car",
+		LandmarksJSON:  "null",
 		AttributesJSON: "null",
 		CapturedAt:     time.Now().UTC(),
 		CreatedAt:      time.Now().UTC(),
 	}
 	capResp := capRec.ToResponse()
+	if capResp.Landmarks == nil {
+		t.Errorf("expected non-nil Landmarks slice")
+	}
 	if capResp.Attributes == nil {
 		t.Errorf("expected non-nil Attributes map")
 	}
@@ -98,6 +102,9 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 	var rawCap map[string]any
 	if err := json.Unmarshal(bytesCap, &rawCap); err != nil {
 		t.Fatalf("unmarshal capResp: %v", err)
+	}
+	if rawCap["landmarks"] == nil {
+		t.Errorf("expected landmarks to serialize to [], got null in JSON: %s", string(bytesCap))
 	}
 	if rawCap["attributes"] == nil {
 		t.Errorf("expected attributes to serialize to {}, got null in JSON: %s", string(bytesCap))

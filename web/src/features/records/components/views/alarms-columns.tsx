@@ -8,6 +8,7 @@ import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { formatRecordTime } from '../../data/format-time'
 import { algorithmLabel, type Alarm } from '../../data/schema'
+import { ClipIndicator } from '../common/clip-indicator'
 import { MediaImage } from '../common/media-image'
 import { createSelectionColumn } from './create-selection-column'
 
@@ -42,8 +43,9 @@ export function buildAlarmColumns(
       ),
       enableSorting: false,
       cell: ({ row }) => (
-        <span className='font-mono text-xs'>
+        <span className='flex items-center gap-1.5 font-mono text-xs'>
           {formatRecordTime(row.original.capturedAt)}
+          <ClipIndicator clip={row.original.clip} />
         </span>
       ),
     },

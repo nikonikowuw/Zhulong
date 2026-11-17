@@ -269,5 +269,26 @@
       "yes": "是",
       "no": "否"
     }
+  },
+  "clip": {
+    "title": "事件錄影",
+    "hasClip": "有錄影",
+    "recordingBadge": "錄影錄製中",
+    "recordingHint": "錄製中，完成後即可播放。",
+    "refresh": "重新整理",
+    "refreshFailed": "重新整理失敗，請稍後重試。",
+    "failed": "錄影失敗",
+    "unavailable": "錄影已不可用。",
+    "unsupportedCodec": "目前瀏覽器不支援該編碼，請下載播放",
+    "download": "下載錄影",
+    "playerLabel": "事件錄影播放器",
+    "offset": "事件位於 {{seconds}} 秒",
+    "duration": "{{seconds}} 秒",
+    "partialHint": "錄影不完整（被截斷或重啟後恢復）。",
+    "status": {
+      "recording": "錄製中",
+      "failed": "錄影失敗",
+      "partial": "不完整"
+    }
   }
 }

@@ -383,3 +383,35 @@ func TestUpdateTaskRequestCropMerge(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskAlgorithmItemClipConfigAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		item TaskAlgorithmItem
+		want string
+	}{
+		{name: "camel", item: TaskAlgorithmItem{ClipConfigJSON: `{"enabled":true}`, ClipConfigJSONAlt: `{}`}, want: `{"enabled":true}`},
+		{name: "snake", item: TaskAlgorithmItem{ClipConfigJSONAlt: `{"enabled":false}`}, want: `{"enabled":false}`},
+		{name: "missing", item: TaskAlgorithmItem{}, want: `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.item.toEntity("task").ClipConfigJSON
+			if got != tt.want {
+				t.Fatalf("got %q want %q", got, tt.want)
+			}
+		})
+	}
+
+	var item TaskAlgorithmItem
+	if err := json.Unmarshal([]byte(`{"algorithmId":"a","clip_config_json":"{\"enabled\":true}"}`), &item); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if item.ClipConfigJSONAlt != `{"enabled":true}` {
+		t.Fatalf("snake_case key not decoded: %+v", item)
+	}
+	resp := (&Task{Algorithms: []TaskAlgorithm{{ClipConfigJSON: `{"enabled":true}`}}}).ToResponse()
+	if resp.Algorithms[0].ClipConfigJSON != `{"enabled":true}` {
+		t.Fatalf("response must echo clip config")
+	}
+}

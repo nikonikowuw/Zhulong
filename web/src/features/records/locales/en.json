@@ -269,5 +269,26 @@
       "yes": "Yes",
       "no": "No"
     }
+  },
+  "clip": {
+    "title": "Event Clip",
+    "hasClip": "Has video clip",
+    "recordingBadge": "Clip recording",
+    "recordingHint": "Recording… the clip becomes playable once finished.",
+    "refresh": "Refresh",
+    "refreshFailed": "Refresh failed, please try again later.",
+    "failed": "Clip recording failed",
+    "unavailable": "The clip is no longer available.",
+    "unsupportedCodec": "This browser cannot play this codec. Please download to play.",
+    "download": "Download Clip",
+    "playerLabel": "Event clip player",
+    "offset": "Event at {{seconds}}s",
+    "duration": "{{seconds}}s",
+    "partialHint": "The clip is incomplete (truncated or recovered after restart).",
+    "status": {
+      "recording": "Recording",
+      "failed": "Failed",
+      "partial": "Incomplete"
+    }
   }
 }

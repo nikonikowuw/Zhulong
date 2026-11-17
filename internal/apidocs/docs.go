@@ -9818,6 +9818,16 @@ const docTemplate = `{
                 "imagePath": {
                     "type": "string"
                 },
+                "landmarks": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "format": "float64"
+                        }
+                    }
+                },
                 "pts": {
                     "type": "integer"
                 },

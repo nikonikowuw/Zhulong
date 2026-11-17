@@ -2,13 +2,20 @@ import { Cpu, Video, ZoomIn } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
-import { algorithmLabel, type RecordItem } from '../../data/schema'
+import {
+  algorithmLabel,
+  type LandmarkPoint,
+  type RecordItem,
+} from '../../data/schema'
+import { BoundingBoxCanvas } from '../common/bounding-box-canvas'
 import { MediaImage } from '../common/media-image'
 
 interface RecordDetailCropCardProps {
   path: string
   alt: string
   score: number
+  landmarks?: LandmarkPoint[]
+  showBoxes?: boolean
   onPreview: () => void
 }
 
@@ -16,9 +23,12 @@ export function RecordDetailCropCard({
   path,
   alt,
   score,
+  landmarks,
+  showBoxes = true,
   onPreview,
 }: RecordDetailCropCardProps) {
   const { t } = useTranslation('records')
+  const hasLandmarks = Boolean(landmarks && landmarks.length > 0)
 
   return (
     <div className='space-y-2 rounded-lg border border-border bg-card p-4 shadow-xs'>
@@ -33,22 +43,41 @@ export function RecordDetailCropCard({
         )}
       </div>
       <div className='group relative flex h-36 w-full items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 p-2'>
-        <MediaImage
-          path={path}
-          alt={alt}
-          className='size-full'
-          imageClassName='object-contain'
-        />
-        <button
-          type='button'
-          onClick={onPreview}
-          aria-label={t('detail.previewImageLabel', {
-            name: t('detail.snapshot'),
-          })}
-          className='absolute inset-0 flex cursor-zoom-in items-center justify-center bg-black/0 text-white opacity-0 transition-all group-hover:bg-black/25 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
-        >
-          <ZoomIn className='size-5 drop-shadow-sm' />
-        </button>
+        {hasLandmarks ? (
+          <BoundingBoxCanvas
+            key={path}
+            imagePath={path}
+            alt={alt}
+            className='max-h-32 max-w-full'
+            imageClassName='object-contain'
+            showBoxes={showBoxes}
+            compact
+            landmarks={landmarks}
+            onPreviewClick={onPreview}
+            previewLabel={t('detail.previewImageLabel', {
+              name: t('detail.snapshot'),
+            })}
+          />
+        ) : (
+          <>
+            <MediaImage
+              path={path}
+              alt={alt}
+              className='size-full'
+              imageClassName='object-contain'
+            />
+            <button
+              type='button'
+              onClick={onPreview}
+              aria-label={t('detail.previewImageLabel', {
+                name: t('detail.snapshot'),
+              })}
+              className='absolute inset-0 flex cursor-zoom-in items-center justify-center bg-black/0 text-white opacity-0 transition-all group-hover:bg-black/25 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
+            >
+              <ZoomIn className='size-5 drop-shadow-sm' />
+            </button>
+          </>
+        )}
       </div>
     </div>
   )

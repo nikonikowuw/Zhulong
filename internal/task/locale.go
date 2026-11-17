@@ -71,6 +71,11 @@ func init() {
 			"zh-Hans": "无效的时间计划配置",
 			"zh-Hant": "無效的時間計劃設定",
 		},
+		"INVALID_CLIP_CONFIG": {
+			"en":      "Invalid event clip recording configuration",
+			"zh-Hans": "无效的事件录像配置",
+			"zh-Hant": "無效的事件錄影設定",
+		},
 		"COMPUTE_BUDGET_EXCEEDED": {
 			"en":      "Total compute budget (1,000 points) exceeded",
 			"zh-Hans": "摄像头算法算力总配额超过 1000 点基准上限",

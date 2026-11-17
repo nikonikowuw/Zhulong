@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { formatRecordTime } from '../../data/format-time'
 import { type Alarm } from '../../data/schema'
+import { ClipIndicator } from '../common/clip-indicator'
 import { MediaImage } from '../common/media-image'
 
 interface AlarmCardProps {
@@ -89,7 +90,8 @@ export const AlarmCard = memo(function AlarmCard({
           <span className='max-w-[120px] truncate font-semibold text-destructive'>
             {item.alarmType}
           </span>
-          <span className='font-mono text-[11px] text-muted-foreground'>
+          <span className='flex items-center gap-1 font-mono text-[11px] text-muted-foreground'>
+            <ClipIndicator clip={item.clip} />
             {formattedTime}
           </span>
         </div>

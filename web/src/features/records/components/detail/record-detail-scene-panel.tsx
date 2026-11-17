@@ -145,7 +145,7 @@ export function RecordDetailScenePanel({
           primaryLabel={primaryLabel}
           secondaryBox={secondaryBox}
           secondaryLabel={secondaryBox ? t('detail.bodyBoxLabel') : undefined}
-          landmarks={rec?.landmarks}
+          landmarks={rec?.landmarks ?? cap?.landmarks}
           onPreviewClick={record.imagePath ? onOpenFullscreen : undefined}
           previewLabel={t('detail.previewImageLabel', {
             name: t('detail.fullImage'),

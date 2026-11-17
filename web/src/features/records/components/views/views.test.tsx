@@ -65,6 +65,7 @@ const sampleCaptures: Capture[] = [
     trackId: 5,
     score: 0.92,
     box: [0.2, 0.2, 0.6, 0.6],
+    landmarks: [],
     cropPath: 'snapshots/cap-1-crop.jpg',
     imagePath: 'snapshots/cap-1.jpg',
     attributes: {},

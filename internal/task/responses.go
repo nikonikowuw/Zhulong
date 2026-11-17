@@ -16,6 +16,7 @@ type TaskAlgorithmInfo struct {
 	ConfigJSON       string    `json:"configJson"`
 	RegionConfigJSON string    `json:"regionConfigJson"`
 	ScheduleJSON     string    `json:"scheduleJson"`
+	ClipConfigJSON   string    `json:"clipConfigJson"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
@@ -81,6 +82,7 @@ func toTaskAlgorithmInfo(sub *TaskAlgorithm) TaskAlgorithmInfo {
 		ConfigJSON:       sub.ConfigJSON,
 		RegionConfigJSON: sub.RegionConfigJSON,
 		ScheduleJSON:     sub.ScheduleJSON,
+		ClipConfigJSON:   sub.ClipConfigJSON,
 		CreatedAt:        sub.CreatedAt.UTC(),
 		UpdatedAt:        sub.UpdatedAt.UTC(),
 	}

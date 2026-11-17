@@ -243,6 +243,7 @@ function jobsForRecord(
           score: cap.score,
         }),
         palette: 'sky',
+        landmarks: cap.landmarks,
       }
     : {}
   if (wantScene && cap.imagePath) {

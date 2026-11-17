@@ -425,6 +425,7 @@ func syncTaskAlgorithms(
 				"config_json":        sub.ConfigJSON,
 				"region_config_json": sub.RegionConfigJSON,
 				"schedule_json":      sub.ScheduleJSON,
+				"clip_config_json":   sub.ClipConfigJSON,
 				"updated_at":         sub.UpdatedAt,
 			}
 			err := tx.Model(&TaskAlgorithm{}).Where("id = ?", sub.ID).Updates(columns).Error

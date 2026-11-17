@@ -26,6 +26,8 @@ type TaskAlgorithmItem struct {
 	RegionConfigJSONAlt string `json:"region_config_json,omitempty"`
 	ScheduleJSON        string `json:"scheduleJson,omitempty"`
 	ScheduleJSONAlt     string `json:"schedule_json,omitempty"`
+	ClipConfigJSON      string `json:"clipConfigJson,omitempty"`
+	ClipConfigJSONAlt   string `json:"clip_config_json,omitempty"`
 }
 
 // CreateTaskRequest is the request payload for creating an analysis task.
@@ -85,6 +87,7 @@ func (item TaskAlgorithmItem) toEntity(taskID string) TaskAlgorithm {
 		ConfigJSON:       cmp.Or(item.ConfigJSON, item.ConfigJSONAlt, defaultConfigJSON),
 		RegionConfigJSON: cmp.Or(item.RegionConfigJSON, item.RegionConfigJSONAlt, defaultConfigJSON),
 		ScheduleJSON:     cmp.Or(item.ScheduleJSON, item.ScheduleJSONAlt, defaultConfigJSON),
+		ClipConfigJSON:   cmp.Or(item.ClipConfigJSON, item.ClipConfigJSONAlt, defaultConfigJSON),
 	}
 }
 

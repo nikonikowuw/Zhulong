@@ -555,6 +555,7 @@ func (s *Service) planPersonCaptures(
 			trackID:    trackID,
 			score:      face.Quality,
 			box:        face.Box,
+			landmarks:  face.Landmarks,
 			attrsJSON:  "{}",
 		})
 		captures = append(captures, capture)

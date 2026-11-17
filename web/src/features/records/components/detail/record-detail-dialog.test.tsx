@@ -59,6 +59,7 @@ const mockCapture: Capture = {
   trackId: 44,
   score: 0.96,
   box: [0.15, 0.2, 0.6, 0.7],
+  landmarks: [],
   cropPath: 'snapshots/vehicle-crop.jpg',
   imagePath: 'snapshots/vehicle-full.jpg',
   attributes: { color: 'white' },

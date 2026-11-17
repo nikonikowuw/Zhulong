@@ -33,7 +33,12 @@ import {
 } from '../../data/schema'
 import { formatTargetType, targetTypeBadgeClass } from '../../data/target-type'
 import { RecognitionComparisonPanel } from './recognition-comparison-panel'
-import { buildPreviewImages, useCopyFeedback } from './record-detail-helpers'
+import { RecordClipPanel } from './record-clip-panel'
+import {
+  buildPreviewImages,
+  projectLandmarksToCrop,
+  useCopyFeedback,
+} from './record-detail-helpers'
 import { RecordDetailScenePanel } from './record-detail-scene-panel'
 import {
   RecordDetailCropCard,
@@ -241,7 +246,25 @@ export function RecordDetailDialog({
                     path={cap.cropPath}
                     alt={formatTargetType(t, cap.targetType)}
                     score={cap.score}
+                    landmarks={projectLandmarksToCrop(cap.landmarks, cap.box)}
+                    showBoxes={showBoxes}
                     onPreview={() => openPreviewById('capture-crop')}
+                  />
+                )}
+
+                {alm?.clip && (
+                  <RecordClipPanel
+                    kind='alarm'
+                    recordId={alm.id}
+                    clip={alm.clip}
+                  />
+                )}
+
+                {rec?.clip && (
+                  <RecordClipPanel
+                    kind='recognition'
+                    recordId={rec.id}
+                    clip={rec.clip}
                   />
                 )}
 

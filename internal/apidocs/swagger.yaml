@@ -1921,6 +1921,13 @@ definitions:
         type: string
       imagePath:
         type: string
+      landmarks:
+        items:
+          items:
+            format: float64
+            type: number
+          type: array
+        type: array
       pts:
         type: integer
       score:

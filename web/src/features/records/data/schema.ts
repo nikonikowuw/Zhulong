@@ -33,6 +33,35 @@ export const faceCandidateSchema = z
 
 export type FaceCandidate = z.infer<typeof faceCandidateSchema>
 
+/** 事件录像片段的生命周期状态（映射后端 `event_clips.status`）。 */
+export const clipStatusSchema = z.enum([
+  'recording',
+  'completed',
+  'truncated',
+  'failed',
+])
+
+export type ClipStatus = z.infer<typeof clipStatusSchema>
+
+/**
+ * 告警 / 识别记录引用的事件录像片段投影（后端 `ClipInfo`）。
+ *
+ * 同一相机短时间内的多个事件会共用一个片段，`offsetMs` 是**本事件**在片段内的
+ * 时刻；`partial` 表示片段因写线程跟不上或进程重启而不完整。
+ */
+export const clipInfoSchema = z.object({
+  id: z.string(),
+  status: clipStatusSchema,
+  partial: z.boolean().default(false),
+  durationMs: z.number().int().nonnegative().default(0),
+  offsetMs: z.number().int().nonnegative().default(0),
+  mediaPath: z.string().default(''),
+  // 'h264' | 'hevc' | ''；保留 string 以免后端新增编码时整页解析失败。
+  codec: z.string().default(''),
+})
+
+export type ClipInfo = z.infer<typeof clipInfoSchema>
+
 export const recognitionSchema = z.object({
   id: z.string(),
   cameraId: z.string(),
@@ -60,6 +89,8 @@ export const recognitionSchema = z.object({
   bodyBox: boxSchema,
   landmarks: z.array(landmarkPointSchema).default([]),
   attributes: z.record(z.string(), z.unknown()).default({}),
+  // 无录像时后端省略或给 null；旧数据（迁移前）同样没有。
+  clip: clipInfoSchema.nullish(),
   capturedAt: z.string(),
   createdAt: z.string(),
 })
@@ -91,6 +122,7 @@ export const alarmSchema = z.object({
   cropPath: z.string().default(''),
   extra: z.record(z.string(), z.unknown()).default({}),
   pts: z.number().int().default(0),
+  clip: clipInfoSchema.nullish(),
   capturedAt: z.string(),
   createdAt: z.string(),
 })
@@ -121,6 +153,7 @@ export const captureSchema = z.object({
   trackId: z.number().int().default(0),
   score: z.number().default(0),
   box: boxSchema,
+  landmarks: z.array(landmarkPointSchema).default([]),
   cropPath: z.string().default(''),
   imagePath: z.string().default(''),
   attributes: z.record(z.string(), z.unknown()).default({}),

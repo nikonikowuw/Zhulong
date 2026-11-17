@@ -177,6 +177,7 @@ type CaptureResponse struct {
 	TrackID          int64          `json:"trackId"`
 	Score            float64        `json:"score"`
 	Box              [4]float64     `json:"box"`
+	Landmarks        [][2]float64   `json:"landmarks"`
 	CropPath         string         `json:"cropPath"`
 	ImagePath        string         `json:"imagePath"`
 	Attributes       map[string]any `json:"attributes"`
@@ -197,6 +198,7 @@ func (c *Capture) ToResponse() CaptureResponse {
 		TrackID:          c.TrackID,
 		Score:            c.Score,
 		Box:              unmarshalBox(c.BoxJSON),
+		Landmarks:        unmarshalSliceOrDefault[[2]float64](c.LandmarksJSON),
 		CropPath:         c.CropPath,
 		ImagePath:        c.ImagePath,
 		Attributes:       unmarshalMapOrDefault(c.AttributesJSON),

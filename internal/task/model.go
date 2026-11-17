@@ -39,16 +39,18 @@ func (Task) TableName() string {
 
 // TaskAlgorithm represents a specific algorithm configuration item bound to a channel task.
 type TaskAlgorithm struct {
-	ID               string    `gorm:"primaryKey;column:id" json:"id"`
-	TaskID           string    `gorm:"column:task_id;not null;index" json:"taskId"`
-	AlgorithmID      string    `gorm:"column:algorithm_id;not null;index" json:"algorithmId"`
-	Enabled          bool      `gorm:"column:enabled;not null" json:"enabled"`
-	SampleFPS        int       `gorm:"column:sample_fps;not null;default:5" json:"sampleFps"`
-	ConfigJSON       string    `gorm:"column:config_json;not null;default:'{}'" json:"configJson"`
-	RegionConfigJSON string    `gorm:"column:region_config_json;not null;default:'{}'" json:"regionConfigJson"`
-	ScheduleJSON     string    `gorm:"column:schedule_json;not null;default:'{}'" json:"scheduleJson"`
-	CreatedAt        time.Time `gorm:"column:created_at;not null" json:"createdAt"`
-	UpdatedAt        time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+	ID               string `gorm:"primaryKey;column:id" json:"id"`
+	TaskID           string `gorm:"column:task_id;not null;index" json:"taskId"`
+	AlgorithmID      string `gorm:"column:algorithm_id;not null;index" json:"algorithmId"`
+	Enabled          bool   `gorm:"column:enabled;not null" json:"enabled"`
+	SampleFPS        int    `gorm:"column:sample_fps;not null;default:5" json:"sampleFps"`
+	ConfigJSON       string `gorm:"column:config_json;not null;default:'{}'" json:"configJson"`
+	RegionConfigJSON string `gorm:"column:region_config_json;not null;default:'{}'" json:"regionConfigJson"`
+	ScheduleJSON     string `gorm:"column:schedule_json;not null;default:'{}'" json:"scheduleJson"`
+	// ClipConfigJSON 是事件录像片段配置（见 ParseClipConfig）；'{}' = 关闭。
+	ClipConfigJSON string    `gorm:"column:clip_config_json;not null;default:'{}'" json:"clipConfigJson"`
+	CreatedAt      time.Time `gorm:"column:created_at;not null" json:"createdAt"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
 }
 
 // TableName overrides the default table name for TaskAlgorithm.

@@ -401,6 +401,7 @@ func (s *Service) normalizeAndValidateAlgorithm(ctx context.Context, sub *TaskAl
 	sub.ConfigJSON = cmp.Or(sub.ConfigJSON, defaultConfigJSON)
 	sub.RegionConfigJSON = cmp.Or(sub.RegionConfigJSON, defaultConfigJSON)
 	sub.ScheduleJSON = cmp.Or(sub.ScheduleJSON, defaultConfigJSON)
+	sub.ClipConfigJSON = cmp.Or(sub.ClipConfigJSON, defaultConfigJSON)
 
 	if _, err := region.ParseConfig(sub.RegionConfigJSON); err != nil {
 		return apperr.Invalid(
@@ -415,6 +416,14 @@ func (s *Service) normalizeAndValidateAlgorithm(ctx context.Context, sub *TaskAl
 			"INVALID_SCHEDULE_CONFIG",
 			fmt.Sprintf("invalid schedule config for %q: %v", sub.AlgorithmID, err),
 			errInvalidScheduleConfig,
+		)
+	}
+
+	if _, err := ParseClipConfig(sub.ClipConfigJSON); err != nil {
+		return apperr.Invalid(
+			"INVALID_CLIP_CONFIG",
+			fmt.Sprintf("invalid clip config for %q: %v", sub.AlgorithmID, err),
+			errInvalidClipConfig,
 		)
 	}
 
@@ -543,7 +552,7 @@ func cloneTask(t *Task) *Task {
 // 用于决定是否需要重启算法子进程。
 //
 // 只比较 CameraID / Enabled / 算法集合（AlgorithmID、Enabled、SampleFPS、ConfigJSON、
-// RegionConfigJSON、ScheduleJSON）。刻意忽略：
+// RegionConfigJSON、ScheduleJSON、ClipConfigJSON）。刻意忽略：
 //   - CropJSON：只换视图，不换算法输入（走 TaskSavedListener 而不是重启）；
 //   - Name：纯展示字段，从不外发给算法包，改名重启只是白白打断流；
 //   - Task.ID / 子项 ID / CreatedAt / UpdatedAt：簿记字段，重建子项会换 ID 但语义不变。
@@ -581,6 +590,7 @@ func sameAlgorithmSemantics(left, right TaskAlgorithm) bool {
 		left.SampleFPS == right.SampleFPS
 	sameDocs := left.ConfigJSON == right.ConfigJSON &&
 		left.RegionConfigJSON == right.RegionConfigJSON &&
-		left.ScheduleJSON == right.ScheduleJSON
+		left.ScheduleJSON == right.ScheduleJSON &&
+		left.ClipConfigJSON == right.ClipConfigJSON
 	return sameHeader && sameDocs
 }
