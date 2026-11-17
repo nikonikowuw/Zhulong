@@ -319,8 +319,8 @@ export function BoundingBoxCanvas({
                   key={`landmark-${index}`}
                   data-testid='landmark-point'
                   className={cn(
-                    'absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-black/75 bg-amber-300 shadow-[0_0_4px_rgba(0,0,0,0.6)]',
-                    compact ? 'size-1.5' : 'size-2'
+                    'absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 ring-1 ring-black/80',
+                    compact ? 'size-[3px]' : 'size-1'
                   )}
                   style={{
                     left: `${pos.x}%`,

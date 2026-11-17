@@ -162,11 +162,11 @@ function drawLandmarks(
   canvasWidth: number,
   canvasHeight: number
 ) {
-  const pointRadius = Math.max(2, Math.round(canvasWidth / 400))
+  const pointRadius = Math.max(1.5, Math.round(canvasWidth / 800))
   ctx.save()
   ctx.fillStyle = '#fde047'
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)'
-  ctx.lineWidth = Math.max(1, Math.round(pointRadius / 2))
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'
+  ctx.lineWidth = 1
 
   for (const [rawX, rawY] of landmarks) {
     if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) continue

@@ -203,7 +203,7 @@ export function RecordImagePreviewDialog({
                       <div
                         key={`preview-landmark-${index}`}
                         data-testid='preview-landmark-point'
-                        className='absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-black/75 bg-amber-300 shadow-[0_0_6px_rgba(0,0,0,0.7)]'
+                        className='absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 ring-1 ring-black/80'
                         style={{
                           left: `${lx * 100}%`,
                           top: `${ly * 100}%`,
