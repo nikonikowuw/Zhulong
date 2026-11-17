@@ -48,7 +48,7 @@ type TaskChangeListener interface {
 
 1. **主子表结构**：
    - 主表 `analysis_tasks`：聚合根，强约束 `UNIQUE(camera_id)`，拥有 `id`, `camera_id`, `enabled`（通道总开关）, `name`, `created_at`, `updated_at`。
-   - 子表 `task_algorithms`：配置明细，拥有 `id`, `task_id`（外键级联）, `algorithm_id`, `enabled`（算法子开关）, `sample_fps`, `config_json`, `region_config_json`, `created_at`, `updated_at`，强约束 `UNIQUE(task_id, algorithm_id)`。
+   - 子表 `task_algorithms`：配置明细，拥有 `id`, `task_id`（外键级联）, `algorithm_id`, `enabled`（算法子开关）, `sample_fps`, `config_json`, `region_config_json`, `schedule_json`, `clip_config_json`, `created_at`, `updated_at`，强约束 `UNIQUE(task_id, algorithm_id)`。
 2. **GORM 零值防回弹**：`Task.Enabled` 与 `TaskAlgorithm.Enabled` 严禁标注 `gorm:"default:true"`，确保显式保存 `enabled=false` 时不会被 GORM 零值机制静默忽略。
 3. **算力预算池**：
    - 全平台总算力预算池基准为 **1,000 点**（`MaxComputePoints = 1000`）；
@@ -109,7 +109,7 @@ type TaskChangeListener interface {
 
 - 本包对外的全部机器码：`TASK_NOT_FOUND`、`TASK_ALREADY_EXISTS`、`TASK_CREATE_FAILED`、`TASK_UPDATE_FAILED`、
   `TASK_DELETE_FAILED`、`TASK_SAVE_FAILED`、`DUPLICATE_ALGORITHM`、`TASK_ALGORITHM_REQUIRED`、`INVALID_TASK_CONFIG`、
-  `INVALID_REGION_CONFIG`、`INVALID_CROP_CONFIG`、`INVALID_SCHEDULE_CONFIG`、`COMPUTE_BUDGET_EXCEEDED`、`ALGORITHM_NOT_FOUND`、`INVALID_REQUEST`，以及复用的
+  `INVALID_REGION_CONFIG`、`INVALID_CROP_CONFIG`、`INVALID_SCHEDULE_CONFIG`、`INVALID_CLIP_CONFIG`、`COMPUTE_BUDGET_EXCEEDED`、`ALGORITHM_NOT_FOUND`、`INVALID_REQUEST`，以及复用的
   `VALIDATION_FAILED`、`INTERNAL_ERROR`。
 - 每个码都必须在 `internal/task/locale.go`（或 `httputil` 内置目录）有 en / zh-Hans / zh-Hant 三语文案；
   漏注册会让 `WriteError` 静默回退到通用 `REQUEST_FAILED` 文案。

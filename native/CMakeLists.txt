@@ -138,6 +138,7 @@ add_library(ZhulongEngine STATIC
     src/pipeline/subscription.cpp
     src/pipeline/frame_publisher.cpp
     src/pipeline/motion_detector.cpp
+    src/pipeline/clip_recorder.cpp
     src/nodes/capture/rtsp_input.cpp
     src/nodes/decode/decoder_factory.cpp
     src/nodes/decode/ffmpeg_decoder.cpp
@@ -147,6 +148,7 @@ add_library(ZhulongEngine STATIC
     src/nodes/snapshot/jpeg_encoder.cpp
     src/nodes/snapshot/jpeg_encoder_backend.cpp
     src/nodes/snapshot/mpp_jpeg_encoder.cpp
+    src/nodes/record/fmp4_writer.cpp
 )
 target_compile_features(ZhulongEngine PUBLIC cxx_std_17)
 target_include_directories(ZhulongEngine
@@ -787,6 +789,13 @@ if(BUILD_TESTING)
     target_include_directories(ZhulongSnapshotTests PRIVATE src)
     target_link_libraries(ZhulongSnapshotTests PRIVATE ZhulongEngine)
     add_test(NAME ZhulongSnapshot COMMAND ZhulongSnapshotTests)
+
+    # 事件录像片段：环形缓冲 / 片段状态机 / 写队列溢出截断 / H.264+HEVC fMP4 写出读回
+    add_executable(ZhulongClipRecorderTests tests/clip_recorder_test.cpp)
+    target_include_directories(ZhulongClipRecorderTests PRIVATE src ${FFMPEG_ROOT}/include)
+    target_link_libraries(ZhulongClipRecorderTests PRIVATE ZhulongEngine Threads::Threads)
+    add_test(NAME ZhulongClipRecorder COMMAND ZhulongClipRecorderTests)
+    set_tests_properties(ZhulongClipRecorder PROPERTIES TIMEOUT 60)
 
     # JPEG 编码后端选择与硬件（VEPU）编码自检。
     # ⚠️ 默认强制 software 后端：本机（x86）没有 /dev/mpp_service，若允许 auto

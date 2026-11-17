@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { recordsApi } from '../api/records-api'
 import { type ClipInfo } from '../data/schema'
 import { ALARMS_QUERY_KEY } from './use-alarms'
@@ -26,6 +26,7 @@ export function useRecordClipRefresh(
   kind: ClipRecordKind,
   recordId: string
 ): RecordClipRefresh {
+  const queryClient = useQueryClient()
   const query = useQuery({
     queryKey:
       kind === 'alarm'
@@ -45,7 +46,14 @@ export function useRecordClipRefresh(
   return {
     clip: query.data,
     refresh: () => {
-      void query.refetch()
+      void query.refetch().then((res) => {
+        if (res.status === 'success' && res.data?.status !== 'recording') {
+          void queryClient.invalidateQueries({
+            queryKey:
+              kind === 'alarm' ? ALARMS_QUERY_KEY : RECOGNITIONS_QUERY_KEY,
+          })
+        }
+      })
     },
     isRefreshing: query.isFetching,
     isError: query.isError,

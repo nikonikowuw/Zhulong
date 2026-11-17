@@ -75,6 +75,7 @@ enum {
 #define ZHULONG_FACE_ID_MAX_LEN      64 /**< 底库单张人脸照片唯一标识符最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_FACE_LANDMARK_COUNT  5  /**< 人脸关键点标准数量（5 点：左眼、右眼、鼻尖、左嘴角、右嘴角） */
 #define ZHULONG_FACE_FEATURE_MAX_DIM 512 /**< 单张人脸特征向量最大维度（FaceLiVTv2-L / ArcFace 均为 512） */
+#define ZHULONG_PERSON_ATTRIBUTE_NAME_MAX_LEN 32 /**< 人体属性标签最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_PLATE_NUMBER_MAX_LEN 32 /**< 车牌号码最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_PLATE_COLOR_MAX_LEN  16 /**< 车牌颜色最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_VEHICLE_TYPE_MAX_LEN 32 /**< 车型描述最大字节长度（含末尾 '\\0'） */
@@ -177,7 +178,24 @@ typedef struct zhulong_face_item {
 } zhulong_face_item;
 
 /**
- * @brief 结构化人体项 (1 个人体挂载 0~N 张人脸)
+ * @brief 人体属性子项 (1 个人体挂载 0~N 个属性标签)
+ *
+ * 语义约定：
+ *   - name 为 UTF-8 属性标签（以 '\0' 结尾），例如 "Hat"、"LongSleeve"、"Female"；
+ *   - score 为该属性的独立概率 (0.0 ~ 1.0)，来自多标签模型（每个标签独立 sigmoid，
+ *     非互斥 softmax 分布，因此同组标签可同时出现）；
+ *   - reserved_ 必须为 0，补齐 8 字节对齐并保留未来扩展；
+ *   - 同一人体项内标签唯一，数组按 score 降序排列；
+ *   - 结构体总尺寸固定为 40 字节，满足 8 字节自然对齐。
+ */
+typedef struct zhulong_person_attribute {
+    char     name[ZHULONG_PERSON_ATTRIBUTE_NAME_MAX_LEN]; /* 属性标签 (UTF-8, 以 '\0' 结尾) (0..32) */
+    float    score;                                       /* 属性概率 (0.0 ~ 1.0) (32..36) */
+    uint32_t reserved_;                                   /* 必须为 0 (36..40) */
+} zhulong_person_attribute;
+
+/**
+ * @brief 结构化人体项 (1 个人体挂载 0~N 张人脸与 0~N 个属性标签)
  *
  * 纯人脸场景退化语义约定（本结构没有「无人体」取值，退化项用可识别的别名表达）：
  *   - 纯人脸检测场景下，每个检出的人脸映射为一个 zhulong_person_item；
@@ -187,14 +205,23 @@ typedef struct zhulong_face_item {
  *     ⚠️ 它不是人体检出置信度，**不要**填 1.0——那会让真实体与退化项无法区分）；
  *   - face_count 填 1，faces 指向对应的人脸项。
  * 宿主识别退化项：track_id == 0 且 body_box == faces[0].box（插件必须原样别名，不得外扩）。
- * 结构体总尺寸为 40 字节，满足 8 字节整除（无填充空位，因此没有预留字段可用）。
+ *
+ * 属性扩展段（v1.4 尾随追加，旧实现按 40 字节前缀读取仍然成立）：
+ *   - attribute_count 为该人体挂载的属性数量；模型未启用、目标未采样或没有标签过阈值时填 0；
+ *   - attribute_count == 0 时 attributes 必须为 NULL，禁止解引用；
+ *   - attributes 指向同一 Arena 内存块内的属性数组（只读），禁止单独 free；
+ *   - 纯人脸退化项不产出属性（attribute_count = 0）。
+ * 结构体总尺寸为 56 字节，满足 8 字节整除（无隐式填充空位）。
  */
 typedef struct zhulong_person_item {
-    int64_t  track_id;                               /* 跟踪 ID (纯人脸场景填 0) */
-    float    body_box[4];                            /* [x1, y1, x2, y2] 严格归一化 (退化项逐位同 face_box) */
-    float    body_score;                             /* 人体检出置信度 (纯人脸退化项填该人脸质量分) */
-    uint32_t face_count;                             /* faces 数组元素数 */
-    const zhulong_face_item* faces;                  /* 指向人脸数组 (只读，指向同一 Arena) */
+    int64_t  track_id;                               /* 跟踪 ID (纯人脸场景填 0) (0..8) */
+    float    body_box[4];                            /* [x1, y1, x2, y2] 严格归一化 (退化项逐位同 face_box) (8..24) */
+    float    body_score;                             /* 人体检出置信度 (纯人脸退化项填该人脸质量分) (24..28) */
+    uint32_t face_count;                             /* faces 数组元素数 (28..32) */
+    const zhulong_face_item* faces;                  /* 指向人脸数组 (只读，指向同一 Arena) (32..40) */
+    uint32_t attribute_count;                        /* attributes 数组元素数 (40..44) */
+    uint32_t reserved_;                              /* 必须为 0，补偿指针前对齐 (44..48) */
+    const zhulong_person_attribute* attributes;      /* 指向属性数组 (只读，指向同一 Arena；无属性时为 NULL) (48..56) */
 } zhulong_person_item;
 
 /**
@@ -251,6 +278,7 @@ typedef struct zhulong_face_structure_item {
  * 内存与遍历契约：
  *   - 本结构体位于单块 Arena 内存首部，总尺寸为 32 字节，满足 8 字节自然对齐；
  *   - persons 指向真人体数组；person_count == 0 时恒为 NULL（真人体项中 face_count 恒填 0，faces 恒为 NULL）；
+ *   - 真人体项的 attribute_count/attributes 指向同一 Arena 内的属性池；无属性时 attribute_count = 0、attributes = NULL；
  *   - faces 指向独立人脸数组；face_count == 0 时恒为 NULL；
  *   - 当且仅当 person_count == 0 && face_count == 0 时，zhulong_inference_result.count = 0 且 data = NULL；
  *   - 只要有人或脸，zhulong_inference_result.count 严格等于 person_count + face_count，

@@ -142,11 +142,71 @@ static void test_serializer_budget_protection()
     }
 }
 
+static void test_person_attributes_serialization()
+{
+    zhulong_person_attribute attrs[2]{};
+    std::strncpy(attrs[0].name, "Female", sizeof(attrs[0].name) - 1);
+    attrs[0].score = 0.93f;
+    std::strncpy(attrs[1].name, "LongSleeve", sizeof(attrs[1].name) - 1);
+    attrs[1].score = 0.87f;
+
+    zhulong_person_item persons[2]{};
+    persons[0].track_id = 0;
+    persons[0].body_box[0] = 0.1f;
+    persons[0].body_box[1] = 0.1f;
+    persons[0].body_box[2] = 0.5f;
+    persons[0].body_box[3] = 0.9f;
+    persons[0].body_score = 0.9f;
+    persons[0].attribute_count = 2;
+    persons[0].attributes = attrs;
+
+    persons[1].body_box[0] = 0.6f;
+    persons[1].body_box[1] = 0.1f;
+    persons[1].body_box[2] = 0.9f;
+    persons[1].body_box[3] = 0.9f;
+    persons[1].body_score = 0.8f;
+
+    zhulong_scene_structure scene{};
+    scene.person_count = 2;
+    scene.persons = persons;
+
+    zhulong_inference_result res{};
+    res.result_type = ZHULONG_RESULT_TYPE_SCENE_STRUCTURE;
+    res.count = 2;
+    res.data = &scene;
+
+    const std::string json = serialize_inference_result(1, 100, 200, 10, &res, "face_algo");
+    assert(json.find("\"attributes\":{\"Female\":0.93,\"LongSleeve\":0.87}") != std::string::npos);
+
+    // 没有属性的人不得输出空 attributes 对象（否则 Go 侧 map 会得到 {} 而不是缺失）
+    size_t attr_pos = json.find("\"attributes\":");
+    assert(attr_pos != std::string::npos);
+    assert(json.find("\"attributes\":", attr_pos + 1) == std::string::npos);
+
+    // count 非零但指针为空：视为无属性，不能崩、也不能输出半个对象
+    persons[0].attributes = nullptr;
+    const std::string null_json = serialize_inference_result(1, 100, 200, 10, &res, "face_algo");
+    assert(null_json.find("\"attributes\":") == std::string::npos);
+
+    // 非有限分数必须被跳过（NaN 进 JSON 会让宿主整条结果解析失败）
+    persons[0].attributes = attrs;
+    attrs[1].score = std::numeric_limits<float>::quiet_NaN();
+    const std::string nan_json = serialize_inference_result(1, 100, 200, 10, &res, "face_algo");
+    assert(nan_json.find("\"LongSleeve\"") == std::string::npos);
+    assert(nan_json.find("\"Female\":0.93") != std::string::npos);
+
+    // 全部分数非法时不能输出空对象：{} 会让下游误判成「跑过模型但没有达标项」
+    attrs[0].score = std::numeric_limits<float>::quiet_NaN();
+    const std::string all_nan_json = serialize_inference_result(1, 100, 200, 10, &res, "face_algo");
+    assert(all_nan_json.find("\"attributes\":") == std::string::npos);
+}
+
 int main()
 {
     test_base64_encode_basic();
     test_encode_features_b64();
     test_serializer_budget_protection();
+    test_person_attributes_serialization();
     std::cout << "All result_serializer tests passed!\n";
     return 0;
 }

@@ -17,7 +17,10 @@ import {
   useRecordClipRefresh,
   type ClipRecordKind,
 } from '../../hooks/use-record-clip'
-import { type ClipCodecProbe, probeClipCodecSupport } from '../../lib/clip-codec'
+import {
+  type ClipCodecProbe,
+  probeClipCodecSupport,
+} from '../../lib/clip-codec'
 import { getMediaUrl } from '../common/media-utils'
 
 export interface RecordClipPanelProps {
@@ -55,8 +58,15 @@ export function RecordClipPanel({
 }: RecordClipPanelProps) {
   const { t } = useTranslation('records')
   const refreshed = useRecordClipRefresh(kind, recordId)
-  // 刷新后后端可能返回 null（片段已被清理）：此时不再展示旧快照。
-  const clip = refreshed.clip === undefined ? snapshotClip : refreshed.clip
+  // 刷新后后端可能返回 null（片段已被清理）：此时不再展示旧快照；
+  // 若列表快照已推进到终态而手动刷新快照仍停留在 recording，以更新的列表快照为准。
+  const clip =
+    refreshed.clip === undefined
+      ? snapshotClip
+      : refreshed.clip?.status === 'recording' &&
+          snapshotClip.status !== 'recording'
+        ? snapshotClip
+        : refreshed.clip
 
   return (
     <div
@@ -88,7 +98,10 @@ export function RecordClipPanel({
             disabled={refreshed.isRefreshing}
           >
             <RefreshCw
-              className={cn('size-3.5', refreshed.isRefreshing && 'animate-spin')}
+              className={cn(
+                'size-3.5',
+                refreshed.isRefreshing && 'animate-spin'
+              )}
             />
             {t('clip.refresh')}
           </Button>
@@ -104,16 +117,18 @@ export function RecordClipPanel({
           {t('clip.failed')}
         </p>
       ) : (
-        // 片段内容变化（刷新后换了文件 / 状态）时重建播放器，清掉上一次的解码错误。
+        // 片段内容或事件偏移变化（刷新后换了文件/状态，或同片段切换关联事件）时重建播放器。
         <ClipPlayer
-          key={`${clip.id}:${clip.status}:${clip.mediaPath}`}
+          key={`${clip.id}:${clip.status}:${clip.mediaPath}:${clip.offsetMs}`}
           clip={clip}
           probe={probe}
         />
       )}
 
       {refreshed.isError && (
-        <p className='text-[11px] text-destructive'>{t('clip.refreshFailed')}</p>
+        <p className='text-[11px] text-destructive'>
+          {t('clip.refreshFailed')}
+        </p>
       )}
     </div>
   )
@@ -146,7 +161,10 @@ function ClipStatusBadges({ clip }: { clip: ClipInfo }) {
           className={cn('gap-1.5 text-[11px]', statusLevelClass('destructive'))}
         >
           <span
-            className={cn('size-1.5 rounded-full', statusDotClass('destructive'))}
+            className={cn(
+              'size-1.5 rounded-full',
+              statusDotClass('destructive')
+            )}
           />
           {t('clip.status.failed')}
         </Badge>
@@ -154,9 +172,12 @@ function ClipStatusBadges({ clip }: { clip: ClipInfo }) {
       {incomplete && (
         <Badge
           variant='outline'
-          className={cn('text-[11px]', statusLevelClass('warning'))}
+          className={cn('gap-1.5 text-[11px]', statusLevelClass('warning'))}
           title={t('clip.partialHint')}
         >
+          <span
+            className={cn('size-1.5 rounded-full', statusDotClass('warning'))}
+          />
           {t('clip.status.partial')}
         </Badge>
       )}
@@ -208,7 +229,7 @@ function ClipPlayer({
           onLoadedMetadata={handleLoadedMetadata}
           onError={() => setPlaybackFailed(true)}
         />
-      ) : (
+      ) : !supported ? (
         <p
           className={cn(
             'flex items-center gap-1.5 rounded-md border px-3 py-2.5 text-xs',
@@ -217,6 +238,16 @@ function ClipPlayer({
         >
           <Video className='size-3.5 shrink-0' />
           {t('clip.unsupportedCodec')}
+        </p>
+      ) : (
+        <p
+          className={cn(
+            'flex items-center gap-1.5 rounded-md border px-3 py-2.5 text-xs',
+            statusLevelClass('destructive')
+          )}
+        >
+          <AlertTriangle className='size-3.5 shrink-0' />
+          {t('clip.playbackFailed')}
         </p>
       )}
 

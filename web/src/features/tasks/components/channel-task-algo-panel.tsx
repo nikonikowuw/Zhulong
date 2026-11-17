@@ -8,6 +8,10 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { type Algorithm } from '@/features/algorithms/contract'
+import {
+  supportsClipRecording,
+  supportsRecognitionFilter,
+} from '../data/clip-config'
 import { MAX_RECTS_PER_CATEGORY } from '../data/region-config'
 import { isScheduleAlwaysActive, parseSchedule } from '../data/schedule-config'
 import {
@@ -18,6 +22,7 @@ import {
 } from '../hooks/use-channel-task-drafts'
 import { type RegionEditorController } from '../hooks/use-region-editor'
 import { AlgoConfigDynamicForm } from './algo-config-dynamic-form'
+import { ChannelTaskClipSection } from './channel-task-clip-section'
 import { FpsStepper } from './fps-stepper'
 import { RegionRectList } from './region-rect-list'
 import { ScheduleGrid } from './schedule-grid'
@@ -32,6 +37,7 @@ export interface ChannelTaskAlgoPanelProps {
   onUpdateFps: (algoId: string, sampleFps: number) => void
   onUpdateConfigJson: (algoId: string, configJson: string) => void
   onUpdateScheduleJson?: (algoId: string, scheduleJson: string) => void
+  onUpdateClipConfigJson?: (algoId: string, clipConfigJson: string) => void
   regionEditor: RegionEditorController
   canEditRegion: boolean
 }
@@ -46,6 +52,7 @@ export function ChannelTaskAlgoPanel({
   onUpdateFps,
   onUpdateConfigJson,
   onUpdateScheduleJson,
+  onUpdateClipConfigJson,
   regionEditor,
   canEditRegion,
 }: ChannelTaskAlgoPanelProps): React.JSX.Element {
@@ -297,6 +304,22 @@ export function ChannelTaskAlgoPanel({
                   onBeforeChange={regionEditor.snapshot}
                 />
               </div>
+
+              {/* 事件录像 */}
+              {onUpdateClipConfigJson &&
+                supportsClipRecording(activeAlgo.taskType) && (
+                  <ChannelTaskClipSection
+                    key={activeAlgo.id}
+                    algoId={activeAlgo.id}
+                    clipConfigJson={activeDraft.clipConfigJson}
+                    showRecognitionFilter={supportsRecognitionFilter(
+                      activeAlgo.taskType
+                    )}
+                    onChange={(nextJson) =>
+                      onUpdateClipConfigJson(activeAlgo.id, nextJson)
+                    }
+                  />
+                )}
             </TabsContent>
 
             <TabsContent

@@ -16,6 +16,7 @@
 #include "common/log.hpp"
 #include "pipeline/engine.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -703,6 +704,100 @@ Zhulong_status_t Zhulong_engine_get_decode_stats(Zhulong_engine_h engine, Zhulon
         require(engine != nullptr);
         require(out_stats != nullptr);
         engine->implementation.get_decode_stats(*out_stats);
+    });
+}
+
+// ============================================================================
+//                               事件录像片段（v7）
+// ============================================================================
+
+// 跨语言布局门禁：Go 直接按 cgo 映射这些结构体，尺寸漂移就是读错字段而不是编译错误。
+static_assert(sizeof(Zhulong_recorder_config) == 40, "Zhulong_recorder_config size drift");
+static_assert(sizeof(Zhulong_clip_trigger_result) == 32, "Zhulong_clip_trigger_result size drift");
+static_assert(sizeof(Zhulong_clip_event) == 64, "Zhulong_clip_event size drift");
+static_assert(offsetof(Zhulong_clip_event, duration_ms) == 16, "Zhulong_clip_event layout drift");
+
+namespace {
+
+/** @brief 片段路径上限（与 PATH_MAX 同量级；超长路径一律拒绝而不是截断） */
+constexpr size_t max_clip_path_bytes = 4096;
+
+bool all_zero(const uint32_t *values, size_t count) noexcept {
+    for (size_t i = 0; i < count; ++i) {
+        if (values[i] != 0) return false;
+    }
+    return true;
+}
+
+} // namespace
+
+extern "C" Zhulong_status_t Zhulong_stream_recorder_configure(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    const Zhulong_recorder_config *cfg) {
+    return boundary([&] {
+        require(engine && stream && cfg);
+        require(cfg->pre_ms >= 0);
+        require(all_zero(cfg->reserved, sizeof(cfg->reserved) / sizeof(cfg->reserved[0])));
+        zhulong::RecorderSettings settings{};
+        settings.pre_ms = cfg->pre_ms;
+        settings.byte_cap = cfg->byte_cap;
+        settings.queue_byte_cap = cfg->queue_byte_cap;
+        engine->implementation.configure_recorder(stream, cfg->pre_ms > 0, settings);
+    });
+}
+
+extern "C" Zhulong_status_t Zhulong_stream_clip_trigger(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    const Zhulong_clip_trigger_request *req, Zhulong_clip_trigger_result *out) {
+    if (out) *out = {};
+    return boundary([&] {
+        require(engine && stream && req && out);
+        require(req->track_mask == 0 || req->track_mask == ZHULONG_TRACK_MASK_VIDEO);
+        require(all_zero(req->reserved, sizeof(req->reserved) / sizeof(req->reserved[0])));
+        require(req->path != nullptr);
+        // 立即拷贝路径：调用返回后调用方（Go 的 C.CString）就会释放它
+        const size_t path_len = ::strnlen(req->path, max_clip_path_bytes + 1);
+        require(path_len > 1 && path_len <= max_clip_path_bytes && req->path[0] == '/');
+
+        zhulong::ClipTriggerParams params{};
+        params.event_pts_us = req->event_pts_us;
+        params.post_ms = req->post_ms;
+        params.max_ms = req->max_ms;
+        params.path.assign(req->path, path_len);
+
+        const zhulong::ClipTriggerOutcome outcome =
+            engine->implementation.trigger_clip(stream, std::move(params));
+        out->clip_seq = outcome.seq;
+        out->created = outcome.created ? 1 : 0;
+        out->codec = outcome.codec;
+        out->offset_ms = outcome.offset_ms;
+        out->start_pts_us = outcome.start_pts_us;
+    });
+}
+
+extern "C" Zhulong_status_t Zhulong_engine_clip_poll(Zhulong_engine_h engine, Zhulong_clip_event *buf,
+    int32_t capacity, int32_t *out_count) {
+    if (out_count) *out_count = 0;
+    return boundary([&] {
+        require(engine && out_count);
+        require(capacity >= 0);
+        require(buf != nullptr || capacity == 0);
+        if (capacity == 0) return;
+        // 先取到局部批次再写调用方缓冲：保证写出的每一项 reserved 都清零。
+        // 批次不超过完成队列自身容量，调用方给再大的 capacity 也不会放大分配。
+        const size_t batch_size = std::min(static_cast<size_t>(capacity), zhulong::default_clip_event_capacity);
+        std::vector<zhulong::ClipEvent> batch(batch_size);
+        const size_t count = engine->implementation.poll_clip_events(batch.data(), batch.size());
+        for (size_t i = 0; i < count; ++i) {
+            Zhulong_clip_event &slot = buf[i];
+            std::memset(&slot, 0, sizeof(slot));
+            slot.clip_seq = batch[i].seq;
+            slot.status = batch[i].status;
+            slot.codec = batch[i].codec;
+            slot.duration_ms = batch[i].duration_ms;
+            slot.size_bytes = batch[i].size_bytes;
+            slot.first_pts_us = batch[i].first_pts_us;
+            slot.last_pts_us = batch[i].last_pts_us;
+        }
+        *out_count = static_cast<int32_t>(count);
     });
 }
 

@@ -70,7 +70,11 @@ export function projectLandmarksToCrop(
   box: BoundingBox
 ): LandmarkPoint[] {
   if (!landmarks || landmarks.length === 0) return []
-  const [x1, y1, x2, y2] = box
+  const [rawX1, rawY1, rawX2, rawY2] = box
+  const x1 = Math.max(0, Math.min(1, rawX1))
+  const y1 = Math.max(0, Math.min(1, rawY1))
+  const x2 = Math.max(0, Math.min(1, rawX2))
+  const y2 = Math.max(0, Math.min(1, rawY2))
   const bw = x2 - x1
   const bh = y2 - y1
   if (!Number.isFinite(bw) || !Number.isFinite(bh) || bw <= 0 || bh <= 0) {

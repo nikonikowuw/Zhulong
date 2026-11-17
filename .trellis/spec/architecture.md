@@ -52,7 +52,7 @@
 | 算法与底库 | Runner 支持启动时全量同步及运行期增量同步；推理后端由构建 profile 选择。 | [插件契约](./native/algo-plugin-contract.md)、[硬件后端](./native/hardware-backends.md) |
 | DMA-BUF | 解码帧可经 FrameBroker 传递 DMA-BUF FD；支持路径依赖驱动、格式、设备权限与后端组合。CPU/共享内存路径仍可能复制，host 构建或单元测试不证明目标板上的硬件路径可用。 | [硬件后端](./native/hardware-backends.md)、[插件与 IPC](./native/algo-plugin-contract.md) |
 | 感知记录与抓拍 | `StreamHub` 在推理结果 fan-out 前应用区域过滤；record 域负责识别/告警/目标抓拍记录和异步证据图。它不等同于连续视频录像。 | [感知记录与抓拍](./backend/record-guidelines.md)、[摄像机规范](./backend/camera-guidelines.md) |
-| 连续录像 | 当前仓库有 recordings 的存储、保留与读取边界，但未交付持续写入视频文件的 recorder 数据面。 | [Storage](./backend/storage-guidelines.md)、[Media file](./backend/mediafile-guidelines.md) |
+| 录像 | **事件录像片段**已交付（告警/识别事件触发，Native GOP 环形缓冲 + 写线程 fMP4，见 `internal/recording`）；**连续（7×24）录像**尚未实现。 | [Storage](./backend/storage-guidelines.md)、[Media file](./backend/mediafile-guidelines.md) |
 
 平台兼容性、量化类型、驱动版本与实测数据必须引用具体 profile、SDK/BSP 和验证条件。主机测试通过不代表目标板硬件路径已验证。
 

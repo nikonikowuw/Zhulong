@@ -60,6 +60,7 @@ struct RetiredResources {
     std::shared_ptr<ipc::FrameBroker> broker;      /**< 待停止的 FrameBroker */
     std::shared_ptr<FramePublisher> publisher;     /**< 待停止的发布线程（持有 broker 裸指针） */
     std::shared_ptr<DecodeSession> session;        /**< 待汇合的解码会话 */
+    std::shared_ptr<Stream> recorder_to_stop;      /**< 已无 AI 消费者、需在锁外停机的事件录像缓冲 */
     std::shared_ptr<Stream> stream_to_stop;        /**< 已从池中移除、需立即停止并汇合的流 */
     /** 会话汇合前 Stream 不得析构：DecodeSession 的熔断回调捕获的是 Stream 裸 this */
     std::shared_ptr<Stream> keepalive;
@@ -377,6 +378,32 @@ struct Engine {
      * @throws Failure Zhulong_ERR_NOT_RUNNING / Zhulong_ERR_NOT_FOUND
      */
     HardwareFrame::ConstPtr find_frame(Zhulong_stream_id id, int64_t pts);
+
+    // =========================================================================
+    // 事件录像片段（v7）
+    // =========================================================================
+
+    /**
+     * engine 级片段完成事件队列（有界、丢最旧）与片段序号分配器。
+     * 自带锁，与 control / registry 无关；shared_ptr 让 recorder 写线程不依赖 Engine 生命周期。
+     */
+    const std::shared_ptr<ClipEventQueue> clip_events{std::make_shared<ClipEventQueue>()};
+
+    /**
+     * @brief 配置 / 关闭指定流的 recorder（非 acquire）。
+     * control 内只查流并拷贝引用，配置（可能 join 写线程）在锁外。
+     * @throws Failure Zhulong_ERR_NOT_RUNNING / Zhulong_ERR_NOT_FOUND / Zhulong_ERR_INVALID_ARGUMENT
+     */
+    void configure_recorder(Zhulong_stream_id id, bool enable, const RecorderSettings &settings);
+
+    /**
+     * @brief 新建或延长指定流上的片段（非 acquire）。
+     * @throws Failure Zhulong_ERR_NOT_RUNNING / Zhulong_ERR_NOT_FOUND / Zhulong_ERR_NOT_READY
+     */
+    ClipTriggerOutcome trigger_clip(Zhulong_stream_id id, ClipTriggerParams params);
+
+    /** @brief 取出最多 capacity 条完成事件（引擎停止后仍可取） */
+    size_t poll_clip_events(ClipEvent *out, size_t capacity) noexcept;
 };
 
 } // namespace zhulong

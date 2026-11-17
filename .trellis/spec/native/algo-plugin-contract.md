@@ -25,6 +25,8 @@
 1. **检测**：`ZHULONG_RESULT_TYPE_DETECTION` (1) + `zhulong_bbox[]`（`box[4]` 严格归一化 `[x1, y1, x2, y2] ∈ [0.0, 1.0]`，总尺寸 88 字节，8 字节自然对齐）；
 2. **分类**：`ZHULONG_RESULT_TYPE_CLASSIFICATION` (2) + `zhulong_classification_item[]`；
 3. **结构化人体/人脸**：`ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` (3) + `zhulong_person_item[]`（支持 1:N 嵌套人脸 `zhulong_face_item` 与 Top-K 候选人 `zhulong_face_candidate`）。
+   - **人体属性扩展 (SDK 1.4.0)**：`zhulong_person_item` 由 40 字节尾随扩展为 56 字节，新增 `attribute_count`、保留位 `reserved_`（必须为 0）与 `const zhulong_person_attribute* attributes`；属性项 40 字节（`char name[32]` + `float score` + 保留位），同一人体内标签唯一且按 `score` 降序。无属性时 `attribute_count = 0`、`attributes = NULL`。旧实现按 40 字节前缀读取仍然成立；宿主只消费 JSON，`persons[]` 新增可选 `attributes` 对象，未知键被忽略。
+   - **Append-only 纪律**：该扩展只允许尾随追加，禁止重排既有字段或改变语义；尺寸断言在 `algo.hpp` 与 `plugin_c_abi_test.c` 同一次构建内校验。
    - **方案 B 底库对账契约**：`zhulong_face_candidate` 包含 `char face_id[ZHULONG_FACE_ID_MAX_LEN]`（200 字节，8 字节整除自然对齐），精确记录候选人对应的单张登记照唯一标识；`zhulong_face_item` 包含 `char matched_face_id[ZHULONG_FACE_ID_MAX_LEN]`（280 字节，8 字节整除自然对齐），记录 Top-1 胜出底照 ID，支持宿主直接进行 1:1 双图（抓拍人脸 vs 底库登记照）核验。
 4. **结构化机动车/车牌**：`ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE` (4) + `zhulong_vehicle_item[]`（支持 1:N 嵌套车牌 `zhulong_plate_item`，车辆结构体 88 字节，车牌结构体 72 字节，均满足 8 字节整除自然对齐；支持纯车牌退化语义：仅检测车牌时 `track_id=0`，`vehicle_box=plate_box`，`vehicle_score` 填**车牌检测**置信度（与 `plate.score` 的字符识别置信度语义不同，严禁互换），`plate_count=1`）。
 5. **场景结构化 (SCENE_STRUCTURE)**：`ZHULONG_RESULT_TYPE_SCENE_STRUCTURE` (5) + `zhulong_scene_structure`（32 字节，8 字节对齐，含 `persons[]`、`faces[]` 扁平双数组与 `const float* face_features` 特征池指针）。
@@ -52,7 +54,7 @@
      ⚠️ 退化项必须**可识别**：`track_id = 0` 且 `body_box` **逐位等于** `faces[0].box`（不得外扩），
      `body_score` 填**该人脸的质量分**——它描述的是「这个框里那张脸有多可信」，不是人体检出置信度。
      **禁止填 `1.0f`**：那会让真实体项与退化项无法区分，宿主的抓拍记录只能显示一个假的 100%。
-     `zhulong_person_item` 没有「无人体」取值也没有预留位（40 字节紧密排列），因此别名是唯一表达方式；
+     `zhulong_person_item` 没有「无人体」取值（v1.4 起为 56 字节，新增的属性扩展段不改变这一点），因此别名是唯一表达方式；
      要真正表达「有脸无人」需要 ABI v2 的平级对象模型（行业对标 NVIDIA DeepStream `NvDsObjectMeta.parent` 与 GA/T 1400.3 `SubRelatedID`：`persons[]` 与 `faces[]` 扁平双数组 + `person_index` 引用索引），不要在 v1 上塞布尔字段。
    - 人体/人脸会话缺失、预处理失败或输出形状不合法时返回空结果；不得由亮度、固定分数或外推坐标合成检测结果。
 

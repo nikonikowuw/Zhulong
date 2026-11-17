@@ -29,6 +29,7 @@ ALLOWED_DIFFERENCES = {
         "src/detection/detector.cpp": "前处理不同：ONNX 需 HWC→NCHW float32，RKNN 模型自带归一化",
         "src/quality/quality_assessor.cpp": "前处理不同：同上（质量评估输入）",
         "src/feature/extractor.cpp": "前处理不同：同上（特征提取输入）",
+        "src/attribute/person_attribute.cpp": "前处理不同：ONNX 需 HWC→NCHW float32 + mean/std，RKNN 模型自带归一化",
         "src/pipeline/face_recognition.cpp": "权重扩展名与开发期源码树前缀按 target 不同",
     },
 }

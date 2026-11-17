@@ -33,6 +33,7 @@ internal/
   task/                       # 视频分析任务管理域 (Camera 与 Algorithm 绑定、调度与区域配置缓存)
   asyncjob/                   # 持久化后台异步任务队列与重启孤儿恢复 (导出/批量处理等)
   record/                     # 感知记录与结构化报警持久化域 (含 SnapshotStore 抓拍落盘与保留清理)
+  recording/                  # 事件录像片段与 event_clips 生命周期（连续 7×24 录像尚未实现）
   alertpush/                  # 告警多目标推送域 (Webhook / MQTT、过滤、HMAC-SHA256 签名媒体 URL)
   spatial/                    # 2D 空间画布底图、相机点位标定与人员轨迹聚合域
   storage/                    # 边缘媒体存储与动态生命周期 (路径规范、statfs 水位感知、回差清理)
@@ -52,10 +53,6 @@ internal/
   logsafe/                    # 零业务依赖的敏感字段与 URL/凭据脱敏库
 native/                       # C++ 流水线源码、SDK 与 C ABI (独立于 Go 源码树)
 web/                          # React 前端工程根目录
-
-# 规划中（尚未创建）
-internal/
-  recording/                  # 连续视频录像与切片存储数据面
 ```
 
 > **提示**：新增带 `@Router` 注解的业务包后，须同步加入根目录 `Makefile` 的 `api-docs --dir` 显式白名单，否则 Swagger 文档会静默漏掉对应端点。

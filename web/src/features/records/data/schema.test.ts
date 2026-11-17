@@ -275,4 +275,67 @@ describe('Records Schemas', () => {
       expect(isAlarmRecord(capture)).toBe(false)
     })
   })
+
+  describe('clip projection', () => {
+    const baseAlarm = {
+      id: 'alarm-1',
+      cameraId: 'cam-1',
+      alarmType: 'intrusion',
+      capturedAt: '2026-11-17T00:00:00Z',
+      createdAt: '2026-11-17T00:00:00Z',
+    }
+
+    it('parses a full clip on alarms and recognitions', () => {
+      const clip = {
+        id: 'clip-1',
+        status: 'completed',
+        partial: false,
+        durationMs: 15000,
+        offsetMs: 5000,
+        mediaPath: 'recordings/clips/cam-1/clip-1.mp4',
+        codec: 'h264',
+      }
+      expect(alarmSchema.parse({ ...baseAlarm, clip }).clip).toEqual(clip)
+      expect(
+        recognitionSchema.parse({
+          id: 'rec-1',
+          cameraId: 'cam-1',
+          capturedAt: '2026-11-17T00:00:00Z',
+          createdAt: '2026-11-17T00:00:00Z',
+          clip: { ...clip, status: 'recording' },
+        }).clip?.status
+      ).toBe('recording')
+    })
+
+    it('accepts an absent or null clip', () => {
+      expect(alarmSchema.parse(baseAlarm).clip).toBeUndefined()
+      expect(alarmSchema.parse({ ...baseAlarm, clip: null }).clip).toBeNull()
+    })
+
+    it('fills optional clip fields with defaults', () => {
+      expect(
+        alarmSchema.parse({
+          ...baseAlarm,
+          clip: { id: 'clip-2', status: 'truncated' },
+        }).clip
+      ).toEqual({
+        id: 'clip-2',
+        status: 'truncated',
+        partial: false,
+        durationMs: 0,
+        offsetMs: 0,
+        mediaPath: '',
+        codec: '',
+      })
+    })
+
+    it('rejects an unknown clip status', () => {
+      expect(
+        alarmSchema.safeParse({
+          ...baseAlarm,
+          clip: { id: 'clip-3', status: 'exploded' },
+        }).success
+      ).toBe(false)
+    })
+  })
 })

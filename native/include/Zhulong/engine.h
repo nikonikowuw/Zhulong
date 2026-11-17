@@ -312,13 +312,13 @@ typedef void (*Zhulong_log_callback)(uintptr_t token, int32_t level, uint64_t st
 /* ========================================================================== */
 
 /**
- * @brief 当前 C ABI 版本号（v6 为 AI 流分析视图 / 任务级裁剪支持）
+ * @brief 当前 C ABI 版本号（v6 为 AI 流分析视图 / 任务级裁剪支持；v7 为事件录像片段）
  *
  * 演进约定：ABI 只允许在结构体**尾部追加**字段，绝不调整已有字段偏移或语义。
  * Go 侧在初始化后必须调用 Zhulong_engine_get_abi_version 校验，头文件与静态库不一致时
  * 直接拒绝启动，避免旧归档被语言层静默复用引发的内存越界。
  */
-#define ZHULONG_ABI_VERSION 6
+#define ZHULONG_ABI_VERSION 7
 
 /**
  * @brief 查询原生静态库编译时对应的 ABI 版本
@@ -573,6 +573,95 @@ Zhulong_status_t Zhulong_stream_set_view(Zhulong_engine_h engine, Zhulong_stream
  */
 Zhulong_status_t Zhulong_stream_get_view(Zhulong_engine_h engine, Zhulong_stream_id stream,
     Zhulong_view_state *out_effective);
+
+/* ========================================================================== */
+/*                         事件录像片段（v7）                                    */
+/* ========================================================================== */
+
+/**
+ * @brief 流级 recorder 配置（GOP 环形缓冲 + 写队列）
+ *
+ * recorder 直接挂在已 acquire 的流上（通常是 AI 流），不额外 acquire 消费者，因此不延长流的生命。
+ */
+typedef struct {
+    int64_t pre_ms;          /**< 0 = 关闭并释放缓冲（活跃片段以 completed 收尾）；>0 时设置前段保留时长 */
+    int64_t byte_cap;        /**< 环形缓冲字节上限，<=0 用默认 32 MiB */
+    int64_t queue_byte_cap;  /**< 写队列上限，<=0 用默认 16 MiB；写队列满 ⇒ 活跃片段截断（truncated） */
+    uint32_t reserved[4];    /**< 预留，必须为 0 */
+} Zhulong_recorder_config;
+
+/**
+ * @brief 配置（或关闭）指定流的事件录像 recorder。
+ *
+ * 非 acquire：流不存在返回 `Zhulong_ERR_NOT_FOUND`；引擎未运行返回 `Zhulong_ERR_NOT_RUNNING`；
+ * `pre_ms < 0` 或 reserved 非零返回 `Zhulong_ERR_INVALID_ARGUMENT`。
+ * 关闭（pre_ms == 0）会同步等待写线程收尾（有上限，约 3s）。
+ */
+Zhulong_status_t Zhulong_stream_recorder_configure(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    const Zhulong_recorder_config *cfg);
+
+/** @brief 片段触发请求 */
+typedef struct {
+    int64_t event_pts_us;    /**< 事件时刻（整形后 pts_us 时间轴）；<=0: 取缓冲中最新包 */
+    int64_t post_ms;         /**< 事件后保留时长（<0 视为 0） */
+    int64_t max_ms;          /**< 单片段上限，<=0 默认 120000 */
+    const char *path;        /**< 最终文件绝对路径，UTF-8；native 立即拷贝，调用返回后即可释放 */
+    uint32_t track_mask;     /**< 预留音频，v7 只接受 0 或 ZHULONG_TRACK_MASK_VIDEO */
+    uint32_t reserved[3];    /**< 预留，必须为 0 */
+} Zhulong_clip_trigger_request;
+
+/** @brief 片段触发结果 */
+typedef struct {
+    uint64_t clip_seq;       /**< engine 内单调递增 */
+    int32_t created;         /**< 1 = 新片段（使用了本次 path）；0 = 延长已有片段（本次 path 未使用） */
+    int32_t codec;           /**< Zhulong_CODEC_H264 / Zhulong_CODEC_H265 */
+    int64_t offset_ms;       /**< 事件在片段内的偏移（>= 0） */
+    int64_t start_pts_us;    /**< 片段首帧（关键帧）的 pts_us */
+} Zhulong_clip_trigger_result;
+
+/**
+ * @brief 触发（新建或延长）一个事件录像片段。
+ *
+ * 语义：
+ *  - 有活跃片段且 `event + post - clip_start <= max` → 延长，`created = 0`；
+ *  - 有活跃片段但超长 → 立即结束旧片段，再新建；
+ *  - 新建：起点为缓冲中最后一个起点 <= event - pre 的关键帧（缓冲不足取最老 GOP）；
+ *    文件先写 `path + ".part"`，结束后 rename 成 `path`；完成状态经 Zhulong_engine_clip_poll 取回。
+ *
+ * @return Zhulong_OK；
+ *         Zhulong_ERR_NOT_READY recorder 未配置或缓冲为空（流刚起）；
+ *         Zhulong_ERR_INVALID_ARGUMENT 空指针、路径非绝对/为空/过长、track_mask 非视频、reserved 非零；
+ *         Zhulong_ERR_NOT_FOUND 流不存在；Zhulong_ERR_NOT_RUNNING 引擎未运行
+ */
+Zhulong_status_t Zhulong_stream_clip_trigger(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    const Zhulong_clip_trigger_request *req, Zhulong_clip_trigger_result *out);
+
+/** @brief 片段完成状态 */
+enum {
+    ZHULONG_CLIP_COMPLETED = 1,   /**< 正常结束（含停机 flush：时长可能短于期望） */
+    ZHULONG_CLIP_TRUNCATED = 2,   /**< 写队列溢出 / 时间轴不连续导致提前结束；文件已落成 */
+    ZHULONG_CLIP_FAILED    = 3    /**< 写出失败；`.part` 已删除，不存在文件 */
+};
+
+/** @brief 片段完成事件 */
+typedef struct {
+    uint64_t clip_seq;
+    int32_t status;               /**< ZHULONG_CLIP_* */
+    int32_t codec;
+    int64_t duration_ms;
+    int64_t size_bytes;
+    int64_t first_pts_us, last_pts_us;
+    uint32_t reserved[4];
+} Zhulong_clip_event;
+
+/**
+ * @brief 取出片段完成事件（caller-buffer）：最多取出 capacity 条并出队；*out_count 为实际条数。
+ *
+ * 完成队列是 engine 级有界队列（溢出丢最旧）；引擎停止后仍可取出残留事件。
+ * `capacity == 0` 时 buf 可为 NULL（只返回 0 条）。
+ */
+Zhulong_status_t Zhulong_engine_clip_poll(Zhulong_engine_h engine, Zhulong_clip_event *buf,
+    int32_t capacity, int32_t *out_count);
 
 /**
  * @brief 音频流元数据视图（v5）

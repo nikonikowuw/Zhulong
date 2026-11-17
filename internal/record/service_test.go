@@ -96,6 +96,11 @@ func TestServiceProcessPersonStructureAndCooldown(t *testing.T) {
 	if r.PersonExternalID != "" {
 		t.Errorf("expected empty personExternalId for a person without one, got %q", r.PersonExternalID)
 	}
+	// 人体属性必须原样落进 records.attributes_json：算法包按官方英文标签输出，
+	// 宿主不重命名、不过滤，留给记录详情页与导出消费。
+	if r.Attributes["gender"] != "female" {
+		t.Errorf("expected person attributes on the recognition, got %+v", r.Attributes)
+	}
 
 	// Verify person capture
 	caps, totalCaps, err := svc.ListCaptures(ctx, record.CaptureFilter{CameraID: "cam_01"})
@@ -105,6 +110,9 @@ func TestServiceProcessPersonStructureAndCooldown(t *testing.T) {
 	// D3 契约：track_id 由宿主关联器生产并独占，载荷 1001 不进库，落库为宿主正数身份 ID
 	if caps[0].TrackID <= 0 || !caps[0].CapturedAt.Equal(captureTime) {
 		t.Errorf("unexpected capture: %+v", caps[0])
+	}
+	if caps[0].Attributes["gender"] != "female" {
+		t.Errorf("expected person attributes on the capture, got %+v", caps[0].Attributes)
 	}
 
 	// 2. High-FPS repeated calls within cooldown window: should be debounced and NOT insert new records

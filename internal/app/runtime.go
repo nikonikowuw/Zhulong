@@ -27,6 +27,15 @@ func regionConfigReloaderProvider(cache *task.RegionConfigCache) regionConfigRel
 	return cache
 }
 
+// clipPolicyReloader is the narrow view of the clip policy cache needed at startup.
+type clipPolicyReloader interface {
+	Reload(ctx context.Context) error
+}
+
+func clipPolicyReloaderProvider(cache *task.ClipPolicyCache) clipPolicyReloader {
+	return cache
+}
+
 type databaseLifecycle interface {
 	OpenAndMigrate(context.Context) error
 	Close() error
@@ -128,6 +137,15 @@ type snapshotLifecycle interface {
 	Stop()
 }
 
+// recordingLifecycle manages the event-clip service (startup repair, poll loop, cleanup).
+//
+// Starts before record so triggers work immediately; stops after camera (which flushes
+// native clips) and record/snapshot, before native.Close and storage.Stop.
+type recordingLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 type lifecycleRuntime struct {
 	database    databaseLifecycle
 	native      engineLifecycle
@@ -144,10 +162,12 @@ type lifecycleRuntime struct {
 	asyncJobs   asyncJobLifecycle
 	record      recordLifecycle
 	snapshot    snapshotLifecycle
+	recording   recordingLifecycle
 	spatial     spatialLifecycle
 	alertPush   alertPushLifecycle
 	apiToken    apiTokenLifecycle
 	configCache regionConfigReloader
+	clipPolicy  clipPolicyReloader
 	server      *http.Server
 	logger      *zap.Logger
 	config      Config
@@ -177,6 +197,7 @@ type lifecycleRuntime struct {
 	asyncJobsReady      bool
 	recordReady         bool
 	snapshotReady       bool
+	recordingReady      bool
 	spatialReady        bool
 	alertPushReady      bool
 	httpReady           bool
@@ -206,10 +227,12 @@ type runtimeParams struct {
 	AsyncJobs   asyncJobLifecycle    `optional:"true"`
 	Record      recordLifecycle      `optional:"true"`
 	Snapshot    snapshotLifecycle    `optional:"true"`
+	Recording   recordingLifecycle   `optional:"true"`
 	Spatial     spatialLifecycle     `optional:"true"`
 	AlertPush   alertPushLifecycle   `optional:"true"`
 	APIToken    apiTokenLifecycle    `optional:"true"`
 	ConfigCache regionConfigReloader `optional:"true"`
+	ClipPolicy  clipPolicyReloader   `optional:"true"`
 	Server      *http.Server
 	Logger      *zap.Logger
 	Config      Config
@@ -239,10 +262,12 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		asyncJobs:   p.AsyncJobs,
 		record:      p.Record,
 		snapshot:    p.Snapshot,
+		recording:   p.Recording,
 		spatial:     p.Spatial,
 		alertPush:   p.AlertPush,
 		apiToken:    p.APIToken,
 		configCache: p.ConfigCache,
+		clipPolicy:  p.ClipPolicy,
 		server:      p.Server,
 		logger:      p.Logger,
 		config:      p.Config,
@@ -281,6 +306,11 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	if r.configCache != nil {
 		if err := r.configCache.Reload(ctx); err != nil {
 			r.degradedStart("region_config_cache", err)
+		}
+	}
+	if r.clipPolicy != nil {
+		if err := r.clipPolicy.Reload(ctx); err != nil {
+			r.degradedStart("clip_policy_cache", err)
 		}
 	}
 
@@ -363,6 +393,13 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	// 抓拍 worker 必须先于 record 启动：
 	// record 在 Start 之后就可能开始接收 AI 结果并登记抓拍任务，
 	// worker 未就绪会让队列迅速积满并持续丢弃。
+	if r.recording != nil {
+		if err := r.recording.Start(ctx); err != nil {
+			r.degradedStart("recording", err)
+		}
+		r.recordingReady = true
+	}
+
 	if r.snapshot != nil {
 		r.snapshot.Start()
 		r.snapshotReady = true
@@ -514,6 +551,7 @@ func (r *lifecycleRuntime) stopSequence() []func(context.Context) error {
 		r.closeSpatial,
 		r.closeAlertPush,
 		r.closeRecordAndSnapshot,
+		r.closeRecording,
 		r.closeStorage,
 		r.closeSystemInfo,
 		r.closeSystemTime,
@@ -802,6 +840,19 @@ func (r *lifecycleRuntime) closeSnapshot() {
 	if r.snapshot != nil {
 		r.snapshot.Stop()
 	}
+}
+
+func (r *lifecycleRuntime) closeRecording(ctx context.Context) error {
+	if !r.recordingReady {
+		return nil
+	}
+	r.recordingReady = false
+	if r.recording != nil {
+		if err := r.recording.Stop(ctx); err != nil {
+			return fmt.Errorf("stop recording service: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *lifecycleRuntime) closeSystemInfo(ctx context.Context) error {

@@ -47,6 +47,22 @@ type RecognitionResponse struct {
 	Attributes       map[string]any             `json:"attributes"`
 	CapturedAt       time.Time                  `json:"capturedAt"`
 	CreatedAt        time.Time                  `json:"createdAt"`
+	// Clip 是关联的事件录像片段；null 表示没有片段。
+	Clip *ClipInfo `json:"clip"`
+}
+
+// ClipInfo is the event clip projection nested in alarm / recognition responses.
+//
+// OffsetMS 是**本事件**在片段内的偏移（多个事件可共享一个片段）；
+// MediaPath 是媒体根内的相对路径，可直接交给前端 getMediaUrl。
+type ClipInfo struct {
+	ID         string `json:"id"`
+	Status     string `json:"status"`
+	Partial    bool   `json:"partial"`
+	DurationMS int64  `json:"durationMs"`
+	OffsetMS   int64  `json:"offsetMs"`
+	MediaPath  string `json:"mediaPath"`
+	Codec      string `json:"codec"`
 }
 
 // derefString 把可空列转换成对外 API 的空串表示。
@@ -142,6 +158,8 @@ type AlarmResponse struct {
 	PTS              int64          `json:"pts"`
 	CapturedAt       time.Time      `json:"capturedAt"`
 	CreatedAt        time.Time      `json:"createdAt"`
+	// Clip 是关联的事件录像片段；null 表示没有片段。
+	Clip *ClipInfo `json:"clip"`
 }
 
 // ToResponse converts an Alarm GORM model to AlarmResponse.

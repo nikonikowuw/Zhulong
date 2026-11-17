@@ -86,7 +86,7 @@ export function buildAlarmColumns(
     {
       accessorKey: 'score',
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('table.score')} />
+        <DataTableColumnHeader column={column} title={t('table.alarmScore')} />
       ),
       enableSorting: false,
       cell: ({ row }) => {

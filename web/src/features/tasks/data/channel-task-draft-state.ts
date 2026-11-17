@@ -44,6 +44,7 @@ export type ChannelTaskDraftAction =
   | { type: 'update-fps'; algoId: string; sampleFps: number }
   | { type: 'update-config-json'; algoId: string; configJson: string }
   | { type: 'update-schedule-json'; algoId: string; scheduleJson: string }
+  | { type: 'update-clip-config-json'; algoId: string; clipConfigJson: string }
   | { type: 'set-channel-enabled'; enabled: boolean }
 
 /** 只在当前相机这一层做局部更新，其余相机的草稿原样保留。 */
@@ -165,6 +166,15 @@ export function channelTaskDraftReducer(
         [action.algoId]: {
           ...(draftsForCamera[action.algoId] ?? createDraftItem()),
           scheduleJson: action.scheduleJson,
+        },
+      }))
+
+    case 'update-clip-config-json':
+      return withCurrentCameraDrafts(state, (draftsForCamera) => ({
+        ...draftsForCamera,
+        [action.algoId]: {
+          ...(draftsForCamera[action.algoId] ?? createDraftItem()),
+          clipConfigJson: action.clipConfigJson,
         },
       }))
 

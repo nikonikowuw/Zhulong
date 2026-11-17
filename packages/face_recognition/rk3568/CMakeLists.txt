@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(ZhulongAlgoSDK 1.3 REQUIRED)
+find_package(ZhulongAlgoSDK 1.4 REQUIRED)
 find_package(Threads REQUIRED)
 
 # 产品代码（算法类本体）：可执行文件与 devtest 共用，避免两份实现。
@@ -20,6 +20,7 @@ add_library(face_recognition_core OBJECT
     src/quality/quality_assessor.cpp
     src/feature/extractor.cpp
     src/matching/matcher.cpp
+    src/attribute/person_attribute.cpp
     src/pipeline/face_recognition.cpp
 )
 target_compile_definitions(face_recognition_core PRIVATE ZHULONG_PLUGIN_BUILD)

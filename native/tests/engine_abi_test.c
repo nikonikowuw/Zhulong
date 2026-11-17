@@ -20,6 +20,13 @@
 _Static_assert(offsetof(Zhulong_packet_view, pkt_flags) == 88, "pkt_flags offset drift");
 _Static_assert(offsetof(Zhulong_packet_view, track_type) == 92, "track_type offset drift");
 _Static_assert(sizeof(Zhulong_packet_view) == 112, "Zhulong_packet_view size drift");
+/* ABI v7 事件录像片段结构体布局（Go 直接按 cgo 映射） */
+_Static_assert(sizeof(Zhulong_recorder_config) == 40, "Zhulong_recorder_config size drift");
+_Static_assert(sizeof(Zhulong_clip_trigger_request) == 48, "Zhulong_clip_trigger_request size drift");
+_Static_assert(offsetof(Zhulong_clip_trigger_request, path) == 24, "clip request path offset drift");
+_Static_assert(sizeof(Zhulong_clip_trigger_result) == 32, "Zhulong_clip_trigger_result size drift");
+_Static_assert(sizeof(Zhulong_clip_event) == 64, "Zhulong_clip_event size drift");
+_Static_assert(offsetof(Zhulong_clip_event, first_pts_us) == 32, "clip event first_pts_us offset drift");
 #endif
 
 static int callback_count;
@@ -155,6 +162,52 @@ int main(void) {
     if (Zhulong_stream_subscribe_track(engine, 1, 1, ZHULONG_TRACK_MASK_AUDIO, packet_callback, 0, &track_sub) !=
         Zhulong_ERR_NOT_RUNNING) return 50;
     if (Zhulong_stream_unsubscribe_ai_results(engine, 1, 1) != Zhulong_ERR_NOT_RUNNING) return 51;
+
+    /* 7e. v7 事件录像片段 ABI 边界：空参数 / 非法参数 / 未运行；out 参数先置零。 */
+    Zhulong_recorder_config recorder_cfg;
+    memset(&recorder_cfg, 0, sizeof(recorder_cfg));
+    recorder_cfg.pre_ms = 5000;
+    if (Zhulong_stream_recorder_configure(0, 1, &recorder_cfg) != Zhulong_ERR_INVALID_ARGUMENT) return 52;
+    if (Zhulong_stream_recorder_configure(engine, 0, &recorder_cfg) != Zhulong_ERR_INVALID_ARGUMENT) return 53;
+    if (Zhulong_stream_recorder_configure(engine, 1, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 54;
+    recorder_cfg.pre_ms = -1;
+    if (Zhulong_stream_recorder_configure(engine, 1, &recorder_cfg) != Zhulong_ERR_INVALID_ARGUMENT) return 55;
+    recorder_cfg.pre_ms = 5000;
+    recorder_cfg.reserved[0] = 1;
+    if (Zhulong_stream_recorder_configure(engine, 1, &recorder_cfg) != Zhulong_ERR_INVALID_ARGUMENT) return 56;
+    recorder_cfg.reserved[0] = 0;
+    if (Zhulong_stream_recorder_configure(engine, 1, &recorder_cfg) != Zhulong_ERR_NOT_RUNNING) return 57;
+
+    Zhulong_clip_trigger_request clip_req;
+    memset(&clip_req, 0, sizeof(clip_req));
+    clip_req.post_ms = 1000;
+    clip_req.path = "/tmp/zhulong-abi-test/evt-1.mp4";
+    Zhulong_clip_trigger_result clip_res;
+    memset(&clip_res, 0x5a, sizeof(clip_res));
+    if (Zhulong_stream_clip_trigger(0, 1, &clip_req, &clip_res) != Zhulong_ERR_INVALID_ARGUMENT) return 58;
+    if (clip_res.clip_seq != 0 || clip_res.created != 0 || clip_res.offset_ms != 0) return 59;
+    if (Zhulong_stream_clip_trigger(engine, 1, 0, &clip_res) != Zhulong_ERR_INVALID_ARGUMENT) return 60;
+    if (Zhulong_stream_clip_trigger(engine, 1, &clip_req, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 61;
+    clip_req.path = "relative/evt-1.mp4";
+    if (Zhulong_stream_clip_trigger(engine, 1, &clip_req, &clip_res) != Zhulong_ERR_INVALID_ARGUMENT) return 62;
+    clip_req.path = 0;
+    if (Zhulong_stream_clip_trigger(engine, 1, &clip_req, &clip_res) != Zhulong_ERR_INVALID_ARGUMENT) return 63;
+    clip_req.path = "/tmp/zhulong-abi-test/evt-1.mp4";
+    clip_req.track_mask = ZHULONG_TRACK_MASK_AUDIO;
+    if (Zhulong_stream_clip_trigger(engine, 1, &clip_req, &clip_res) != Zhulong_ERR_INVALID_ARGUMENT) return 64;
+    clip_req.track_mask = ZHULONG_TRACK_MASK_VIDEO;
+    if (Zhulong_stream_clip_trigger(engine, 1, &clip_req, &clip_res) != Zhulong_ERR_NOT_RUNNING) return 65;
+
+    Zhulong_clip_event clip_events[4];
+    int32_t clip_count = 99;
+    if (Zhulong_engine_clip_poll(0, clip_events, 4, &clip_count) != Zhulong_ERR_INVALID_ARGUMENT) return 66;
+    if (clip_count != 0) return 67;
+    if (Zhulong_engine_clip_poll(engine, clip_events, 4, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 68;
+    if (Zhulong_engine_clip_poll(engine, 0, 4, &clip_count) != Zhulong_ERR_INVALID_ARGUMENT) return 69;
+    if (Zhulong_engine_clip_poll(engine, clip_events, -1, &clip_count) != Zhulong_ERR_INVALID_ARGUMENT) return 70;
+    /* 完成队列不要求运行态：停机后仍可取出残留事件（这里为空） */
+    if (Zhulong_engine_clip_poll(engine, 0, 0, &clip_count) != Zhulong_OK || clip_count != 0) return 71;
+    if (Zhulong_engine_clip_poll(engine, clip_events, 4, &clip_count) != Zhulong_OK || clip_count != 0) return 72;
 
     /* 8. 销毁安全测试：传入 NULL 指针必须保证安全无崩溃 */
     Zhulong_probe_result_destroy(0);

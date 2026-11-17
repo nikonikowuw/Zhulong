@@ -297,10 +297,12 @@ func (s *Service) notifyTaskSaved(ctx context.Context, taskID, cameraID string) 
 }
 
 // notifyTaskChanged 通知单个算法；空 ID 已在 notifyTasksChanged 里过滤。
+// 使用 WithoutCancel：写库已提交，客户端断连不得中止缓存重载与原生录像重配。
 func (s *Service) notifyTaskChanged(ctx context.Context, algorithmID string) {
+	detached := context.WithoutCancel(ctx)
 	for _, listener := range s.listeners {
 		if listener != nil {
-			listener.OnTaskChanged(ctx, algorithmID)
+			listener.OnTaskChanged(detached, algorithmID)
 		}
 	}
 }

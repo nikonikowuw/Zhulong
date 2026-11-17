@@ -66,6 +66,8 @@ type Service struct {
 	depsMu        sync.RWMutex
 	snapshots     *SnapshotStore
 	alarmListener AlarmListener
+	clipTrigger   ClipTrigger
+	clipPolicies  ClipPolicyProvider
 
 	pendingMu     sync.Mutex
 	pendingAlarms map[string]*pendingAlarmEntry
@@ -505,6 +507,8 @@ func (s *Service) processPersonStructure(ctx context.Context, f ingestFrame) err
 			errs = append(errs, fmt.Errorf("insert recognitions: %w", err))
 		} else {
 			dispatchCreated(s, ctx, recognitions, recognitionJobs, eventFromRecognition)
+			// 录像在分发之后同步触发：不推迟抓拍入队（Native 抓拍历史只有 4 帧）与事件推送。
+			s.triggerRecognitionClips(ctx, f, recognitions)
 		}
 	}
 	// 人体/人脸抓拍只落库，不对外发事件（识别事件已是同一帧的下游表示）。
@@ -746,6 +750,7 @@ func (s *Service) processDetection(ctx context.Context, f ingestFrame) error {
 			errs = append(errs, fmt.Errorf("insert alarms: %w", err))
 		} else {
 			dispatchCreated(s, ctx, alarms, alarmJobs, eventFromAlarm)
+			s.triggerAlarmClips(ctx, f, alarms)
 		}
 	}
 	if len(captures) > 0 {
@@ -871,6 +876,7 @@ func (s *Service) processClassification(ctx context.Context, f ingestFrame) erro
 		return fmt.Errorf("insert classification alarms: %w", err)
 	}
 	dispatchCreated(s, ctx, alarms, jobs, eventFromAlarm)
+	s.triggerAlarmClips(ctx, f, alarms)
 
 	return nil
 }
@@ -1189,6 +1195,7 @@ func (s *Service) ListRecognitions(
 		responses[i] = items[i].ToResponse()
 	}
 	s.enrichRecognitionCandidates(ctx, responses)
+	s.attachRecognitionClips(ctx, items, responses)
 	return responses, total, nil
 }
 
@@ -1203,6 +1210,7 @@ func (s *Service) GetRecognition(ctx context.Context, id string) (*RecognitionRe
 	}
 	responses := []RecognitionResponse{item.ToResponse()}
 	s.enrichRecognitionCandidates(ctx, responses)
+	s.attachRecognitionClips(ctx, []Recognition{*item}, responses)
 	return &responses[0], nil
 }
 
@@ -1253,6 +1261,7 @@ func (s *Service) ListAlarms(ctx context.Context, filter AlarmFilter) ([]AlarmRe
 	for i := range items {
 		responses[i] = items[i].ToResponse()
 	}
+	s.attachAlarmClips(ctx, items, responses)
 	return responses, total, nil
 }
 
@@ -1265,8 +1274,9 @@ func (s *Service) GetAlarm(ctx context.Context, id string) (*AlarmResponse, erro
 	if item == nil {
 		return nil, apperr.NotFound("ALARM_NOT_FOUND", "alarm not found", nil)
 	}
-	resp := item.ToResponse()
-	return &resp, nil
+	responses := []AlarmResponse{item.ToResponse()}
+	s.attachAlarmClips(ctx, []Alarm{*item}, responses)
+	return &responses[0], nil
 }
 
 // ListCaptures returns filtered and paginated CaptureResponse items.

@@ -31,6 +31,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/openapi"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/record"
+	"github.com/nikonikowuw/Zhulong/internal/recording"
 	"github.com/nikonikowuw/Zhulong/internal/schedule"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/systeminfo"
@@ -361,6 +362,13 @@ func (c recordSnapshotFileChecker) SnapshotFileExists(
 		return false, nil
 	}
 	return false, err
+}
+
+func (c recordSnapshotFileChecker) ClipFileExists(
+	ctx context.Context,
+	relativePath string,
+) (bool, error) {
+	return c.SnapshotFileExists(ctx, relativePath)
 }
 
 // recordRetentionDaysProvider 把 storage 域持有的抓拍保留天数暴露给 record 域。
@@ -831,4 +839,142 @@ func round1Finite(v float64) float64 {
 		return 0
 	}
 	return math.Round(v*10) / 10
+}
+
+// --- Event Clip Adapters ---
+
+func clipCodecString(codec engine.Codec) string {
+	switch codec {
+	case engine.CodecH264:
+		return "h264"
+	case engine.CodecH265:
+		// 前端与 FFmpeg MIME 探测统一使用 "hevc"
+		return "hevc"
+	default:
+		return ""
+	}
+}
+
+func clipStatusFromEngine(status engine.ClipStatus) recording.ClipStatus {
+	switch status {
+	case engine.ClipStatusCompleted:
+		return recording.ClipStatusCompleted
+	case engine.ClipStatusTruncated:
+		return recording.ClipStatusTruncated
+	case engine.ClipStatusFailed:
+		return recording.ClipStatusFailed
+	default:
+		return recording.ClipStatusFailed
+	}
+}
+
+type recordingClipHubAdapter struct {
+	hub    *camera.StreamHub
+	engine *engine.Engine
+}
+
+func (a *recordingClipHubAdapter) TriggerClip(
+	ctx context.Context,
+	cameraID string,
+	req recording.ClipTriggerRequest,
+) (recording.ClipTriggerResult, error) {
+	res, err := a.hub.TriggerClip(ctx, cameraID, engine.ClipTriggerRequest{
+		EventPTSUS: req.EventPTSUS,
+		PostMs:     req.PostMs,
+		MaxMs:      req.MaxMs,
+		Path:       req.Path,
+	})
+	if err != nil {
+		return recording.ClipTriggerResult{}, err
+	}
+	return recording.ClipTriggerResult{
+		Seq:        res.Seq,
+		Created:    res.Created,
+		Codec:      clipCodecString(res.Codec),
+		OffsetMs:   res.OffsetMs,
+		StartPTSUS: res.StartPTSUS,
+	}, nil
+}
+
+func (a *recordingClipHubAdapter) PollClipEvents(ctx context.Context, max int) ([]recording.ClipEvent, error) {
+	events, err := a.engine.PollClipEvents(ctx, max)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]recording.ClipEvent, len(events))
+	for i, ev := range events {
+		out[i] = recording.ClipEvent{
+			Seq:        ev.Seq,
+			Status:     clipStatusFromEngine(ev.Status),
+			Codec:      clipCodecString(ev.Codec),
+			DurationMs: ev.DurationMs,
+			SizeBytes:  ev.SizeBytes,
+			FirstPTSUS: ev.FirstPTSUS,
+			LastPTSUS:  ev.LastPTSUS,
+		}
+	}
+	return out, nil
+}
+
+type recordingRetentionDaysProvider struct {
+	storage *storage.Service
+}
+
+func (p recordingRetentionDaysProvider) RecordingRetentionDays(ctx context.Context) (int, error) {
+	if p.storage == nil {
+		return 0, nil
+	}
+	cfg, err := p.storage.GetConfig(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if cfg == nil {
+		return 0, nil
+	}
+	return cfg.RecordingsRetentionDays, nil
+}
+
+type recordClipTriggerAdapter struct {
+	svc *recording.Service
+}
+
+func (a *recordClipTriggerAdapter) TriggerClip(
+	ctx context.Context,
+	req record.ClipTriggerRequest,
+) (string, int64, error) {
+	var kind recording.EventKind
+	switch req.Kind {
+	case record.ClipEventAlarm:
+		kind = recording.EventKindAlarm
+	case record.ClipEventRecognition:
+		kind = recording.EventKindRecognition
+	default:
+		return "", 0, recording.ErrInvalidTrigger
+	}
+	return a.svc.Trigger(ctx, recording.TriggerRequest{
+		CameraID:    req.CameraID,
+		AlgorithmID: req.AlgorithmID,
+		EventKind:   kind,
+		EventID:     req.EventID,
+		PTSUS:       req.PTSUS,
+		CapturedAt:  req.CapturedAt,
+		Policy: recording.ClipPolicy{
+			PostSeconds: req.PostSeconds,
+		},
+	})
+}
+
+type recordClipPolicyAdapter struct {
+	cache *task.ClipPolicyCache
+}
+
+func (a *recordClipPolicyAdapter) ClipPolicyFor(cameraID, algorithmID string) (record.ClipPolicy, bool) {
+	cfg, ok := a.cache.PolicyFor(cameraID, algorithmID)
+	if !ok {
+		return record.ClipPolicy{}, false
+	}
+	return record.ClipPolicy{
+		PostSeconds:       cfg.PostSeconds,
+		RecognitionFilter: cfg.RecognitionFilter,
+	}, true
 }

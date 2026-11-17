@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/architecture.md", "reason": "跨层拓扑与连续录像/感知记录边界"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "新增 v7 ABI 的检查清单"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "Stream::dispatch 与有界队列策略"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "packet 时间轴/normalizer 语义"}
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "告警/识别入库与证据生命周期"}
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": "recordings 保留、.lock 铁律"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移与快照字段约定"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Info 投影命名与信封"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Fx 模块与 lifecycleRuntime"}
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "task_algorithms 配置校验与传播"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "特性切片与前端约定"}
+{"file": ".trellis/tasks/11-17-event-clip-recording/design.md", "reason": "本任务技术设计"}

@@ -67,7 +67,7 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 | 传输路径 | 目标场景 | 容量上限 | 拥塞溢出策略 |
 | --- | --- | --- | --- |
 | **Capture ➔ Decode** | 原始压缩码流包 (H.264/H.265) | 30~60 包 | **关键帧自愈重同步 (Keyframe Resync)**：满载丢包后进入等待关键帧状态；新关键帧到达时自动清空残存损坏包队列并恢复解码 |
-| **Decode ➔ Storage (录像)** | 录像切片持久化（规划中，未实现） | 60~120 帧 | **背压阻塞唤醒**：保障录像完整，不随意丢弃 |
+| **Demux ➔ ClipRecorder (事件片段)** | 事件前后 GOP 环形缓冲 + 写线程 fMP4 | 默认 32 MiB 缓冲 / 16 MiB 写队列 | **绝不反压**：写队列满则在下一包截断活跃片段并标 `truncated`，保障拉流与 AI 推理不受阻 |
 | **Decode ➔ Inference (AI)** | 实时视觉检测分析 | **极小 (2~3 帧)** | **直接丢弃旧帧 (Drop Oldest)**：保障视觉分析始终针对最新画面 |
 
 ### 关键帧自愈状态机 (Keyframe Resync)

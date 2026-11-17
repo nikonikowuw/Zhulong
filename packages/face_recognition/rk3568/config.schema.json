@@ -53,6 +53,28 @@
       "title": "多帧特征融合",
       "description": "自动融合连续多帧特征，显著提升走近与轻微侧脸时的识别效果",
       "default": true
+    },
+    "enable_person_attributes": {
+      "type": "boolean",
+      "title": "人体属性识别",
+      "description": "为每个人体输出 26 类属性（衣着、性别、年龄段、朝向等）；按人缓存并周期性刷新，不是每帧都重新推理",
+      "default": true
+    },
+    "person_attribute_refresh_ms": {
+      "type": "integer",
+      "title": "属性刷新间隔",
+      "description": "同一个人多久重新识别一次属性 (单位: 毫秒)；越小越实时，越大越省算力",
+      "minimum": 200,
+      "maximum": 10000,
+      "default": 1000
+    },
+    "person_attribute_max_persons": {
+      "type": "integer",
+      "title": "单帧属性人数",
+      "description": "每帧最多识别几个人（按人体框大小优先，近景优先）；避免人多时算力被属性阶段吃满",
+      "minimum": 1,
+      "maximum": 8,
+      "default": 2
     }
   },
   "additionalProperties": false

@@ -3,6 +3,7 @@ import { strFromU8 } from 'fflate'
 import { evidenceFileName } from '../data/evidence-file-name'
 import {
   boxSchema,
+  landmarkPointSchema,
   recordsTabSchema,
   type Alarm,
   type Capture,
@@ -33,6 +34,7 @@ const overlayOptionsSchema = z.object({
   primaryLabel: z.string().optional(),
   secondaryBox: boxSchema.optional(),
   secondaryLabel: z.string().optional(),
+  landmarks: z.array(landmarkPointSchema).optional(),
   palette: z.enum(['emerald', 'rose', 'amber', 'sky', 'violet']).optional(),
   secondaryPalette: z
     .enum(['emerald', 'rose', 'amber', 'sky', 'violet'])

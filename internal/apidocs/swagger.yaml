@@ -1875,6 +1875,10 @@ definitions:
         type: string
       capturedAt:
         type: string
+      clip:
+        allOf:
+        - $ref: '#/definitions/record.ClipInfo'
+        description: Clip 是关联的事件录像片段；null 表示没有片段。
       createdAt:
         type: string
       cropPath:
@@ -1937,6 +1941,23 @@ definitions:
       trackId:
         type: integer
     type: object
+  record.ClipInfo:
+    properties:
+      codec:
+        type: string
+      durationMs:
+        type: integer
+      id:
+        type: string
+      mediaPath:
+        type: string
+      offsetMs:
+        type: integer
+      partial:
+        type: boolean
+      status:
+        type: string
+    type: object
   record.RecognitionCandidateInfo:
     properties:
       face_id:
@@ -1980,6 +2001,10 @@ definitions:
         type: array
       capturedAt:
         type: string
+      clip:
+        allOf:
+        - $ref: '#/definitions/record.ClipInfo'
+        description: Clip 是关联的事件录像片段；null 表示没有片段。
       createdAt:
         type: string
       faceImagePath:
@@ -2668,6 +2693,8 @@ definitions:
     properties:
       algorithmId:
         type: string
+      clipConfigJson:
+        type: string
       configJson:
         type: string
       createdAt:
@@ -2692,6 +2719,10 @@ definitions:
       algorithm_id:
         type: string
       algorithmId:
+        type: string
+      clip_config_json:
+        type: string
+      clipConfigJson:
         type: string
       config_json:
         type: string

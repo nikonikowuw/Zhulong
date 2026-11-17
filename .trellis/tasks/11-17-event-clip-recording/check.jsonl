@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go 质量与测试约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量与浏览器测试"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "ABI 边界校验"}
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": ".lock 保护与清理回归"}
+{"file": ".trellis/tasks/11-17-event-clip-recording/prd.md", "reason": "验收标准"}

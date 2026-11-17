@@ -18,6 +18,8 @@ export function taskAlgorithmsPayload(
       override && algo.id === override.id ? override.enabled : algo.enabled,
     configJson: algo.configJson,
     regionConfigJson: algo.regionConfigJson,
+    // 整体替换语义：漏传会把已开启的录像配置清回默认（关闭）。
+    clipConfigJson: algo.clipConfigJson || '{}',
     scheduleJson: algo.scheduleJson || '{}',
   }))
 }

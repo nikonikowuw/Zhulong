@@ -121,8 +121,16 @@ int main(void) {
     _Static_assert(offsetof(zhulong_scene_structure, faces) == 16, "faces offset mismatch");
     _Static_assert(offsetof(zhulong_scene_structure, face_features) == 24, "face_features offset mismatch");
 
-    _Static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
+    _Static_assert(sizeof(zhulong_person_attribute) == 40, "zhulong_person_attribute must be 40 bytes");
+    _Static_assert(sizeof(zhulong_person_attribute) % 8 == 0, "zhulong_person_attribute must be 8-byte aligned");
+    _Static_assert(offsetof(zhulong_person_attribute, score) == 32, "person attribute score offset mismatch");
+    _Static_assert(offsetof(zhulong_person_attribute, reserved_) == 36, "person attribute reserved offset mismatch");
+
+    _Static_assert(sizeof(zhulong_person_item) == 56, "zhulong_person_item must be 56 bytes");
     _Static_assert(sizeof(zhulong_person_item) % 8 == 0, "zhulong_person_item must be 8-byte aligned");
+    _Static_assert(offsetof(zhulong_person_item, attribute_count) == 40, "attribute_count offset mismatch");
+    _Static_assert(offsetof(zhulong_person_item, reserved_) == 44, "person reserved offset mismatch");
+    _Static_assert(offsetof(zhulong_person_item, attributes) == 48, "attributes offset mismatch");
 
     _Static_assert(sizeof(zhulong_plate_item) == 72, "zhulong_plate_item must be 72 bytes");
     _Static_assert(sizeof(zhulong_plate_item) % 8 == 0, "zhulong_plate_item must be 8-byte aligned");
@@ -175,8 +183,9 @@ int main(void) {
 
     /* 4. 验证结构化结果在纯 C 边界下的单块 Arena 解构 */
     {
-        /* 模拟分配 1 个人体 + 1 张人脸 + 1 个候选人的 Arena 连续内存块 */
-        size_t arena_size = sizeof(zhulong_person_item) + sizeof(zhulong_face_item) + sizeof(zhulong_face_candidate);
+        /* 模拟分配 1 个人体 + 1 张人脸 + 1 个候选人 + 1 个属性的 Arena 连续内存块 */
+        size_t arena_size = sizeof(zhulong_person_item) + sizeof(zhulong_face_item) +
+                            sizeof(zhulong_face_candidate) + sizeof(zhulong_person_attribute);
         uint8_t* arena = (uint8_t*)malloc(arena_size);
         assert(arena != NULL);
         memset(arena, 0, arena_size);
@@ -184,6 +193,8 @@ int main(void) {
         zhulong_person_item* person = (zhulong_person_item*)arena;
         zhulong_face_item* face = (zhulong_face_item*)(arena + sizeof(zhulong_person_item));
         zhulong_face_candidate* candidate = (zhulong_face_candidate*)(arena + sizeof(zhulong_person_item) + sizeof(zhulong_face_item));
+        zhulong_person_attribute* attribute = (zhulong_person_attribute*)(arena + sizeof(zhulong_person_item) +
+                                                sizeof(zhulong_face_item) + sizeof(zhulong_face_candidate));
 
         /* 填充候选人 */
         strncpy(candidate->person_id, "user_001", sizeof(candidate->person_id) - 1);
@@ -217,6 +228,14 @@ int main(void) {
         person->body_score = 1.0f;
         person->face_count = 1;
         person->faces = face;
+        person->attribute_count = 1;
+        person->reserved_ = 0;
+        person->attributes = attribute;
+
+        /* 填充属性 */
+        strncpy(attribute->name, "LongSleeve", sizeof(attribute->name) - 1);
+        attribute->score = 0.87f;
+        attribute->reserved_ = 0;
 
         /* 构造 zhulong_inference_result */
         zhulong_inference_result res;
@@ -240,6 +259,10 @@ int main(void) {
         assert(p->faces[0].candidate_count == 1);
         assert(strcmp(p->faces[0].candidates[0].person_name, "Alice") == 0);
         assert(strcmp(p->faces[0].candidates[0].face_id, "face_001") == 0);
+        assert(p->attribute_count == 1);
+        assert(p->attributes != NULL);
+        assert(strcmp(p->attributes[0].name, "LongSleeve") == 0);
+        assert(p->attributes[0].score == 0.87f);
 
         /* 单次 free 释放整个 Arena 树 */
         free(res.internal_token);
@@ -305,10 +328,11 @@ int main(void) {
 
     /* 6. 验证 SCENE_STRUCTURE v2 独立人脸与特征池在纯 C 边界下的单块 Arena 解构 */
     {
-        /* 模拟分配 1 个人体 + 1 张人脸 (携带 512 维特征) 的 Arena 连续内存块 */
+        /* 模拟分配 1 个人体 (带 1 个属性) + 1 张人脸 (携带 512 维特征) 的 Arena 连续内存块 */
         size_t arena_size = sizeof(zhulong_scene_structure) +
                             sizeof(zhulong_person_item) +
                             sizeof(zhulong_face_structure_item) +
+                            sizeof(zhulong_person_attribute) +
                             ZHULONG_FACE_FEATURE_MAX_DIM * sizeof(float);
         uint8_t* arena = (uint8_t*)malloc(arena_size);
         assert(arena != NULL);
@@ -317,7 +341,8 @@ int main(void) {
         zhulong_scene_structure* scene = (zhulong_scene_structure*)arena;
         zhulong_person_item* person = (zhulong_person_item*)(arena + sizeof(zhulong_scene_structure));
         zhulong_face_structure_item* face = (zhulong_face_structure_item*)(arena + sizeof(zhulong_scene_structure) + sizeof(zhulong_person_item));
-        float* features = (float*)(arena + sizeof(zhulong_scene_structure) + sizeof(zhulong_person_item) + sizeof(zhulong_face_structure_item));
+        zhulong_person_attribute* attribute = (zhulong_person_attribute*)(arena + sizeof(zhulong_scene_structure) + sizeof(zhulong_person_item) + sizeof(zhulong_face_structure_item));
+        float* features = (float*)(arena + sizeof(zhulong_scene_structure) + sizeof(zhulong_person_item) + sizeof(zhulong_face_structure_item) + sizeof(zhulong_person_attribute));
 
         scene->person_count = 1;
         scene->face_count = 1;
@@ -331,6 +356,12 @@ int main(void) {
         person->body_score = 0.95f;
         person->face_count = 0;
         person->faces = NULL;
+        person->attribute_count = 1;
+        person->attributes = attribute;
+
+        strncpy(attribute->name, "Female", sizeof(attribute->name) - 1);
+        attribute->score = 0.93f;
+        attribute->reserved_ = 0;
 
         face->box[0] = 0.2f; face->box[1] = 0.15f;
         face->box[2] = 0.35f; face->box[3] = 0.35f;
@@ -363,6 +394,10 @@ int main(void) {
         assert(s->face_count == 1);
         assert(s->face_features != NULL);
         assert(s->persons[0].track_id == 42);
+        assert(s->persons[0].attribute_count == 1);
+        assert(s->persons[0].attributes != NULL);
+        assert(strcmp(s->persons[0].attributes[0].name, "Female") == 0);
+        assert(s->persons[0].attributes[0].score == 0.93f);
         assert(s->faces[0].person_index == 0);
         assert(s->faces[0].feature_dim == 512);
         assert(s->faces[0].feature_offset == 0);

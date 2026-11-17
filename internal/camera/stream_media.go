@@ -38,6 +38,8 @@ type MediaStream interface {
 	// GetView 查询当前生效窗口与切换点（只读）。
 	GetView(ctx context.Context) (region.ViewState, error)
 	Snapshot(ctx context.Context, options engine.SnapshotOptions) ([]engine.SnapshotImage, error)
+	ConfigureRecorder(ctx context.Context, cfg engine.RecorderConfig) error
+	TriggerClip(ctx context.Context, req engine.ClipTriggerRequest) (engine.ClipTriggerResult, error)
 	Close() error
 }
 
@@ -145,6 +147,14 @@ func (s *streamAdapter) GetView(ctx context.Context) (region.ViewState, error) {
 		return region.ViewState{}, err
 	}
 	return toRegionViewState(state), nil
+}
+
+func (s *streamAdapter) ConfigureRecorder(ctx context.Context, cfg engine.RecorderConfig) error {
+	return s.stream.ConfigureRecorder(ctx, cfg)
+}
+
+func (s *streamAdapter) TriggerClip(ctx context.Context, req engine.ClipTriggerRequest) (engine.ClipTriggerResult, error) {
+	return s.stream.TriggerClip(ctx, req)
 }
 
 // toRegionViewState 把引擎层 `(float64 矩形, 毫秒)` 转成域层 `(Rect, time.Time)`。

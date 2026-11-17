@@ -322,5 +322,18 @@
     "invalidJson": "配置参数必须是合法的 JSON 格式",
     "rectMinSide": "矩形最小边长不得小于 0.01 且 x1 < x2, y1 < y2",
     "cropMinSide": "裁剪窗口最小边长不得小于 0.02"
+  },
+  "clip": {
+    "title": "事件录像",
+    "description": "在每个事件前后保存一段短视频。",
+    "preSeconds": "前段秒数",
+    "postSeconds": "后段秒数",
+    "secondsRange": "范围 {{min}}–{{max}} 秒",
+    "recognitionFilter": "识别过滤",
+    "filters": {
+      "all": "全部识别",
+      "stranger": "仅陌生人",
+      "known": "仅已知人员"
+    }
   }
 }

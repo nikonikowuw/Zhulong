@@ -70,6 +70,7 @@ function normalizeCoords(
 
 function normalizePoint(
   point: LandmarkPoint,
+  isPixelSpace: boolean,
   naturalWidth: number,
   naturalHeight: number
 ): { x: number; y: number } | null {
@@ -77,8 +78,7 @@ function normalizePoint(
   if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return null
   if (rawX < 0 || rawY < 0) return null
 
-  const isNormalized = rawX <= 1.05 && rawY <= 1.05
-  if (isNormalized) {
+  if (!isPixelSpace) {
     if (rawX > 1 || rawY > 1) return null
     return { x: rawX * 100, y: rawY * 100 }
   }
@@ -307,28 +307,35 @@ export function BoundingBoxCanvas({
           {/* 人脸 5 点关键点 */}
           {landmarks &&
             landmarks.length > 0 &&
-            landmarks.map((point, index) => {
-              const pos = normalizePoint(
-                point,
-                dimensions.width,
-                dimensions.height
+            (() => {
+              const isPixelSpace = landmarks.some(
+                ([x, y]) =>
+                  Number.isFinite(x) && Number.isFinite(y) && (x > 2 || y > 2)
               )
-              if (!pos) return null
-              return (
-                <div
-                  key={`landmark-${index}`}
-                  data-testid='landmark-point'
-                  className={cn(
-                    'absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 ring-1 ring-black/80',
-                    compact ? 'size-[3px]' : 'size-1'
-                  )}
-                  style={{
-                    left: `${pos.x}%`,
-                    top: `${pos.y}%`,
-                  }}
-                />
-              )
-            })}
+              return landmarks.map((point, index) => {
+                const pos = normalizePoint(
+                  point,
+                  isPixelSpace,
+                  dimensions.width,
+                  dimensions.height
+                )
+                if (!pos) return null
+                return (
+                  <div
+                    key={`landmark-${index}`}
+                    data-testid='landmark-point'
+                    className={cn(
+                      'absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 ring-1 ring-black/80',
+                      compact ? 'size-[3px]' : 'size-1'
+                    )}
+                    style={{
+                      left: `${pos.x}%`,
+                      top: `${pos.y}%`,
+                    }}
+                  />
+                )
+              })
+            })()}
         </div>
       )}
     </div>

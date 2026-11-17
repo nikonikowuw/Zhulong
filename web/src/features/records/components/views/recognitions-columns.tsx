@@ -95,7 +95,7 @@ export function buildRecognitionColumns(
     {
       accessorKey: 'similarity',
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('table.score')} />
+        <DataTableColumnHeader column={column} title={t('table.similarity')} />
       ),
       enableSorting: false,
       cell: ({ row }) => {

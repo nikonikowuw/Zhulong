@@ -14,6 +14,8 @@ export interface TaskAlgorithmItemInfo {
   enabled?: boolean
   configJson?: string
   regionConfigJson?: string
+  /** 事件录像配置 JSON（见 data/clip-config.ts）；`'{}'` = 关闭。 */
+  clipConfigJson?: string
   scheduleJson?: string
 }
 
@@ -37,6 +39,7 @@ export interface CreateTaskRequest {
   enabled?: boolean
   configJson?: string
   regionConfigJson?: string
+  clipConfigJson?: string
   name?: string
   crop?: Rect | null
   algorithms?: TaskAlgorithmItemInfo[]
@@ -48,6 +51,7 @@ export interface UpdateTaskRequest {
   sampleFps?: number
   configJson?: string
   regionConfigJson?: string
+  clipConfigJson?: string
   /**
    * 三态：省略 = 保留，`null` = 清除，数组 = 设置。
    *
@@ -113,6 +117,7 @@ export const tasksApi = {
       sampleFps: req.sampleFps,
       configJson: req.configJson,
       regionConfigJson: req.regionConfigJson,
+      clipConfigJson: req.clipConfigJson,
       crop: req.crop,
       algorithms: req.algorithms,
     })
@@ -129,6 +134,7 @@ export const tasksApi = {
       sampleFps: req.sampleFps,
       configJson: req.configJson,
       regionConfigJson: req.regionConfigJson,
+      clipConfigJson: req.clipConfigJson,
       // undefined 会被 JSON.stringify 丢掉，因此“省略 = 保留”在 wire 上成立。
       crop: req.crop,
       algorithms: req.algorithms,

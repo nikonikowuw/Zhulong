@@ -27,6 +27,7 @@
 #include "common/face_feature_fusion.hpp"
 #include "common/face_image_quality.hpp"
 #include "common/face_quality.hpp"
+#include "attribute/person_attribute.hpp"
 #include "common/scene_filter.hpp"
 #include "detection/detector.hpp"
 #include "detection/scrfd_decode.hpp"
@@ -2891,6 +2892,131 @@ void test_face_fusion_weighting() {
     }
 }
 
+void test_person_attribute_labels_and_thresholds() {
+    check(zhulong::face::kPersonAttributeLabels.size() == 26, "属性标签数应为 26");
+    check(zhulong::face::kPersonAttributeThresholds.size() == 26, "逐标签阈值数应为 26");
+    check(zhulong::face::kPersonAttributeLabels[0] == "Hat", "下标 0 必须是 Hat");
+    check(zhulong::face::kPersonAttributeLabels[25] == "Back", "下标 25 必须是 Back（顺序错位不会崩，只会静默输出错误属性）");
+    check(zhulong::face::kPersonAttributeLabels[1] == "Glasses", "下标 1 必须是 Glasses");
+    check(zhulong::face::kPersonAttributeLabels[18] == "HoldObjectsInFront", "下标 18 必须是 HoldObjectsInFront");
+    check(nearly_equal(zhulong::face::kPersonAttributeThresholds[1], 0.30f, 1e-6f), "Glasses 阈值应为 0.30");
+    check(nearly_equal(zhulong::face::kPersonAttributeThresholds[18], 0.60f, 1e-6f), "HoldObjectsInFront 阈值应为 0.60");
+    check(nearly_equal(zhulong::face::kPersonAttributeThresholds[0], 0.50f, 1e-6f), "其余标签阈值应为 0.50");
+}
+
+void test_person_attribute_extraction() {
+    std::array<float, zhulong::face::kPersonAttributeCount> scores{};
+    scores.fill(0.10f);
+    scores[3] = 0.90f;  // LongSleeve
+    scores[23] = 0.80f; // Front
+    scores[1] = 0.35f;  // Glasses（阈值 0.30 → 保留）
+    scores[18] = 0.55f; // HoldObjectsInFront（阈值 0.60 → 丢弃）
+
+    const auto attributes =
+        zhulong::face::extract_person_attributes(scores.data(), scores.size());
+    check(attributes.size() == 3, "只应输出达到各自阈值的属性");
+    check(attributes[0].name == "LongSleeve" && nearly_equal(attributes[0].score, 0.90f, 1e-6f),
+          "属性必须按分数降序（LongSleeve 最高）");
+    check(attributes[1].name == "Front", "属性必须按分数降序（Front 次之）");
+    check(attributes[2].name == "Glasses", "Glasses 阈值放宽到 0.30，0.35 必须保留");
+
+    // 形状/数值不合法一律按「本帧无结果」处理，绝不能把 NaN 当成 0 分带进 JSON
+    check(zhulong::face::extract_person_attributes(nullptr, scores.size()).empty(), "空指针必须返回空");
+    check(zhulong::face::extract_person_attributes(scores.data(), scores.size() - 1).empty(),
+          "输出维度不等于 26 必须返回空");
+    auto nan_scores = scores;
+    nan_scores[3] = std::numeric_limits<float>::quiet_NaN();
+    nan_scores[4] = 1.5f; // 超范围
+    const auto filtered =
+        zhulong::face::extract_person_attributes(nan_scores.data(), nan_scores.size());
+    check(filtered.size() == 2, "NaN 与越界分数必须被跳过");
+    check(filtered[0].name == "Front" && filtered[1].name == "Glasses", "跳过非法分数后仍按分数降序");
+
+    // 每人最多 8 条：属性 JSON 会随人数放大，必须给 IPC 64KB 载荷留余量
+    std::array<float, zhulong::face::kPersonAttributeCount> many{};
+    many.fill(0.99f);
+    const auto capped = zhulong::face::extract_person_attributes(many.data(), many.size());
+    check(capped.size() == zhulong::face::kMaxPersonAttributesPerPerson,
+          "每人属性条数必须截断到上限");
+    check(capped.front().name == "Hat" && capped.back().name == "UpperSplice",
+          "同分截断必须保持官方标签顺序");
+}
+
+void test_person_attribute_box_iou() {
+    using zhulong::face::person_attribute_box_iou;
+    const std::array<float, 4> a{0.10f, 0.10f, 0.30f, 0.50f};
+    check(nearly_equal(person_attribute_box_iou(a, a), 1.0f, 1e-6f), "同一个框 IoU 应为 1");
+    check(person_attribute_box_iou(a, std::array<float, 4>{0.60f, 0.60f, 0.80f, 0.80f}) == 0.0f,
+          "不相交的框 IoU 应为 0");
+    check(person_attribute_box_iou(a, std::array<float, 4>{0.30f, 0.10f, 0.50f, 0.50f}) == 0.0f,
+          "仅边界相接不算重叠");
+    // 半重叠：交 0.1×0.4=0.04，并 0.08+0.04-0.04=0.08 → 0.5
+    check(nearly_equal(person_attribute_box_iou(a, std::array<float, 4>{0.20f, 0.10f, 0.30f, 0.50f}),
+                       0.5f, 1e-5f),
+          "半重叠框 IoU 应为 0.5");
+    check(person_attribute_box_iou(a, std::array<float, 4>{0.20f, 0.10f, 0.20f, 0.50f}) == 0.0f,
+          "退化框（零宽）不得参与关联");
+}
+
+void test_person_attribute_track_cache() {
+    using namespace zhulong::face;
+    WorkerAttributeCache cache;
+    const std::vector<std::array<float, 4>> boxes{{0.10f, 0.10f, 0.30f, 0.50f},
+                                                  {0.60f, 0.10f, 0.90f, 0.60f}};
+    const auto first = associate_person_tracks(cache, boxes, 1000);
+    check(cache.tracks.size() == 2, "两个互不重叠的框应新建两条轨迹");
+    check(first.size() == 2 && cache.tracks[first[0]].id != cache.tracks[first[1]].id,
+          "每个框必须映射到不同轨迹");
+
+    // 框轻微漂移仍关联回原轨迹，属性不因抖动丢失
+    const std::vector<std::array<float, 4>> drifted{{0.12f, 0.11f, 0.32f, 0.51f}, boxes[1]};
+    const auto second = associate_person_tracks(cache, drifted, 1200);
+    check(cache.tracks.size() == 2, "轻微漂移不应新增轨迹");
+    check(cache.tracks[second[0]].id == cache.tracks[first[0]].id, "漂移后仍应关联到原轨迹");
+
+    // 到期判定：从未分类 / 距上次分类满周期；同帧只取面积最大的前 N 个
+    auto due = select_tracks_for_classification(cache, 1200, 1000, 8);
+    check(due.size() == 2, "从未分类过的轨迹都应到期");
+    cache.tracks[first[0]].updated_ms = 1200;
+    cache.tracks[first[1]].updated_ms = 1200;
+    check(select_tracks_for_classification(cache, 1500, 1000, 8).empty(),
+          "未满刷新周期不得重复分类");
+    due = select_tracks_for_classification(cache, 2200, 1000, 1);
+    check(due.size() == 1, "max_persons 限制本帧只分类 1 人");
+    check(cache.tracks[due[0]].id == cache.tracks[first[1]].id, "应优先分类面积更大的人");
+
+    // 淘汰：超过 max(3×刷新周期, 5s) 未见即删除
+    prune_person_attribute_tracks(cache, 1200 + 5000, 1000);
+    check(cache.tracks.size() == 2, "刚好 5 秒仍应保留");
+    prune_person_attribute_tracks(cache, 1200 + 6000, 1000);
+    check(cache.tracks.empty(), "超过 5 秒未见的轨迹必须淘汰");
+}
+
+void test_resolve_person_attribute_params() {
+    using namespace zhulong::face;
+    const PersonAttributeParams defaults;
+    const auto empty = resolve_person_attribute_params("", defaults);
+    check(empty.enabled && empty.refresh_ms == kDefaultPersonAttributeRefreshMs &&
+              empty.max_persons_per_frame == kDefaultPersonAttributeMaxPersons,
+          "空任务配置必须原样返回默认值");
+
+    const auto overridden = resolve_person_attribute_params(
+        R"({"enable_person_attributes":false,"person_attribute_refresh_ms":2500,"person_attribute_max_persons":4})",
+        defaults);
+    check(!overridden.enabled, "enable_person_attributes=false 必须生效");
+    check(overridden.refresh_ms == 2500, "合法刷新周期必须生效");
+    check(overridden.max_persons_per_frame == 4, "合法单帧人数必须生效");
+
+    // 越界/非法值回落默认，而不是静默截断成边界值（任务配置不该被偷偷改写）
+    const auto clamped = resolve_person_attribute_params(
+        R"({"person_attribute_refresh_ms":50,"person_attribute_max_persons":99})", defaults);
+    check(clamped.refresh_ms == kDefaultPersonAttributeRefreshMs, "刷新周期越界必须回落默认");
+    check(clamped.max_persons_per_frame == kDefaultPersonAttributeMaxPersons, "单帧人数越界必须回落默认");
+    const auto malformed = resolve_person_attribute_params("{", defaults);
+    check(malformed.enabled && malformed.refresh_ms == kDefaultPersonAttributeRefreshMs,
+          "非法 JSON 必须回落默认");
+}
+
 int main() {
     test_similarity_transform_recovers_known_geometry();
     test_similarity_transform_rejects_degenerate_input();
@@ -2919,6 +3045,11 @@ int main() {
     test_track_identity_params();
     test_aligner_downscale_antialiasing();
     test_face_enroll_enhance();
+    test_person_attribute_labels_and_thresholds();
+    test_person_attribute_extraction();
+    test_person_attribute_box_iou();
+    test_person_attribute_track_cache();
+    test_resolve_person_attribute_params();
 #if defined(ZHULONG_FACE_HAS_PREPROCESS_HELPER)
     test_hwc_to_nchw_normalized();
 #endif

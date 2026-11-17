@@ -11,7 +11,7 @@ packages/face_recognition/
 ├── onnx/                     x86_64 ONNX Runtime 档位
 │   ├── manifest.json         包元信息（id / version / platform.target=onnx）
 │   ├── config.schema.json    宿主校验与前端渲染用的配置契约
-│   ├── models/               det_500m / scrfd_person_2.5g / ediffiqa_t / facelivtv2-l (.onnx)
+│   ├── models/               det_500m / scrfd_person_2.5g / ediffiqa_t / facelivtv2-l / pplcnet_person_attribute (.onnx)
 │   ├── sample.jpg            开发期冒烟样本帧
 │   ├── src/                  算法源码（common / detection / alignment / quality / feature / matching / pipeline）
 │   ├── tests/                包内无模型自测（aligner_matcher_test）+ 开发期出图（dev_infer）
@@ -19,7 +19,7 @@ packages/face_recognition/
 └── rk3568/                   RK3568 RKNN 档位（与 onnx 共享通用算法源码，受漂移门禁约束）
     ├── manifest.json         包元信息（platform.target=rk3568）
     ├── config.schema.json    与 onnx 档位逐字节同步的配置契约
-    ├── models/               对应 .rknn 量化权重（含 ediffiqa_t.rknn INT8）
+    ├── models/               对应 .rknn 量化权重（含 ediffiqa_t.rknn INT8、pplcnet_person_attribute.rknn FP16）
     └── ...
 ```
 
@@ -74,6 +74,13 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
 5. **人体关联与 `filter_unmatched` 场景裁剪（`src/common/face_association.hpp` + `scene_filter.hpp`）**
    - 通过 IoF `>= 0.50` 且人脸中心落在人体框上半部把人脸挂载到人体目标；开启 `filter_unmatched` 时过滤未确认身份的人脸与未挂载已确认人脸的人体，并同步重映射 `person_index`。
 
+6. **人体属性识别（`src/attribute/person_attribute.*`，可选阶段）**
+   - PPLCNet_x1_0（PULC person_attribute）单人裁剪多标签分类，输出 26 个**相互独立**的 sigmoid 概率：Hat / Glasses / ShortSleeve / LongSleeve / UpperStride / UpperLogo / UpperPlaid / UpperSplice / LowerStripe / LowerPattern / LongCoat / Trousers / Shorts / Skirt&Dress / Boots / HandBag / ShoulderBag / Backpack / HoldObjectsInFront / AgeLess18 / Age18-60 / AgeOver60 / Female / Front / Side / Back。
+   - **与官方推理一致的前处理**：把人体框直接拉伸到 `192×256`（不做保持比 letterbox，模型按检测器裁剪训练），RGB；onnx 侧按 `mean=[123.675,116.28,103.53] / std=[58.395,57.12,57.375]` 归一化为 NCHW float，rk3568 侧均值/方差已内置于 `.rknn`，直接喂 HWC uint8。
+   - **逐标签阈值**：默认 `0.50`；`Glasses` 放宽到 `0.30`、`HoldObjectsInFront` 提高到 `0.60`（与官方脚本一致），按分数降序输出达标项，每人最多 8 条（属性会随人数放大 JSON，需给 64KB IPC 载荷留余量）。属性名保持官方英文标签（直接作为 JSON 键写入记录 `attributes_json`，避免英文键 ↔ 中文名二次映射在跨层丢失）。
+   - **按轨迹采样缓存（重要）**：属性模型是单目标分类器，RK3568 上 **14.86 ms/人**（FP16）。监控画面里逐帧给每个人各跑一次会随人数线性吃掉算力，因此包内按人体框 IoU `>= 0.30` 关联出包内轨迹（**绝不写入 `track_id`**，宿主独占人员跟踪身份），只对"新出现或距上次分类已满 `person_attribute_refresh_ms`"的人重新推理；单帧最多分类 `person_attribute_max_persons` 人（按框面积降序，近景优先），其余人沿用缓存属性。轨迹 5 秒未见即淘汰，单 worker 上限 64 条。
+   - **降级语义**：模型文件缺失/加载失败、或分类失败时，该人本帧不带 `attributes`（保留上一次缓存），人体检测、人脸识别、抓拍与记录链路完全不受影响。人体项属性字段属于 C ABI 1.4 追加段（`zhulong_person_item` 40 → 56 字节，仅尾部追加），旧宿主读取时自然忽略。
+
 ## 配置参数与三层生效优先级
 
 参数支持三层生效优先级：
@@ -91,6 +98,9 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
 | `filter_unmatched` | 忽略陌生人 | false | 布尔 | 开启后仅记录已登记人员，未比中人员不产生抓拍和记录 |
 | `top_k` | 候选人员数量 | 3 | 1 – 20 | 识别命中时展示的最高相似度候选人数上限 |
 | `enable_face_feature_fusion` | 多帧特征融合 | true | 布尔 | 自动融合连续多帧特征，显著提升走近与轻微侧脸时的识别效果 |
+| `enable_person_attributes` | 人体属性识别 | true | 布尔 | 为每个人体输出衣着/性别/年龄段/朝向等 26 类属性 |
+| `person_attribute_refresh_ms` | 属性刷新间隔 | 1000 | 200 – 10000 | 同一个人多久重新识别一次属性 (单位: 毫秒) |
+| `person_attribute_max_persons` | 单帧属性人数 | 2 | 1 – 8 | 每帧最多识别几个人（框面积大者优先） |
 
 ### 2. 高阶/专家调优参数（收归算法包 `.env` 或任务 JSON 源码模式）
 
@@ -119,6 +129,8 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
    C++ 流式推理输出的 `FaceItem.candidates` **故意不按 `threshold` 截断过滤**——当目标未命中（`matched=false`）时，抓拍记录仍携带底库中最接近的 Top-K 唯一身份及相似度，便于安保事后核查"最像谁"；而宿主 Go 侧 `person.SearchByImage` 接口面向主动检索，候选列表按阈值过滤。两者语义差异是有意设计。
 3. **`filter_unmatched` 与 `min_match_margin` 同时开启的丢弃行为**：
    当 `min_match_margin > 0` 时，即使第一名得分 `>= threshold`，只要与第二名不同身份的分差 `< min_match_margin`，该目标就会被判为未确认身份（`matched=false`）。若同时开启 `filter_unmatched=true`，此类"高分但分差不足的疑似目标"会被 `should_emit_face_result` 及场景裁剪**整体丢弃，不产生任何抓拍图片、入库记录或 `candidates` 证据**。若业务现场希望保留疑似人员抓拍供人工复核，请保持 `filter_unmatched=false`。
-4. **已知边界**：
+4. **人体属性是"采样值"而不是"逐帧值"**：
+   属性缓存按包内轨迹（IoU 关联）维护，`person_attribute_refresh_ms` 越大越省算力、属性越滞后；人群密集且快速交错时，IoU 关联可能短暂把两个人判成同一轨迹，表现为属性串人一帧，下一次分类自愈。属性名是官方英文标签，记录详情页按 JSON 展示；如需中文展示应在 Web 侧做映射，不要在算法包里改名（改名会让历史记录与新记录键不一致）。
+5. **已知边界**：
    - `sample.jpg` 单帧冒烟（`make test`）仅验证模型加载与推理链路可用，不代表真实 CCTV 场景识别率。
    - 宿主解码器与共享内存帧的 YUV 色彩空间历史契约问题跨 SDK/引擎边界，不在本算法包内部单侧修改范围内。

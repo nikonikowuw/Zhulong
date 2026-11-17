@@ -1,7 +1,7 @@
 {
   "id": "face_recognition",
   "name": "人脸识别算法",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "基于 SCRFD 人体与人脸双检测协同与 512 维特征比对的高性能人员结构化算法包",
   "task_type": "person_structure",
   "category": "safety",

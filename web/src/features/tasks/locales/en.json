@@ -322,5 +322,18 @@
     "invalidJson": "Configuration parameters must be valid JSON",
     "rectMinSide": "Minimum rectangle side length must be at least 0.01 and x1 < x2, y1 < y2",
     "cropMinSide": "Minimum crop window side length must be at least 0.02"
+  },
+  "clip": {
+    "title": "Event Clip Recording",
+    "description": "Save a short video around each event.",
+    "preSeconds": "Pre-event (s)",
+    "postSeconds": "Post-event (s)",
+    "secondsRange": "Range {{min}}–{{max}} s",
+    "recognitionFilter": "Recognition filter",
+    "filters": {
+      "all": "All recognitions",
+      "stranger": "Strangers only",
+      "known": "Known persons only"
+    }
   }
 }

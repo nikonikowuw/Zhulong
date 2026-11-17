@@ -18,8 +18,8 @@
 
 | 阶段 | 当前顺序 |
 | --- | --- |
-| **启动 (`lifecycleRuntime.Start`)** | 日志输出准备 ➔ 数据库打开与迁移（失败阻断）➔ 区域配置缓存重载（失败仅告警）➔ Audit（失败阻断并关库）➔ Network ➔ SystemTime ➔ SystemInfo ➔ Storage（注册写阻断观察者后启动）➔ Person ➔ AsyncJobs（须在 Person 清理 stale staging 之后）➔ Spatial（创建 `<data-dir>/maps`）➔ Snapshot worker ➔ Record ➔ native 日志队列启动与回调注册 ➔ Native Engine ➔ Camera 密钥初始化与健康调度器 ➔ GB28181 ➔ AlertPush ➔ Algorithm ➔ TLS 配置、TCP listener 与 HTTP Serve ➔ 可选日志级别热重载器。其中数据库、Audit、Native/日志回调、Camera 与 HTTP listener 为关键阻断项（失败回滚）；其余可选域及区域缓存失败调用 `degradedStart` 后继续启动。 |
-| **停止 (`lifecycleRuntime.Stop`)** | 停止日志级别热重载器 ➔ HTTP 优雅关闭并等待 Serve ➔ 遍历 `stopSequence()`：`gb28181` ➔ `camera` ➔ `asyncJobs` ➔ `algorithm` ➔ `person` ➔ `spatial` ➔ `alertPush` ➔ `record` + `snapshot`（`record.Stop` 先于 `snapshot` worker 排空）➔ `storage` ➔ `systemInfo` ➔ `systemTime` ➔ `network` ➔ `audit` ➔ `apiToken` ➔ `native`（Engine + 日志回调）➔ `database` ➔ 同步并关闭应用日志资源。 |
+| **启动 (`lifecycleRuntime.Start`)** | 日志输出准备 ➔ 数据库打开与迁移（失败阻断）➔ 区域配置缓存重载与事件录像策略缓存重载（失败仅告警）➔ Audit（失败阻断并关库）➔ Network ➔ SystemTime ➔ SystemInfo ➔ Storage（注册写阻断观察者后启动）➔ Person ➔ AsyncJobs（须在 Person 清理 stale staging 之后）➔ Spatial（创建 `<data-dir>/maps`）➔ Recording（启动修复与轮询/清理协程）➔ Snapshot worker ➔ Record ➔ native 日志队列启动与回调注册 ➔ Native Engine ➔ Camera 密钥初始化与健康调度器 ➔ GB28181 ➔ AlertPush ➔ Algorithm ➔ TLS 配置、TCP listener 与 HTTP Serve ➔ 可选日志级别热重载器。其中数据库、Audit、Native/日志回调、Camera 与 HTTP listener 为关键阻断项（失败回滚）；其余可选域及策略缓存失败调用 `degradedStart` 后继续启动。 |
+| **停止 (`lifecycleRuntime.Stop`)** | 停止日志级别热重载器 ➔ HTTP 优雅关闭并等待 Serve ➔ 遍历 `stopSequence()`：`gb28181` ➔ `camera`（释放 AI 流时同步 flush 原生录像）➔ `asyncJobs` ➔ `algorithm` ➔ `person` ➔ `spatial` ➔ `alertPush` ➔ `record` + `snapshot`（`record.Stop` 先于 `snapshot` worker 排空）➔ `recording`（停止轮询前做最终 `PollOnce`）➔ `storage` ➔ `systemInfo` ➔ `systemTime` ➔ `network` ➔ `audit` ➔ `apiToken` ➔ `native`（Engine + 日志回调）➔ `database` ➔ 同步并关闭应用日志资源。 |
 
 ⚠️ **停机顺序只有一份**：`Stop` 与 `Start` 失败回滚都遍历 `lifecycleRuntime.stopSequence()` 返回的同一个函数切片。两者曾经是两份手写清单，一次 listen 失败会把 `algorithm` 排在 `camera` 之前释放，而正常停机的顺序正好相反。新增或调整阶段时**只改 `stopSequence()`**，`internal/app/runtime_test.go` 的 `TestStartupRollbackSharesShutdownOrder` 会比对两条路径的事件轨迹是否一致。
 

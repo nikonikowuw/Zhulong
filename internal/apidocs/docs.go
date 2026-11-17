@@ -9753,6 +9753,14 @@ const docTemplate = `{
                 "capturedAt": {
                     "type": "string"
                 },
+                "clip": {
+                    "description": "Clip 是关联的事件录像片段；null 表示没有片段。",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/record.ClipInfo"
+                        }
+                    ]
+                },
                 "createdAt": {
                     "type": "string"
                 },
@@ -9842,6 +9850,32 @@ const docTemplate = `{
                 }
             }
         },
+        "record.ClipInfo": {
+            "type": "object",
+            "properties": {
+                "codec": {
+                    "type": "string"
+                },
+                "durationMs": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "mediaPath": {
+                    "type": "string"
+                },
+                "offsetMs": {
+                    "type": "integer"
+                },
+                "partial": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "record.RecognitionCandidateInfo": {
             "type": "object",
             "properties": {
@@ -9902,6 +9936,14 @@ const docTemplate = `{
                 },
                 "capturedAt": {
                     "type": "string"
+                },
+                "clip": {
+                    "description": "Clip 是关联的事件录像片段；null 表示没有片段。",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/record.ClipInfo"
+                        }
+                    ]
                 },
                 "createdAt": {
                     "type": "string"
@@ -10910,6 +10952,9 @@ const docTemplate = `{
                 "algorithmId": {
                     "type": "string"
                 },
+                "clipConfigJson": {
+                    "type": "string"
+                },
                 "configJson": {
                     "type": "string"
                 },
@@ -10946,6 +10991,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "algorithm_id": {
+                    "type": "string"
+                },
+                "clipConfigJson": {
+                    "type": "string"
+                },
+                "clip_config_json": {
                     "type": "string"
                 },
                 "configJson": {

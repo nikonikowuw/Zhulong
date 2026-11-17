@@ -33,3 +33,6 @@ dist-ssr
 # Vitest artifacts (browser screenshots/attachments)
 **/__screenshots__/
 .vitest-attachments/
+
+# 事件录像播放器的真实解码测试夹具（根 .gitignore 全局忽略 *.mp4）
+!src/features/records/components/detail/__fixtures__/*.mp4

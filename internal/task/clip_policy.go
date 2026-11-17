@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/schedule"
 	"go.uber.org/zap"
 )
 
@@ -95,6 +97,7 @@ func (c *ClipPolicyCache) Reload(ctx context.Context) error {
 		policies:      make(map[regionKey]ClipConfig),
 		recorderPreMS: make(map[string]int64),
 	}
+	now := time.Now()
 	for i := range tasks {
 		t := &tasks[i]
 		if !t.Enabled {
@@ -103,6 +106,10 @@ func (c *ClipPolicyCache) Reload(ctx context.Context) error {
 		for j := range t.Algorithms {
 			algo := &t.Algorithms[j]
 			if !algo.Enabled {
+				continue
+			}
+			sched, schedErr := schedule.Parse(algo.ScheduleJSON)
+			if schedErr == nil && sched != nil && !sched.IsActiveAt(now) {
 				continue
 			}
 			cfg, err := ParseClipConfig(algo.ClipConfigJSON)

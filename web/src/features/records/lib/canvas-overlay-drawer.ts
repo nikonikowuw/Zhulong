@@ -168,15 +168,18 @@ function drawLandmarks(
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'
   ctx.lineWidth = 1
 
+  const isPixelSpace = landmarks.some(
+    ([x, y]) => Number.isFinite(x) && Number.isFinite(y) && (x > 2 || y > 2)
+  )
+
   for (const [rawX, rawY] of landmarks) {
     if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) continue
     if (rawX < 0 || rawY < 0) continue
 
-    const isNormalized = rawX <= 1.05 && rawY <= 1.05
-    if (isNormalized && (rawX > 1 || rawY > 1)) continue
+    if (!isPixelSpace && (rawX > 1 || rawY > 1)) continue
 
-    const px = isNormalized ? rawX * canvasWidth : rawX
-    const py = isNormalized ? rawY * canvasHeight : rawY
+    const px = isPixelSpace ? rawX : rawX * canvasWidth
+    const py = isPixelSpace ? rawY : rawY * canvasHeight
     if (px > canvasWidth || py > canvasHeight) continue
 
     ctx.beginPath()

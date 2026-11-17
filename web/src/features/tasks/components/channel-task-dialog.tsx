@@ -67,6 +67,7 @@ function ChannelTaskDialogContent({
     updateFps,
     updateConfigJson,
     updateScheduleJson,
+    updateClipConfigJson,
     toPayloadDrafts,
   } = useChannelTaskDrafts({
     initialCameraId: defaultCamId,
@@ -351,6 +352,7 @@ function ChannelTaskDialogContent({
           onUpdateFps={updateFps}
           onUpdateConfigJson={updateConfigJson}
           onUpdateScheduleJson={updateScheduleJson}
+          onUpdateClipConfigJson={updateClipConfigJson}
           regionEditor={regionEditor}
           canEditRegion={canEditRegion}
         />

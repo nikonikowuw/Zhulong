@@ -89,6 +89,52 @@ inline std::string encode_features_b64(const float* features, uint32_t count)
 }
 
 /**
+ * @brief 将单个人体的属性写成 JSON 对象片段（无属性时不输出任何内容）
+ *
+ * 输出形如 `,"attributes":{"Hat":0.9,"Female":0.7}`。非有限分数会被丢弃，
+ * 保证单行 JSON 永远合法；标签唯一性由插件保证。
+ */
+inline void append_person_attributes(std::ostringstream& ss, const zhulong_person_item& person)
+{
+    if (person.attribute_count == 0 || !person.attributes)
+    {
+        return;
+    }
+    uint32_t valid_count = 0;
+    for (uint32_t i = 0; i < person.attribute_count; ++i)
+    {
+        if (std::isfinite(person.attributes[i].score))
+        {
+            ++valid_count;
+        }
+    }
+    if (valid_count == 0)
+    {
+        // 全部分数非法时整体不输出：空的 attributes 对象与「没有属性」语义不同，
+        // 会让下游误以为跑过属性模型但一个标签都没过阈值。
+        return;
+    }
+
+    ss << ",\"attributes\":{";
+    bool first = true;
+    for (uint32_t i = 0; i < person.attribute_count; ++i)
+    {
+        const auto& attr = person.attributes[i];
+        if (!std::isfinite(attr.score))
+        {
+            continue;
+        }
+        if (!first)
+        {
+            ss << ",";
+        }
+        ss << runner::json_quote(attr.name) << ":" << attr.score;
+        first = false;
+    }
+    ss << "}";
+}
+
+/**
  * @brief 将插件返回的推理结果序列化为单行 JSON 字符串
  */
 inline std::string serialize_inference_result(uint64_t stream_id,
@@ -156,8 +202,9 @@ inline std::string serialize_inference_result(uint64_t stream_id,
             ss << "{\"track_id\":" << p.track_id
                << ",\"body_box\":[" << p.body_box[0] << "," << p.body_box[1] << ","
                << p.body_box[2] << "," << p.body_box[3] << "]"
-               << ",\"body_score\":" << p.body_score
-               << ",\"faces\":[";
+               << ",\"body_score\":" << p.body_score;
+            append_person_attributes(ss, p);
+            ss << ",\"faces\":[";
             for (uint32_t j = 0; j < p.face_count; ++j)
             {
                 if (j > 0) ss << ",";
@@ -239,8 +286,9 @@ inline std::string serialize_inference_result(uint64_t stream_id,
                 ss << "{\"track_id\":" << p.track_id
                    << ",\"body_box\":[" << p.body_box[0] << "," << p.body_box[1] << ","
                    << p.body_box[2] << "," << p.body_box[3] << "]"
-                   << ",\"body_score\":" << p.body_score
-                   << ",\"faces\":[]}";
+                   << ",\"body_score\":" << p.body_score;
+                append_person_attributes(ss, p);
+                ss << ",\"faces\":[]}";
             }
         }
         ss << "],\"faces\":[";

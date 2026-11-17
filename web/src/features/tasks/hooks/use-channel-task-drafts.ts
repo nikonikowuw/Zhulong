@@ -56,6 +56,7 @@ export interface ChannelTaskDraftsController {
   updateFps: (algoId: string, sampleFps: number) => void
   updateConfigJson: (algoId: string, configJson: string) => void
   updateScheduleJson: (algoId: string, scheduleJson: string) => void
+  updateClipConfigJson: (algoId: string, clipConfigJson: string) => void
   /**
    * 生成提交载荷。
    *
@@ -276,6 +277,13 @@ export function useChannelTaskDrafts({
     []
   )
 
+  const updateClipConfigJson = useCallback(
+    (algoId: string, clipConfigJson: string) => {
+      dispatch({ type: 'update-clip-config-json', algoId, clipConfigJson })
+    },
+    []
+  )
+
   const setChannelEnabled = useCallback((enabled: boolean) => {
     dispatch({ type: 'set-channel-enabled', enabled })
   }, [])
@@ -296,6 +304,9 @@ export function useChannelTaskDrafts({
             algoId === state.activeAlgoId && editedRegion !== null
               ? editedRegion
               : draft.regionConfigJson,
+          clipConfigJson: draft.clipConfigJson?.trim()
+            ? draft.clipConfigJson
+            : EMPTY_CONFIG_JSON,
           scheduleJson: draft.scheduleJson?.trim()
             ? draft.scheduleJson
             : EMPTY_CONFIG_JSON,
@@ -321,6 +332,7 @@ export function useChannelTaskDrafts({
       updateFps,
       updateConfigJson,
       updateScheduleJson,
+      updateClipConfigJson,
       toPayloadDrafts,
     }),
     [
@@ -336,6 +348,7 @@ export function useChannelTaskDrafts({
       updateFps,
       updateConfigJson,
       updateScheduleJson,
+      updateClipConfigJson,
       toPayloadDrafts,
     ]
   )

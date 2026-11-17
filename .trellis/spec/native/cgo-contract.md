@@ -2,7 +2,7 @@
 
 > Go 与 C++ 原生引擎之间的 CGO 边界、不透明句柄、指针规则与内存生命周期。
 
-> **快速导航**：§1–§3 核心原则、指针守则与句柄租约锁序 · §4/§4.1 ABI v5/v6 缓冲与视图边界 · §5–§6 线程绑定与验证边界 · §7 离线人脸特征提取子进程协议。
+> **快速导航**：§1–§3 核心原则、指针守则与句柄租约锁序 · §4–§4.2 ABI v5/v6/v7 缓冲、视图与事件片段 · §5–§6 线程绑定与验证边界 · §7 离线人脸特征提取子进程协议。
 
 ---
 
@@ -160,6 +160,13 @@ func (s *Subscription) Close() error
   `Since == 0` 必须映射成 `time.Time{}` 而不是 Unix epoch，否则「从未切换」会被当成「1970 年切换过」。
 - `Zhulong_ERR_NOT_READY` 需要 `engine.StatusNotReady` 与 `errors.go` 的 `ErrStreamNotReady` 同步，
   不得复用 `ErrNotFound`（一个哨兵一个状态码，`TestSentinelCodesAreUnique` 会抓）。
+
+---
+
+## 4.2 事件录像片段（ABI v7）
+
+- 通过 `Zhulong_stream_recorder_configure`、`Zhulong_stream_clip_trigger` 与 `Zhulong_engine_clip_poll`（caller-buffer）向 Go 暴露事件前后 GOP 环形缓冲与 fMP4 片段写出能力；Go 侧实现在 `internal/engine/clip.go`。
+- `Zhulong_stream_clip_trigger` 立即拷贝 `path` 字符串且不保留 Go 指针；`Zhulong_engine_clip_poll` 在引擎 `Stop` 后、`Close` 前仍可调用，用于停机前排空已完成事件。
 
 ---
 

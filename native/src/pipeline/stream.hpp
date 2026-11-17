@@ -24,6 +24,7 @@
 #include "nodes/capture/rtsp_input.hpp"
 #include "nodes/decode/decoder.hpp"
 #include "pipeline/bounded_queue.hpp"
+#include "pipeline/clip_recorder.hpp"
 #include "common/view_window.hpp"
 #include "pipeline/preview_normalizer.hpp"
 #include "pipeline/audio_normalizer.hpp"
@@ -402,6 +403,28 @@ struct Stream {
     /** @brief 查询当前生效 E 与生效起点（未设置/未就绪时 rect=identity, since=0）。 */
     void get_view(ViewRect *out_rect, int64_t *out_since_ms) const;
 
+    // =========================================================================
+    // 事件录像片段（v7）
+    // =========================================================================
+
+    /**
+     * @brief 创建 / 更新 / 关闭（enable=false）本流的 ClipRecorder。
+     *
+     * 关闭时在 Stream::mutex 外同步 shutdown（活跃片段以 completed 收尾，有上限地等写线程）。
+     * ⚠️ 调用方不得持有 Engine::control（内部可能 join 写线程）。
+     */
+    void configure_recorder(bool enable, const RecorderSettings &settings,
+                            const std::shared_ptr<ClipEventQueue> &events);
+
+    /**
+     * @brief 新建或延长片段；未配置 recorder 时抛 Zhulong_ERR_NOT_READY。
+     * 宽高 / 参数集兜底取自流元数据（码流解析不出时使用）。
+     */
+    ClipTriggerOutcome trigger_clip(ClipTriggerParams params);
+
+    /** @brief 摘下并 shutdown recorder（幂等；必须在锁外、拉流线程汇合后调用） */
+    void shutdown_recorder() noexcept;
+
 private:
     /**
      * @brief 取一次**严格**递增的发布时钟。
@@ -422,6 +445,14 @@ private:
     bool view_geometry_ready_{false};
     int64_t view_since_ms_{0};
     int64_t last_capture_ms_{0};
+
+    /**
+     * 事件录像 recorder（受 mutex 保护；dispatch 每包随会话/快照一起拷一份 shared_ptr）。
+     * 为空时热路径只多一次空指针判断。
+     */
+    std::shared_ptr<ClipRecorder> clip_recorder_;
+    /** 串行化 configure_recorder / shutdown_recorder（它们会在 mutex 外 join 写线程） */
+    std::mutex recorder_control_mutex_;
 };
 
 } // namespace zhulong

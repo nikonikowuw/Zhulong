@@ -16,6 +16,9 @@ export const taskAlgorithmSchema = z.object({
   sampleFps: z.number().int().min(1).max(1000).default(5),
   configJson: z.string().default('{}'),
   regionConfigJson: z.string().default('{}'),
+  // 事件录像配置（见 data/clip-config.ts）。声明为 optional 而非 default('{}')：
+  // 旧后端 / 历史 fixture 没有此键，消费方一律按 `|| '{}'`（= 关闭）处理。
+  clipConfigJson: z.string().optional(),
   scheduleJson: z.string().default('{}'),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -91,6 +94,7 @@ export interface AlgorithmConfigDraft {
   enabled: boolean
   configJson: string
   regionConfigJson?: string
+  clipConfigJson?: string
   scheduleJson?: string
 }
 

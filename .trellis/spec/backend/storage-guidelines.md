@@ -70,6 +70,7 @@
    - `manual` 在健康盘（usage ≤ low）上不得先删一批未过期文件：Phase 2 进入前的预检查必须直接返回。
 3. **记录组粒度**：快照按 `{dir}/{基名前缀}` 聚组（主图、`_crop`、`_face` 与 sidecar），整组原子删除；只有全部媒体文件都已删除或原本不存在时，才把前缀 ID 交给 DB 级联。组内任一文件删除失败时保留 DB 行并记 warn。
 4. **铁律保护**：告警抓拍的图片旁必须有 `.lock` 保护标记；带有 AI 告警事件标记、或带有 `.lock` / `_locked` 保护标记的高价值证据录像与抓拍，**严禁自动 TTL 或水位清理删除**。历史 alarm 图必须在升级时补锁；storage 另通过可选 `EvidenceGuard` 按 alarm ID 失败关闭保护。
+   - ⚠️ **事件录像命名约束**：事件录像片段使用 `recordings/{camera_id}/{YYYY-MM-DD}/evt-{clip_id}.mp4`（`evt-` 用连字符而**禁止** `_`）。`cleaner.go` 的 `mediaPrefix` 以第一个 `_` 之前的字符串分组，`evt_` 会把同一目录所有片段归入同一清理组，导致一把 `.lock` 锁住整天片段。
 5. **无法回收时**：候选耗尽仍无法达到止点，必须记录 `stop_reason=candidates_exhausted` 与审计；emergency 下保持熔断是正确行为，不能假装恢复。
 
 ### 2.3 批次步进流控与礼貌避让 (Throttled Batch Deletion)

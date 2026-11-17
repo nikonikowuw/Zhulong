@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
@@ -500,5 +501,49 @@ describe('RecordDetailDialog', () => {
 
     // 点击重试不应误打开全屏预览（若被全屏遮罩层拦截，会出现 "1 / 2" 页码）
     expect(getByText('1 / 2').query()).toBeNull()
+  })
+
+  it('embeds the clip panel only for records that reference a clip', async () => {
+    const client = new QueryClient()
+    const clip = {
+      id: 'clip-1',
+      status: 'recording' as const,
+      partial: false,
+      durationMs: 0,
+      offsetMs: 0,
+      mediaPath: 'recordings/clips/cam-perimeter/clip-1.mp4',
+      codec: 'h264',
+    }
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <RecordDetailDialog
+          open={true}
+          onOpenChange={vi.fn()}
+          record={{ ...mockAlarm, clip }}
+          tab='alarms'
+        />
+      </QueryClientProvider>
+    )
+
+    await expect
+      .element(screen.getByRole('heading', { name: '事件录像' }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByRole('button', { name: '刷新' }))
+      .toBeInTheDocument()
+
+    await screen.rerender(
+      <QueryClientProvider client={client}>
+        <RecordDetailDialog
+          open={true}
+          onOpenChange={vi.fn()}
+          record={mockAlarm}
+          tab='alarms'
+        />
+      </QueryClientProvider>
+    )
+    await expect
+      .element(screen.getByRole('heading', { name: '事件录像' }))
+      .not.toBeInTheDocument()
   })
 })

@@ -22,6 +22,7 @@
 #include <zhulong/plugin.h>
 #include <zhulong/runtime/gallery_registry.hpp>
 
+#include "attribute/person_attribute.hpp"
 #include "common/face_enroll_enhance.hpp"
 #include "pipeline/face_recognition.hpp"
 
@@ -230,6 +231,44 @@ bool check_unit_norm(const std::vector<float>& feat) {
     return std::fabs(std::sqrt(norm_sq) - 1.0f) < 0.01f;
 }
 
+/** @brief 把属性列表拼成 "LongSleeve:0.87 Female:0.93" 形式，便于终端肉眼核对 */
+std::string attribute_summary(const std::vector<zhulong::PersonAttribute>& attributes) {
+    std::string text;
+    for (const auto& attribute : attributes) {
+        if (!text.empty()) {
+            text.push_back(' ');
+        }
+        char score[16] = {};
+        std::snprintf(score, sizeof(score), ":%.2f", attribute.score);
+        text += attribute.name;
+        text += score;
+    }
+    return text;
+}
+
+/** @brief 属性自检：名字必须在标签表内、分数在 (0,1]、按分数降序，且不超过 26 条 */
+bool valid_attributes(const std::vector<zhulong::PersonAttribute>& attributes) {
+    if (attributes.size() > static_cast<size_t>(zhulong::face::kPersonAttributeCount)) {
+        return false;
+    }
+    float previous = 1.0f;
+    for (const auto& attribute : attributes) {
+        if (!std::isfinite(attribute.score) || !(attribute.score > 0.0f) || attribute.score > 1.0f ||
+            attribute.score > previous) {
+            return false;
+        }
+        previous = attribute.score;
+        bool known = false;
+        for (const std::string_view label : zhulong::face::kPersonAttributeLabels) {
+            known = known || (label == attribute.name);
+        }
+        if (!known) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool run_regression_checks(zhulong::face::FaceRecognitionPlugin& plugin,
                            zhulong::Session& session,
                            const uint8_t* sample_rgb,
@@ -281,6 +320,7 @@ bool run_regression_checks(zhulong::face::FaceRecognitionPlugin& plugin,
         DEV_CHECK(p.faces.empty(), "SceneStructure person item faces must be empty");
         DEV_CHECK(p.body_box[0] >= 0.0f && p.body_box[2] <= 1.0f && p.body_box[0] < p.body_box[2], "valid body x");
         DEV_CHECK(p.body_box[1] >= 0.0f && p.body_box[3] <= 1.0f && p.body_box[1] < p.body_box[3], "valid body y");
+        DEV_CHECK(valid_attributes(p.attributes), "person attributes must use known labels with ordered scores");
     }
     for (const auto& f : scene.faces) {
         DEV_CHECK(f.quality >= 0.28f && f.quality <= 1.0f, "face quality must pass default eDifFIQA(T) gate");
@@ -535,6 +575,7 @@ int main(int argc, char** argv) {
         row_person.label = "body";
         row_person.score = person.body_score;
         std::memcpy(row_person.box, person.body_box, sizeof(row_person.box));
+        row_person.text = attribute_summary(person.attributes);
         draw_box(canvas.data(), width, height, row_person.box, 0, 255, 0);
         rows.push_back(row_person);
 

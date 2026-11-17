@@ -576,6 +576,8 @@ void Stream::join() {
     if (worker.joinable()) {
         worker.join();
     }
+    // 拉流线程已汇合：不会再有包进入 recorder，活跃片段此时以 completed 收尾
+    shutdown_recorder();
 }
 
 bool Stream::has_ai_consumer() const noexcept {
@@ -727,18 +729,21 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
         return;
     }
 
-    // 单次加锁同时取得解码会话与订阅者快照 (仅拷贝 shared_ptr，热路径无堆分配)
+    // 单次加锁同时取得解码会话、订阅者快照与录像 recorder (仅拷贝 shared_ptr，热路径无堆分配)
     std::shared_ptr<DecodeSession> session;
     std::shared_ptr<const SubscriberList> subscribers;
+    std::shared_ptr<ClipRecorder> recorder;
     {
         std::lock_guard<std::mutex> lock(mutex);
         session = decode_session_;
         subscribers = subscriber_snapshot_;
+        recorder = clip_recorder_;
     }
 
     // 无人接收时不做整形：normalize() 会逐包扫 NAL 并推进时间轴，全部是纯开销。
     // 原点因此从「首个消费者看到的第一包」建立，比在无人期空转更贴近订阅语义。
-    if (!session && subscribers->empty()) {
+    // recorder 同样是接收者：它要的是整形后的包（单调 pts_us + 关键帧内参数集）。
+    if (!session && subscribers->empty() && !recorder) {
         return;
     }
 
@@ -765,6 +770,12 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
     // 1. 优先推送至 AI 解码队列 (先于 Preview 回调，避免慢回调延迟 AI 处理)
     if (session && !cancel.stopped.load()) {
         session->push_packet(shaped, true);
+    }
+
+    // 1b. 事件录像环形缓冲：on_packet 内深拷贝（shaped.data 可能借用整形器缓冲），
+    //     只做非阻塞入队，绝不等待写线程；noexcept，不会把异常带进 read_rtsp。
+    if (recorder && !cancel.stopped.load()) {
+        recorder->on_packet(shaped);
     }
 
     // 2. 在锁外逐个调用订阅回调（按轨过滤仅接收视频轨的订阅者）
@@ -991,6 +1002,77 @@ void Stream::get_view(ViewRect *out_rect, int64_t *out_since_ms) const {
             // 未配置 → 沿用最后一次清除的边界；已配置但未就绪 → 0（与 NOT_READY 契约一致）。
             *out_since_ms = view_configured_ ? 0 : view_since_ms_;
         }
+    }
+}
+
+// ============================================================================
+//                               事件录像片段（v7）
+// ============================================================================
+
+void Stream::configure_recorder(bool enable, const RecorderSettings &settings,
+                                const std::shared_ptr<ClipEventQueue> &events) {
+    std::lock_guard<std::mutex> control(recorder_control_mutex_);
+    if (!enable) {
+        std::shared_ptr<ClipRecorder> retiring;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            retiring = std::move(clip_recorder_);
+        }
+        // 锁外收尾：shutdown 会 join 写线程；拉流线程手里残留的引用只会命中 shut_ 早退
+        if (retiring) {
+            retiring->shutdown();
+            ZL_LOGI(id, "pipeline.stream", "clip_recorder_disabled");
+        }
+        return;
+    }
+
+    std::shared_ptr<ClipRecorder> existing;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        existing = clip_recorder_;
+    }
+    if (existing) {
+        existing->configure(settings);
+        return;
+    }
+    // 构造会启动写线程：放在 Stream::mutex 外，提交时只做一次 shared_ptr 赋值
+    auto created = std::make_shared<ClipRecorder>(id, settings, events);
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        clip_recorder_ = created;
+    }
+    ZL_LOGI(id, "pipeline.stream", "clip_recorder_enabled pre_ms=%lld",
+            static_cast<long long>(settings.pre_ms));
+}
+
+ClipTriggerOutcome Stream::trigger_clip(ClipTriggerParams params) {
+    std::shared_ptr<ClipRecorder> recorder;
+    Video meta;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        recorder = clip_recorder_;
+        if (recorder) meta = video_meta_;
+    }
+    if (!recorder) throw Failure{Zhulong_ERR_NOT_READY};
+    params.width_hint = meta.view.width;
+    params.height_hint = meta.view.height;
+    if (!meta.extradata.empty()) {
+        params.parameter_sets_hint = to_annex_b(meta.view.codec, meta.extradata.data(), meta.extradata.size());
+    }
+    return recorder->trigger(params);
+}
+
+void Stream::shutdown_recorder() noexcept {
+    try {
+        std::lock_guard<std::mutex> control(recorder_control_mutex_);
+        std::shared_ptr<ClipRecorder> retiring;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            retiring = std::move(clip_recorder_);
+        }
+        if (retiring) retiring->shutdown();
+    } catch (...) {
+        ZL_LOGE(id, "pipeline.stream", "clip_recorder_shutdown_exception");
     }
 }
 

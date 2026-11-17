@@ -30,6 +30,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/openapi"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/record"
+	"github.com/nikonikowuw/Zhulong/internal/recording"
 	"github.com/nikonikowuw/Zhulong/internal/spatial"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/systeminfo"
@@ -547,6 +548,7 @@ type taskOut struct {
 	Service         *task.Service
 	Handler         *task.Handler
 	ConfigCache     *task.RegionConfigCache
+	ClipPolicyCache *task.ClipPolicyCache
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
 }
 
@@ -568,11 +570,18 @@ func provideTaskComponents(p taskParams) taskOut {
 	configCache := task.NewRegionConfigCache(p.Store, p.Logger)
 	p.StreamHub.SetRegionConfigProvider(configCache)
 
-	// Both the algorithm supervisor and the region config cache must react to task changes.
-	// The cache owns its own error handling, so no adapter is needed here.
+	clipPolicyCache := task.NewClipPolicyCache(p.Store, p.Logger)
+	clipPolicyCache.SetOnReload(func(ctx context.Context) {
+		p.StreamHub.RefreshRecorders(ctx)
+	})
+	p.StreamHub.SetClipPolicyProvider(clipPolicyCache)
+
+	// Both the algorithm supervisor and the caches must react to task changes.
+	// The caches own their own error handling, so no adapter is needed here.
 	listeners := []task.TaskChangeListener{
 		p.AlgoService,
 		configCache,
+		clipPolicyCache,
 	}
 	// 任务级裁剪：Store 直接满足 camera.TaskCropProvider；
 	// 保存后由监听器刷新媒体层。
@@ -598,6 +607,7 @@ func provideTaskComponents(p taskParams) taskOut {
 		Service:         service,
 		Handler:         handler,
 		ConfigCache:     configCache,
+		ClipPolicyCache: clipPolicyCache,
 		ProtectedRoutes: handler,
 	}
 }
@@ -607,6 +617,7 @@ var taskModule = fx.Module("task",
 		provideTaskStore,
 		provideTaskComponents,
 		regionConfigReloaderProvider,
+		clipPolicyReloaderProvider,
 	),
 )
 
@@ -754,6 +765,51 @@ var clientLogModule = fx.Module("client-log",
 	fx.Provide(provideClientLog),
 )
 
+// --- Recording Module ---
+
+type recordingOut struct {
+	fx.Out
+
+	Service   *recording.Service
+	Lifecycle recordingLifecycle
+}
+
+type recordingParams struct {
+	fx.In
+
+	DBProvider database.DBProvider
+	StreamHub  *camera.StreamHub
+	Engine     *engine.Engine
+	Storage    *storage.Service
+	MediaFiles *mediafile.Service `optional:"true"`
+	Logger     *zap.Logger
+}
+
+func provideRecording(p recordingParams) recordingOut {
+	store := recording.NewStore(p.DBProvider)
+	hub := &recordingClipHubAdapter{hub: p.StreamHub, engine: p.Engine}
+	svc := recording.NewService(
+		store,
+		hub,
+		mediafile.NewMediaRootProvider(p.Storage),
+		p.Storage,
+		p.Logger,
+		recording.Options{},
+	)
+	svc.SetRetentionDaysProvider(recordingRetentionDaysProvider{storage: p.Storage})
+	if p.MediaFiles != nil {
+		svc.SetFileChecker(recordSnapshotFileChecker{media: p.MediaFiles})
+	}
+	return recordingOut{
+		Service:   svc,
+		Lifecycle: svc,
+	}
+}
+
+var recordingModule = fx.Module("recording",
+	fx.Provide(provideRecording),
+)
+
 // --- Record Module ---
 
 type recordOut struct {
@@ -775,6 +831,8 @@ type recordParams struct {
 	StreamHub  *camera.StreamHub
 	Storage    *storage.Service
 	MediaFiles *mediafile.Service
+	Recording  *recording.Service    `optional:"true"`
+	ClipPolicy *task.ClipPolicyCache `optional:"true"`
 	Logger     *zap.Logger
 }
 
@@ -846,6 +904,11 @@ func provideRecord(p recordParams) recordOut {
 	)
 	snapshots.SetPathCleaner(comp.Store)
 	comp.Service.SetSnapshotStore(snapshots)
+
+	if p.Recording != nil && p.ClipPolicy != nil {
+		comp.Service.SetClipTrigger(&recordClipTriggerAdapter{svc: p.Recording})
+		comp.Service.SetClipPolicyProvider(&recordClipPolicyAdapter{cache: p.ClipPolicy})
+	}
 
 	p.StreamHub.SetAIConsumer(comp.Service)
 	return recordOut{
@@ -1106,6 +1169,7 @@ var Module = fx.Options(
 	asyncJobModule,
 	personModule,
 	clientLogModule,
+	recordingModule,
 	recordModule,
 	spatialModule,
 	apiTokenModule,

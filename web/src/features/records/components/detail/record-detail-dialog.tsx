@@ -254,6 +254,7 @@ export function RecordDetailDialog({
 
                 {alm?.clip && (
                   <RecordClipPanel
+                    key={alm.id}
                     kind='alarm'
                     recordId={alm.id}
                     clip={alm.clip}
@@ -262,6 +263,7 @@ export function RecordDetailDialog({
 
                 {rec?.clip && (
                   <RecordClipPanel
+                    key={rec.id}
                     kind='recognition'
                     recordId={rec.id}
                     clip={rec.clip}

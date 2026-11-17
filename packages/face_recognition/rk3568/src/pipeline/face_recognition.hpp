@@ -14,6 +14,7 @@
 #include "feature/extractor.hpp"
 #include "matching/matcher.hpp"
 #include "quality/quality_assessor.hpp"
+#include "attribute/person_attribute.hpp"
 #include "common/face_feature_fusion.hpp"
 #include "common/match_config.hpp"
 
@@ -155,23 +156,49 @@ private:
                                     const MatchParams& match_params,
                                     zhulong::FaceItem& out_face) const;
 
+    /**
+     * @brief 人体属性采样：关联缓存轨迹、挑出到期的人、分类并回填
+     *
+     * 只在属性模型与对应 worker 会话都可用时被调用；单个框分类失败不影响其他框，
+     * 也不会让本帧人体结果整体失败（属性是增强信息，不是业务主链路）。
+     *
+     * @param body_boxes     本帧人体检测框（按检测顺序）
+     * @param out_attributes 与 `body_boxes` 等长，供调用方按人体下标取用
+     */
+    void apply_person_attributes(uint32_t worker_id,
+                                 const PersonAttributeParams& params,
+                                 zhulong::Session& attribute_session,
+                                 const zhulong::Image& image,
+                                 const std::vector<std::array<float, 4>>& body_boxes,
+                                 int64_t now_ms,
+                                 std::vector<std::vector<zhulong::PersonAttribute>>& out_attributes);
+
     zhulong::Model person_model_;
     zhulong::Model det_model_;
     zhulong::Model quality_model_;
     zhulong::Model rec_model_;
+    /** @brief 人体属性分类模型（可选：文件缺失或加载失败时整个属性阶段静默关闭） */
+    zhulong::Model attribute_model_;
     std::mutex sessions_mu_;
     mutable std::mutex detector_mu_;
     SessionTable person_sessions_;
     SessionTable quality_sessions_;
     SessionTable rec_sessions_;
+    SessionTable attribute_sessions_;
     PersonDetector person_detector_;
     FaceDetector detector_;
     FaceQualityAssessor quality_assessor_;
     FaceFeatureExtractor extractor_;
+    PersonAttributeClassifier attribute_classifier_;
     Matcher matcher_;
     TaskFeatureFusionManager fusion_manager_;
+    /** @brief worker_id → 属性采样缓存；与 `sessions_mu_` 分开，推理期间不阻塞会话查找 */
+    std::mutex attribute_cache_mu_;
+    std::unordered_map<uint32_t, WorkerAttributeCache> attribute_caches_;
     /** @brief 进程级默认算法参数（.env / `--config` / init）；任务级配置在此之上覆盖 */
     MatchParams default_match_params_{load_match_params_from_env()};
+    /** @brief 进程级默认属性采样参数；任务级 JSON 在此之上覆盖 */
+    PersonAttributeParams default_attribute_params_{};
 };
 
 /**

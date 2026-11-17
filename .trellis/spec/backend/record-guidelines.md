@@ -45,6 +45,7 @@ Runner MSG_RESULT
 ## 3. 证据图生命周期
 
 - 抓拍是记录的补充，不是记录写入的前置条件；图像生成和写盘在 `SnapshotStore` 后台 worker 执行，不阻塞推理结果消费路径。
+- **事件录像片段触发**：仅 `alarms` 与 `recognitions` 在持久化成功后同步调用可选 `ClipTrigger`（`captures` 永不触发）；识别事件按任务策略 `all | stranger | known` 过滤。触发失败仅记 `Warn`，不影响事件入库与分发；片段状态与清理生命周期由 `internal/recording` 负责。
 - 队列有界（当前容量 32），提交非阻塞；依赖缺失、队列满或存储写门关闭时允许丢弃抓拍任务。已接收任务在 `Stop` 时排空。需要观测丢弃时读取 `SnapshotStore.Dropped()`。感知层不设单帧人工截断（杜绝冷却饥饿），多目标瞬时并发直接由队列容量与 `Dropped()` 观测承接。
 - 每个任务执行时重新读取媒体根目录，并检查 storage 写门；路径存为媒体根内的相对路径（`snapshots/...`），媒体读取仍走 `internal/mediafile`，不能自行拼接绝对路径对外暴露。
 - C ABI 抓拍支持透传目标帧 `PTS` 时间戳，Native 侧历史环形缓存（4 帧容量）优先精确匹配目标帧；若历史已淘汰或未指定有效 PTS，退回读取当前最新帧。图像生成和写盘在 `SnapshotStore` 后台 worker 执行，不阻塞推理结果消费路径。

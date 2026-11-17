@@ -48,6 +48,7 @@ type StreamHub struct {
 	engine           MediaEngine
 	regionProvider   RegionConfigProvider
 	taskCropProvider TaskCropProvider
+	clipProvider     ClipPolicyProvider
 	registry         *StateRegistry
 	logger           *zap.Logger
 	eventHub         *EventHub
@@ -101,7 +102,8 @@ type aiStreamRef struct {
 	// 刻意用 channel 而不是 sync.Mutex：等锁必须能被 ctx 取消。保存路径带着 200ms
 	// 预算进来，Mutex 等锁那段时间不受预算约束——前一次 apply 卡在慢 SQLite 读上时，
 	// 「保存不等媒体层」就成了一句空话。
-	applySem chan struct{}
+	applySem    chan struct{}
+	recorderSem chan struct{}
 
 	// viewMu 保护视图快照。view 是引擎回报的生效 E；viewPrev 只保留上一代，
 	// 用于把换窗前已发布的在途帧映射回正确的全幅坐标。
@@ -114,10 +116,11 @@ type aiStreamRef struct {
 // newAIStreamRef 构造一个视图为全幅的 ref。
 func newAIStreamRef(stream MediaStream) *aiStreamRef {
 	return &aiStreamRef{
-		stream:   stream,
-		applySem: make(chan struct{}, 1),
-		view:     region.ViewState{Rect: region.Identity()},
-		viewPrev: region.Identity(),
+		stream:      stream,
+		applySem:    make(chan struct{}, 1),
+		recorderSem: make(chan struct{}, 1),
+		view:        region.ViewState{Rect: region.Identity()},
+		viewPrev:    region.Identity(),
 	}
 }
 
@@ -193,6 +196,13 @@ type TaskCropProvider interface {
 	CropFor(ctx context.Context, cameraID string) (*region.Rect, error)
 }
 
+// ClipPolicyProvider 返回某路相机当前是否应开启事件录像环形缓冲及其前段保留时长。
+//
+// enabled=false 或 preMs<=0 表示关闭并释放缓冲。
+type ClipPolicyProvider interface {
+	RecorderFor(cameraID string) (preMs int64, enabled bool)
+}
+
 // SetAIConsumer registers an optional consumer for AI inference results.
 func (h *StreamHub) SetAIConsumer(consumer AIResultConsumer) {
 	h.mu.Lock()
@@ -212,6 +222,13 @@ func (h *StreamHub) SetTaskCropProvider(provider TaskCropProvider) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.taskCropProvider = provider
+}
+
+// SetClipPolicyProvider registers an optional provider for per-camera recorder buffering policies.
+func (h *StreamHub) SetClipPolicyProvider(provider ClipPolicyProvider) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.clipProvider = provider
 }
 
 // NewStreamHub 构造全局流分发中心。
@@ -827,6 +844,9 @@ func (h *StreamHub) acquireAIStreamBrokerPath(
 			)
 		}
 
+		// 若该相机有启用录像的任务，在 AI 流拉起后立即配置原生环形缓冲。
+		h.applyRecorderForCamera(ctx, cameraID, ref)
+
 		return path, nil
 	})
 
@@ -914,6 +934,11 @@ func (h *StreamHub) ReleaseAIStreamSubscriber(cameraID, subscriberID string) {
 		if err != nil && !isIgnorable {
 			h.logger.Warn("clear AI view before release failed",
 				zap.String("camera_id", cameraID), zap.Error(err))
+		}
+		if recErr := toClose.ConfigureRecorder(clearCtx, engine.RecorderConfig{PreMs: 0}); recErr != nil &&
+			!errors.Is(recErr, engine.ErrNotFound) && !errors.Is(recErr, engine.ErrStreamNotReady) {
+			h.logger.Warn("disable clip recorder before release failed",
+				zap.String("camera_id", cameraID), zap.Error(recErr))
 		}
 
 		if err := toClose.Close(); err != nil {
@@ -1074,6 +1099,96 @@ func (h *StreamHub) Snapshot(
 	return imgs, err
 }
 
+// TriggerClip 在指定相机当前活跃的 AI 物理流上发起或延长事件录像片段。
+//
+// 相机没有活跃 AI 流时返回 ErrAIStreamInactive，不自行拉流。
+func (h *StreamHub) TriggerClip(
+	ctx context.Context,
+	cameraID string,
+	req engine.ClipTriggerRequest,
+) (engine.ClipTriggerResult, error) {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return engine.ClipTriggerResult{}, ErrStreamHubClosed
+	}
+	ref := h.aiStreams[cameraID]
+	h.mu.Unlock()
+
+	if ref == nil {
+		h.logger.Warn("StreamHub.TriggerClip: no active AI stream for camera",
+			zap.String("camera_id", cameraID))
+		return engine.ClipTriggerResult{}, ErrAIStreamInactive
+	}
+	res, err := ref.stream.TriggerClip(ctx, req)
+	if err != nil {
+		h.logger.Warn("StreamHub.TriggerClip: stream.TriggerClip failed",
+			zap.String("camera_id", cameraID), zap.Error(err))
+	}
+	return res, err
+}
+
+// RefreshRecorders 按当前 ClipPolicyProvider 重新配置所有活跃 AI 流的环形缓冲。
+func (h *StreamHub) RefreshRecorders(ctx context.Context) {
+	h.mu.Lock()
+	if h.closed || h.clipProvider == nil {
+		h.mu.Unlock()
+		return
+	}
+	refs := make(map[string]*aiStreamRef, len(h.aiStreams))
+	for camID, ref := range h.aiStreams {
+		if ref != nil && ref.stream != nil {
+			refs[camID] = ref
+		}
+	}
+	provider := h.clipProvider
+	h.mu.Unlock()
+
+	for camID, ref := range refs {
+		h.applyRecorderWithProvider(ctx, camID, ref, provider)
+	}
+}
+
+func (h *StreamHub) applyRecorderForCamera(ctx context.Context, cameraID string, ref *aiStreamRef) {
+	h.mu.Lock()
+	provider := h.clipProvider
+	h.mu.Unlock()
+	if provider == nil || ref == nil || ref.stream == nil {
+		return
+	}
+	h.applyRecorderWithProvider(ctx, cameraID, ref, provider)
+}
+
+func (h *StreamHub) applyRecorderWithProvider(
+	ctx context.Context,
+	cameraID string,
+	ref *aiStreamRef,
+	provider ClipPolicyProvider,
+) {
+	if ref == nil || ref.stream == nil {
+		return
+	}
+	// 与 applyTaskCrop 同理：串行化「读 provider + ConfigureRecorder」，防止并发切流与关闭录像倒序生效。
+	if ref.recorderSem != nil {
+		select {
+		case ref.recorderSem <- struct{}{}:
+			defer func() { <-ref.recorderSem }()
+		case <-ctx.Done():
+			return
+		}
+	}
+	preMs, enabled := provider.RecorderFor(cameraID)
+	if !enabled || preMs <= 0 {
+		preMs = 0
+	}
+	if err := ref.stream.ConfigureRecorder(ctx, engine.RecorderConfig{PreMs: preMs}); err != nil {
+		h.logger.Warn("StreamHub: ConfigureRecorder failed",
+			zap.String("camera_id", cameraID),
+			zap.Int64("pre_ms", preMs),
+			zap.Error(err))
+	}
+}
+
 // Close 停机时安全关闭所有分发器。
 func (h *StreamHub) Close() error {
 	h.mu.Lock()
@@ -1110,6 +1225,12 @@ func (h *StreamHub) Close() error {
 				h.logger.Warn("close AI subscription on hub shutdown", zap.Error(closeErr))
 			}
 		}
+		clearCtx, clearCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if recErr := ref.stream.ConfigureRecorder(clearCtx, engine.RecorderConfig{PreMs: 0}); recErr != nil &&
+			!errors.Is(recErr, engine.ErrNotFound) && !errors.Is(recErr, engine.ErrStreamNotReady) {
+			h.logger.Warn("disable clip recorder on hub shutdown", zap.Error(recErr))
+		}
+		clearCancel()
 		if err := ref.stream.Close(); err != nil {
 			h.logger.Warn("close AI stream on hub shutdown", zap.Error(err))
 		}

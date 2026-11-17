@@ -197,7 +197,19 @@ struct FaceItem {
 };
 
 /**
- * @brief 结构化人体项 (1 个人体挂载 0~N 张人脸)
+ * @brief 人体属性子项 (1 个人体挂载 0~N 个属性标签)
+ *
+ * - name 为 UTF-8 属性标签（如 "Hat"、"LongSleeve"、"Female"）；
+ * - score 为该标签的独立概率 (0.0 ~ 1.0)，多标签模型每个标签独立 sigmoid；
+ * - 同一人体项内标签唯一，数组按 score 降序排列。
+ */
+struct PersonAttribute {
+    std::string name;     /**< 属性标签 (UTF-8) */
+    float score{0.0f};    /**< 属性概率 (0.0 ~ 1.0) */
+};
+
+/**
+ * @brief 结构化人体项 (1 个人体挂载 0~N 张人脸与 0~N 个属性标签)
  *
  * 纯人脸场景退化语义说明（本结构没有「无人体」取值，退化项用可识别的别名表达）：
  *   - 在纯人脸检测/识别场景下，每个检出人脸映射为一个 PersonItem；
@@ -207,12 +219,15 @@ struct FaceItem {
  *     ⚠️ 不是人体检出置信度，不要填 1.0，否则真实体与退化项不可区分）；
  *   - faces 包含单张人脸项。
  * 宿主识别退化项：track_id == 0 且 body_box == faces[0].box（插件必须原样别名，不得外扩）。
+ *
+ * 属性扩展：attributes 可为空（模型缺失、目标未采样或没有标签过阈值）；纯人脸退化项恒为空。
  */
 struct PersonItem {
     int64_t track_id{0};                       /**< 人体跟踪 ID (纯人脸场景填 0) */
     float body_box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /**< [x1, y1, x2, y2] 归一化坐标 (纯人脸退化项逐位同 face_box) */
     float body_score{0.0f};                    /**< 人体检出置信度 (纯人脸退化项填该人脸质量分) */
     std::vector<FaceItem> faces;               /**< 关联的人脸列表 (0~N 张) */
+    std::vector<PersonAttribute> attributes;   /**< 人体属性列表 (按 score 降序，可为空) */
 };
 
 /**
@@ -462,7 +477,9 @@ static_assert(sizeof(zhulong_face_candidate) == 200, "zhulong_face_candidate mus
 static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
 static_assert(sizeof(zhulong_face_item) == 280, "zhulong_face_item must be 280 bytes");
 static_assert(sizeof(zhulong_face_item) % 8 == 0, "zhulong_face_item must be 8-byte aligned");
-static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
+static_assert(sizeof(zhulong_person_attribute) == 40, "zhulong_person_attribute must be 40 bytes");
+static_assert(sizeof(zhulong_person_attribute) % 8 == 0, "zhulong_person_attribute must be 8-byte aligned");
+static_assert(sizeof(zhulong_person_item) == 56, "zhulong_person_item must be 56 bytes");
 static_assert(sizeof(zhulong_person_item) % 8 == 0, "zhulong_person_item must be 8-byte aligned");
 static_assert(sizeof(zhulong_plate_item) == 72, "zhulong_plate_item must be 72 bytes");
 static_assert(sizeof(zhulong_plate_item) % 8 == 0, "zhulong_plate_item must be 8-byte aligned");
@@ -605,9 +622,11 @@ struct PersonStructureResultAdapter {
         size_t n_persons = persons.size();
         size_t n_faces = 0;
         size_t n_candidates = 0;
+        size_t n_attributes = 0;
 
         for (const auto& p : persons) {
             n_faces += p.faces.size();
+            n_attributes += p.attributes.size();
             for (const auto& f : p.faces) {
                 n_candidates += f.candidates.size();
             }
@@ -623,7 +642,8 @@ struct PersonStructureResultAdapter {
         size_t persons_bytes = n_persons * sizeof(zhulong_person_item);
         size_t faces_bytes = n_faces * sizeof(zhulong_face_item);
         size_t candidates_bytes = n_candidates * sizeof(zhulong_face_candidate);
-        size_t total_bytes = persons_bytes + faces_bytes + candidates_bytes;
+        size_t attributes_bytes = n_attributes * sizeof(zhulong_person_attribute);
+        size_t total_bytes = persons_bytes + faces_bytes + candidates_bytes + attributes_bytes;
 
         uint8_t* arena = static_cast<uint8_t*>(std::malloc(total_bytes));
         if (!arena) {
@@ -634,9 +654,13 @@ struct PersonStructureResultAdapter {
         auto* out_persons = reinterpret_cast<zhulong_person_item*>(arena);
         auto* out_faces = reinterpret_cast<zhulong_face_item*>(arena + persons_bytes);
         auto* out_candidates = reinterpret_cast<zhulong_face_candidate*>(arena + persons_bytes + faces_bytes);
+        auto* out_attributes = n_attributes > 0
+            ? reinterpret_cast<zhulong_person_attribute*>(arena + persons_bytes + faces_bytes + candidates_bytes)
+            : nullptr;
 
         size_t face_idx = 0;
         size_t cand_idx = 0;
+        size_t attr_idx = 0;
 
         for (size_t i = 0; i < n_persons; ++i) {
             const auto& src_p = persons[i];
@@ -700,6 +724,20 @@ struct PersonStructureResultAdapter {
                 }
             } else {
                 dst_p.faces = nullptr;
+            }
+
+            dst_p.attribute_count = static_cast<uint32_t>(src_p.attributes.size());
+            if (dst_p.attribute_count > 0) {
+                dst_p.attributes = &out_attributes[attr_idx];
+                for (size_t j = 0; j < src_p.attributes.size(); ++j) {
+                    const auto& src_a = src_p.attributes[j];
+                    auto& dst_a = out_attributes[attr_idx++];
+                    std::strncpy(dst_a.name, src_a.name.c_str(), sizeof(dst_a.name) - 1);
+                    dst_a.name[sizeof(dst_a.name) - 1] = '\0';
+                    dst_a.score = src_a.score;
+                }
+            } else {
+                dst_p.attributes = nullptr;
             }
         }
 
@@ -847,6 +885,11 @@ struct SceneStructureResultAdapter {
         size_t n_faces = scene.faces.size();
         size_t n_candidates = 0;
         size_t n_feature_floats = 0;
+        size_t n_attributes = 0;
+
+        for (const auto& p : scene.persons) {
+            n_attributes += p.attributes.size();
+        }
 
         for (const auto& f : scene.faces) {
             n_candidates += f.candidates.size();
@@ -875,8 +918,9 @@ struct SceneStructureResultAdapter {
         size_t persons_bytes = n_persons * sizeof(zhulong_person_item);
         size_t faces_bytes = n_faces * sizeof(zhulong_face_structure_item);
         size_t candidates_bytes = n_candidates * sizeof(zhulong_face_candidate);
+        size_t attributes_bytes = n_attributes * sizeof(zhulong_person_attribute);
         size_t features_bytes = n_feature_floats * sizeof(float);
-        size_t total_bytes = scene_bytes + persons_bytes + faces_bytes + candidates_bytes + features_bytes;
+        size_t total_bytes = scene_bytes + persons_bytes + faces_bytes + candidates_bytes + attributes_bytes + features_bytes;
 
         uint8_t* arena = static_cast<uint8_t*>(std::malloc(total_bytes));
         if (!arena) {
@@ -897,15 +941,19 @@ struct SceneStructureResultAdapter {
         auto* out_candidates = n_candidates > 0
             ? reinterpret_cast<zhulong_face_candidate*>(arena + scene_bytes + persons_bytes + faces_bytes)
             : nullptr;
+        auto* out_attributes = n_attributes > 0
+            ? reinterpret_cast<zhulong_person_attribute*>(arena + scene_bytes + persons_bytes + faces_bytes + candidates_bytes)
+            : nullptr;
         auto* out_features = n_feature_floats > 0
-            ? reinterpret_cast<float*>(arena + scene_bytes + persons_bytes + faces_bytes + candidates_bytes)
+            ? reinterpret_cast<float*>(arena + scene_bytes + persons_bytes + faces_bytes + candidates_bytes + attributes_bytes)
             : nullptr;
 
         out_scene->persons = out_persons;
         out_scene->faces = out_faces;
         out_scene->face_features = out_features;
 
-        // 填充真人体 (真人体项内 faces 恒为空)
+        // 填充真人体 (真人体项内 faces 恒为空，属性挂到各自的属性池)
+        size_t attr_idx = 0;
         for (size_t i = 0; i < n_persons; ++i) {
             const auto& src_p = scene.persons[i];
             auto& dst_p = out_persons[i];
@@ -918,6 +966,20 @@ struct SceneStructureResultAdapter {
             dst_p.body_score = src_p.body_score;
             dst_p.face_count = 0;
             dst_p.faces = nullptr;
+
+            dst_p.attribute_count = static_cast<uint32_t>(src_p.attributes.size());
+            if (dst_p.attribute_count > 0) {
+                dst_p.attributes = &out_attributes[attr_idx];
+                for (size_t j = 0; j < src_p.attributes.size(); ++j) {
+                    const auto& src_a = src_p.attributes[j];
+                    auto& dst_a = out_attributes[attr_idx++];
+                    std::strncpy(dst_a.name, src_a.name.c_str(), sizeof(dst_a.name) - 1);
+                    dst_a.name[sizeof(dst_a.name) - 1] = '\0';
+                    dst_a.score = src_a.score;
+                }
+            } else {
+                dst_p.attributes = nullptr;
+            }
         }
 
         // 填充独立人脸

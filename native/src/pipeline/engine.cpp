@@ -313,6 +313,10 @@ void RetiredResources::finish() {
     }
     Stream::stop_decode_session(std::move(session));
     session.reset();
+    if (recorder_to_stop) {
+        recorder_to_stop->shutdown_recorder();
+        recorder_to_stop.reset();
+    }
     if (stream_to_stop) {
         stream_to_stop->request_stop();
         stream_to_stop->join();
@@ -617,8 +621,10 @@ void Engine::detach_consumer_locked(const std::shared_ptr<Stream> &stream, uint6
     out.keepalive = stream;
     out.session = stream->sync_decode_pipeline(decode_policy_);
 
-    // 当该流的全部 AI 消费者均已注销时，摘下其 FramePublisher 与 FrameBroker
+    // 当该流的全部 AI 消费者均已注销时，摘下其 FramePublisher 与 FrameBroker，
+    // 并在锁外停机并 flush 事件录像缓冲（避免 8s 宽限期或预览流继续白占 32 MiB 内存）。
     if (!stream->has_ai_consumer()) {
+        out.recorder_to_stop = stream;
         std::lock_guard<std::mutex> registry(registry_mutex);
         auto pub_it = publishers.find(id);
         if (pub_it != publishers.end()) {
@@ -1243,6 +1249,29 @@ Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint1
     }
     if (out_delivered) *out_delivered = min_delivered;
     return Zhulong_OK;
+}
+
+void Engine::configure_recorder(Zhulong_stream_id id, bool enable, const RecorderSettings &settings) {
+    std::shared_ptr<Stream> stream;
+    {
+        std::lock_guard<std::mutex> lock(control);
+        stream = find_stream(id);
+    }
+    // 锁外：创建会启动写线程，关闭会有上限地 join 写线程，都不能卡住 control
+    stream->configure_recorder(enable, settings, clip_events);
+}
+
+ClipTriggerOutcome Engine::trigger_clip(Zhulong_stream_id id, ClipTriggerParams params) {
+    std::shared_ptr<Stream> stream;
+    {
+        std::lock_guard<std::mutex> lock(control);
+        stream = find_stream(id);
+    }
+    return stream->trigger_clip(std::move(params));
+}
+
+size_t Engine::poll_clip_events(ClipEvent *out, size_t capacity) noexcept {
+    return clip_events->poll(out, capacity);
 }
 
 } // namespace zhulong

@@ -176,6 +176,17 @@ func (s *mockMediaStream) Snapshot(
 	return nil, engine.ErrSnapshotUnavailable
 }
 
+func (s *mockMediaStream) ConfigureRecorder(ctx context.Context, cfg engine.RecorderConfig) error {
+	return nil
+}
+
+func (s *mockMediaStream) TriggerClip(
+	ctx context.Context,
+	req engine.ClipTriggerRequest,
+) (engine.ClipTriggerResult, error) {
+	return engine.ClipTriggerResult{}, engine.ErrStreamNotReady
+}
+
 func (s *mockMediaStream) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()

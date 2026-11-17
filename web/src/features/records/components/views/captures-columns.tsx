@@ -135,7 +135,7 @@ export function buildCaptureColumns(
     {
       accessorKey: 'score',
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('table.score')} />
+        <DataTableColumnHeader column={column} title={t('table.confidence')} />
       ),
       enableSorting: false,
       cell: ({ row }) => {

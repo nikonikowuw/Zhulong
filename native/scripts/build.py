@@ -65,7 +65,11 @@ FLAGS = [
     # 抓拍（JPEG）需要 MJPEG 编码器。注意：这是**编码器**，与上面的解码器是两回事。
     # mjpeg 编码器在 FFmpeg 中属于 LGPL 组件，不会把整包变为 GPL；
     # 切勿为了它去打开 --enable-gpl / --enable-nonfree。
-    "--enable-encoder=mjpeg"
+    "--enable-encoder=mjpeg",
+    # 事件录像片段：mp4(mov) muxer 写 fMP4，file 协议落盘；mov demuxer 仅供
+    # native 自测把写出的片段读回校验（首帧关键帧 / 帧数 / 时长），体积很小。
+    # 三者均为 LGPL 组件。mov muxer 自带 Annex B → avcC/hvcC 转换，不需要 bsf。
+    "--enable-muxer=mp4", "--enable-protocol=file", "--enable-demuxer=mov"
 ]
 PACKAGE_RESOLVER = ROOT / "native/scripts/no_external_pkg_config.sh"
 

@@ -723,9 +723,10 @@ func appendUnique(ids []string, id string) []string {
 }
 
 // mediaPrefix derives the grouping key from a file name:
-// "01J8XYZ_crop.jpg" → "01J8XYZ"; "alarm.jpg.lock" → "alarm".
+// "01J8XYZ_crop.jpg" → "01J8XYZ"; "alarm.jpg.lock" → "alarm"; "evt-01.mp4.part" → "evt-01".
 func mediaPrefix(name string) string {
 	stripped := strings.TrimSuffix(name, lockMarkerSuffix)
+	stripped = strings.TrimSuffix(stripped, ".part")
 	ext := filepath.Ext(stripped)
 	base := strings.TrimSuffix(stripped, ext)
 	prefix := strings.SplitN(base, "_", 2)[0]
@@ -746,7 +747,14 @@ func isCleanupProtected(name, path string) bool {
 	// Anything other than a clean "not exists" protects the file: a permission
 	// error while looking for the marker must not turn into deleting evidence.
 	_, err := os.Lstat(path + lockMarkerSuffix)
-	return !os.IsNotExist(err)
+	if !os.IsNotExist(err) {
+		return true
+	}
+	if strings.HasSuffix(name, ".part") {
+		_, partErr := os.Lstat(strings.TrimSuffix(path, ".part") + lockMarkerSuffix)
+		return !os.IsNotExist(partErr)
+	}
+	return false
 }
 
 // walkMediaFiles visits every regular file under root.

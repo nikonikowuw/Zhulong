@@ -188,4 +188,44 @@ describe('useChannelTaskDrafts', () => {
     const payload = result.current.toPayloadDrafts({ regionEditable: true })
     expect(payload.map((draft) => draft.algorithmId)).toEqual(['algo-face'])
   })
+
+  it('submits clipConfigJson: default disabled, then the edited value', async () => {
+    const { result, act } = await renderDrafts()
+
+    // 已保存的订阅没有 clipConfigJson（旧后端）：提交时回落为 '{}' = 关闭。
+    expect(
+      result.current.toPayloadDrafts({ regionEditable: true })[0].clipConfigJson
+    ).toBe('{}')
+
+    const clipJson =
+      '{"enabled":true,"preSeconds":3,"postSeconds":12,"recognitionFilter":"stranger"}'
+    act(() => result.current.updateClipConfigJson('algo-face', clipJson))
+
+    expect(result.current.drafts['algo-face']?.clipConfigJson).toBe(clipJson)
+    expect(
+      result.current.toPayloadDrafts({ regionEditable: true })[0].clipConfigJson
+    ).toBe(clipJson)
+  })
+
+  it('loads the saved clipConfigJson into the draft', async () => {
+    const clipJson =
+      '{"enabled":true,"preSeconds":5,"postSeconds":10,"recognitionFilter":"all"}'
+    const savedTasks: Task[] = tasks.map((task) => ({
+      ...task,
+      algorithms: task.algorithms.map((algo) => ({
+        ...algo,
+        clipConfigJson: clipJson,
+      })),
+    }))
+    const { result } = await renderHook(() =>
+      useChannelTaskDrafts({
+        initialCameraId: 'cam-01',
+        algorithms,
+        allTasks: savedTasks,
+      })
+    )
+
+    expect(result.current.drafts['algo-face']?.clipConfigJson).toBe(clipJson)
+    expect(result.current.drafts['algo-smoke']?.clipConfigJson).toBe('{}')
+  })
 })

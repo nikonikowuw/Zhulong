@@ -28,23 +28,26 @@ type Recognition struct {
 	// ⚠️ 两者不可互换：前者负责库内关联与 ON DELETE SET NULL，后者负责跨系统上报。
 	// 底库 IPC 载荷下发的 person_id 是业务键原值，绝不能直接写进 PersonID ——
 	// 那会让业务键不等于内部主键的人员，每次命中都撞外键、整批记录静默丢失。
-	PersonID         *string   `gorm:"column:person_id"`
-	PersonExternalID string    `gorm:"column:person_external_id;not null;default:''"`
-	PersonName       string    `gorm:"column:person_name;not null;default:''"`
-	MatchedFaceID    string    `gorm:"column:matched_face_id;not null;default:''"`
-	Matched          bool      `gorm:"column:matched;not null;default:0"`
-	Similarity       float64   `gorm:"column:similarity;not null;default:0.0"`
-	CandidatesJSON   string    `gorm:"column:candidates_json;not null;default:'[]'"`
-	FaceImagePath    string    `gorm:"column:face_image_path;not null;default:''"`
-	GalleryImagePath string    `gorm:"column:gallery_image_path;not null;default:''"`
-	ImagePath        string    `gorm:"column:image_path;not null;default:''"`
-	BoxJSON          string    `gorm:"column:box_json;not null;default:'[]'"`
-	BodyBoxJSON      string    `gorm:"column:body_box_json;not null;default:'[]'"`
-	LandmarksJSON    string    `gorm:"column:landmarks_json;not null;default:'[]'"`
-	AttributesJSON   string    `gorm:"column:attributes_json;not null;default:'{}'"`
-	FeatureVector    []byte    `gorm:"column:feature_vector"`
-	CapturedAt       time.Time `gorm:"column:captured_at;not null"`
-	CreatedAt        time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
+	PersonID         *string `gorm:"column:person_id"`
+	PersonExternalID string  `gorm:"column:person_external_id;not null;default:''"`
+	PersonName       string  `gorm:"column:person_name;not null;default:''"`
+	MatchedFaceID    string  `gorm:"column:matched_face_id;not null;default:''"`
+	Matched          bool    `gorm:"column:matched;not null;default:0"`
+	Similarity       float64 `gorm:"column:similarity;not null;default:0.0"`
+	CandidatesJSON   string  `gorm:"column:candidates_json;not null;default:'[]'"`
+	FaceImagePath    string  `gorm:"column:face_image_path;not null;default:''"`
+	GalleryImagePath string  `gorm:"column:gallery_image_path;not null;default:''"`
+	ImagePath        string  `gorm:"column:image_path;not null;default:''"`
+	BoxJSON          string  `gorm:"column:box_json;not null;default:'[]'"`
+	BodyBoxJSON      string  `gorm:"column:body_box_json;not null;default:'[]'"`
+	LandmarksJSON    string  `gorm:"column:landmarks_json;not null;default:'[]'"`
+	AttributesJSON   string  `gorm:"column:attributes_json;not null;default:'{}'"`
+	FeatureVector    []byte  `gorm:"column:feature_vector"`
+	// ClipID / ClipOffsetMS 关联事件录像片段（event_clips，ON DELETE SET NULL）；NULL = 无片段。
+	ClipID       *string   `gorm:"column:clip_id"`
+	ClipOffsetMS *int64    `gorm:"column:clip_offset_ms"`
+	CapturedAt   time.Time `gorm:"column:captured_at;not null"`
+	CreatedAt    time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
 }
 
 func (Recognition) TableName() string {
@@ -68,6 +71,9 @@ type Alarm struct {
 	PTS              int64     `gorm:"column:pts;not null"`
 	CapturedAt       time.Time `gorm:"column:captured_at;not null"`
 	CreatedAt        time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
+	// 同 Recognition.ClipID。
+	ClipID       *string `gorm:"column:clip_id"`
+	ClipOffsetMS *int64  `gorm:"column:clip_offset_ms"`
 }
 
 func (Alarm) TableName() string {

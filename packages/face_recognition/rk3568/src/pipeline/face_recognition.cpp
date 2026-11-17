@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -56,6 +57,13 @@ struct ProcessedFace {
     std::array<float, 4> face_box{0.0f, 0.0f, 0.0f, 0.0f};
     zhulong::FaceItem item;
 };
+
+/** @brief 单调时钟毫秒数：属性采样缓存只比较间隔，不依赖墙上时间（跳时不会误判过期） */
+int64_t steady_now_ms() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 /**
  * @brief 当前进程自身所在目录（不含结尾斜杠）；取不到时返回空串
@@ -184,6 +192,9 @@ zhulong_status_t FaceRecognitionPlugin::init(const std::string& config_json) {
     quality_model_ = load_target_model("models/ediffiqa_t");
     // 4. 人脸特征提取模型 (ArcFace w600k_r50)
     rec_model_ = load_target_model("models/w600k_r50");
+    // 5. 人体属性分类模型 (PPLCNet_x1_0 person_attribute) —— 可选：文件缺失/加载失败时
+    //    整个属性阶段静默关闭，人体结构化结果照常输出（属性是增强信息，不是主链路）
+    attribute_model_ = load_target_model("models/pplcnet_person_attribute");
 
     if (!det_model_.valid()) {
         return model_unavailable_status("models/det_10g");
@@ -210,6 +221,14 @@ zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
         }
     }
 
+    zhulong::Session attribute_session;
+    if (attribute_model_.valid()) {
+        attribute_session = attribute_model_.create_session(worker_id);
+        if (!attribute_session.valid()) {
+            return {};
+        }
+    }
+
     // 级联会话防降级保护：任一阶段会话创建失败，必须立即中止并返回非法 session
     if (!det_session.valid() || !quality_session.valid() || !rec_session.valid()) {
         return {};
@@ -221,6 +240,9 @@ zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
         rec_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(rec_session));
         if (person_session.valid()) {
             person_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(person_session));
+        }
+        if (attribute_session.valid()) {
+            attribute_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(attribute_session));
         }
     }
     return det_session;
@@ -428,6 +450,25 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
         return {};
     }
 
+    // 2.5 人体属性（可选阶段）：复用上面的人体框，不额外做检测。
+    //     属性模型是单目标分类器，按轨迹缓存 + 刷新周期采样，成本与「到期人数」而非总人数成正比。
+    std::vector<std::vector<zhulong::PersonAttribute>> person_attributes(person_detections.size());
+    const PersonAttributeParams attribute_params = resolve_person_attribute_params(
+        task_context.params.json, default_attribute_params_);
+    if (attribute_params.enabled && !person_detections.empty()) {
+        const std::shared_ptr<zhulong::Session> attribute_session =
+            lookup_session(attribute_sessions_, worker_id);
+        if (attribute_session && attribute_session->valid()) {
+            std::vector<std::array<float, 4>> body_boxes;
+            body_boxes.reserve(person_detections.size());
+            for (const auto& detection : person_detections) {
+                body_boxes.push_back(detection.body_box);
+            }
+            apply_person_attributes(worker_id, attribute_params, *attribute_session, image,
+                                    body_boxes, steady_now_ms(), person_attributes);
+        }
+    }
+
     // 3. 每张合格人脸：仿射对齐 → eDifFIQA(T) 质检 → 单帧特征抽取 → 按流跨帧特征融合 → 底库比对（一帧只取一次底库快照）
     std::vector<ProcessedFace> processed_faces;
     processed_faces.reserve(face_detections.size());
@@ -495,15 +536,18 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
     scene.persons.reserve(person_detections.size());
     scene.faces.reserve(processed_faces.size());
 
-    // 4. 真人体构造（face_count 恒为 0，faces 恒为空）
-    for (const auto& person_detection : person_detections) {
+    // 4. 真人体构造（face_count 恒为 0，faces 恒为空；属性来自 2.5 的采样缓存）
+    for (size_t p = 0; p < person_detections.size(); ++p) {
         zhulong::PersonItem person;
         person.track_id = 0;
-        person.body_box[0] = person_detection.body_box[0];
-        person.body_box[1] = person_detection.body_box[1];
-        person.body_box[2] = person_detection.body_box[2];
-        person.body_box[3] = person_detection.body_box[3];
-        person.body_score = person_detection.score;
+        person.body_box[0] = person_detections[p].body_box[0];
+        person.body_box[1] = person_detections[p].body_box[1];
+        person.body_box[2] = person_detections[p].body_box[2];
+        person.body_box[3] = person_detections[p].body_box[3];
+        person.body_score = person_detections[p].score;
+        if (p < person_attributes.size()) {
+            person.attributes = std::move(person_attributes[p]);
+        }
         scene.persons.push_back(std::move(person));
     }
 
@@ -551,6 +595,90 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
     return scene;
 }
 
+void FaceRecognitionPlugin::apply_person_attributes(
+    uint32_t worker_id,
+    const PersonAttributeParams& params,
+    zhulong::Session& attribute_session,
+    const zhulong::Image& image,
+    const std::vector<std::array<float, 4>>& body_boxes,
+    int64_t now_ms,
+    std::vector<std::vector<zhulong::PersonAttribute>>& out_attributes) {
+    out_attributes.assign(body_boxes.size(), {});
+
+    // 第一个临界区只做纯数据操作（淘汰/关联/挑到期），把 14.86 ms/人的推理放到锁外 ——
+    // 否则两路 worker 会互相把对方堵在属性推理上，帧延迟随路数线性变差。
+    std::vector<uint64_t> track_ids(body_boxes.size(), 0);
+    struct DueTrack {
+        uint64_t id;
+        std::array<float, 4> box;
+    };
+    std::vector<DueTrack> due;
+    {
+        std::lock_guard<std::mutex> lock(attribute_cache_mu_);
+        WorkerAttributeCache& cache = attribute_caches_[worker_id];
+        // 先淘汰再关联：淘汰会移动元素，放在关联之后会让刚算出的 track 下标失效
+        prune_person_attribute_tracks(cache, now_ms, params.refresh_ms);
+        const std::vector<size_t> mapping = associate_person_tracks(cache, body_boxes, now_ms);
+        for (size_t d = 0; d < body_boxes.size(); ++d) {
+            track_ids[d] = cache.tracks[mapping[d]].id;
+        }
+        for (size_t index : select_tracks_for_classification(
+                 cache, now_ms, params.refresh_ms, params.max_persons_per_frame)) {
+            due.push_back(DueTrack{cache.tracks[index].id, cache.tracks[index].box});
+        }
+    }
+
+    struct ClassifiedTrack {
+        uint64_t id;
+        bool ok{false};
+        std::vector<zhulong::PersonAttribute> attributes;
+    };
+    std::vector<ClassifiedTrack> classified;
+    classified.reserve(due.size());
+    for (const DueTrack& track : due) {
+        ClassifiedTrack result;
+        result.id = track.id;
+        result.ok = attribute_classifier_.classify(attribute_session, image, track.box, result.attributes);
+        // 失败时保留空的 attributes 且不回写旧值：下面只推进 updated_ms，避免每帧重试同一个坏框
+        classified.push_back(std::move(result));
+    }
+
+    std::lock_guard<std::mutex> lock(attribute_cache_mu_);
+    const auto cache_it = attribute_caches_.find(worker_id);
+    if (cache_it == attribute_caches_.end()) {
+        return;
+    }
+    std::vector<PersonAttributeTrack>& tracks = cache_it->second.tracks;
+    const auto find_track = [&tracks](uint64_t id) -> PersonAttributeTrack* {
+        for (auto& track : tracks) {
+            if (track.id == id) {
+                return &track;
+            }
+        }
+        return nullptr;
+    };
+
+    for (ClassifiedTrack& result : classified) {
+        PersonAttributeTrack* track = find_track(result.id);
+        if (track == nullptr) {
+            continue; // 推理期间被其他 worker 的淘汰清走
+        }
+        track->updated_ms = now_ms;
+        if (result.ok) {
+            track->attributes = std::move(result.attributes);
+        }
+    }
+    for (size_t d = 0; d < body_boxes.size(); ++d) {
+        if (track_ids[d] == 0) {
+            continue;
+        }
+        const PersonAttributeTrack* track = find_track(track_ids[d]);
+        if (track != nullptr) {
+            out_attributes[d] = track->attributes;
+        }
+    }
+}
+
 std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::Session& session,
                                                                       const zhulong::Image& image,
                                                                       zhulong::TaskContext& task_context) {
@@ -596,6 +724,9 @@ void FaceRecognitionPlugin::parse_config(const std::string& config_json) {
     // 环境变量覆盖底层硬编码默认值，随后由 config_json 叠加；越界值保持默认，宁可退化也不能让插件拒绝启动。
     default_match_params_ = load_match_params_from_env(default_match_params_);
     default_match_params_ = resolve_match_params(config_json, default_match_params_);
+    // 属性采样参数同样支持「进程级配置打底、任务级 JSON 覆盖」；默认关闭以外的越界值一律回落，
+    // 避免一条手写配置把属性阶段推进每帧全量推理。
+    default_attribute_params_ = resolve_person_attribute_params(config_json, default_attribute_params_);
 }
 
 // ============================================================================
