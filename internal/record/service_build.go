@@ -78,6 +78,7 @@ func buildRecognitionRecordAndJob(
 		ImagePath:        fullPath,
 		BoxJSON:          marshalBox(face.Box),
 		BodyBoxJSON:      marshalBox(bodyBox),
+		LandmarksJSON:    marshalSliceOrDefault(face.Landmarks),
 		AttributesJSON:   marshalMapOrDefault(personAttrs),
 		FeatureVector:    face.FeatureVector,
 		CapturedAt:       f.capturedAt,

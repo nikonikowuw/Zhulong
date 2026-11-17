@@ -5,14 +5,19 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { type Recognition } from '../../data/schema'
+import { BoundingBoxCanvas } from '../common/bounding-box-canvas'
 import { MediaImage } from '../common/media-image'
 import { getGalleryImageUrl } from '../common/media-utils'
 import { CandidateComparisonList } from './candidate-comparison-list'
-import { useCopyFeedback } from './record-detail-helpers'
+import {
+  projectLandmarksToCrop,
+  useCopyFeedback,
+} from './record-detail-helpers'
 import { type RecordPreviewImageItem } from './record-image-preview-dialog'
 
 interface RecognitionComparisonPanelProps {
   record: Recognition
+  showBoxes?: boolean
   selectedCandidateIdx: number | null
   onSelectCandidateIdx: (idx: number | null) => void
   previewImages: RecordPreviewImageItem[]
@@ -22,6 +27,7 @@ interface RecognitionComparisonPanelProps {
 
 export function RecognitionComparisonPanel({
   record: rec,
+  showBoxes = true,
   selectedCandidateIdx,
   onSelectCandidateIdx,
   previewImages,
@@ -83,25 +89,30 @@ export function RecognitionComparisonPanel({
           <span className='text-[11px] font-medium text-muted-foreground'>
             {t('detail.snapshot')}
           </span>
-          <div className='group relative size-24 overflow-hidden rounded-md border border-border bg-muted/40 shadow-xs'>
-            <MediaImage
-              path={rec.faceImagePath}
-              alt={t('detail.snapshot')}
-              className='size-full'
-              imageClassName='object-contain'
-              fallbackText={t('card.fallbackFace')}
-            />
-            {rec.faceImagePath && (
-              <button
-                type='button'
-                onClick={() => onOpenPreviewById('face-crop')}
-                aria-label={t('detail.previewImageLabel', {
+          <div className='group relative flex size-24 items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 shadow-xs'>
+            {rec.faceImagePath ? (
+              <BoundingBoxCanvas
+                key={rec.faceImagePath}
+                imagePath={rec.faceImagePath}
+                alt={t('detail.snapshot')}
+                className='max-h-24 max-w-24'
+                imageClassName='object-contain'
+                showBoxes={showBoxes}
+                compact
+                landmarks={projectLandmarksToCrop(rec.landmarks, rec.box)}
+                onPreviewClick={() => onOpenPreviewById('face-crop')}
+                previewLabel={t('detail.previewImageLabel', {
                   name: t('detail.snapshot'),
                 })}
-                className='absolute inset-0 flex cursor-zoom-in items-center justify-center bg-black/0 text-white opacity-0 transition-all group-hover:bg-black/35 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-hidden'
-              >
-                <ZoomIn className='size-4 drop-shadow-sm' />
-              </button>
+              />
+            ) : (
+              <MediaImage
+                path={rec.faceImagePath}
+                alt={t('detail.snapshot')}
+                className='size-full'
+                imageClassName='object-contain'
+                fallbackText={t('card.fallbackFace')}
+              />
             )}
           </div>
         </div>

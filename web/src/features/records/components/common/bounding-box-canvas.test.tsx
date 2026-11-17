@@ -64,4 +64,41 @@ describe('BoundingBoxCanvas', () => {
       .element(getByRole('button', { name: /重试/ }))
       .toBeInTheDocument()
   })
+
+  it('renders 5-point landmarks when showBoxes is true and hides when false', async () => {
+    const landmarks: [number, number][] = [
+      [0.32, 0.36],
+      [0.42, 0.36],
+      [0.37, 0.42],
+      [0.34, 0.48],
+      [0.4, 0.48],
+    ]
+
+    const { getByAltText, getByTestId, rerender } = await render(
+      <BoundingBoxCanvas
+        imagePath={TINY_PNG_DATA_URL}
+        alt='Landmarks Frame'
+        primaryBox={[0.2, 0.3, 0.7, 0.8]}
+        landmarks={landmarks}
+        showBoxes
+      />
+    )
+
+    await expect
+      .element(getByAltText('Landmarks Frame'))
+      .toHaveClass('opacity-100')
+    expect(getByTestId('landmark-point').elements()).toHaveLength(5)
+
+    await rerender(
+      <BoundingBoxCanvas
+        imagePath={TINY_PNG_DATA_URL}
+        alt='Landmarks Frame'
+        primaryBox={[0.2, 0.3, 0.7, 0.8]}
+        landmarks={landmarks}
+        showBoxes={false}
+      />
+    )
+
+    expect(getByTestId('landmark-point').elements()).toHaveLength(0)
+  })
 })

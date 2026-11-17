@@ -5,6 +5,8 @@ import {
   isAlarmRecord,
   isCaptureRecord,
   isRecognitionRecord,
+  type BoundingBox,
+  type LandmarkPoint,
   type RecordItem,
   type RecordsTab,
 } from '../../data/schema'
@@ -62,6 +64,31 @@ export function useCopyFeedback(durationMs = 2000) {
   return { copied, copy }
 }
 
+/** 将全帧归一化关键点投影到人脸裁剪图局部 [0, 1] 坐标系 */
+export function projectLandmarksToCrop(
+  landmarks: LandmarkPoint[],
+  box: BoundingBox
+): LandmarkPoint[] {
+  if (!landmarks || landmarks.length === 0) return []
+  const [x1, y1, x2, y2] = box
+  const bw = x2 - x1
+  const bh = y2 - y1
+  if (!Number.isFinite(bw) || !Number.isFinite(bh) || bw <= 0 || bh <= 0) {
+    return []
+  }
+  return landmarks
+    .map(([lx, ly]): LandmarkPoint => [(lx - x1) / bw, (ly - y1) / bh])
+    .filter(
+      ([cx, cy]) =>
+        Number.isFinite(cx) &&
+        Number.isFinite(cy) &&
+        cx >= 0 &&
+        cx <= 1 &&
+        cy >= 0 &&
+        cy <= 1
+    )
+}
+
 /** 汇总当前记录可全屏查看的图片序列，支持跨图左右切换与缩略图跳转 */
 export function buildPreviewImages(
   record: RecordItem,
@@ -79,6 +106,7 @@ export function buildPreviewImages(
       id: 'full',
       url: getMediaUrl(record.imagePath),
       title: t('detail.fullImage'),
+      landmarks: rec?.landmarks,
     })
   }
 
@@ -88,6 +116,7 @@ export function buildPreviewImages(
         id: 'face-crop',
         url: getMediaUrl(rec.faceImagePath),
         title: t('detail.snapshot'),
+        landmarks: projectLandmarksToCrop(rec.landmarks, rec.box),
       })
     }
     const matchedGalleryUrl = getGalleryImageUrl(

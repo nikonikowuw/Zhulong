@@ -31,6 +31,7 @@ const mockRecognition: Recognition = {
   imagePath: 'snapshots/full-1.jpg',
   box: [0.1, 0.1, 0.3, 0.3],
   bodyBox: [0.05, 0.05, 0.5, 0.9],
+  landmarks: [],
   attributes: { age: 26, mask: false },
   capturedAt: '2026-03-31T12:00:00Z',
   createdAt: '2026-03-31T12:00:01Z',

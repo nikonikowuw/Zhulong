@@ -3,7 +3,7 @@ import { ImageOff, Loader2, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { type BoundingBox } from '../../data/schema'
+import { type BoundingBox, type LandmarkPoint } from '../../data/schema'
 import { getMediaUrl } from './media-utils'
 
 export interface BoundingBoxItem {
@@ -20,10 +20,13 @@ export interface BoundingBoxCanvasProps {
   primaryLabel?: string
   secondaryBox?: BoundingBox
   secondaryLabel?: string
+  landmarks?: LandmarkPoint[]
   className?: string
   imageClassName?: string
   /** 控制是否渲染标注覆盖层，默认 true */
   showBoxes?: boolean
+  /** 紧凑模式（用于缩略图卡片，跳过大图最小高度占位） */
+  compact?: boolean
   /** 图像加载成功后的回调 */
   onDimensionsLoaded?: (dimensions: { width: number; height: number }) => void
   /** 点击已加载全景图触发的预览回调（错误态不挂载，避免遮挡重试按钮） */
@@ -65,6 +68,29 @@ function normalizeCoords(
   }
 }
 
+function normalizePoint(
+  point: LandmarkPoint,
+  naturalWidth: number,
+  naturalHeight: number
+): { x: number; y: number } | null {
+  const [rawX, rawY] = point
+  if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return null
+  if (rawX < 0 || rawY < 0) return null
+
+  const isNormalized = rawX <= 1.05 && rawY <= 1.05
+  if (isNormalized) {
+    if (rawX > 1 || rawY > 1) return null
+    return { x: rawX * 100, y: rawY * 100 }
+  }
+
+  const nw = naturalWidth > 0 ? naturalWidth : 1920
+  const nh = naturalHeight > 0 ? naturalHeight : 1080
+  const x = (rawX / nw) * 100
+  const y = (rawY / nh) * 100
+  if (x > 100 || y > 100) return null
+  return { x, y }
+}
+
 export function BoundingBoxCanvas({
   imagePath,
   alt,
@@ -72,9 +98,11 @@ export function BoundingBoxCanvas({
   primaryLabel,
   secondaryBox,
   secondaryLabel,
+  landmarks,
   className,
   imageClassName,
   showBoxes = true,
+  compact = false,
   onDimensionsLoaded,
   onPreviewClick,
   previewLabel,
@@ -107,7 +135,9 @@ export function BoundingBoxCanvas({
         // 加载未完成且无错误时，保持 16:9 比例自适应占位，平滑不突变
         !imgLoaded &&
           !imgError &&
-          'aspect-video min-h-[260px] w-full max-w-full'
+          (compact
+            ? 'size-full'
+            : 'aspect-video min-h-[260px] w-full max-w-full')
       )}
     >
       {/* 图像加载占位：绝对定位覆盖，平滑淡出，半透明纯黑背景与视口浑然一体 */}
@@ -141,7 +171,14 @@ export function BoundingBoxCanvas({
 
       {/* 错误提示态 */}
       {imgError ? (
-        <div className='flex aspect-video w-full max-w-2xl min-w-[280px] flex-col items-center justify-center gap-3 bg-neutral-900/60 p-6 text-neutral-400 select-none'>
+        <div
+          className={cn(
+            'flex flex-col items-center justify-center gap-2 bg-neutral-900/60 text-neutral-400 select-none',
+            compact
+              ? 'size-full p-2'
+              : 'aspect-video w-full max-w-2xl min-w-[280px] gap-3 p-6'
+          )}
+        >
           <div className='flex size-12 items-center justify-center rounded-full bg-neutral-800/80 text-destructive/80'>
             <ImageOff className='size-6' />
           </div>
@@ -266,6 +303,32 @@ export function BoundingBoxCanvas({
                 </div>
               )
             })()}
+
+          {/* 人脸 5 点关键点 */}
+          {landmarks &&
+            landmarks.length > 0 &&
+            landmarks.map((point, index) => {
+              const pos = normalizePoint(
+                point,
+                dimensions.width,
+                dimensions.height
+              )
+              if (!pos) return null
+              return (
+                <div
+                  key={`landmark-${index}`}
+                  data-testid='landmark-point'
+                  className={cn(
+                    'absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-black/75 bg-amber-300 shadow-[0_0_4px_rgba(0,0,0,0.6)]',
+                    compact ? 'size-1.5' : 'size-2'
+                  )}
+                  style={{
+                    left: `${pos.x}%`,
+                    top: `${pos.y}%`,
+                  }}
+                />
+              )
+            })}
         </div>
       )}
     </div>

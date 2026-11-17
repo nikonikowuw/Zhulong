@@ -31,6 +31,7 @@ describe('export-csv', () => {
       imagePath: 'snapshots/scene.jpg',
       box: [0.1, 0.2, 0.3, 0.4],
       bodyBox: [0.05, 0.1, 0.4, 0.8],
+      landmarks: [],
       attributes: {},
       capturedAt: '2026-11-03T08:30:00.000Z',
       createdAt: '2026-11-03T08:30:01.000Z',

@@ -171,6 +171,7 @@ function jobsForRecord(
           secondaryBox: rec.bodyBox,
           secondaryLabel: personLabel,
           secondaryPalette: 'violet',
+          landmarks: rec.landmarks,
         }
       : {}
     if (wantScene && rec.imagePath) {

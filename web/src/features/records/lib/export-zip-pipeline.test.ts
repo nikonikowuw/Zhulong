@@ -31,6 +31,7 @@ function makeRecognition(overrides: Partial<Recognition> = {}): Recognition {
     imagePath: TINY_PNG_DATA_URL,
     box: [0.1, 0.1, 0.5, 0.5],
     bodyBox: [0.05, 0.05, 0.6, 0.9],
+    landmarks: [],
     attributes: {},
     capturedAt: '2026-11-03T08:00:00.000Z',
     createdAt: '2026-11-03T08:00:01.000Z',

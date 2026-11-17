@@ -302,6 +302,7 @@ func TestProcessPersonStructureResolvesIdentityThroughMatchedFace(t *testing.T) 
 				Faces: []aitypes.FaceSubItem{
 					{
 						Box:           [4]float64{0.15, 0.22, 0.35, 0.45},
+						Landmarks:     [][2]float64{{0.20, 0.28}, {0.30, 0.28}, {0.25, 0.34}, {0.21, 0.40}, {0.29, 0.40}},
 						Matched:       true,
 						PersonID:      businessKey,
 						PersonName:    "Stale Payload Name",
@@ -362,6 +363,12 @@ func TestProcessPersonStructureResolvesIdentityThroughMatchedFace(t *testing.T) 
 	}
 	if matched.GalleryImagePath != "faces/bob.jpg" {
 		t.Errorf("expected galleryImagePath 'faces/bob.jpg', got %q", matched.GalleryImagePath)
+	}
+	if len(matched.Landmarks) != 5 || matched.Landmarks[2] != [2]float64{0.25, 0.34} {
+		t.Errorf("expected 5 persisted landmarks on matched recognition, got %+v", matched.Landmarks)
+	}
+	if len(unmatched.Landmarks) != 0 {
+		t.Errorf("expected empty landmarks slice on unmatched recognition, got %+v", unmatched.Landmarks)
 	}
 
 	if unmatched.PersonID != nil {

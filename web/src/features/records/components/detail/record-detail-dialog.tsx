@@ -218,6 +218,7 @@ export function RecordDetailDialog({
                 {rec && (
                   <RecognitionComparisonPanel
                     record={rec}
+                    showBoxes={showBoxes}
                     selectedCandidateIdx={selectedCandidateIdx}
                     onSelectCandidateIdx={setSelectedCandidateIdx}
                     previewImages={previewImages}

@@ -6,6 +6,10 @@ export const boxSchema = z
 
 export type BoundingBox = [number, number, number, number]
 
+export const landmarkPointSchema = z.tuple([z.number(), z.number()])
+
+export type LandmarkPoint = [number, number]
+
 export const faceCandidateSchema = z
   .object({
     personId: z.string().optional(),
@@ -54,6 +58,7 @@ export const recognitionSchema = z.object({
   imagePath: z.string().default(''),
   box: boxSchema,
   bodyBox: boxSchema,
+  landmarks: z.array(landmarkPointSchema).default([]),
   attributes: z.record(z.string(), z.unknown()).default({}),
   capturedAt: z.string(),
   createdAt: z.string(),

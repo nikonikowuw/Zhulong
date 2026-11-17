@@ -17,6 +17,7 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 		CandidatesJSON: "null",
 		BoxJSON:        "null",
 		BodyBoxJSON:    "null",
+		LandmarksJSON:  "null",
 		AttributesJSON: "null",
 		CapturedAt:     time.Now().UTC(),
 		CreatedAt:      time.Now().UTC(),
@@ -25,6 +26,9 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 	recResp := rec.ToResponse()
 	if recResp.Candidates == nil {
 		t.Errorf("expected non-nil Candidates slice")
+	}
+	if recResp.Landmarks == nil {
+		t.Errorf("expected non-nil Landmarks slice")
 	}
 	if recResp.Attributes == nil {
 		t.Errorf("expected non-nil Attributes map")
@@ -40,6 +44,9 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 	}
 	if rawRec["candidates"] == nil {
 		t.Errorf("expected candidates to serialize to [], got null in JSON: %s", string(bytesRec))
+	}
+	if rawRec["landmarks"] == nil {
+		t.Errorf("expected landmarks to serialize to [], got null in JSON: %s", string(bytesRec))
 	}
 	if rawRec["attributes"] == nil {
 		t.Errorf("expected attributes to serialize to {}, got null in JSON: %s", string(bytesRec))

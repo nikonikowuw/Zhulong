@@ -30,6 +30,7 @@ const sampleRecognitions: Recognition[] = [
     imagePath: 'snapshots/rec-1.jpg',
     box: [0.1, 0.2, 0.3, 0.4],
     bodyBox: [0, 0, 0, 0],
+    landmarks: [],
     attributes: {},
     capturedAt: '2026-03-31T10:00:00Z',
     createdAt: '2026-03-31T10:00:01Z',

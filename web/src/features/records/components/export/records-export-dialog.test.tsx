@@ -32,6 +32,7 @@ describe('RecordsExportDialog', () => {
             imagePath: '',
             box: [0, 0, 0, 0],
             bodyBox: [0, 0, 0, 0],
+            landmarks: [],
             attributes: {},
             capturedAt: '2026-11-03T10:00:00Z',
             createdAt: '',

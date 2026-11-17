@@ -43,6 +43,7 @@ type RecognitionResponse struct {
 	ImagePath        string                     `json:"imagePath"`
 	Box              [4]float64                 `json:"box"`
 	BodyBox          [4]float64                 `json:"bodyBox"`
+	Landmarks        [][2]float64               `json:"landmarks"`
 	Attributes       map[string]any             `json:"attributes"`
 	CapturedAt       time.Time                  `json:"capturedAt"`
 	CreatedAt        time.Time                  `json:"createdAt"`
@@ -117,6 +118,7 @@ func (r *Recognition) ToResponse() RecognitionResponse {
 		ImagePath:        r.ImagePath,
 		Box:              unmarshalBox(r.BoxJSON),
 		BodyBox:          unmarshalBox(r.BodyBoxJSON),
+		Landmarks:        unmarshalSliceOrDefault[[2]float64](r.LandmarksJSON),
 		Attributes:       unmarshalMapOrDefault(r.AttributesJSON),
 		CapturedAt:       r.CapturedAt.UTC(),
 		CreatedAt:        r.CreatedAt.UTC(),

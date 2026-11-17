@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { type LandmarkPoint } from '../../data/schema'
 import { RecordImagePreviewToolbar } from './record-image-preview-toolbar'
 
 export interface RecordPreviewImageItem {
@@ -11,6 +12,7 @@ export interface RecordPreviewImageItem {
   url: string
   title: string
   subtitle?: string
+  landmarks?: LandmarkPoint[]
 }
 
 export interface RecordImagePreviewDialogProps {
@@ -175,17 +177,43 @@ export function RecordImagePreviewDialog({
               </Button>
             )}
 
-            <img
-              src={current.url}
-              alt={current.title}
+            <div
               onDoubleClick={handleDoubleClick}
               onClick={(e) => e.stopPropagation()}
               style={{
                 transform: `scale(${scale})`,
                 transition: 'transform 0.15s ease-out',
               }}
-              className='max-h-[75vh] max-w-[90vw] cursor-default rounded-lg object-contain shadow-2xl drop-shadow-[0_15px_35px_rgba(0,0,0,0.85)]'
-            />
+              className='relative inline-flex cursor-default items-center justify-center'
+            >
+              <img
+                src={current.url}
+                alt={current.title}
+                className='max-h-[75vh] max-w-[90vw] rounded-lg object-contain shadow-2xl drop-shadow-[0_15px_35px_rgba(0,0,0,0.85)]'
+              />
+              {current.landmarks && current.landmarks.length > 0 && (
+                <div className='pointer-events-none absolute inset-0'>
+                  {current.landmarks.map(([lx, ly], index) =>
+                    Number.isFinite(lx) &&
+                    Number.isFinite(ly) &&
+                    lx >= 0 &&
+                    lx <= 1 &&
+                    ly >= 0 &&
+                    ly <= 1 ? (
+                      <div
+                        key={`preview-landmark-${index}`}
+                        data-testid='preview-landmark-point'
+                        className='absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-black/75 bg-amber-300 shadow-[0_0_6px_rgba(0,0,0,0.7)]'
+                        style={{
+                          left: `${lx * 100}%`,
+                          top: `${ly * 100}%`,
+                        }}
+                      />
+                    ) : null
+                  )}
+                </div>
+              )}
+            </div>
 
             {hasMultiple && (
               <Button

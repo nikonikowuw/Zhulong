@@ -1,4 +1,4 @@
-import { type BoundingBox } from '../data/schema'
+import { type BoundingBox, type LandmarkPoint } from '../data/schema'
 import {
   fetchImageAsBlob,
   isValidBox,
@@ -21,6 +21,8 @@ export interface OverlayBurnOptions {
   palette?: PaletteKey
   /** 次要框颜色风格，默认 'violet' */
   secondaryPalette?: PaletteKey
+  /** 人脸 5 点关键点（识别记录特有） */
+  landmarks?: LandmarkPoint[]
   /** 取消信号 */
   signal?: AbortSignal
   /** 输出 MIME 类型，默认 'image/jpeg' */
@@ -154,6 +156,38 @@ async function decodeImageSource(sourceBlob: Blob): Promise<{
   return { width: img.naturalWidth, height: img.naturalHeight, source: img }
 }
 
+function drawLandmarks(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  landmarks: LandmarkPoint[],
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  const pointRadius = Math.max(2, Math.round(canvasWidth / 400))
+  ctx.save()
+  ctx.fillStyle = '#fde047'
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)'
+  ctx.lineWidth = Math.max(1, Math.round(pointRadius / 2))
+
+  for (const [rawX, rawY] of landmarks) {
+    if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) continue
+    if (rawX < 0 || rawY < 0) continue
+
+    const isNormalized = rawX <= 1.05 && rawY <= 1.05
+    if (isNormalized && (rawX > 1 || rawY > 1)) continue
+
+    const px = isNormalized ? rawX * canvasWidth : rawX
+    const py = isNormalized ? rawY * canvasHeight : rawY
+    if (px > canvasWidth || py > canvasHeight) continue
+
+    ctx.beginPath()
+    ctx.arc(px, py, pointRadius, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  ctx.restore()
+}
+
 /** 离屏 Canvas 检测框与研判标签烧录引擎 */
 export async function burnOverlayOnImage(
   imageSource: string | Blob,
@@ -166,6 +200,7 @@ export async function burnOverlayOnImage(
     secondaryLabel,
     palette = 'emerald',
     secondaryPalette = 'violet',
+    landmarks,
     signal,
     mimeType = 'image/jpeg',
     quality = 0.85,
@@ -214,6 +249,10 @@ export async function burnOverlayOnImage(
     if (isValidBox(primaryBox)) {
       const primRect = toAbsoluteCoords(primaryBox, naturalWidth, naturalHeight)
       drawBoxAndLabel(ctx, primRect, primaryLabel, palette, naturalWidth, false)
+    }
+
+    if (landmarks && landmarks.length > 0) {
+      drawLandmarks(ctx, landmarks, naturalWidth, naturalHeight)
     }
   }
 
