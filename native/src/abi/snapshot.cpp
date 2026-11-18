@@ -17,6 +17,7 @@
 #include "Zhulong/frame.hpp"
 #include "nodes/snapshot/jpeg_encoder.hpp"
 #include "nodes/snapshot/jpeg_encoder_backend.hpp"
+#include "pipeline/frame_publisher.hpp"
 
 #include <algorithm>
 #include <array>
@@ -63,6 +64,11 @@ struct SnapshotImage {
  */
 struct Zhulong_snapshot_result_t {
     std::vector<std::unique_ptr<zhulong::SnapshotImage>> images;
+    // 抓拍自证：这次实际取到的是哪一帧（见 Zhulong_snapshot_source_* 访问器）。
+    int64_t source_pts{0};
+    bool source_has_pts{false};
+    int64_t source_capture_time_ms{0};
+    bool source_exact{true};
 };
 
 namespace zhulong {
@@ -255,6 +261,7 @@ bool append_image(Zhulong_snapshot_result_t &result, int32_t box_index, int32_t 
  */
 Zhulong_status_t encode_snapshot(const HardwareFrame &frame, int32_t quality,
                                  const std::vector<std::array<float, 4>> &boxes,
+                                 const FramePublisher::SnapshotSource &source,
                                  Zhulong_snapshot_h *out) {
     // 先探编码能力：两个后端都不可用（静态 FFmpeg 未编译 mjpeg 且平台无 VEPU）时
     // 应立即返回 UNSUPPORTED，而不是让调用方误以为「这一帧有问题，下次再试」。
@@ -278,10 +285,17 @@ Zhulong_status_t encode_snapshot(const HardwareFrame &frame, int32_t quality,
     }
 
     auto result = std::make_unique<Zhulong_snapshot_result_t>();
+    result->source_pts = source.pts;
+    result->source_has_pts = source.has_pts;
+    result->source_capture_time_ms = source.capture_time_ms;
+    result->source_exact = source.exact;
     std::vector<uint8_t> jpeg;
     // 全幅优先走 DMA-BUF 直通（零 CPU 拷贝）；不可用或失败时回退到 CPU 视图上传，
     // 两条路径对同一帧产出等价图像，调用方无需感知。
-    bool encoded = backend.encode_dma(frame, view, full_w, full_h, quality, jpeg);
+    // ⚠️ 只有硬件帧才尝试 DMA-BUF 直通：dma_fd < 0 的帧（软解 / 抓拍拷贝副本）必然
+    //    直通失败，而失败会累计 JpegBackend 的连续失败计数，最终把整进程的直通永久关闭。
+    bool encoded = frame.dma_fd >= 0 &&
+                   backend.encode_dma(frame, view, full_w, full_h, quality, jpeg);
     if (!encoded) {
         encoded = backend.encode(view, 0, 0, full_w, full_h, quality, jpeg);
     }
@@ -332,6 +346,27 @@ extern "C" const Zhulong_snapshot_image *Zhulong_snapshot_at(Zhulong_snapshot_h 
         return nullptr;
     }
     return &result->images[static_cast<size_t>(index)]->view;
+}
+
+extern "C" int64_t Zhulong_snapshot_source_pts(Zhulong_snapshot_h result) {
+    if (!result || !result->source_has_pts) {
+        return 0;
+    }
+    return result->source_pts;
+}
+
+extern "C" int64_t Zhulong_snapshot_source_capture_time_ms(Zhulong_snapshot_h result) {
+    if (!result) {
+        return 0;
+    }
+    return result->source_capture_time_ms;
+}
+
+extern "C" int32_t Zhulong_snapshot_source_exact(Zhulong_snapshot_h result) {
+    if (!result) {
+        return 0;
+    }
+    return result->source_exact ? 1 : 0;
 }
 
 extern "C" void Zhulong_snapshot_destroy(Zhulong_snapshot_h result) {

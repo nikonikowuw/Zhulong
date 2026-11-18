@@ -111,6 +111,12 @@ type aiStreamRef struct {
 	view        region.ViewState
 	viewPrev    region.Rect
 	viewPending bool
+
+	// noIdentityWarned 保证「结果不带任何帧身份」只告警一次（每条流一代）。
+	//
+	// 缺 PTS 时抓拍只能退回最新帧，证据图与检测帧的对齐就失效了；这条链路上
+	// 没有任何其他地方能看到「PTS 缺失」，所以必须在入口留一条可诊断的痕迹。
+	noIdentityWarned atomic.Bool
 }
 
 // newAIStreamRef 构造一个视图为全幅的 ref。
@@ -1066,9 +1072,9 @@ func (h *StreamHub) AIStreamBrokerStats(
 // Snapshot 对指定相机的 AI 分析流执行抓拍（全幅 + 可选裁剪），返回 JPEG 字节流。
 //
 // 语义（⚠️ 调用方必须了解）：
-//   - 若 options.PTS > 0，优先在 Native 历史环形缓存中精确匹配对应帧；
-//     未指定（PTS <= 0）或历史已滑出时退回抓取当前最新的一帧。
-//     历史未命中时与结果之间存在固有延迟（实测约 1~4 帧）。
+//   - 若 options.PTS > 0，优先在 Native 的两级抓拍历史中精确匹配对应帧；未指定
+//     （PTS <= 0）抓最新帧，目标帧滑出窗口时退回 **PTS 最近**的帧（不是最新帧）。
+//     副本环约覆盖最近 1.2s 的已发布帧，超出后与结果之间的偏差就不再可忽略。
 //   - 相机当前没有活跃 AI 流时返回 ErrAIStreamInactive，不自行拉起拉流：
 //     默默拉流会引来无法解释的带宽消耗与运维困惑。
 //   - 本调用同步执行 JPEG 编码（RK3568 1080p 约 35~60ms），必须在独立 goroutine
@@ -1329,6 +1335,14 @@ func (h *StreamHub) consumeAIResults(
 			}
 		}
 		res = region.Reproject(res, ref.viewFor(res.Timestamp))
+
+		// 帧身份（pts / capture_time_ms）是证据抓拍的唯一锚点：两者都没有时，
+		// Native 只能抓最新帧，证据图与这次检测结果无法绑定。
+		if res.PTS <= 0 && res.CaptureTimeMs <= 0 && ref.noIdentityWarned.CompareAndSwap(false, true) {
+			h.logger.Warn("ai result carries no frame identity (pts / capture_time_ms): evidence snapshots fall back to the latest frame",
+				zap.String("camera_id", cameraID),
+				zap.String("algorithm_id", res.AlgorithmID))
+		}
 
 		h.mu.Lock()
 		consumer := h.aiConsumer

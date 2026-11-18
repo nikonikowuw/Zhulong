@@ -312,13 +312,16 @@ typedef void (*Zhulong_log_callback)(uintptr_t token, int32_t level, uint64_t st
 /* ========================================================================== */
 
 /**
- * @brief 当前 C ABI 版本号（v6 为 AI 流分析视图 / 任务级裁剪支持；v7 为事件录像片段）
+ * @brief 当前 C ABI 版本号
+ *
+ * v6 为 AI 流分析视图 / 任务级裁剪支持；v7 为事件录像片段；
+ * v8 为抓拍帧身份锚点（请求新增 target_capture_time_ms）与抓拍自证访问器。
  *
  * 演进约定：ABI 只允许在结构体**尾部追加**字段，绝不调整已有字段偏移或语义。
  * Go 侧在初始化后必须调用 Zhulong_engine_get_abi_version 校验，头文件与静态库不一致时
  * 直接拒绝启动，避免旧归档被语言层静默复用引发的内存越界。
  */
-#define ZHULONG_ABI_VERSION 7
+#define ZHULONG_ABI_VERSION 8
 
 /**
  * @brief 查询原生静态库编译时对应的 ABI 版本
@@ -781,7 +784,11 @@ typedef struct {
     int32_t quality;      /**< JPEG 质量 1..100（越界时收敛到 [1,100]，传 0 使用默认 85） */
     int32_t box_count;    /**< 裁剪框数量，范围 [0, ZHULONG_SNAPSHOT_MAX_BOXES]；0 表示只出全幅图 */
     const float *boxes;   /**< 长度为 box_count * 4 的归一化坐标数组；box_count 为 0 时可为 NULL */
-    int64_t target_pts;   /**< 目标帧 PTS 时间戳（单位为源流时间基下的原生滴答数 Ticks）；若 <= 0 则抓取当前最新帧，若 > 0 则优先在历史环形缓存中精确匹配 */
+    int64_t target_pts;   /**< 目标帧 PTS 时间戳（单位为源流时间基下的原生滴答数 Ticks）；若 <= 0 则不按 PTS 匹配 */
+    int64_t target_capture_time_ms; /**< 目标帧采集时钟（毫秒，与算法结果里的 capture_time_ms 同源，v8 新增）。
+                                     *   > 0 时作为**首选帧身份键**，优先级高于 target_pts：它由发布侧单调生成，
+                                     *   不受插件不回传 PTS 或 RTSP 时基重置影响。两者都 <= 0 时抓取最新帧。
+                                     *   ⚠️ 旧调用方必须显式清零（结构体零初始化即可），否则会误判为「指定了某一帧」 */
 } Zhulong_snapshot_request;
 
 /** @brief 抓拍结果的不透明句柄类型，由 Zhulong_stream_snapshot 分配 */
@@ -791,12 +798,22 @@ typedef struct Zhulong_snapshot_result_t *Zhulong_snapshot_h;
  * @brief 对指定流的 AI 解码会话执行抓拍（全幅 + 可选裁剪），输出 JPEG
  *
  * 语义与限制（⚠️ 请完整阅读后再使用）：
- *   - **帧来源**：若 request->target_pts > 0，优先在 Native 历史环形缓存中精确
- *     匹配对应 PTS 的帧；若历史已淘汰或 target_pts <= 0，退回当前最新的一帧。
- *   - **持帧上限与缓冲预算**：Native 侧为历史抓拍保留固定 4 帧借用引用（实测
- *     推理结果回传延迟约 1~4 帧）。在 RK3568 硬解 720p（10 缓冲池）/ 1080p
- *     （16 缓冲池）下，分别保留 6 / 12 个空闲缓冲供解码器参考帧与轮转，
- *     确保不会耗尽 buffer group 导致解码卡顿。
+ *   - **帧来源**：若 request->target_capture_time_ms > 0 或 request->target_pts > 0，
+ *     按以下顺序解析：
+ *     1) 按 capture_time_ms 在像素副本环精确匹配（首选身份键，v8）；
+ *     2) 按 target_pts 精确匹配：借用引用优先（零拷贝、保留硬件 JPEG 直通），
+ *        其次像素副本环（与解码池解耦，约覆盖最近 1.2 s / 24 MiB 的已发布帧）；
+ *     3) 若目标帧已滑出窗口，退回**按给定键最近**的帧（而不是最新帧——最新帧在
+ *        时间上最远，正是「检测框画在别的帧上」的来源），并打限频告警 + 计数。
+ *     两个键都 <= 0 时等价于「抓最近一帧」。
+ *   - **抓拍自证**：结果句柄可通过 Zhulong_snapshot_source_capture_time_ms /
+ *     Zhulong_snapshot_source_pts / Zhulong_snapshot_source_exact 查询「实际取到的是
+ *     哪一帧」以及是否精确命中请求。调用方应据此断言证据图与检测结果同帧。
+ *   - **持帧上限与缓冲预算**：借用引用固定 4 帧（实测推理结果回传延迟约 1~4 帧）。
+ *     在 RK3568 硬解 720p（10 缓冲池）/ 1080p（16 缓冲池）下，分别保留 6 / 12 个
+ *     空闲缓冲供解码器参考帧与轮转，确保不会耗尽 buffer group 导致解码卡顿。
+ *     更长的历史由**像素副本**承担（不占用解码缓冲），代价是每发布帧一次全幅
+ *     memcpy（1080p NV12 约 3.1 MB，5 fps 下约 15 MB/s）。
  *   - **前置条件**：该流必须存在活跃的 AI 解码会话（即已有 AI 消费者挂载）。
  *     无解码会话时返回 Zhulong_ERR_NOT_FOUND，而不是自行拉起拉流。
  *   - **同步阻塞**：本函数执行 JPEG 编码，耗时与分辨率、裁剪框数量正相关
@@ -838,6 +855,32 @@ int32_t Zhulong_snapshot_count(Zhulong_snapshot_h result);
  *         该指针在 Zhulong_snapshot_destroy 之后失效。
  */
 const Zhulong_snapshot_image *Zhulong_snapshot_at(Zhulong_snapshot_h result, int32_t index);
+
+/**
+ * @brief 查询本次抓拍**实际取到**的帧身份：原始 PTS
+ *
+ * @param result 结果句柄
+ * @return 命中帧的 PTS；帧不带 PTS（源头未提供）或句柄为空时返回 0
+ */
+int64_t Zhulong_snapshot_source_pts(Zhulong_snapshot_h result);
+
+/**
+ * @brief 查询本次抓拍**实际取到**的帧身份：采集时钟（毫秒，发布侧单调时间）
+ *
+ * @param result 结果句柄
+ * @return 命中帧的 capture_time_ms；身份未知（如借用环反查不到记录）或句柄为空时返回 0
+ */
+int64_t Zhulong_snapshot_source_capture_time_ms(Zhulong_snapshot_h result);
+
+/**
+ * @brief 判断本次抓拍是否**精确命中**请求的帧
+ *
+ * @param result 结果句柄
+ * @return 1 精确命中（或调用方未指定目标帧，取到的就是所要求的最新帧）；
+ *         0 表示请求的帧已滑出历史窗口、返回的是按时间最近的替代帧。
+ *         调用方应把 0 视为「证据图不能与本次检测结果绑定」。
+ */
+int32_t Zhulong_snapshot_source_exact(Zhulong_snapshot_h result);
 
 /**
  * @brief 释放抓拍结果及其全部图片数据

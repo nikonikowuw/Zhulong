@@ -55,10 +55,14 @@ type snapshotOutput struct {
 
 // snapshotJob 是一次待执行的抓拍写盘任务。
 type snapshotJob struct {
-	cameraID    string
-	pts         int64
-	targetTable string
-	targetID    string
+	cameraID string
+	pts      int64
+	// captureTimeMs 是推理结果携带的帧采集时钟（毫秒）。> 0 时它是断言
+	// 「证据图与检测结果同帧」的首选键：它比 pts 可靠 —— 插件可以不回传 pts，
+	// RTSP 重连还会重置时基。
+	captureTimeMs int64
+	targetTable   string
+	targetID      string
 	// boxes 是归一化裁剪框，索引 i 对应 boxIndex == i 的输出。
 	boxes   []engine.SnapshotBox
 	outputs []snapshotOutput
@@ -100,9 +104,11 @@ type SnapshotStore struct {
 
 	quality int
 
-	// dropMu 保护 dropped：入队失败发生在调用方 goroutine，读侧是运维接口。
-	dropMu  sync.Mutex
-	dropped int64
+	// dropMu 保护抓拍统计（dropped / mismatched）：写侧分别在调用方 goroutine
+	// 与 worker goroutine，读侧是运维接口。
+	dropMu     sync.Mutex
+	dropped    int64
+	mismatched int64
 }
 
 // NewSnapshotStore 构造抓拍落盘组件，quality 为 JPEG 质量（0 表示使用默认值）。
@@ -198,6 +204,16 @@ func (s *SnapshotStore) Dropped() int64 {
 	return s.dropped
 }
 
+// Mismatched 返回「抓拍取到的帧与检测结果不是同一帧」的累计次数。
+//
+// 非零说明 Native 的历史窗口已经覆盖不住算法回传延迟：证据图上的框会画在别的
+// 画面上。这个计数是判断「需不需要调大副本环预算」的唯一现场依据。
+func (s *SnapshotStore) Mismatched() int64 {
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
+	return s.mismatched
+}
+
 // Enqueue 提交一次抓拍写盘任务，非阻塞。
 //
 // 返回 false 表示任务被丢弃（不可用、已停机或队列已满），调用方应让路径字段留空。
@@ -285,15 +301,17 @@ func (s *SnapshotStore) capture(job snapshotJob) (string, map[int]engine.Snapsho
 	}
 
 	images, err := s.provider.Snapshot(ctx, job.cameraID, engine.SnapshotOptions{
-		Quality: s.quality,
-		PTS:     job.pts,
-		Boxes:   job.boxes,
+		Quality:       s.quality,
+		PTS:           job.pts,
+		CaptureTimeMs: job.captureTimeMs,
+		Boxes:         job.boxes,
 	})
 	if err != nil {
 		s.logger.Warn("snapshot capture failed",
 			zap.String("camera_id", job.cameraID), zap.Error(err))
 		return "", nil, false
 	}
+	s.verifySource(job, images)
 
 	// 按 boxIndex 建索引：原生层可能跳过退化框，不能按位置对应。
 	byIndex := make(map[int]engine.SnapshotImage, len(images))
@@ -302,6 +320,48 @@ func (s *SnapshotStore) capture(job snapshotJob) (string, map[int]engine.Snapsho
 	}
 
 	return root, byIndex, true
+}
+
+// verifySource 断言本次抓拍取到的确实是检测结果对应的那一帧。
+//
+// 证据图是追溯凭据：帧一旦错位，框就画在别的画面上，而这在界面上与「检测不准」
+// 看起来完全一样。Native 侧已经把实际帧的身份（pts / capture_time_ms / exact）
+// 回传上来，这里把它变成可检索的告警与计数，而不是静默落盘。
+//
+// ⚠️ 这里只告警、不改写记录：告警图仍然要落盘（有图总比没图强），但调用方与运维
+// 能通过 mismatched 计数和这条 Warn 立刻看出「这批图不能当证据用」。
+func (s *SnapshotStore) verifySource(job snapshotJob, images []engine.SnapshotImage) {
+	if len(images) == 0 {
+		return
+	}
+	source := images[0].Source
+	mismatch := !source.Exact
+	switch {
+	case job.captureTimeMs > 0:
+		mismatch = mismatch || source.CaptureTimeMs != job.captureTimeMs
+	case job.pts > 0:
+		mismatch = mismatch || source.PTS != job.pts
+	default:
+		// 结果既无 capture_time_ms 也无 pts：没有可断言的帧身份，不算错。
+		return
+	}
+	if !mismatch {
+		return
+	}
+
+	s.dropMu.Lock()
+	s.mismatched++
+	s.dropMu.Unlock()
+	s.logger.Warn("snapshot frame does not match the inference result",
+		zap.String("camera_id", job.cameraID),
+		zap.String("table", job.targetTable),
+		zap.String("record_id", job.targetID),
+		zap.Int64("expected_pts", job.pts),
+		zap.Int64("expected_capture_time_ms", job.captureTimeMs),
+		zap.Int64("actual_pts", source.PTS),
+		zap.Int64("actual_capture_time_ms", source.CaptureTimeMs),
+		zap.Bool("actual_exact", source.Exact),
+	)
 }
 
 // writeOutputs 把抓拍结果写到各自的目标路径，返回「哪些相对路径确实写成了」。

@@ -180,6 +180,7 @@ type InferenceResult struct {
 	AlgorithmID     string               `json:"algorithm_id"`
 	PTS             int64                `json:"pts"`
 	PTSUS           *int64               `json:"pts_us,omitempty"`
+	CaptureTimeMs   int64                `json:"capture_time_ms,omitempty"`
 	Timestamp       time.Time            `json:"timestamp"`
 	TaskType        string               `json:"task_type"`
 	CostMs          int64                `json:"cost_ms"`
@@ -410,6 +411,9 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		ptsUS := *payload.PTSUS
 		res.PTSUS = &ptsUS
 	}
+	// 帧的采集时钟（发布侧单调生成）：抓拍用它作为首选帧身份键，比 pts 可靠
+	// ——插件可以不回传 pts，RTSP 重连还会重置时基。0 表示本条结果没带。
+	res.CaptureTimeMs = payload.CaptureTimeMs
 	return res, nil
 }
 

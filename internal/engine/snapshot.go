@@ -26,6 +26,20 @@ const DefaultSnapshotQuality = 85
 // 它们可以赋值给同一变量的时候就没人能拦住把分析窗口当裁剪框传进去。
 type SnapshotBox [4]float64
 
+// SnapshotSource 标识一次抓拍**实际取到**的是哪一帧。
+//
+// 宿主用它断言「证据图与检测结果同帧」：PTS / CaptureTimeMs 应当等于推理结果里的
+// 同名身份；Exact 为 false 说明请求的帧已滑出 Native 的历史窗口，返回的是按时间
+// 最近的替代帧 —— 此时图与结果不能绑定，调用方必须自行标注或告警。
+type SnapshotSource struct {
+	// PTS 是命中帧的原始 PTS；0 表示帧本身不带 PTS（身份未知）。
+	PTS int64
+	// CaptureTimeMs 是命中帧的采集时钟（毫秒，发布侧单调时间）；0 表示身份未知。
+	CaptureTimeMs int64
+	// Exact 报告本次是否精确命中请求的帧；调用方未指定目标帧时为 true。
+	Exact bool
+}
+
 // SnapshotImage 是一张抓拍图。
 //
 // BoxIndex 为 -1 表示全幅图；>=0 表示对应 SnapshotBoxes[i] 的裁剪图。
@@ -36,15 +50,20 @@ type SnapshotImage struct {
 	Width    int
 	Height   int
 	JPEG     []byte
+	// Source 是本次抓拍的帧身份。同一次抓拍的所有图片共享同一个值。
+	Source SnapshotSource
 }
 
 // SnapshotOptions 控制一次抓拍的编码参数。
 type SnapshotOptions struct {
 	// Quality 为 JPEG 质量 1..100。0 表示使用 DefaultSnapshotQuality。
 	Quality int
-	// PTS 为目标帧的时间戳（源流原生时基 ticks）；<= 0 抓当前最新帧，
-	// > 0 则优先在历史环形缓存中精确匹配。
+	// PTS 为目标帧的时间戳（源流原生时基 ticks）；<= 0 表示不按 PTS 匹配。
 	PTS int64
+	// CaptureTimeMs 为目标帧的采集时钟（毫秒，与 InferenceResult.CaptureTimeMs 同源）。
+	// > 0 时它是**首选帧身份键**，优先级高于 PTS：由发布侧单调生成，不受插件不回传
+	// PTS 或 RTSP 时基重置影响。PTS 与 CaptureTimeMs 都 <= 0 时抓当前最新帧。
+	CaptureTimeMs int64
 	// Boxes 为需要额外输出的裁剪框；为空表示只出全幅图。
 	// 上限为 MaxSnapshotBoxes。
 	Boxes []SnapshotBox
@@ -53,9 +72,9 @@ type SnapshotOptions struct {
 // Snapshot 对指定流执行抓拍（全幅 + 可选裁剪），返回完整 JPEG 字节流。
 //
 // ⚠️ 语义与陷阱（与 C ABI 文档保持一致）：
-//   - 若 options.PTS > 0，优先在 Native 历史环形缓存中精确匹配对应帧；若历史已淘汰或
-//     options.PTS <= 0，退回抓取当前最新的一帧。二者在历史未匹配时存在固有延迟
-//     （实测约 1~4 帧）。
+//   - 若 options.PTS > 0，优先在 Native 的两级抓拍历史中精确匹配对应帧（4 帧借用环 →
+//     约 1.2s / 24 MiB 像素副本环）；目标帧滑出窗口时退回 **PTS 最近**的帧（不是最新帧），
+//     并计入 Native 的 snapshot_miss_count、按 1s 限频打 `snapshot_pts_evicted` 告警。
 //   - 该流必须已有活跃的 AI 解码会话（即已有 AI 消费者），否则返回 StatusNotFound。
 //   - 本调用同步执行 JPEG 编码（RK3568 上 1080p 约 35~60ms），不可在热路径或
 //     Native 回调中调用。
@@ -106,6 +125,7 @@ func (s *Stream) Snapshot(ctx context.Context, options SnapshotOptions) ([]Snaps
 	}
 	req.quality = C.int32_t(clampQuality(options.Quality))
 	req.target_pts = C.int64_t(options.PTS)
+	req.target_capture_time_ms = C.int64_t(options.CaptureTimeMs)
 
 	return s.engine.snapshot(ref.generation, ref.id, &req)
 }
@@ -157,6 +177,12 @@ func (e *Engine) snapshot(
 	}
 	defer C.Zhulong_snapshot_destroy(result)
 
+	source := SnapshotSource{
+		PTS:           int64(C.Zhulong_snapshot_source_pts(result)),
+		CaptureTimeMs: int64(C.Zhulong_snapshot_source_capture_time_ms(result)),
+		Exact:         C.Zhulong_snapshot_source_exact(result) != 0,
+	}
+
 	count := int(C.Zhulong_snapshot_count(result))
 	if count <= 0 {
 		return nil, nativeErrorf("snapshot", StatusInternal, "native snapshot returned no images")
@@ -175,6 +201,7 @@ func (e *Engine) snapshot(
 			Width:    int(view.width),
 			Height:   int(view.height),
 			JPEG:     C.GoBytes(unsafe.Pointer(view.data), C.int(view.size)),
+			Source:   source,
 		})
 	}
 	if len(images) == 0 {

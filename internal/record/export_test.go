@@ -78,6 +78,15 @@ func NewSnapshotJobForTest(cameraID string, boxes []engine.SnapshotBox, outputs 
 	)
 }
 
+// NewSnapshotJobWithIdentityForTest 构造携带完整帧身份（pts + capture_time_ms）的测试抓拍任务。
+func NewSnapshotJobWithIdentityForTest(cameraID string, pts, captureTimeMs int64,
+	boxes []engine.SnapshotBox, outputs []SnapshotOutputForTest) snapshotJob {
+	job := NewSnapshotJobForTest(cameraID, boxes, outputs)
+	job.pts = pts
+	job.captureTimeMs = captureTimeMs
+	return job
+}
+
 // NewSnapshotJobWithPTSForTest 构造携带指定 PTS 的测试抓拍任务。
 func NewSnapshotJobWithPTSForTest(
 	cameraID string,

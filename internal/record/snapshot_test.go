@@ -468,3 +468,111 @@ func TestSnapshotStoreClearsPathsOnSnapshotFailure(t *testing.T) {
 		return caps[0].ImagePath == "" && caps[0].CropPath == ""
 	})
 }
+
+// TestSnapshotStoreVerifiesFrameIdentity 钉住「证据图与检测结果同帧」的自证：
+// Worker 必须把结果携带的帧身份传给 Native，并把 Native 回报的**实际**帧身份与它
+// 比对。不一致时计入 Mismatched 并告警，但图仍然照常落盘 —— 有图总比没图强，
+// 缺的是「这张图能不能当证据」这个结论。
+func TestSnapshotStoreVerifiesFrameIdentity(t *testing.T) {
+	const (
+		expectedPTS  = int64(1400)
+		expectedTime = int64(5013)
+	)
+	cases := []struct {
+		name         string
+		jobPTS       int64
+		jobTime      int64
+		source       engine.SnapshotSource
+		wantMismatch int64
+	}{
+		{
+			name:    "exact match by capture time",
+			jobPTS:  expectedPTS,
+			jobTime: expectedTime,
+			source: engine.SnapshotSource{
+				PTS: expectedPTS, CaptureTimeMs: expectedTime, Exact: true,
+			},
+			wantMismatch: 0,
+		},
+		{
+			name:    "capture time mismatch",
+			jobPTS:  expectedPTS,
+			jobTime: expectedTime,
+			source: engine.SnapshotSource{
+				PTS: expectedPTS, CaptureTimeMs: 5002, Exact: false,
+			},
+			wantMismatch: 1,
+		},
+		{
+			name:    "identity matches but native refused to confirm it",
+			jobPTS:  expectedPTS,
+			jobTime: expectedTime,
+			source: engine.SnapshotSource{
+				PTS: expectedPTS, CaptureTimeMs: expectedTime, Exact: false,
+			},
+			wantMismatch: 1,
+		},
+		{
+			name:    "pts only fallback",
+			jobPTS:  expectedPTS,
+			jobTime: 0,
+			source: engine.SnapshotSource{
+				PTS: expectedPTS, Exact: true,
+			},
+			wantMismatch: 0,
+		},
+		{
+			name:    "pts only mismatch",
+			jobPTS:  expectedPTS,
+			jobTime: 0,
+			source: engine.SnapshotSource{
+				PTS: 1300, Exact: true,
+			},
+			wantMismatch: 1,
+		},
+		{
+			name:    "result carries no frame identity",
+			jobPTS:  0,
+			jobTime: 0,
+			source: engine.SnapshotSource{
+				PTS: 1400, CaptureTimeMs: 5013, Exact: false,
+			},
+			wantMismatch: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rel := "snapshots/cam-01/2026-10-20/identity.jpg"
+			provider := &fakeSnapshotProvider{images: []engine.SnapshotImage{{
+				BoxIndex: -1, Width: 64, Height: 48, JPEG: jpegStub(0xA0), Source: tc.source,
+			}}}
+			root := t.TempDir()
+			store := record.NewSnapshotStore(
+				provider,
+				&fakeMediaRoot{root: root},
+				&fakeGate{allow: true},
+				85,
+				zap.NewNop(),
+			)
+			store.Start()
+
+			if !store.Enqueue(record.NewSnapshotJobWithIdentityForTest("cam-01", tc.jobPTS, tc.jobTime,
+				nil, []record.SnapshotOutputForTest{{BoxIndex: -1, RelPath: rel}})) {
+				t.Fatal("enqueue rejected")
+			}
+			store.Stop()
+
+			if got := store.Mismatched(); got != tc.wantMismatch {
+				t.Fatalf("Mismatched() = %d, want %d", got, tc.wantMismatch)
+			}
+			// 身份不匹配也绝不能丢掉证据图：现场靠它判断「当时画面里到底有什么」。
+			if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+				t.Fatalf("evidence image must be written regardless of identity mismatch: %v", err)
+			}
+			if got := provider.lastOptions().CaptureTimeMs; got != tc.jobTime {
+				t.Fatalf("CaptureTimeMs forwarded to native = %d, want %d", got, tc.jobTime)
+			}
+		})
+	}
+}

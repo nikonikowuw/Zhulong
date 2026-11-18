@@ -141,6 +141,12 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - 未到发布周期的帧就地丢弃释放，杜绝无意义的共享内存拷贝与 socket 通知；
    - 推送至 `FrameBroker` 后立即 reset `HardwareFrame` 句柄，杜绝慢算法跨进程反压卡死上游解码会话。
    - ⚠️ **抓拍历史只收已下发的帧**：`FramePublisher` 的环形缓存只在 `publish_frame` 返回 `true` 后压入，与 `latest_frame()`/`find_frame()` 的「最近一次发布过的帧」契约一致；节流丢弃与发布失败都不入环。
+   - ⚠️ **抓拍历史是两级结构，借用环只有 4 帧不够用**：慢算法回传延迟经常超过 4 帧（RKNN 板端尤甚），因此除 4 帧借用环外还有一层**像素副本环**（`SnapshotFrame`，时间窗 `snapshot_window=1200ms` + 帧数 12 + 字节 24 MiB）。副本用 `WindowCrop::copy` 以 `packed_layout_for()` 的紧打包布局落到堆内存，`find_frame()` 命中时用 `release_fn` 延长字节生命周期包成临时 `HardwareFrame`（`dma_fd=-1`、`host_planes` 来自 `layout.offsets/strides`）。**绝不能靠加大借用环来扩历史**：720p 解码池只有 10 帧，多占的每个引用都会挤压 buffer group。
+   - ⚠️ **未命中必须回退到 PTS 最近的帧，不能回退最新帧**：最新帧在时间上离目标最远，会把旧帧的检测框画到新画面上（证据图框偏移的直接成因）。回退同时递增 `snapshot_miss_count` 并按 1 s 限频告警 `snapshot_pts_evicted`（含 requested/nearest/delta/持有区间），让「窗口够不够」可观测。
+   - ⚠️ **帧身份锚点是 `capture_time_ms`，不是 `pts`（ABI v8）**：`pts` 由源流给出，插件可以不回传（结果为 0），RTSP 重连还会重置时基（不同帧撞同一个 `pts`）。因此 `Zhulong_snapshot_request` 尾部新增 `target_capture_time_ms` 作为**首选身份键**：它由发布线程单调生成（见 §6 `capture_time_ms` 严格递增），随 broker 消息与结果 JSON 下发。匹配顺序固定为 `capture_time_ms` 精确 → `pts` 精确（借用环优先，保留硬件 JPEG 直通）→ 按给定键最近的回退帧。
+   - ⚠️ **抓拍必须自证「取到的是哪一帧」**：`Zhulong_snapshot_result_t` 记录实际命中帧的 `source_pts` / `source_capture_time_ms` / `source_exact`，由 `Zhulong_snapshot_source_pts` / `Zhulong_snapshot_source_capture_time_ms` / `Zhulong_snapshot_source_exact` 读取。`exact=false` 意味着请求的帧已滑出窗口，宿主**必须**据此拒绝把证据图与该次检测结果绑定（Go 侧见 `SnapshotStore.verifySource`）。没有这三个值，宿主只能假设成功，错位就会一路静默到界面上。
+   - ⚠️ **副本环是「发布时间」的拷贝，不是「抓拍时间」的**：帧在 `publish_frame` 之后立即归还解码池，等算法结果回来已无帧可拷。想加长历史只能加副本预算（`snapshot_bytes_capacity` / `snapshot_window`），不能延后拷贝。
+   - ⚠️ **确认流程**：`find_frame(pts)` 等价于 `resolve_frame(pts, 0).frame`；新增调用方一律直接用 `resolve_frame(pts, capture_time_ms)` 取身份，不要自己拼 `SnapshotSource`。
    - ⚠️ **发布失败是显式失败，不是静默丢帧**：`publish_frame` 返回 `false` 时必须已完整回滚（配额归还、槽位置 `FREE`、`total_dropped_` 递增），且**绝不**发出 `MSG_FRAME_DISPATCH`。订阅方不得假设「没收到通知 = 帧被节流丢弃」与「收到通知 = 槽位内容就是该帧」以外还有第三种状态。
    - ⚠️ **慢消费者导致发送超时后走租约清算**：`write_all` 在 `SO_SNDTIMEO` 下 `EAGAIN` 必须 `poll(POLLOUT)` 有界等待（详见 [算法插件契约 §6.4](./algo-plugin-contract.md)）。超时返回 `false` 后由 `publish_frame` 清算该客户端租约，**绝不**无界自旋 —— 否则发布线程与持 `Engine::control` 锁的广播路径会一并挂死。
 3. **宿主生命周期绑定与资源隔离**：

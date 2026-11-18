@@ -299,6 +299,12 @@ void test_c_abi_handle_semantics() {
     CHECK(req.box_count == 0);
     CHECK(req.boxes == nullptr);
     CHECK(req.target_pts == 0);
+    CHECK(req.target_capture_time_ms == 0);
+
+    // 4. 抓拍自证访问器对空句柄必须安全，且语义是「身份未知 / 不算精确」
+    CHECK(Zhulong_snapshot_source_pts(nullptr) == 0);
+    CHECK(Zhulong_snapshot_source_capture_time_ms(nullptr) == 0);
+    CHECK(Zhulong_snapshot_source_exact(nullptr) == 0);
 }
 
 void test_frame_publisher_find_frame() {
@@ -368,6 +374,154 @@ void test_frame_publisher_find_frame() {
     CHECK(publisher.find_frame(0) == nullptr);
 }
 
+
+void test_frame_publisher_snapshot_history() {
+    using zhulong::FramePublisher;
+    using zhulong::HardwareFrame;
+    using zhulong::ViewWindow;
+
+    // 与 WindowCrop::copy 同布局的全幅物化：Y/UV 分平面逐行紧打包，dst_stride = align_up(w, 64)。
+    auto crop = [](const HardwareFrame& frame, const ViewWindow& win, uint8_t* dst, size_t size,
+                   int stride, int /*dst_dma_fd*/) {
+        if (win.w <= 0 || win.h <= 0 || frame.host_planes[0] == nullptr ||
+            frame.host_planes[1] == nullptr) {
+            return false;
+        }
+        const size_t y_bytes = static_cast<size_t>(stride) * static_cast<size_t>(win.h);
+        if (y_bytes * 3 / 2 > size) {
+            return false;
+        }
+        for (int row = 0; row < win.h; ++row) {
+            std::memcpy(dst + static_cast<size_t>(row) * static_cast<size_t>(stride),
+                        frame.host_planes[0] +
+                            static_cast<size_t>(row + win.y) * frame.plane_strides[0],
+                        static_cast<size_t>(stride));
+        }
+        for (int row = 0; row < win.h / 2; ++row) {
+            std::memcpy(dst + y_bytes + static_cast<size_t>(row) * static_cast<size_t>(stride),
+                        frame.host_planes[1] +
+                            static_cast<size_t>(row + win.y / 2) * frame.plane_strides[1],
+                        static_cast<size_t>(stride));
+        }
+        return true;
+    };
+
+    FramePublisher publisher(nullptr, nullptr, crop);
+
+    // 每个 pts 填充可辨认的常量，用于验证「取回的确实是那一帧的像素」。
+    auto make_frame = [](int64_t pts) -> HardwareFrame::ConstPtr {
+        auto frame = std::make_shared<HardwareFrame>();
+        frame->width = kWidth;
+        frame->height = kHeight;
+        frame->stride = kWidth;
+        frame->vstride = kHeight;
+        frame->format = zhulong::FRAME_FORMAT_NV12;
+        auto bytes = std::make_shared<std::vector<uint8_t>>(
+            static_cast<size_t>(kWidth) * kHeight * 3 / 2, static_cast<uint8_t>(pts & 0xFF));
+        frame->host_ptr = bytes->data();
+        frame->host_planes[0] = bytes->data();
+        frame->host_planes[1] = bytes->data() + static_cast<size_t>(kWidth) * kHeight;
+        frame->plane_strides[0] = kWidth;
+        frame->plane_strides[1] = kWidth;
+        frame->pts = pts;
+        frame->has_pts = true;
+        frame->release_fn = [bytes](HardwareFrame* /*self*/) {};
+        return frame;
+    };
+
+    // 1. 连续发布 14 帧（pts 100..1400）：副本环按帧数上限淘汰最旧两帧。
+    //    每帧带一个单调的采集时钟 capture_time_ms = 5000 + i，作为抓拍的首选身份键。
+    HardwareFrame::ConstPtr last_frame;
+    for (int64_t i = 0; i < 14; ++i) {
+        last_frame = make_frame(100 + i * 100);
+        publisher.push_frame(last_frame, 5000 + i);
+    }
+    CHECK(publisher.snapshot_cache_frames() == 12);
+    CHECK(publisher.snapshot_cache_bytes() > 0);
+    CHECK(publisher.snapshot_miss_count() == 0);
+
+    // 2. 精确命中：取回的是副本（无 dmabuf）、像素内容与 pts 对应
+    auto exact = publisher.find_frame(1400);
+    CHECK(exact != nullptr);
+    CHECK(exact->pts == 1400 && exact->has_pts);
+    CHECK(exact->width == kWidth && exact->height == kHeight);
+    CHECK(exact->format == zhulong::FRAME_FORMAT_NV12);
+    CHECK(exact->dma_fd < 0);
+    CHECK(exact->host_planes[0] != nullptr);
+    CHECK(exact->host_planes[1] == exact->host_planes[0] + static_cast<size_t>(kWidth) * kHeight);
+    CHECK(exact->host_planes[0][0] == static_cast<uint8_t>(1400 & 0xFF));
+    CHECK(exact->plane_strides[0] == kWidth);
+
+    // 3. 两个身份键都 <= 0：取副本环尾部，并回报「取到的就是最新帧」
+    auto latest = publisher.resolve_frame(0, 0);
+    CHECK(latest.frame != nullptr && latest.frame->pts == 1400);
+    CHECK(latest.source.exact);
+    CHECK(latest.source.has_pts && latest.source.pts == 1400);
+    CHECK(latest.source.capture_time_ms == 5013);
+    CHECK(publisher.latest_frame() != nullptr && publisher.latest_frame()->pts == 1400);
+
+    // 4. 身份键优先：capture_time_ms 精确命中，即使同时给了指向另一帧的 pts
+    auto by_time = publisher.resolve_frame(800, 5013);
+    CHECK(by_time.frame != nullptr && by_time.frame->pts == 1400);
+    CHECK(by_time.source.exact && by_time.source.capture_time_ms == 5013);
+
+    // 5. 同一帧仍留在借用环里时改用借用帧（保留硬件 JPEG 直通），身份不变
+    auto by_time_hw = publisher.resolve_frame(0, 5013);
+    CHECK(by_time_hw.frame == last_frame);
+    CHECK(by_time_hw.source.exact && by_time_hw.source.capture_time_ms == 5013);
+
+    // 6. 超出 4 帧借用环、但仍在副本环内：capture_time_ms 同样精确命中
+    auto older_time = publisher.resolve_frame(0, 5002);
+    CHECK(older_time.frame != nullptr && older_time.frame->pts == 300);
+    CHECK(older_time.frame->dma_fd < 0);
+    CHECK(older_time.source.exact && older_time.source.pts == 300);
+    CHECK(older_time.source.capture_time_ms == 5002);
+    CHECK(publisher.snapshot_miss_count() == 0);
+
+    // 7. 帧已滑出副本环：按 capture_time_ms 回退最近的副本帧，且必须自报 exact=false
+    //    —— 这正是宿主拒绝把证据图与检测结果绑定的信号。
+    auto evicted_time = publisher.resolve_frame(0, 5000);
+    CHECK(evicted_time.frame != nullptr && evicted_time.frame->pts == 300);
+    CHECK(!evicted_time.source.exact);
+    CHECK(evicted_time.source.capture_time_ms == 5002);
+    CHECK(publisher.snapshot_miss_count() == 1);
+
+    // 8. 只给 pts：精确命中时身份一并回报（副本环自带 capture_time_ms）
+    auto by_pts = publisher.resolve_frame(800, 0);
+    CHECK(by_pts.frame != nullptr && by_pts.frame->pts == 800);
+    CHECK(by_pts.source.exact && by_pts.source.pts == 800);
+    CHECK(by_pts.source.capture_time_ms == 5007);
+
+    // 9. 借用环帧不带 capture_time_ms，由发布记录反查；同时给 capture_time_ms 时，
+    //    pts 命中不算精确（没能证实是同一帧）。
+    publisher.record_published_pts(5013, 1400, true, 0);
+    auto borrowed = publisher.resolve_frame(1400, 0);
+    CHECK(borrowed.frame == last_frame);
+    CHECK(borrowed.source.exact && borrowed.source.capture_time_ms == 5013);
+    //    ⚠️ 未证实的身份不计入 miss（那是「淘汰」的计数），但必须自报 exact=false，
+    //    由宿主侧告警 —— 见 internal/record/snapshot.go 的 verifySource。
+    auto unconfirmed = publisher.resolve_frame(1400, 9999);
+    CHECK(unconfirmed.frame == last_frame);
+    CHECK(!unconfirmed.source.exact);
+    CHECK(publisher.snapshot_miss_count() == 1);
+
+    // 10. 超出 4 帧借用环、但仍在副本环内的帧必须精确命中（慢算法回传的常态）
+    auto older = publisher.find_frame(300);
+    CHECK(older != nullptr && older->pts == 300);
+    CHECK(publisher.snapshot_miss_count() == 1);
+
+    // 11. 已被淘汰的帧回退到 PTS 最近的副本帧（而非最新帧），并计入未命中
+    auto evicted = publisher.find_frame(100);
+    CHECK(evicted != nullptr && evicted->pts == 300);
+    CHECK(publisher.snapshot_miss_count() == 2);
+
+    // 6. 副本字节随返回值存活：停流清空历史后仍可安全读取
+    auto kept = publisher.find_frame(1400);
+    publisher.stop();
+    CHECK(publisher.find_frame(0) == nullptr);
+    CHECK(kept != nullptr);
+    CHECK(kept->host_planes[0][0] == static_cast<uint8_t>(1400 & 0xFF));
+}
 } // namespace
 
 int main() {
@@ -377,6 +531,7 @@ int main() {
         test_encode_jpeg_roundtrip();
         test_c_abi_handle_semantics();
         test_frame_publisher_find_frame();
+        test_frame_publisher_snapshot_history();
         std::cout << "snapshot_test: all checks passed" << std::endl;
         return 0;
     } catch (const std::exception &e) {

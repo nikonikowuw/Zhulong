@@ -1196,6 +1196,11 @@ HardwareFrame::ConstPtr Engine::latest_frame(Zhulong_stream_id id) {
 }
 
 HardwareFrame::ConstPtr Engine::find_frame(Zhulong_stream_id id, int64_t pts) {
+    return find_snapshot_frame(id, pts, 0).frame;
+}
+
+FramePublisher::SnapshotMatch Engine::find_snapshot_frame(Zhulong_stream_id id, int64_t pts,
+                                                          int64_t capture_time_ms) {
     if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
     std::shared_ptr<FramePublisher> publisher;
     {
@@ -1209,7 +1214,7 @@ HardwareFrame::ConstPtr Engine::find_frame(Zhulong_stream_id id, int64_t pts) {
         throw Failure{Zhulong_ERR_NOT_FOUND};
     }
     // 锁外读取：publisher 由 shared_ptr 保活，其内部短锁与 control / registry 无关
-    return publisher->find_frame(pts);
+    return publisher->resolve_frame(pts, capture_time_ms);
 }
 
 Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type,

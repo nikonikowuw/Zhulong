@@ -48,11 +48,13 @@ namespace zhulong {
  * @param frame 已取到的只读帧引用
  * @param quality 已收敛到 [1,100] 的 JPEG 质量
  * @param boxes 归一化 [x1,y1,x2,y2] 框列表（可为空）
+ * @param source 实际命中帧的身份（回传给宿主做「图与结果同帧」自证）
  * @param[out] out 成功时接收分配好的结果句柄
  * @return Zhulong_status_t
  */
 Zhulong_status_t encode_snapshot(const HardwareFrame &frame, int32_t quality,
                                  const std::vector<std::array<float, 4>> &boxes,
+                                 const FramePublisher::SnapshotSource &source,
                                  Zhulong_snapshot_h *out);
 
 } // namespace zhulong
@@ -648,12 +650,14 @@ extern "C" Zhulong_status_t Zhulong_stream_snapshot(Zhulong_engine_h engine, Zhu
         int32_t quality = 85;
         int32_t box_count = 0;
         int64_t target_pts = 0;
+        int64_t target_capture_time_ms = 0;
         if (request != nullptr) {
             if (request->quality != 0) {
                 quality = request->quality < 1 ? 1 : (request->quality > 100 ? 100 : request->quality);
             }
             box_count = request->box_count;
             target_pts = request->target_pts;
+            target_capture_time_ms = request->target_capture_time_ms;
             require(box_count >= 0 && box_count <= ZHULONG_SNAPSHOT_MAX_BOXES);
             if (box_count > 0) {
                 require(request->boxes != nullptr);
@@ -674,15 +678,19 @@ extern "C" Zhulong_status_t Zhulong_stream_snapshot(Zhulong_engine_h engine, Zhu
             boxes.push_back({src[0], src[1], src[2], src[3]});
         }
 
-        // 3. 取帧（优先按 target_pts 匹配历史帧，未匹配或未指定时退回最新帧，内部短锁），返回后锁已释放
-        zhulong::HardwareFrame::ConstPtr frame = engine->implementation.find_frame(stream, target_pts);
-        if (!frame) {
+        // 3. 取帧：capture_time_ms 是首选身份键（发布侧单调生成，不受 pts 缺失/时基重置
+        //    影响），其次才是 target_pts；两者都未命中时退回按给定键最近的帧并告警。
+        //    结果同时带回实际帧的身份，供宿主断言「证据图与检测结果同帧」。
+        zhulong::FramePublisher::SnapshotMatch match =
+            engine->implementation.find_snapshot_frame(stream, target_pts, target_capture_time_ms);
+        if (!match.frame) {
             // 流存在但尚未发布过帧（刚接入/重建解码器）。这是暂时状态，不是配置错误。
             throw zhulong::Failure{Zhulong_ERR_NOT_FOUND};
         }
 
         // 4. 锁外编码
-        const Zhulong_status_t rc = zhulong::encode_snapshot(*frame, quality, boxes, out_result);
+        const Zhulong_status_t rc =
+            zhulong::encode_snapshot(*match.frame, quality, boxes, match.source, out_result);
         if (rc != Zhulong_OK) {
             throw zhulong::Failure{rc};
         }

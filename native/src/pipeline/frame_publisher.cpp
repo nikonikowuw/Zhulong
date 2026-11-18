@@ -57,6 +57,10 @@ void FramePublisher::stop() {
         {
             std::lock_guard<std::mutex> lock(latest_mutex_);
             if (history_frames_.empty()) {
+                // 副本环只持有堆上字节（不再牵制解码器缓冲），直接清空即可；
+                // clear() 不分配，满足 noexcept 约束。
+                snapshot_frames_.clear();
+                snapshot_bytes_ = 0;
                 published_pts_records_.clear();
                 break;
             }
@@ -73,26 +77,266 @@ HardwareFrame::ConstPtr FramePublisher::latest_frame() const {
 }
 
 HardwareFrame::ConstPtr FramePublisher::find_frame(int64_t pts) const {
-    std::lock_guard<std::mutex> lock(latest_mutex_);
-    if (history_frames_.empty()) {
-        return nullptr;
+    return resolve_frame(pts, 0).frame;
+}
+
+int64_t FramePublisher::lookup_capture_time_ms_locked(int64_t pts) const {
+    if (pts <= 0) {
+        return 0;
     }
-    if (pts > 0) {
-        // 从最新的帧往旧查找，优先匹配目标 PTS
+    // 借用环自身不携带 capture_time_ms（HardwareFrame 是解码器产出的，字段固定），
+    // 但副本环与借用环是**同一次 push_frame 同步插入**的，副本自带采集时钟，
+    // 因此同 pts 的副本是权威来源。
+    for (auto it = snapshot_frames_.rbegin(); it != snapshot_frames_.rend(); ++it) {
+        if (it->has_pts && it->pts == pts) {
+            return it->capture_time_ms;
+        }
+    }
+    // 兜底：发布时登记的轻量记录（仅在帧带 pts_us 时登记，可能查不到 → 0，按身份未知处理）。
+    for (auto it = published_pts_records_.rbegin(); it != published_pts_records_.rend(); ++it) {
+        if (it->has_pts && it->raw_pts == pts) {
+            return it->capture_time_ms;
+        }
+    }
+    return 0;
+}
+
+FramePublisher::SnapshotMatch FramePublisher::resolve_frame(int64_t pts,
+                                                            int64_t capture_time_ms) const {
+    SnapshotMatch match;
+    std::lock_guard<std::mutex> lock(latest_mutex_);
+
+    const bool want_time = capture_time_ms > 0;
+    const bool want_pts = pts > 0;
+
+    // 1) 身份锚点优先：capture_time_ms 由发布线程单调生成，不受插件不回传 pts 或
+    //    RTSP 时基重置影响，是唯一能稳定跨进程标识「哪一帧」的键。
+    if (want_time) {
+        for (auto it = snapshot_frames_.rbegin(); it != snapshot_frames_.rend(); ++it) {
+            if (it->capture_time_ms != capture_time_ms) {
+                continue;
+            }
+            match.source = SnapshotSource{it->pts, it->has_pts, it->capture_time_ms, true};
+            match.frame = frame_from_snapshot(*it);
+            // 同一帧若还留在借用环里，改用硬件帧：保留零拷贝与硬件 JPEG 直通。
+            if (it->has_pts) {
+                for (auto hit = history_frames_.rbegin(); hit != history_frames_.rend(); ++hit) {
+                    if ((*hit)->has_pts && (*hit)->pts == it->pts) {
+                        match.frame = *hit;
+                        break;
+                    }
+                }
+            }
+            return match;
+        }
+    }
+
+    // 2) PTS 精确匹配：旧结果不带 capture_time_ms 时的回退键。调用方同时给了
+    //    capture_time_ms 时，这一分支不算「精确」——我们没能证实是同一帧。
+    const bool exact_by_pts = !want_time;
+    if (want_pts) {
         for (auto it = history_frames_.rbegin(); it != history_frames_.rend(); ++it) {
             if ((*it)->has_pts && (*it)->pts == pts) {
-                return *it;
+                match.frame = *it;
+                match.source = SnapshotSource{(*it)->pts, true,
+                                              lookup_capture_time_ms_locked((*it)->pts),
+                                              exact_by_pts};
+                return match;
+            }
+        }
+        for (auto it = snapshot_frames_.rbegin(); it != snapshot_frames_.rend(); ++it) {
+            if (it->has_pts && it->pts == pts) {
+                match.frame = frame_from_snapshot(*it);
+                match.source = SnapshotSource{it->pts, true, it->capture_time_ms, exact_by_pts};
+                return match;
             }
         }
     }
-    // 未指定有效 PTS 或目标帧已被淘汰，回退为最新帧
-    return history_frames_.back();
+
+    // 3) 未命中：回退到按给定键**最近**的副本帧，并计数 + 限频告警。
+    //    ⚠️ 绝不能回退最新帧——那是时间上最远的选择，会把旧帧的检测框画到更新的
+    //    画面上，正是「抓拍帧与检测结果不一致、坐标偏移」的直接来源。
+    if ((want_time || want_pts) && !snapshot_frames_.empty()) {
+        const SnapshotFrame* nearest = nullptr;
+        int64_t nearest_delta = 0;
+        size_t considered = 0;
+        const int64_t wanted = want_time ? capture_time_ms : pts;
+        for (const auto& cached : snapshot_frames_) {
+            const bool usable = want_time ? cached.capture_time_ms > 0 : cached.has_pts;
+            if (!usable) {
+                continue;
+            }
+            ++considered;
+            const int64_t cached_key = want_time ? cached.capture_time_ms : cached.pts;
+            const int64_t delta =
+                cached_key > wanted ? cached_key - wanted : wanted - cached_key;
+            if (nearest == nullptr || delta < nearest_delta) {
+                nearest = &cached;
+                nearest_delta = delta;
+            }
+        }
+        if (nearest != nullptr) {
+            snapshot_miss_count_.fetch_add(1, std::memory_order_relaxed);
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_snapshot_miss_warn_ > std::chrono::seconds(1)) {
+                last_snapshot_miss_warn_ = now;
+                ZL_LOGW(stream_ ? stream_->id : 0, "pipeline.frame_publisher",
+                        "snapshot_pts_evicted requested_pts=%lld requested_capture_time_ms=%lld "
+                        "nearest_pts=%lld nearest_capture_time_ms=%lld delta=%lld "
+                        "held=%zu considered=%zu range_pts=[%lld,%lld]",
+                        static_cast<long long>(pts), static_cast<long long>(capture_time_ms),
+                        static_cast<long long>(nearest->pts),
+                        static_cast<long long>(nearest->capture_time_ms),
+                        static_cast<long long>(nearest_delta), snapshot_frames_.size(), considered,
+                        static_cast<long long>(snapshot_frames_.front().pts),
+                        static_cast<long long>(snapshot_frames_.back().pts));
+            }
+            match.frame = frame_from_snapshot(*nearest);
+            match.source =
+                SnapshotSource{nearest->pts, nearest->has_pts, nearest->capture_time_ms, false};
+            return match;
+        }
+    }
+
+    // 4) 无键查询（抓最新）或副本不可用时的兜底：保持旧语义，优先借用环尾部。
+    //    此时调用方没有指定帧，取到的就是它所要求的那一帧，故 exact 为真。
+    const bool exact_latest = !want_time && !want_pts;
+    if (!history_frames_.empty()) {
+        const HardwareFrame& latest = *history_frames_.back();
+        match.source = SnapshotSource{latest.pts, latest.has_pts,
+                                      lookup_capture_time_ms_locked(latest.pts), exact_latest};
+        match.frame = history_frames_.back();
+        return match;
+    }
+    if (!snapshot_frames_.empty()) {
+        const SnapshotFrame& cached = snapshot_frames_.back();
+        match.frame = frame_from_snapshot(cached);
+        match.source = SnapshotSource{cached.pts, cached.has_pts, cached.capture_time_ms,
+                                      exact_latest};
+        return match;
+    }
+    return match;
 }
 
-void FramePublisher::push_frame(HardwareFrame::ConstPtr frame) {
+size_t FramePublisher::snapshot_cache_frames() const {
+    std::lock_guard<std::mutex> lock(latest_mutex_);
+    return snapshot_frames_.size();
+}
+
+size_t FramePublisher::snapshot_cache_bytes() const {
+    std::lock_guard<std::mutex> lock(latest_mutex_);
+    return snapshot_bytes_;
+}
+
+bool FramePublisher::cache_snapshot_frame(const HardwareFrame& frame,
+                                           int64_t capture_time_ms) {
+    if (!crop_) {
+        return false;
+    }
+    if (frame.format != FRAME_FORMAT_NV12 && frame.format != FRAME_FORMAT_YUV420P) {
+        return false;
+    }
+    // 与 encode_snapshot 的取整规则一致：全幅按 2 像素向内取整（色度下采样要求）。
+    const uint32_t width = frame.width & ~static_cast<uint32_t>(1);
+    const uint32_t height = frame.height & ~static_cast<uint32_t>(1);
+    if (width < 2 || height < 2) {
+        return false;
+    }
+    ViewWindow window{};
+    window.active = true;
+    window.x = 0;
+    window.y = 0;
+    window.w = static_cast<int>(width);
+    window.h = static_cast<int>(height);
+    const PackedLayout layout = packed_layout_for(window, frame.format);
+    if (!layout.valid || layout.bytes == 0 || layout.bytes > snapshot_bytes_capacity) {
+        return false;
+    }
+
+    // ⚠️ 拷贝在锁外执行：3 MB/帧的 memcpy 不得挡住 find_frame 的查询路径。
+    auto bytes = std::make_shared<std::vector<uint8_t>>(layout.bytes);
+    if (!crop_(frame, window, bytes->data(), bytes->size(), static_cast<int>(layout.stride), -1)) {
+        return false;
+    }
+
+    SnapshotFrame cached{};
+    cached.bytes = std::move(bytes);
+    cached.layout = layout;
+    cached.width = width;
+    cached.height = height;
+    cached.format = frame.format;
+    cached.pts = frame.pts;
+    cached.has_pts = frame.has_pts;
+    cached.capture_time_ms = capture_time_ms;
+    cached.pts_us = frame.pts_us;
+    cached.has_pts_us = frame.has_pts_us;
+    cached.time_base_num = frame.time_base_num;
+    cached.time_base_den = frame.time_base_den;
+    cached.stream_id = frame.stream_id;
+    cached.cached_at = std::chrono::steady_clock::now();
+
+    std::lock_guard<std::mutex> lock(latest_mutex_);
+    snapshot_bytes_ += cached.bytes->size();
+    snapshot_frames_.push_back(std::move(cached));
+    evict_snapshot_frames_locked(std::chrono::steady_clock::now());
+    return true;
+}
+
+void FramePublisher::evict_snapshot_frames_locked(std::chrono::steady_clock::time_point now) {
+    while (!snapshot_frames_.empty()) {
+        const bool too_many = snapshot_frames_.size() > snapshot_frames_capacity;
+        const bool too_big = snapshot_bytes_ > snapshot_bytes_capacity;
+        const bool too_old = now - snapshot_frames_.front().cached_at > snapshot_window &&
+                             snapshot_frames_.size() > 1;
+        if (!too_many && !too_big && !too_old) {
+            break;
+        }
+        snapshot_bytes_ -= snapshot_frames_.front().bytes->size();
+        snapshot_frames_.pop_front();
+    }
+}
+
+HardwareFrame::ConstPtr FramePublisher::frame_from_snapshot(const SnapshotFrame& cached) const {
+    if (!cached.bytes || cached.bytes->empty()) {
+        return nullptr;
+    }
+    // `shared_ptr` 不可拷贝进 ConstPtr 的 deleter，故用 release_fn 延长字节生命周期：
+    // 临时帧析构时 release_fn 释放对 vector 的最后一个引用。
+    auto holder = cached.bytes;
+    auto frame = std::make_shared<HardwareFrame>();
+    uint8_t* base = holder->data();
+    frame->width = cached.width;
+    frame->height = cached.height;
+    frame->stride = cached.layout.stride;
+    frame->vstride = cached.height;
+    frame->format = cached.format;
+    frame->dma_fd = -1;
+    frame->dev_ptr = nullptr;
+    frame->host_ptr = base + cached.layout.offsets[0];
+    for (int plane = 0; plane < frame_plane_count; ++plane) {
+        if (cached.layout.strides[plane] == 0) {
+            continue;
+        }
+        frame->host_planes[plane] = base + cached.layout.offsets[plane];
+        frame->plane_strides[plane] = static_cast<uint32_t>(cached.layout.strides[plane]);
+    }
+    frame->pts = cached.pts;
+    frame->has_pts = cached.has_pts;
+    frame->pts_us = cached.pts_us;
+    frame->has_pts_us = cached.has_pts_us;
+    frame->time_base_num = cached.time_base_num;
+    frame->time_base_den = cached.time_base_den;
+    frame->stream_id = cached.stream_id;
+    frame->release_fn = [holder](HardwareFrame* /*self*/) mutable { holder.reset(); };
+    return frame;
+}
+
+void FramePublisher::push_frame(HardwareFrame::ConstPtr frame, int64_t capture_time_ms) {
     if (!frame) {
         return;
     }
+    // 副本物化必须在锁外完成（见 cache_snapshot_frame 注释）。
+    const bool cached = cache_snapshot_frame(*frame, capture_time_ms);
     HardwareFrame::ConstPtr evicted_frame;
     {
         std::lock_guard<std::mutex> lock(latest_mutex_);
@@ -101,6 +345,9 @@ void FramePublisher::push_frame(HardwareFrame::ConstPtr frame) {
             history_frames_.pop_front();
         }
         history_frames_.push_back(std::move(frame));
+        if (cached) {
+            evict_snapshot_frames_locked(std::chrono::steady_clock::now());
+        }
     }
     evicted_frame.reset(); // 锁外析构底层 HardwareFrame
 }
@@ -261,7 +508,7 @@ void FramePublisher::publish_once(std::chrono::steady_clock::time_point &next_du
             record_published_pts(dispatched_capture_time_ms, frame->pts,
                                  frame->has_pts, frame->pts_us);
         }
-        push_frame(frame);
+        push_frame(frame, dispatched_capture_time_ms);
     }
 
     // ⚠️ 防慢算法拖垮解码器准则：

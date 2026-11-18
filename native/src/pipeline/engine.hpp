@@ -379,6 +379,21 @@ struct Engine {
      */
     HardwareFrame::ConstPtr find_frame(Zhulong_stream_id id, int64_t pts);
 
+    /**
+     * @brief 解析指定流的抓拍帧并回传其身份（抓拍自证）
+     *
+     * 与 find_frame() 的区别只有返回值：调用方拿到的不仅是帧，还有这一帧的
+     * pts / capture_time_ms 以及「是否精确命中请求的那一帧」。
+     *
+     * @param id 物理流 ID
+     * @param pts 目标帧 PTS（<= 0 表示不按 PTS 匹配）
+     * @param capture_time_ms 目标帧采集时钟（<= 0 表示不按它匹配；两者都 <= 0 取最新帧）
+     * @return 命中帧与其身份；无帧时 `frame` 为空
+     * @throws Failure Zhulong_ERR_NOT_RUNNING / Zhulong_ERR_NOT_FOUND
+     */
+    FramePublisher::SnapshotMatch find_snapshot_frame(Zhulong_stream_id id, int64_t pts,
+                                                      int64_t capture_time_ms);
+
     // =========================================================================
     // 事件录像片段（v7）
     // =========================================================================

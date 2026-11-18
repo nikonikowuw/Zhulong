@@ -86,10 +86,11 @@ func buildRecognitionRecordAndJob(
 	}
 
 	job := snapshotJob{
-		cameraID:    f.res.CameraID,
-		pts:         f.res.PTS,
-		targetTable: tableRecognitions,
-		targetID:    recID,
+		cameraID:      f.res.CameraID,
+		pts:           f.res.PTS,
+		captureTimeMs: f.res.CaptureTimeMs,
+		targetTable:   tableRecognitions,
+		targetID:      recID,
 		boxes: []engine.SnapshotBox{
 			engine.SnapshotBox(face.Box),
 		},
@@ -141,10 +142,11 @@ func buildCaptureRecordAndJob(f ingestFrame, spec captureSpec) (*Capture, snapsh
 	}
 
 	job := snapshotJob{
-		cameraID:    f.res.CameraID,
-		pts:         f.res.PTS,
-		targetTable: tableCaptures,
-		targetID:    captureID,
+		cameraID:      f.res.CameraID,
+		pts:           f.res.PTS,
+		captureTimeMs: f.res.CaptureTimeMs,
+		targetTable:   tableCaptures,
+		targetID:      captureID,
 		boxes: []engine.SnapshotBox{
 			engine.SnapshotBox(spec.box),
 		},
@@ -205,12 +207,13 @@ func buildAlarmRecordAndJob(f ingestFrame, spec alarmSpec) (*Alarm, snapshotJob)
 	}
 
 	job := snapshotJob{
-		cameraID:    f.res.CameraID,
-		pts:         f.res.PTS,
-		targetTable: tableAlarms,
-		targetID:    alarmID,
-		boxes:       boxes,
-		outputs:     outputs,
+		cameraID:      f.res.CameraID,
+		pts:           f.res.PTS,
+		captureTimeMs: f.res.CaptureTimeMs,
+		targetTable:   tableAlarms,
+		targetID:      alarmID,
+		boxes:         boxes,
+		outputs:       outputs,
 	}
 
 	return alarm, job

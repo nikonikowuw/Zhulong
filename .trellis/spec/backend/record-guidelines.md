@@ -48,7 +48,8 @@ Runner MSG_RESULT
 - **事件录像片段触发**：仅 `alarms` 与 `recognitions` 在持久化成功后同步调用可选 `ClipTrigger`（`captures` 永不触发）；识别事件按任务策略 `all | stranger | known` 过滤。触发失败仅记 `Warn`，不影响事件入库与分发；片段状态与清理生命周期由 `internal/recording` 负责。
 - 队列有界（当前容量 32），提交非阻塞；依赖缺失、队列满或存储写门关闭时允许丢弃抓拍任务。已接收任务在 `Stop` 时排空。需要观测丢弃时读取 `SnapshotStore.Dropped()`。感知层不设单帧人工截断（杜绝冷却饥饿），多目标瞬时并发直接由队列容量与 `Dropped()` 观测承接。
 - 每个任务执行时重新读取媒体根目录，并检查 storage 写门；路径存为媒体根内的相对路径（`snapshots/...`），媒体读取仍走 `internal/mediafile`，不能自行拼接绝对路径对外暴露。
-- C ABI 抓拍支持透传目标帧 `PTS` 时间戳，Native 侧历史环形缓存（4 帧容量）优先精确匹配目标帧；若历史已淘汰或未指定有效 PTS，退回读取当前最新帧。图像生成和写盘在 `SnapshotStore` 后台 worker 执行，不阻塞推理结果消费路径。
+- C ABI 抓拍支持透传目标帧 `PTS` 时间戳，Native 侧两级历史优先精确匹配目标帧：先查 4 帧借用环（零拷贝），再查像素副本环（约 1.2 s / 24 MiB 的已发布帧，与解码池解耦）。目标帧滑出窗口时退回**PTS 最近**的帧（不是最新帧）并限频告警 + 计数 `snapshot_miss_count`——最新帧在时间上最远，会把旧帧的检测框画到新画面上。图像生成和写盘在 `SnapshotStore` 后台 worker 执行，不阻塞推理结果消费路径。
+- **证据图必须自证与检测结果同帧**：`snapshotJob` 携带结果里的 `capture_time_ms`（`InferenceResult.CaptureTimeMs`，首选身份键）与 `pts`（回退键），经 `engine.SnapshotOptions.CaptureTimeMs` 透传给 Native；Native 回报实际命中帧的身份（`SnapshotImage.Source`）。`SnapshotStore.verifySource` 在 worker 内比对：结果带 `capture_time_ms` 就比对它，否则比对 `pts`，两者都没有则跳过（无可断言的帧身份，不算错）。不一致或 `Source.Exact == false` 时递增 `SnapshotStore.Mismatched()` 并记一条 `snapshot frame does not match the inference result` 的 Warn —— **图仍然照常落盘**（有图比没图强），缺的是「这张图能不能当证据」的结论；`Mismatched()` 非零是判断要不要调大 Native 副本环预算的唯一现场依据。
 - 数据库记录先写入，之后才提交抓拍任务。因此路径字段可能在图像生成前已写入，非空路径不保证文件已存在。任务队列拒绝时，调用方会尝试清空对应记录路径；后台遇到写门关闭、媒体根解析失败、抓拍失败或零张图片写入时，也会尝试清空该记录的抓拍路径。**这些清理是尽力而为，可能异步失败；若一个任务部分写入成功，当前实现不会逐输出项清理未写入路径。**`SnapshotStore` 未注入（`Available() == false`）时，告警/识别/车辆抓拍三条分发路径都会先尝试清空记录路径再分发事件，不允许出现「服务不知道自己没有抓拍能力，却留下非空路径」的记录。调用方仍必须容忍媒体读取返回缺失。
 
 参考实现：`internal/record/service.go`、`internal/record/snapshot.go`、`internal/engine/engine.go`、`native/src/abi/engine.cpp`。测试：`internal/record/snapshot_test.go`。
