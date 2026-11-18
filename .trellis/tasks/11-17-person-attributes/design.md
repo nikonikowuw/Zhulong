@@ -128,7 +128,14 @@ std::unordered_map<uint32_t, std::vector<CachedTrack>> tracks_;  // 受 attr_mu_
   `internal/algorithm` 协议测试校验 `ZHULONG_PERSON_ATTRIBUTE_NAME_MAX_LEN`；
   `internal/record` 用例断言人体属性同时落到 recognition 与 person capture 的 `attributes_json`。
 - 交叉编译：`make sdk-cross-install` 产出 aarch64 前缀（sdk 1.4.0）后，rk3568 档 `make all` 全量通过。
-- 板端运行验证**未完成**：`native/scripts/board_check.sh` 卡在 SSH（`/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf`
-  符号链接属主 `nobody:nogroup`，以及 `192.168.17.135:22` 当前不可达）。网络恢复后需补跑，重点看
-  `make test` 输出里的人体属性与单帧耗时。
+- 板端运行验证（RK3568，2026-11-17）：`make test` 与 `--verify` 均在板上跑通，`cost_ms ≈ 267~317`（4 人体 + 6 人脸同帧）。
+  实测同时发现**模型档位问题**：模型库里的 `PPLCNet_x1_0_person_attribute.rknn`（FP16）是 **RK3588 目标**，
+  板上 `rknn_init` 直接拒绝（`This rknn model is for RK3588, but current platform is RK3566/RK3568`），
+  插件按设计静默降级为「无属性、其余链路正常」——降级语义在真实硬件上得到验证。
+- 因此 rk3568 档改用官方 `PPLCNet_x1_0_person_attribute_rk3568_i8.rknn`（INT8、channel 量化、2.27 MB）。
+  换模型后板端输出：4 人体中 2 人带属性（`person_attribute_max_persons=2` 生效），Top 标签与 onnx 档一致
+  （`ShortSleeve 0.986 / Front 0.900 / AgeOver60 0.697`），边界标签出现与量化误差一致的个别翻转
+  （如 `AgeOver60 0.765 → Age18-60 0.607`），与官方评测「均值误差 0.059、546 例 35 个翻转」相符，阈值沿用官方值。
+- 由于本机没有 rknn-toolkit2（无 `pip3`），无法自行把 onnx 转成 rk3568 FP16；若后续需要 FP16 精度，
+  需在装有 toolkit 的环境用 `python/convert.py --target_platform rk3568` 重新转换后再替换权重文件。
 - 包版本：两个档位 `manifest.json` 由 1.0.0 → 1.1.0。

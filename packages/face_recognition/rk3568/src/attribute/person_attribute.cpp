@@ -5,6 +5,11 @@
  * `.rknn` 在转换时把 mean/std 烘进了模型（convert.py 的 `mean_values`/`std_values`），
  * 运行时只需要给拉伸后的 RGB888 块 —— **不要**在这里再做一次归一化，否则等于对
  * 归一化后的值再减一次均值，输出会整体失真但不会报错。
+ *
+ * 权重用模型库的 `PPLCNet_x1_0_person_attribute_rk3568_i8.rknn`（INT8，channel 量化）：
+ * 同一目录的 FP16 `.rknn` 是 RK3588 目标，板上 `rknn_init` 会直接以
+ * `This rknn model is for RK3588` 拒绝。INT8 的边界概率与 FP16/ONNX 有偏差，
+ * 阈值仍用官方值。
  */
 
 #include "attribute/person_attribute.hpp"

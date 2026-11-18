@@ -10,7 +10,8 @@
 它验证的是**包与宿主之间那两个公开协议**：
 
   --verify          安装期黑盒验包：骨架跑一次完整生命周期，最后一行 JSON 报告。
-  --extract-feature 底库登记通道：28 字节帧头 + 裸像元 → 一行 JSON 特征。
+  --extract-feature 底库登记通道：28 字节帧头 + 裸像元 → 一行 JSON 特征（需要单脸近景图；
+                    多人合照返回 MULTIPLE_FACES，按「样本不合适」SKIPPED，不算包缺陷）。
 
 不依赖任何第三方库、不依赖仓库：把它和 SDK 前缀一起拷到任意机器即可自查。
 
@@ -155,6 +156,12 @@ def probe_extract_feature(entry, pkg_dir, image_path):
             print("[extract-feature] SKIPPED: 本包未提供底库登记能力（abi.json capability=optional）。"
                   " 若要用它做底库登记，需要在包内定义 zhulong_face_extract_feature。")
             return None
+        if reply.get("code") == "MULTIPLE_FACES":
+            # 底库登记是「一张脸一条记录」的接口，多人合照本来就不该被登记。
+            # 这是样本不合适，不是包缺陷：换单脸近景图再验，或直接走 --verify。
+            print("[extract-feature] SKIPPED: 样本里检测到多张人脸，底库登记通道需要单脸近景图"
+                  "（换单脸样本或用 --verify 验包）。")
+            return None
         raise ProbeError(f"--extract-feature failed: {reply}")
 
     dim = reply.get("feature_dim")
@@ -179,7 +186,7 @@ def main(argv):
                         help="包根目录（含 manifest.json 与 models/）；默认取 --entry 所在目录。"
                              "开发布局（<pkg>/build/<id>）需要显式指定 <pkg>。")
     parser.add_argument("--sample", help="--verify 用的样本（netpbm .ppm/.pgm）")
-    parser.add_argument("--image", help="--extract-feature 用的整图（netpbm .ppm/.pgm）")
+    parser.add_argument("--image", help="--extract-feature 用的整图（netpbm .ppm/.pgm，需单脸近景）")
     parser.add_argument("--verify", action="store_true", help="跑安装期黑盒验包")
     parser.add_argument("--extract-feature", action="store_true", help="跑底库登记特征提取")
     parser.add_argument("--all", action="store_true", help="两种都跑")

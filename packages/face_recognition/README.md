@@ -19,7 +19,7 @@ packages/face_recognition/
 └── rk3568/                   RK3568 RKNN 档位（与 onnx 共享通用算法源码，受漂移门禁约束）
     ├── manifest.json         包元信息（platform.target=rk3568）
     ├── config.schema.json    与 onnx 档位逐字节同步的配置契约
-    ├── models/               对应 .rknn 量化权重（含 ediffiqa_t.rknn INT8、pplcnet_person_attribute.rknn FP16）
+    ├── models/               对应 .rknn 量化权重（含 ediffiqa_t.rknn INT8、pplcnet_person_attribute.rknn INT8）
     └── ...
 ```
 
@@ -77,8 +77,9 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
 6. **人体属性识别（`src/attribute/person_attribute.*`，可选阶段）**
    - PPLCNet_x1_0（PULC person_attribute）单人裁剪多标签分类，输出 26 个**相互独立**的 sigmoid 概率：Hat / Glasses / ShortSleeve / LongSleeve / UpperStride / UpperLogo / UpperPlaid / UpperSplice / LowerStripe / LowerPattern / LongCoat / Trousers / Shorts / Skirt&Dress / Boots / HandBag / ShoulderBag / Backpack / HoldObjectsInFront / AgeLess18 / Age18-60 / AgeOver60 / Female / Front / Side / Back。
    - **与官方推理一致的前处理**：把人体框直接拉伸到 `192×256`（不做保持比 letterbox，模型按检测器裁剪训练），RGB；onnx 侧按 `mean=[123.675,116.28,103.53] / std=[58.395,57.12,57.375]` 归一化为 NCHW float，rk3568 侧均值/方差已内置于 `.rknn`，直接喂 HWC uint8。
+   - **rk3568 侧用官方 INT8 权重**：模型库里的 `PPLCNet_x1_0_person_attribute.rknn`（FP16）是 **RK3588 目标**，板上 `rknn_init` 会报 `This rknn model is for RK3588`；rk3568 档位只能用 `PPLCNet_x1_0_person_attribute_rk3568_i8.rknn`（`quantized_method=channel`）。代价是量化误差：官方评测均值误差 0.059、546 例中 35 个标签翻转，边界概率会与 FP16/ONNX 有差异，阈值沿用官方值即可，如需更保守可自行上调。
    - **逐标签阈值**：默认 `0.50`；`Glasses` 放宽到 `0.30`、`HoldObjectsInFront` 提高到 `0.60`（与官方脚本一致），按分数降序输出达标项，每人最多 8 条（属性会随人数放大 JSON，需给 64KB IPC 载荷留余量）。属性名保持官方英文标签（直接作为 JSON 键写入记录 `attributes_json`，避免英文键 ↔ 中文名二次映射在跨层丢失）。
-   - **按轨迹采样缓存（重要）**：属性模型是单目标分类器，RK3568 上 **14.86 ms/人**（FP16）。监控画面里逐帧给每个人各跑一次会随人数线性吃掉算力，因此包内按人体框 IoU `>= 0.30` 关联出包内轨迹（**绝不写入 `track_id`**，宿主独占人员跟踪身份），只对"新出现或距上次分类已满 `person_attribute_refresh_ms`"的人重新推理；单帧最多分类 `person_attribute_max_persons` 人（按框面积降序，近景优先），其余人沿用缓存属性。轨迹 5 秒未见即淘汰，单 worker 上限 64 条。
+   - **按轨迹采样缓存（重要）**：属性模型是单目标分类器，RK3568 上 **4.27 ms/人**（INT8，官方实测；换算成单帧多人仍需按人数线性放大）。监控画面里逐帧给每个人各跑一次会随人数线性吃掉算力，因此包内按人体框 IoU `>= 0.30` 关联出包内轨迹（**绝不写入 `track_id`**，宿主独占人员跟踪身份），只对"新出现或距上次分类已满 `person_attribute_refresh_ms`"的人重新推理；单帧最多分类 `person_attribute_max_persons` 人（按框面积降序，近景优先），其余人沿用缓存属性。轨迹 5 秒未见即淘汰，单 worker 上限 64 条。
    - **降级语义**：模型文件缺失/加载失败、或分类失败时，该人本帧不带 `attributes`（保留上一次缓存），人体检测、人脸识别、抓拍与记录链路完全不受影响。人体项属性字段属于 C ABI 1.4 追加段（`zhulong_person_item` 40 → 56 字节，仅尾部追加），旧宿主读取时自然忽略。
 
 ## 配置参数与三层生效优先级
