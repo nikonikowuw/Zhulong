@@ -227,7 +227,17 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 	}
 
 	if existing != nil {
+		// runnerLive 先判 nil：supervisor 是可缺席依赖（见 scheduleAlgorithmRestart）。
+		runnerLive := s.supervisor != nil && s.supervisor.GetStatus(existing.ID) == StatusRunning
+		previouslyEnabled := existing.Status == StatusActive
+
 		algo.PreviousVersion = existing.Version
+		algo.CreatedAt = existing.CreatedAt
+		if runnerLive || previouslyEnabled {
+			// 升级已启用的算法必须保留 ACTIVE，否则热升级拉起新进程后 DB 却被覆写为 DISABLED，
+			// 下次宿主重启时 algorithmLifecycleImpl.Start 会漏自启。
+			algo.Status = StatusActive
+		}
 		if err := s.store.UpdateAlgorithm(ctx, algo); err != nil {
 			discardStagedVersion()
 			return nil, normalizeInstallError(fmt.Errorf("update existing algorithm: %w", err))
@@ -236,14 +246,12 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 			zap.String("id", algo.ID),
 			zap.String("new_version", algo.Version),
 			zap.String("prev_version", algo.PreviousVersion),
+			zap.String("status", algo.Status),
 		)
 
 		// If the previous version is active or supervised, transition the worker process
 		// under the supervision of RollbackGuard.
-		// runnerLive 先判 nil：supervisor 是可缺席依赖（见 scheduleAlgorithmRestart）。
-		runnerLive := s.supervisor != nil && s.supervisor.GetStatus(existing.ID) == StatusRunning
-		previouslyEnabled := existing.Status == StatusActive
-		if runnerLive || previouslyEnabled {
+		if s.supervisor != nil && (runnerLive || previouslyEnabled) {
 			upgradeErr := s.supervisor.UpgradeAlgorithm(
 				ctx,
 				algo.ToPackageMeta(),

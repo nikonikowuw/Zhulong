@@ -2,6 +2,7 @@ package algorithm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -335,5 +336,166 @@ func TestEnableAlgorithmInCrashLoopReturnsConflict(t *testing.T) {
 	}
 	if appErr.Kind != apperr.KindConflict {
 		t.Fatalf("expected KindConflict, got %v", appErr.Kind)
+	}
+}
+
+func createInstallablePackageArchive(t *testing.T, id, version string) string {
+	t.Helper()
+	manifest := algorithm.Manifest{
+		ID:        id,
+		Version:   version,
+		Name:      id,
+		TaskType:  algorithm.TaskTypeDetection,
+		Category:  algorithm.CategorySafety,
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
+		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	return createTestTarGz(t, map[string][]byte{
+		"manifest.json":      manifestBytes,
+		id:                   installableEntry(1),
+		"sample.jpg":         []byte("sample image bytes"),
+		"config.schema.json": []byte(`{"type":"object"}`),
+	})
+}
+
+func TestInstallAlgorithmUpgradePreservesStatusAndCreatedAt(t *testing.T) {
+	tests := []struct {
+		name           string
+		initialStatus  string
+		brokerPaths    []string
+		nilSupervisor  bool
+		wantDBStatus   string
+		wantLiveStatus string
+	}{
+		{
+			name:           "active running stays active and transitions runner",
+			initialStatus:  algorithm.StatusActive,
+			brokerPaths:    []string{"/tmp/zhulong_broker_upgrade_active.sock"},
+			wantDBStatus:   algorithm.StatusActive,
+			wantLiveStatus: algorithm.StatusRunning,
+		},
+		{
+			name:           "active standby stays active without starting runner",
+			initialStatus:  algorithm.StatusActive,
+			brokerPaths:    []string{},
+			wantDBStatus:   algorithm.StatusActive,
+			wantLiveStatus: algorithm.StatusDisabled,
+		},
+		{
+			name:           "disabled stays disabled",
+			initialStatus:  algorithm.StatusDisabled,
+			brokerPaths:    []string{"/tmp/zhulong_broker_upgrade_disabled.sock"},
+			wantDBStatus:   algorithm.StatusDisabled,
+			wantLiveStatus: algorithm.StatusDisabled,
+		},
+		{
+			name:           "crash_loop resets to disabled on upgrade",
+			initialStatus:  algorithm.StatusCrashLoop,
+			brokerPaths:    []string{"/tmp/zhulong_broker_upgrade_crashloop.sock"},
+			wantDBStatus:   algorithm.StatusDisabled,
+			wantLiveStatus: algorithm.StatusDisabled,
+		},
+		{
+			name:          "active with nil supervisor stays active without panic",
+			initialStatus: algorithm.StatusActive,
+			nilSupervisor: true,
+			wantDBStatus:  algorithm.StatusActive,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			comp, _, tempDir := setupServiceTest(t)
+			t.Cleanup(func() {
+				comp.Supervisor.StopAll(time.Second)
+			})
+			ctx := context.Background()
+			const algoID = "upgrade_status_algo"
+
+			svc := comp.Service
+			if tc.nilSupervisor {
+				svc = algorithm.NewService(
+					comp.Store,
+					comp.Verifier,
+					nil,
+					algorunner.Runtime{AlgorithmsDir: tempDir},
+					zap.NewNop(),
+				)
+			} else {
+				comp.Supervisor.SetBrokerSubscriptionResolver(&staticBrokerResolver{paths: tc.brokerPaths})
+			}
+
+			// 1. 安装 1.0.0，固定早期 CreatedAt 并切到测试所需的初始状态
+			v1Archive := createInstallablePackageArchive(t, algoID, "1.0.0")
+			defer os.Remove(v1Archive)
+			v1, err := svc.InstallAlgorithm(ctx, v1Archive)
+			if err != nil {
+				t.Fatalf("install v1.0.0: %v", err)
+			}
+
+			origCreatedAt := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+			v1.CreatedAt = origCreatedAt
+			v1.Status = tc.initialStatus
+			if err := comp.Store.UpdateAlgorithm(ctx, v1); err != nil {
+				t.Fatalf("seed v1 initial state: %v", err)
+			}
+			if !tc.nilSupervisor && tc.initialStatus == algorithm.StatusActive && len(tc.brokerPaths) > 0 {
+				if err := comp.Supervisor.StartAlgorithm(ctx, v1.ToPackageMeta()); err != nil {
+					t.Fatalf("start v1 runner: %v", err)
+				}
+				deadline := time.Now().Add(5 * time.Second)
+				for time.Now().Before(deadline) && comp.Supervisor.GetStatus(algoID) != algorithm.StatusRunning {
+					time.Sleep(20 * time.Millisecond)
+				}
+				if got := comp.Supervisor.GetStatus(algoID); got != algorithm.StatusRunning {
+					t.Fatalf("v1 runner did not reach RUNNING, got %s", got)
+				}
+			}
+
+			// 2. 升级到 1.1.0
+			v2Archive := createInstallablePackageArchive(t, algoID, "1.1.0")
+			defer os.Remove(v2Archive)
+			upgraded, err := svc.InstallAlgorithm(ctx, v2Archive)
+			if err != nil {
+				t.Fatalf("upgrade to v1.1.0: %v", err)
+			}
+
+			if upgraded.Version != "1.1.0" || upgraded.PreviousVersion != "1.0.0" {
+				t.Fatalf("unexpected versions: version=%q previous=%q", upgraded.Version, upgraded.PreviousVersion)
+			}
+			if upgraded.Status != tc.wantDBStatus {
+				t.Fatalf("returned Status = %q, want %q", upgraded.Status, tc.wantDBStatus)
+			}
+			if !upgraded.CreatedAt.Equal(origCreatedAt) {
+				t.Fatalf("returned CreatedAt = %v, want preserved %v", upgraded.CreatedAt, origCreatedAt)
+			}
+
+			stored, err := comp.Store.GetAlgorithm(ctx, algoID)
+			if err != nil {
+				t.Fatalf("reload upgraded algorithm from DB: %v", err)
+			}
+			if stored.Status != tc.wantDBStatus {
+				t.Fatalf("stored DB Status = %q, want %q", stored.Status, tc.wantDBStatus)
+			}
+			if !stored.CreatedAt.Equal(origCreatedAt) {
+				t.Fatalf("stored DB CreatedAt = %v, want preserved %v", stored.CreatedAt, origCreatedAt)
+			}
+
+			if !tc.nilSupervisor {
+				if tc.wantLiveStatus == algorithm.StatusRunning {
+					deadline := time.Now().Add(5 * time.Second)
+					for time.Now().Before(deadline) && comp.Supervisor.GetStatus(algoID) != algorithm.StatusRunning {
+						time.Sleep(20 * time.Millisecond)
+					}
+				}
+				if got := comp.Supervisor.GetStatus(algoID); got != tc.wantLiveStatus {
+					t.Fatalf("supervisor live status = %q, want %q", got, tc.wantLiveStatus)
+				}
+			}
+		})
 	}
 }
