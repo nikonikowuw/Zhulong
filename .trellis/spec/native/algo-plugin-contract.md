@@ -242,15 +242,21 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 - 缺省语义：未下发 = 空视图 = 算法用自己的默认值；越界值回落默认而不是报错（宿主与包分开交付，
   版本偏斜真实存在）。
 
-### 检测输入分辨率：两档位默认值分叉 + fail fast
+### 检测输入分辨率：静态形状钉死 + fail fast
 
 `set_input_size` 带校验并返回 `bool`（人脸粒度 32、人体粒度 128）：
 
 - **不整除即拒绝**：布局不符时解码只会返回空结果、没有错误码，这就是一次静默零检出。
-- **静态形状档位（rk3568）只接受模型自带尺寸**：`.rknn` 是 `static_shape [1,3,640,640]`，
-  RKNN 后端按 `element_count` 校验，尺寸不符时 `forward` 直接失败。
-- 因此两档位的**默认流分辨率本就不同**（onnx 640×384 / rk3568 640×640）。`src/pipeline/*.cpp`
-  在 drift 白名单里（按 target 允许不同），**漂移检查看不到这处语义差异** —— 改默认值时必须两边一起看。
+- **静态形状档位（rk3568）只接受该档位权重的自带尺寸**：`.rknn` 是静态图，RKNN 后端按
+  `element_count` 校验，尺寸不符时 `forward` 直接失败。这个尺寸**由各包的权重定义，不是档位常量**：
+  - `face_recognition/rk3568`：人脸权重支持 640×640 与 640×384，人体权重是 `static_shape [1,3,640,640]`
+    → `PersonDetector` 只接受 640×640；
+  - `crowd_gathering/rk3568`：权重在转换时钉成 `[1,3,384,640]`（16:9 CCTV 档位，见该包
+    `rk3568/CONVERSION.md`）→ `PersonDetector` 只接受 640×384，`config.schema.json` 里不暴露
+    `detect_input_*`，改分辨率 = 重新转换权重。
+- 因此同一包的两档位**默认流分辨率可能不同**（face：onnx 640×384 / rk3568 640×640；crowd：两边
+  都是 640×384）。`src/pipeline/*.cpp` 在 drift 白名单里（按 target 允许不同），**漂移检查看不到
+  这处语义差异** —— 改默认值时必须两边一起看。
   共享头文件里的分叉由 SDK 的 `INTERFACE_COMPILE_DEFINITIONS`（`ZHULONG_INFERENCE_RKNN` /
   `_ONNX`）表达，与 `TARGET_MODEL_EXT` 用同一组定义，不按架构宏猜。
 

@@ -28,6 +28,9 @@ def main():
                         help="跳过包自身可执行文件的构建（复用 packages/<id>/<target>/build/<id>）")
     parser.add_argument("--toolchain", help="交叉构建用的 CMake 工具链文件")
     parser.add_argument("--rknn-root", help="RKNN 前缀")
+    parser.add_argument("--rga-root",
+                        help="RGA 前缀（SDK 前缀的视觉后端是 rga 时必需：前缀会把"
+                             "librga.so.2 传给消费方，交叉链接需要能解析它）")
     parser.add_argument("--onnxruntime-root", help="ONNX Runtime 前缀")
     args = parser.parse_args()
 
@@ -124,10 +127,13 @@ def main():
         toolchain_path = t.resolve() if t.is_absolute() else ((repo_root or pkg_root) / t).resolve()
     elif is_cross:
         if repo_root:
+            # 顺序即优先级：`cross-<target>-rknn-rga` / `-rknn` 才钉了 aarch64 交叉编译器；
+            # 裸 `cross-<target>`（宿主 Go 二进制用的 profile）没有 CMAKE_CXX_COMPILER，
+            # 在 C++ 工程里会退化成「宿主 g++ + rk3568 sysroot」，报 sys/cdefs.h 找不到。
             toolchain_candidates = [
+                repo_root / "build" / "native" / f"cross-{args.target}-rknn-rga" / "toolchain.cmake",
+                repo_root / "build" / "native" / f"cross-{args.target}-rknn" / "toolchain.cmake",
                 repo_root / "build" / "native" / f"cross-{args.target}" / "toolchain.cmake",
-                repo_root / "build" / "native" / "cross-rk3568-rknn-rga" / "toolchain.cmake",
-                repo_root / "build" / "native" / "cross-rk3568-rknn" / "toolchain.cmake",
             ]
             for cand in toolchain_candidates:
                 if cand.exists():
@@ -141,6 +147,11 @@ def main():
     if not rknn_root and args.target in ("rk3568", "rk3588"):
         if repo_root and (repo_root / "native" / "vendor" / "rknpu2").exists():
             rknn_root = str((repo_root / "native" / "vendor" / "rknpu2").resolve())
+
+    rga_root = args.rga_root
+    if not rga_root and args.target in ("rk3568", "rk3588"):
+        if repo_root and (repo_root / "native" / "vendor" / "rga").exists():
+            rga_root = str((repo_root / "native" / "vendor" / "rga").resolve())
 
     if (toolchain_path or is_cross) and not args.no_verify:
         print("[*] 交叉构建：跳过本机验包（产物在宿主不可执行）。")
@@ -171,6 +182,8 @@ def main():
             make_args.append("TOOLCHAIN=" + str(toolchain_path))
         if rknn_root:
             make_args.append("RKNN_ROOT=" + str(rknn_root))
+        if rga_root:
+            make_args.append("RGA_ROOT=" + str(rga_root))
         if args.onnxruntime_root:
             make_args.append("ONNXRUNTIME_ROOT=" + str(Path(args.onnxruntime_root).resolve()))
         res = subprocess.run(make_args)
@@ -218,6 +231,13 @@ def main():
     models_src = target_dir / "models"
     if models_src.exists() and models_src.is_dir():
         shutil.copytree(models_src, staging_dir / "models", dirs_exist_ok=True)
+
+    # 转换/量化证据摊平到包根：现场排障时要能直接核对权重来源与精度模式，
+    # 而不是回到仓库里找对应 target 目录。
+    for doc_name in ("CONVERSION.md", "QUANTIZATION.md"):
+        doc_src = target_dir / doc_name
+        if doc_src.is_file():
+            shutil.copy2(doc_src, staging_dir / doc_name)
 
     if not args.no_verify and args.target == "onnx":
         print(f"[*] 执行本地黑盒验包（cwd={staging_dir}）...")

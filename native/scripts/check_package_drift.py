@@ -32,6 +32,11 @@ ALLOWED_DIFFERENCES = {
         "src/attribute/person_attribute.cpp": "前处理不同：ONNX 需 HWC→NCHW float32 + mean/std，RKNN 模型自带归一化",
         "src/pipeline/face_recognition.cpp": "权重扩展名与开发期源码树前缀按 target 不同",
     },
+    "crowd_gathering": {
+        "src/detection/person_detector.cpp": "前处理不同：ONNX 需 HWC→NCHW float32 + mean/std 查表，RKNN 模型自带归一化、直接喂 HWC uint8",
+        "src/detection/person_detector.hpp": "工作区与尺寸校验不同：ONNX 是动态输入，RKNN 权重为静态形状、只接受转换时固定的 640×384",
+        "src/pipeline/crowd_gathering.cpp": "权重扩展名与开发期源码树前缀按 target 不同",
+    },
 }
 
 # 允许只存在于部分 target 的文件（缺侧不算漂移）。
