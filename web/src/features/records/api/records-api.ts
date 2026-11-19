@@ -35,6 +35,7 @@ export const recordsApi = {
         personExternalId: params?.personExternalId?.trim() || undefined,
         matched:
           params?.matched !== undefined ? String(params.matched) : undefined,
+        dedup: params?.dedup ? 'true' : undefined,
         startTime: params?.startTime?.trim() || undefined,
         endTime: params?.endTime?.trim() || undefined,
       },

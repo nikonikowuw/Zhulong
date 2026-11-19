@@ -71,3 +71,68 @@ describe('RecordsToolbar', () => {
     )
   })
 })
+
+describe('RecordsToolbar dedup toggle', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('toggles display dedup on the recognitions tab', async () => {
+    const onDedupChange = vi.fn()
+
+    const screen = await renderWithQuery(
+      <RecordsToolbar
+        tab='recognitions'
+        view='table'
+        dateRange={{ isDefaultWindow: true, preset: 'today' }}
+        dedup={false}
+        onViewChange={vi.fn()}
+        onCameraChange={vi.fn()}
+        onDateRangeChange={vi.fn()}
+        onDedupChange={onDedupChange}
+        onResetFilters={vi.fn()}
+      />
+    )
+
+    const button = screen.getByRole('button', { name: '去重' })
+    await expect.element(button).toHaveAttribute('aria-pressed', 'false')
+
+    await userEvent.click(button)
+    expect(onDedupChange).toHaveBeenCalledExactlyOnceWith(true)
+  })
+
+  it('marks the toggle as pressed when dedup is active', async () => {
+    const screen = await renderWithQuery(
+      <RecordsToolbar
+        tab='recognitions'
+        view='table'
+        dateRange={{ isDefaultWindow: true, preset: 'today' }}
+        dedup
+        onViewChange={vi.fn()}
+        onCameraChange={vi.fn()}
+        onDateRangeChange={vi.fn()}
+        onResetFilters={vi.fn()}
+      />
+    )
+
+    await expect
+      .element(screen.getByRole('button', { name: '去重' }))
+      .toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('hides the toggle on other tabs', async () => {
+    const screen = await renderWithQuery(
+      <RecordsToolbar
+        tab='alarms'
+        view='table'
+        dateRange={{ isDefaultWindow: true, preset: 'today' }}
+        onViewChange={vi.fn()}
+        onCameraChange={vi.fn()}
+        onDateRangeChange={vi.fn()}
+        onResetFilters={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: '去重' }).query()).toBeNull()
+  })
+})

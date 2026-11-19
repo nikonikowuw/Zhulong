@@ -4881,6 +4881,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "boolean",
+                        "description": "Collapse filtered recognitions to one per camera and person (display only)",
+                        "name": "dedup",
+                        "in": "query"
+                    },
+                    {
                         "type": "string",
                         "description": "Start time (RFC3339)",
                         "name": "startTime",

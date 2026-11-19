@@ -173,6 +173,8 @@
     "endTime": "End time",
     "cancel": "Cancel",
     "apply": "Apply",
+    "dedup": "Deduplicate",
+    "dedupHint": "Show only the latest record per camera and person; data is not deleted",
     "reset": "Reset Filters"
   },
   "selection": {

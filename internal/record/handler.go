@@ -43,6 +43,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Param        personId query string false "Filter by internal person row ID"
 // @Param        personExternalId query string false "Filter by external business key (persons.person_id snapshot)"
 // @Param        matched query bool false "Filter by match status"
+// @Param        dedup query bool false "Collapse filtered recognitions to one per camera and person (display only)"
 // @Param        startTime query string false "Start time (RFC3339)"
 // @Param        endTime query string false "End time (RFC3339)"
 // @Success      200 {object} httputil.Response{data=httputil.PaginatedData[RecognitionResponse]}

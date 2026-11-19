@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Cross2Icon } from '@radix-ui/react-icons'
-import { LayoutGrid, Table as TableIcon } from 'lucide-react'
+import { CopyCheck, LayoutGrid, Table as TableIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
@@ -30,6 +30,7 @@ export interface RecordsToolbarProps {
   dateRange: ResolvedRecordsWindow
   matched?: 'all' | 'true' | 'false'
   personId?: string
+  dedup?: boolean
   alarmType?: string
   targetType?: string
   onViewChange: (view: 'grid' | 'table') => void
@@ -37,6 +38,7 @@ export interface RecordsToolbarProps {
   onDateRangeChange: (range: RecordsDateRange) => void
   onMatchedChange?: (matched?: 'all' | 'true' | 'false') => void
   onPersonIdChange?: (personId?: string) => void
+  onDedupChange?: (dedup: boolean) => void
   onAlarmTypeChange?: (alarmType?: string) => void
   onTargetTypeChange?: (targetType?: string) => void
   onResetFilters: () => void
@@ -49,6 +51,7 @@ export function RecordsToolbar({
   dateRange,
   matched,
   personId,
+  dedup,
   alarmType,
   targetType,
   onViewChange,
@@ -56,6 +59,7 @@ export function RecordsToolbar({
   onDateRangeChange,
   onMatchedChange,
   onPersonIdChange,
+  onDedupChange,
   onAlarmTypeChange,
   onTargetTypeChange,
   onResetFilters,
@@ -210,8 +214,22 @@ export function RecordsToolbar({
         )}
       </div>
 
-      {/* 右侧：视图切换 */}
+      {/* 右侧：去重开关 + 视图切换 */}
       <div className='flex items-center gap-2'>
+        {tab === 'recognitions' && (
+          <Button
+            type='button'
+            variant={dedup ? 'secondary' : 'outline'}
+            size='sm'
+            aria-pressed={dedup}
+            title={t('toolbar.dedupHint')}
+            onClick={() => onDedupChange?.(!dedup)}
+            className='h-7 px-2.5 text-xs'
+          >
+            <CopyCheck className='me-1 size-3.5' />
+            <span>{t('toolbar.dedup')}</span>
+          </Button>
+        )}
         <div className='flex items-center rounded-md border border-border bg-muted/30 p-0.5'>
           <Button
             variant={view === 'grid' ? 'secondary' : 'ghost'}

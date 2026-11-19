@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -59,12 +60,7 @@ func listInReadSnapshot[T any](
 	window httputil.PageWindow,
 	findModifiers ...func(g gorm.ChainInterface[T]) gorm.ChainInterface[T],
 ) ([]T, int64, error) {
-	if window.PageSize <= 0 || window.PageSize > httputil.MaxPageSize {
-		window.PageSize = httputil.DefaultPageSize
-	}
-	if window.Offset < 0 {
-		window.Offset = 0
-	}
+	window = normalizePageWindow(window)
 
 	var total int64
 	var items []T
@@ -92,6 +88,18 @@ func listInReadSnapshot[T any](
 		items = []T{}
 	}
 	return items, total, nil
+}
+
+// normalizePageWindow 做零值/越界防御：GORM 的 Limit(0) 表示「不加 LIMIT」，
+// 一个漏填 window 的内部调用者会把整表读进内存，在边缘设备上直接 OOM。
+func normalizePageWindow(window httputil.PageWindow) httputil.PageWindow {
+	if window.PageSize <= 0 || window.PageSize > httputil.MaxPageSize {
+		window.PageSize = httputil.DefaultPageSize
+	}
+	if window.Offset < 0 {
+		window.Offset = 0
+	}
+	return window
 }
 
 // normalizeTimestamps 把可空的写入时间补成 UTC：零值表示「现在就写」，
@@ -139,34 +147,126 @@ func (s *Store) CreateRecognitionBatch(ctx context.Context, recs []*Recognition)
 }
 
 // ListRecognitions returns filtered and paginated recognition records.
+//
+// Dedup 只影响本次返回结果：它在当前筛选条件命中的全部记录上，按
+// 「相机 + 人员」只保留最新一条，不删除任何行。total 也是折叠后的条数，
+// 保证分页与内容自洽。
 func (s *Store) ListRecognitions(ctx context.Context, filter RecognitionFilter) ([]Recognition, int64, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
+	if filter.Dedup {
+		return s.listDedupedRecognitions(ctx, db, filter)
+	}
+	where, args := recognitionWhere(filter)
 	return listInReadSnapshot(ctx, db, func(g gorm.ChainInterface[Recognition]) gorm.ChainInterface[Recognition] {
-		if filter.CameraID != "" {
-			g = g.Where("camera_id = ?", filter.CameraID)
-		}
-		if filter.PersonID != "" {
-			g = g.Where("person_id = ?", filter.PersonID)
-		}
-		if filter.PersonExternalID != "" {
-			g = g.Where("person_external_id = ?", filter.PersonExternalID)
-		}
-		if filter.Matched != nil {
-			g = g.Where("matched = ?", *filter.Matched)
-		}
-		if filter.StartTime != nil {
-			g = g.Where("captured_at >= ?", filter.StartTime.UTC())
-		}
-		if filter.EndTime != nil {
-			g = g.Where("captured_at <= ?", filter.EndTime.UTC())
-		}
-		return g
+		return g.Where(where, args...)
 	}, filter.Window, func(g gorm.ChainInterface[Recognition]) gorm.ChainInterface[Recognition] {
 		return g.Omit("feature_vector")
 	})
+}
+
+// recognitionWhere 把过滤器翻译成 SQL 条件。所有片段都是常量，只有值走占位符；
+// 普通列表与去重列表共用同一份条件，避免两条路径的筛选语义漂移。
+func recognitionWhere(filter RecognitionFilter) (string, []any) {
+	conditions := []string{"1=1"}
+	args := make([]any, 0, 6)
+	if filter.CameraID != "" {
+		conditions = append(conditions, "camera_id = ?")
+		args = append(args, filter.CameraID)
+	}
+	if filter.PersonID != "" {
+		conditions = append(conditions, "person_id = ?")
+		args = append(args, filter.PersonID)
+	}
+	if filter.PersonExternalID != "" {
+		conditions = append(conditions, "person_external_id = ?")
+		args = append(args, filter.PersonExternalID)
+	}
+	if filter.Matched != nil {
+		conditions = append(conditions, "matched = ?")
+		args = append(args, *filter.Matched)
+	}
+	if filter.StartTime != nil {
+		conditions = append(conditions, "captured_at >= ?")
+		args = append(args, filter.StartTime.UTC())
+	}
+	if filter.EndTime != nil {
+		conditions = append(conditions, "captured_at <= ?")
+		args = append(args, filter.EndTime.UTC())
+	}
+	return strings.Join(conditions, " AND "), args
+}
+
+// recognitionDedupCTE 在当前筛选结果上按「相机 + 人员」分组，每组只保留最新
+// 的一条作为代表行；不再按时间窗口切分会话，同一个 key 在整个查询范围内只有
+// 一条。
+//
+// 身份优先级与业务含义一致：人员档案 ID 最可靠；档案已删除时退回对外业务键
+// 快照；未匹配的人只有宿主关联器生成的 track_id（还要带算法命名空间，避免不同
+// 算法的 track 撞号）；三者都没有时用记录 ID 自成一组，绝不把陌生人误合并。
+// 这里的 key 只用于列表分组展示，与写入侧 cooldown 的抑制键是两套东西。
+//
+// WHERE 由 recognitionWhere 生成（纯常量片段），%s 不接收外部输入。
+const recognitionDedupCTE = `
+WITH filtered AS (
+	SELECT id, camera_id, captured_at,
+		CASE
+			WHEN person_id IS NOT NULL AND person_id <> '' THEN 'p:' || camera_id || ':' || person_id
+			WHEN person_external_id IS NOT NULL AND person_external_id <> '' THEN 'e:' || camera_id || ':' || person_external_id
+			WHEN track_id > 0 THEN 't:' || camera_id || ':' || COALESCE(algorithm_id, '') || ':' || track_id
+			ELSE 'id:' || id
+		END AS dedup_key
+	FROM recognitions
+	WHERE %s
+),
+representatives AS (
+	SELECT id, captured_at
+	FROM (
+		SELECT id, captured_at,
+			ROW_NUMBER() OVER (
+				PARTITION BY dedup_key
+				ORDER BY captured_at DESC, id DESC
+			) AS rn
+		FROM filtered
+	)
+	WHERE rn = 1
+)`
+
+func (s *Store) listDedupedRecognitions(ctx context.Context, db *gorm.DB, filter RecognitionFilter) ([]Recognition, int64, error) {
+	window := normalizePageWindow(filter.Window)
+	where, args := recognitionWhere(filter)
+	cte := fmt.Sprintf(recognitionDedupCTE, where)
+
+	var total int64
+	var items []Recognition
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Raw(cte+` SELECT COUNT(*) FROM representatives`, args...).Scan(&total).Error; err != nil {
+			return err
+		}
+		pageIDs := tx.Raw(
+			cte+` SELECT id FROM representatives ORDER BY captured_at DESC, id DESC LIMIT ? OFFSET ?`,
+			append(append([]any{}, args...), window.PageSize, window.Offset)...,
+		)
+		found, err := gorm.G[Recognition](tx).
+			Where("id IN (?)", pageIDs).
+			Order("captured_at DESC, id DESC").
+			Omit("feature_vector").
+			Find(ctx)
+		if err != nil {
+			return err
+		}
+		items = found
+		return nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	if items == nil {
+		items = []Recognition{}
+	}
+	return items, total, nil
 }
 
 // GetRecognitionByID retrieves a recognition by its primary key.

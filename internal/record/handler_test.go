@@ -250,3 +250,70 @@ func TestHandlerListAndGetCaptures(t *testing.T) {
 		t.Errorf("expected 200 for target-types, got %d", wTargetTypes.Code)
 	}
 }
+
+// TestHandlerListRecognitionsDedupQuery 守住 HTTP 参数确实进入 store 的去重路径：
+// 同一个人的两条连续记录在 dedup=true 时只返回一条，关闭时两条都在。
+func TestHandlerListRecognitionsDedupQuery(t *testing.T) {
+	router, _, store, cleanup := newRecordHandlerHarness(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	base := time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
+	if err := store.CreateRecognitionBatch(ctx, []*record.Recognition{
+		{
+			ID: "dedup_a", CameraID: "cam_01", AlgorithmID: strPtr("algo_01"),
+			TrackID: 1, PersonID: strPtr("person_alice"), PersonName: "Alice",
+			Matched: true, Similarity: 0.95, CandidatesJSON: "[]",
+			CapturedAt: base,
+		},
+		{
+			ID: "dedup_b", CameraID: "cam_01", AlgorithmID: strPtr("algo_01"),
+			TrackID: 1, PersonID: strPtr("person_alice"), PersonName: "Alice",
+			Matched: true, Similarity: 0.94, CandidatesJSON: "[]",
+			CapturedAt: base.Add(3 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("seed recognitions: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		query     string
+		wantTotal int64
+		wantLen   int
+	}{
+		{name: "plain list keeps both rows", query: "", wantTotal: 2, wantLen: 2},
+		{name: "dedup collapses the appearance", query: "?dedup=true", wantTotal: 1, wantLen: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/api/v1/records/recognitions"+tt.query, nil)
+			router.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+			}
+
+			var envelope struct {
+				Code string `json:"code"`
+				Data struct {
+					Items []json.RawMessage `json:"items"`
+					Total int64             `json:"total"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if envelope.Code != "OK" {
+				t.Fatalf("code = %q, want OK", envelope.Code)
+			}
+			if envelope.Data.Total != tt.wantTotal {
+				t.Errorf("total = %d, want %d", envelope.Data.Total, tt.wantTotal)
+			}
+			if len(envelope.Data.Items) != tt.wantLen {
+				t.Errorf("len(items) = %d, want %d", len(envelope.Data.Items), tt.wantLen)
+			}
+		})
+	}
+}

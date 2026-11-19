@@ -5831,6 +5831,11 @@ paths:
         in: query
         name: matched
         type: boolean
+      - description: Collapse filtered recognitions to one per camera and person (display
+          only)
+        in: query
+        name: dedup
+        type: boolean
       - description: Start time (RFC3339)
         in: query
         name: startTime

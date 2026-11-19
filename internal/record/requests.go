@@ -15,8 +15,10 @@ type ListRecognitionsQuery struct {
 	PersonID         string `form:"personId"`
 	PersonExternalID string `form:"personExternalId"`
 	Matched          *bool  `form:"matched"`
-	StartTime        string `form:"startTime"`
-	EndTime          string `form:"endTime"`
+	// Dedup 为 true 时把当前筛选结果按同相机同人员折叠为一条，只影响展示。
+	Dedup     bool   `form:"dedup"`
+	StartTime string `form:"startTime"`
+	EndTime   string `form:"endTime"`
 }
 
 // ToFilter converts query parameters into a validated RecognitionFilter.
@@ -35,6 +37,7 @@ func (q *ListRecognitionsQuery) ToFilter() (RecognitionFilter, error) {
 		PersonID:         q.PersonID,
 		PersonExternalID: q.PersonExternalID,
 		Matched:          q.Matched,
+		Dedup:            q.Dedup,
 		StartTime:        start,
 		EndTime:          end,
 		Window:           window,

@@ -45,6 +45,7 @@ export function useRecordsPage() {
 
   const matched = search.matched
   const personId = search.personId
+  const dedup = search.dedup === 'true'
   const alarmType = search.alarmType
   const targetType = search.targetType
 
@@ -86,6 +87,7 @@ export function useRecordsPage() {
           personId,
           matched:
             matched === 'true' ? true : matched === 'false' ? false : undefined,
+          dedup,
           startTime: activeRange.startTime,
           endTime: activeRange.endTime,
         }
@@ -220,6 +222,12 @@ export function useRecordsPage() {
     [updateSearch]
   )
 
+  const handleDedupChange = useCallback(
+    (nextDedup: boolean) =>
+      updateSearch({ dedup: nextDedup ? 'true' : undefined, page: 1 }),
+    [updateSearch]
+  )
+
   const handlePageChange = useCallback(
     (nextPage: number) => updateSearch({ page: nextPage }),
     [updateSearch]
@@ -317,6 +325,7 @@ export function useRecordsPage() {
     cameraId,
     activeRange,
     matched,
+    dedup,
     personId,
     alarmType,
     targetType,
@@ -348,6 +357,7 @@ export function useRecordsPage() {
     handlePersonIdChange,
     handleAlarmTypeChange,
     handleTargetTypeChange,
+    handleDedupChange,
     handlePageChange,
     handlePageSizeChange,
     handleDateRangeChange,

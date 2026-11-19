@@ -226,6 +226,7 @@ describe('Records Schemas', () => {
         cameraId: 'cam-9',
         preset: '24h',
         matched: 'true',
+        dedup: 'true',
         alarmType: 'invasion',
       })
       expect(parsed.tab).toBe('alarms')
@@ -235,7 +236,12 @@ describe('Records Schemas', () => {
       expect(parsed.cameraId).toBe('cam-9')
       expect(parsed.preset).toBe('24h')
       expect(parsed.matched).toBe('true')
+      expect(parsed.dedup).toBe('true')
       expect(parsed.alarmType).toBe('invasion')
+    })
+
+    it('drops an invalid dedup value instead of failing the route', () => {
+      expect(recordsSearchSchema.parse({ dedup: 'yes' }).dedup).toBeUndefined()
     })
   })
 

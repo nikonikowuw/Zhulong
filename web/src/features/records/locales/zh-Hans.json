@@ -173,6 +173,8 @@
     "endTime": "结束时间",
     "cancel": "取消",
     "apply": "应用",
+    "dedup": "去重",
+    "dedupHint": "同一相机同一人员只显示最近一条，不删除数据",
     "reset": "重置筛选"
   },
   "selection": {

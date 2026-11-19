@@ -119,6 +119,8 @@ type RecognitionFilter struct {
 	Matched          *bool
 	StartTime        *time.Time
 	EndTime          *time.Time
+	// Dedup 只在列表读取时把当前筛选结果按「相机 + 人员」折叠为一条，不改变存储。
+	Dedup bool
 	// Window 是已解析的分页窗口。store 直接用它，不再自行从 page/pageSize
 	// 推导 offset —— 二段推导正是 legacy limit/offset 被静默取整的原因。
 	Window httputil.PageWindow

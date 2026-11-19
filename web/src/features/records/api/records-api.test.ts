@@ -285,3 +285,45 @@ describe('recordsApi', () => {
     })
   })
 })
+
+describe('recordsApi.getRecognitions dedup', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('requests dedup=true only when the display toggle is on', async () => {
+    const spy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce(
+      mockResponse({
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 20,
+      })
+    )
+
+    await recordsApi.getRecognitions({ dedup: true })
+
+    expect(spy).toHaveBeenCalledWith(
+      '/records/recognitions',
+      expect.objectContaining({
+        params: expect.objectContaining({ dedup: 'true' }),
+      })
+    )
+  })
+
+  it('omits dedup when the display toggle is off', async () => {
+    const spy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce(
+      mockResponse({
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 20,
+      })
+    )
+
+    await recordsApi.getRecognitions({ dedup: false })
+
+    const params = spy.mock.calls[0]?.[1]?.params as Record<string, unknown>
+    expect(params.dedup).toBeUndefined()
+  })
+})

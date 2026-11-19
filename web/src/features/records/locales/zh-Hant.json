@@ -173,6 +173,8 @@
     "endTime": "結束時間",
     "cancel": "取消",
     "apply": "套用",
+    "dedup": "去重",
+    "dedupHint": "同相機同人員只顯示最近一筆，不刪除資料",
     "reset": "重置篩選"
   },
   "selection": {
