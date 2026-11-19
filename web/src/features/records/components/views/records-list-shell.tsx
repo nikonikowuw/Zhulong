@@ -77,6 +77,7 @@ export function RecordsListShell<T extends { id: string }>({
   tableThumbnailSkeletonClass = 'size-10',
 }: RecordsListShellProps<T>) {
   const { t } = useTranslation('records')
+  const { t: tCommon } = useTranslation('common')
 
   // 骨架数量对齐真实行数：加载态与结算态高度一致，切 Tab 时页面不再上下跳
   const placeholderCount = Math.max(1, Math.min(pageSize, total || pageSize))
@@ -102,6 +103,13 @@ export function RecordsListShell<T extends { id: string }>({
     }),
   })
 
+  // 0 条时分页栏不渲染，总条数单独保留，避免筛选后计数消失
+  const totalLabel = (
+    <p className='px-2 text-sm text-muted-foreground'>
+      {tCommon('table.pagination.totalItems', { total })}
+    </p>
+  )
+
   if (view === 'grid') {
     if (isLoading) {
       return (
@@ -120,7 +128,7 @@ export function RecordsListShell<T extends { id: string }>({
               </div>
             ))}
           </div>
-          {total > 0 && <DataTablePagination table={table} />}
+          {total > 0 && <DataTablePagination table={table} total={total} />}
         </div>
       )
     }
@@ -141,10 +149,13 @@ export function RecordsListShell<T extends { id: string }>({
 
     if (items.length === 0) {
       return (
-        <div className='flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-12 text-center'>
-          <div className='mb-3 rounded-full bg-muted p-3'>{emptyIcon}</div>
-          <h3 className='text-base font-semibold'>{emptyTitle}</h3>
-          <p className='mt-1 text-sm text-muted-foreground'>{emptyDesc}</p>
+        <div className='space-y-4'>
+          <div className='flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-12 text-center'>
+            <div className='mb-3 rounded-full bg-muted p-3'>{emptyIcon}</div>
+            <h3 className='text-base font-semibold'>{emptyTitle}</h3>
+            <p className='mt-1 text-sm text-muted-foreground'>{emptyDesc}</p>
+          </div>
+          {totalLabel}
         </div>
       )
     }
@@ -163,7 +174,7 @@ export function RecordsListShell<T extends { id: string }>({
             </SelectableCardWrapper>
           ))}
         </div>
-        {total > 0 && <DataTablePagination table={table} />}
+        {total > 0 && <DataTablePagination table={table} total={total} />}
       </div>
     )
   }
@@ -287,7 +298,10 @@ export function RecordsListShell<T extends { id: string }>({
           </Table>
         </div>
 
-        {!isError && total > 0 && <DataTablePagination table={table} />}
+        {!isError && total > 0 && (
+          <DataTablePagination table={table} total={total} />
+        )}
+        {!isError && !isLoading && total === 0 && totalLabel}
       </div>
     </TableSelectionProvider>
   )

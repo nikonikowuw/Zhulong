@@ -15,7 +15,15 @@ const columns: ColumnDef<Row>[] = [{ accessorKey: 'id' }]
  * `SidebarInset` 上的 `@container/content` 为参照（见 authenticated-layout.tsx）。
  * 不给这个容器，两段页码块会同时可见，测试就测不到真实的二选一行为。
  */
-function Harness({ width, totalPages }: { width: number; totalPages: number }) {
+function Harness({
+  width,
+  totalPages,
+  total,
+}: {
+  width: number
+  totalPages: number
+  total?: number
+}) {
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable<Row>({
     data: [],
@@ -27,7 +35,7 @@ function Harness({ width, totalPages }: { width: number; totalPages: number }) {
   })
   return (
     <div className='@container/content' style={{ width }}>
-      <DataTablePagination table={table} />
+      <DataTablePagination table={table} total={total} />
     </div>
   )
 }
@@ -91,5 +99,19 @@ describe('DataTablePagination page indicator', () => {
 
     const el = await waitForSingleVisibleIndicator(container)
     expect(lineCount(el)).toBe(1)
+  })
+
+  it('shows the total result count when provided', async () => {
+    const { getByText } = await render(
+      <Harness width={1024} totalPages={7} total={128} />
+    )
+
+    await expect.element(getByText('共 128 条')).toBeInTheDocument()
+  })
+
+  it('omits the total result count when not provided', async () => {
+    const { getByText } = await render(<Harness width={1024} totalPages={7} />)
+
+    expect(getByText(/^共 \d+ 条$/).query()).toBeNull()
   })
 })

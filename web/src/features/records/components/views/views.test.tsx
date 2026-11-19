@@ -122,9 +122,9 @@ describe('Records Views', () => {
       )
 
       await expect.element(getByRole('table')).toBeInTheDocument()
-      const rowItem = getByText('Alice Zhang')
-      await expect.element(rowItem).toBeInTheDocument()
-      await userEvent.click(rowItem)
+      await expect.element(getByText('Alice Zhang')).toBeInTheDocument()
+      await expect.element(getByText('共 1 条')).toBeInTheDocument()
+      await userEvent.click(getByText('Alice Zhang'))
       expect(handleSelect).toHaveBeenCalledWith(sampleRecognitions[0])
     })
 
@@ -166,8 +166,13 @@ describe('Records Views', () => {
       )
 
       await expect.element(getByTextGrid('暂无感知记录')).toBeInTheDocument()
+      await expect.element(getByTextGrid('共 0 条')).toBeInTheDocument()
 
-      const { getByRole, getByText: getByTextTable } = await render(
+      const {
+        container,
+        getByRole,
+        getByText: getByTextTable,
+      } = await render(
         <RecognitionsView
           items={[]}
           total={0}
@@ -188,6 +193,8 @@ describe('Records Views', () => {
       await expect.element(getByTextTable('抓拍快照')).toBeInTheDocument()
       await expect.element(getByTextTable('抓拍时间')).toBeInTheDocument()
       await expect.element(getByTextTable('摄像机')).toBeInTheDocument()
+      // 同页存在 grid 空态，用 container 限定到当前表格视图
+      expect(container.textContent).toContain('共 0 条')
       expect(getByTextTable(/Page 1 of/).query()).toBeNull()
     })
 

@@ -18,11 +18,14 @@ import {
 
 type DataTablePaginationProps<TData> = {
   table: Table<TData>
+  /** 当前筛选条件下的结果总数；传入后在分页栏左侧显示总条数 */
+  total?: number
   className?: string
 }
 
 export function DataTablePagination<TData>({
   table,
+  total,
   className,
 }: DataTablePaginationProps<TData>) {
   const currentPage = table.getState().pagination.pageIndex + 1
@@ -40,8 +43,15 @@ export function DataTablePagination<TData>({
       style={{ overflowClipMargin: 1 }}
     >
       <div className='flex w-full items-center justify-between'>
-        <div className='flex min-w-25 shrink-0 items-center justify-center text-sm font-medium whitespace-nowrap @2xl/content:hidden'>
-          {t('table.pagination.pageOf', { currentPage, totalPages })}
+        <div className='flex min-w-0 items-center gap-3'>
+          {typeof total === 'number' && (
+            <p className='shrink-0 text-sm whitespace-nowrap text-muted-foreground'>
+              {t('table.pagination.totalItems', { total })}
+            </p>
+          )}
+          <div className='flex min-w-25 shrink-0 items-center justify-center text-sm font-medium whitespace-nowrap @2xl/content:hidden'>
+            {t('table.pagination.pageOf', { currentPage, totalPages })}
+          </div>
         </div>
         <div className='flex items-center gap-2 @max-2xl/content:flex-row-reverse'>
           <Select

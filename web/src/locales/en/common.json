@@ -90,6 +90,7 @@
     "selectedCount": "{{count}} selected",
     "pagination": {
       "pageOf": "Page {{currentPage}} of {{totalPages}}",
+      "totalItems": "Total: {{total}}",
       "rowsPerPage": "Rows per page",
       "firstPage": "Go to first page",
       "previousPage": "Go to previous page",

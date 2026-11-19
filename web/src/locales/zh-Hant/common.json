@@ -90,6 +90,7 @@
     "selectedCount": "已選擇 {{count}} 項",
     "pagination": {
       "pageOf": "第 {{currentPage}} 頁，共 {{totalPages}} 頁",
+      "totalItems": "共 {{total}} 條",
       "rowsPerPage": "每頁列數",
       "firstPage": "前往第一頁",
       "previousPage": "前往上一頁",
