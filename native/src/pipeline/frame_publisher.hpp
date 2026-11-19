@@ -17,6 +17,7 @@
 #include "pipeline/motion_detector.hpp"
 #include "algorithm/ipc/frame_broker.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -128,16 +129,30 @@ public:
     HardwareFrame::ConstPtr find_frame(int64_t pts) const;
 
     /**
-     * @brief 压入一帧到历史缓存（测试及内部调用）
+     * @brief 压入一帧到历史缓存（测试及内部投递路径共用）
      *
-     * 先按需物化像素副本（可能在锁外做 3 MB/帧的 memcpy），再在锁内插入两个历史环。
+     * 进入 4 帧借用环；当借用环满载淘汰队头帧时，才按需在锁外物化像素副本进入副本环。
+     * `broker_frame_id > 0` 且关联 broker 时，若该帧已由所有接收客户端干净 ACK 且未收到
+     * `MSG_RESULT`，淘汰时直接零拷贝丢弃。
      * 淘汰旧帧时确保在互斥锁外析构，遵守 pipeline-guidelines 规则。
      *
      * @param frame 已发布帧
      * @param capture_time_ms 本帧发布时打下的单调采集毫秒时间戳（与发给算法的
      *        `capture_time_ms` 同源），作为抓拍的帧身份锚点
+     * @param broker_frame_id broker 分配的帧序号（0 表示不走 broker 生命周期判定，保守物化）
      */
-    void push_frame(HardwareFrame::ConstPtr frame, int64_t capture_time_ms = 0);
+    void push_frame(HardwareFrame::ConstPtr frame, int64_t capture_time_ms = 0,
+                    uint64_t broker_frame_id = 0);
+
+    /**
+     * @brief 标记某一已发布帧收到了算法回传的 `MSG_RESULT`
+     *
+     * 必须在同一 socket 的 `MSG_FRAME_ACK` 之前由结果派发路径调用（`Engine::dispatch_ai_result`）：
+     * 借用环淘汰该帧时，只要 `result_seen` 为真，即便所有客户端已完成 ACK，也必须物化副本以服务
+     * 异步排队的 Go `SnapshotStore`。
+     */
+    void mark_result_frame(bool has_capture_time_ms, int64_t capture_time_ms,
+                           bool has_raw_pts, int64_t raw_pts) noexcept;
 
     /** @brief 抓拍历史未命中精确 PTS、只能回退最近帧的次数（可观测性） */
     [[nodiscard]] uint64_t snapshot_miss_count() const noexcept {
@@ -147,6 +162,11 @@ public:
     /** @brief 当前抓拍像素副本环持有的帧数与字节数（可观测性/测试） */
     [[nodiscard]] size_t snapshot_cache_frames() const;
     [[nodiscard]] size_t snapshot_cache_bytes() const;
+
+    /** @brief 累计物化进抓拍像素副本环的帧数（可观测性/测试：验证静止/空帧零拷贝跳过） */
+    [[nodiscard]] uint64_t snapshot_materialized_count() const noexcept {
+        return snapshot_materialized_count_.load(std::memory_order_relaxed);
+    }
 
     /**
      * @brief 记录已发布帧的采集时钟 / 原始 PTS 与预览归一化时间戳映射
@@ -200,12 +220,44 @@ private:
     // ⚠️ mutable + mutex：查询接口是 const，但需要加锁读取。
     static constexpr size_t history_capacity = 4;
     static constexpr size_t published_pts_capacity = 64;
+    static constexpr size_t pending_result_marks_capacity = 16;
 
-    // 抓拍用的像素副本环：与解码池解耦，覆盖「结果回传慢于 4 帧」的常态。
-    // 1080p NV12 单帧 3.1 MB，5 fps 下 1200 ms ≈ 6 帧 ≈ 19 MB，仍在 RK3568 可承受范围。
+    // 抓拍用的像素副本环：与解码池解耦，仅在借用环淘汰「仍在途 / 超时 / 已产出结果」的帧时按需物化，
+    // 避免静止帧、无目标帧和未投递帧白白拷贝 3 MB 非缓存 DMA-BUF 并把真正需要抓拍的帧挤出窗口。
+    // 1080p NV12 单帧 3.1 MB，硬上限 12 帧 / 24 MiB / 3000 ms（覆盖多人脸多帧串行推理峰值）。
     static constexpr size_t snapshot_frames_capacity = 12;
     static constexpr size_t snapshot_bytes_capacity = 24u * 1024u * 1024u;
-    static constexpr std::chrono::milliseconds snapshot_window{1200};
+    static constexpr std::chrono::milliseconds snapshot_window{3000};
+
+    /** @brief 4 帧借用环条目：绑定硬件帧、采集身份、broker 帧序号与结果标记 */
+    struct HistoryEntry {
+        HardwareFrame::ConstPtr frame;
+        int64_t capture_time_ms{0};
+        uint64_t broker_frame_id{0};
+        bool result_seen{false};
+    };
+
+    /**
+     * @brief 兜底暂存「在 push_frame 落环前就先到达的 MSG_RESULT」标记
+     *
+     * 极速算法或发布线程在 publish_frame 之后、push_frame 之前被调度抢占时，
+     * mark_result_frame 可能早于 push_frame 到达。固定数组零堆分配（保持 noexcept），
+     * push_frame 入环时认领并转为 HistoryEntry::result_seen。
+     */
+    struct PendingResultMark {
+        bool active{false};
+        bool has_capture_time_ms{false};
+        int64_t capture_time_ms{0};
+        bool has_raw_pts{false};
+        int64_t raw_pts{0};
+    };
+
+    /** @brief 抓拍副本像素缓冲复用池（避免每次物化重复分配与清零 3 MB vector） */
+    struct SnapshotBufferPool {
+        mutable std::mutex mutex;
+        std::vector<std::unique_ptr<std::vector<uint8_t>>> buffers;
+        size_t pooled_bytes{0};
+    };
 
     /**
      * @brief 一帧已发布画面的紧打包像素副本（NV12 / YUV420P）
@@ -231,26 +283,32 @@ private:
     };
 
     /**
-     * @brief 物化并登记一帧像素副本；格式不支持或回调缺失时返回 false（保留借用环路径）
-     *
-     * @param frame 已发布帧
-     * @param capture_time_ms 本帧的采集时钟，作为副本环的帧身份键
+     * @brief 从复用池借出（或首次分配）指定字节数的像素缓冲，析构时自动归还池中
      */
-    bool cache_snapshot_frame(const HardwareFrame& frame, int64_t capture_time_ms);
+    std::shared_ptr<std::vector<uint8_t>> acquire_snapshot_buffer(size_t bytes);
+
+    /**
+     * @brief 在锁外物化一帧像素副本；格式不支持或回调缺失时返回 false
+     */
+    bool materialize_snapshot_frame(const HardwareFrame& frame, int64_t capture_time_ms,
+                                    SnapshotFrame& out);
 
     /**
      * @brief 按 pts 反查采集时钟（调用方持锁）
      *
-     * 借用环的 `HardwareFrame` 不携带 capture_time_ms，只能借发布时登记的
-     * PublishedPtsRecord 反查；查不到返回 0（身份未知）。
+     * 优先查借用环与副本环，最后回退到发布时登记的 PublishedPtsRecord；查不到返回 0。
      */
     int64_t lookup_capture_time_ms_locked(int64_t pts) const;
 
     /** @brief 把副本包装成只读 HardwareFrame（调用方持锁，副本字节随 release_fn 存活） */
     HardwareFrame::ConstPtr frame_from_snapshot(const SnapshotFrame& cached) const;
 
-    /** @brief 按时间窗/帧数/字节预算淘汰最旧副本（调用方持锁） */
-    void evict_snapshot_frames_locked(std::chrono::steady_clock::time_point now);
+    /**
+     * @brief 按时间窗/帧数/字节预算淘汰最旧副本（调用方持锁），将释放的像素缓冲移交调用方锁外析构
+     */
+    void evict_snapshot_frames_locked(
+        std::chrono::steady_clock::time_point now,
+        std::vector<std::shared_ptr<std::vector<uint8_t>>>& recycled_out);
 
     struct PublishedPtsRecord {
         int64_t capture_time_ms{0};
@@ -260,12 +318,16 @@ private:
     };
 
     mutable std::mutex latest_mutex_;
-    std::deque<HardwareFrame::ConstPtr> history_frames_;
+    std::deque<HistoryEntry> history_frames_;
     std::deque<SnapshotFrame> snapshot_frames_;
     size_t snapshot_bytes_{0};
+    std::shared_ptr<SnapshotBufferPool> snapshot_pool_{std::make_shared<SnapshotBufferPool>()};
     mutable std::atomic<uint64_t> snapshot_miss_count_{0};
+    std::atomic<uint64_t> snapshot_materialized_count_{0};
     mutable std::chrono::steady_clock::time_point last_snapshot_miss_warn_{};
     std::deque<PublishedPtsRecord> published_pts_records_;
+    std::array<PendingResultMark, pending_result_marks_capacity> pending_result_marks_{};
+    size_t pending_result_cursor_{0};
 
     MotionDetector motion_detector_;
 };

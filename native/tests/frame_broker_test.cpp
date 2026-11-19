@@ -2151,6 +2151,154 @@ void test_shm_pool_move_resets_source_and_broker_publish_stop_race() {
     std::cout << "[PASS] test_shm_pool_move_resets_source_and_broker_publish_stop_race" << std::endl;
 }
 
+// =============================================================================
+// Test: 发布前置就绪判定、投递回执、以及超时驱逐与干净 ACK 的生命周期区分
+// =============================================================================
+void test_frame_broker_readiness_receipt_and_clean_completion() {
+    uint64_t stream_id = 1099;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 2;
+    opt.slot_size = 64 * 1024;
+    opt.max_in_flight_per_client = 2;
+    opt.lease_timeout = std::chrono::milliseconds(100);
+
+    std::string err;
+    assert(broker.start(stream_id, "/tmp", opt, &err));
+
+    // 1. 0 客户端在线时：前置检查直接短路返回 false
+    assert(!broker.has_ready_client_or_record_drop());
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path(), &err));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "ready_probe", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> resp_payload;
+    assert(client.recv_msg(resp_hdr, resp_payload, 1000));
+    HandshakeResp resp{};
+    std::memcpy(&resp, resp_payload.data(), sizeof(resp));
+    for (int i = 0; i < 50 && broker.client_count() == 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    assert(broker.client_count() == 1);
+    assert(broker.has_ready_client_or_record_drop());
+
+    std::vector<uint8_t> buf(64 * 48 * 3 / 2, 0x22);
+    HardwareFrame frame{};
+    frame.width = 64;
+    frame.height = 48;
+    frame.stride = 64;
+    frame.vstride = 48;
+    frame.format = FRAME_FORMAT_NV12;
+    frame.host_ptr = buf.data();
+    frame.host_planes[0] = buf.data();
+    frame.host_planes[1] = buf.data() + 64 * 48;
+    frame.plane_strides[0] = 64;
+    frame.plane_strides[1] = 64;
+
+    // 2. 投递 2 帧打满 in_flight（= 2）
+    PublishReceipt r1{};
+    PublishReceipt r2{};
+    assert(broker.publish_frame(frame, ViewWindow{}, FrameMotionInfo{}, CropCopyFn{}, 1001, &r1));
+    assert(r1.delivered_clients == 1 && r1.frame_id > 0);
+    assert(!broker.is_frame_completed_cleanly(r1.frame_id));
+
+    assert(broker.publish_frame(frame, ViewWindow{}, FrameMotionInfo{}, CropCopyFn{}, 1002, &r2));
+    assert(r2.delivered_clients == 1 && r2.frame_id > r1.frame_id);
+    assert(!broker.is_frame_completed_cleanly(r2.frame_id));
+
+    // 3. 全部槽位已满且未超时：前置检查返回 false 且递增 dropped_frames；
+    //    此时直接调 publish_frame 因无空闲槽位返回 false 且回执为空。
+    assert(!broker.has_ready_client_or_record_drop());
+    ClientInfo info{};
+    assert(broker.get_client_info(resp.client_id, info));
+    assert(info.dropped_frames == 1);
+
+    PublishReceipt r_full{};
+    assert(!broker.publish_frame(frame, ViewWindow{}, FrameMotionInfo{}, CropCopyFn{}, 1003, &r_full));
+    assert(r_full.delivered_clients == 0 && r_full.frame_id == 0);
+
+    // 4. 超过 lease_timeout 且全部槽位已占满：前置检查必须返回 true 让 publish_frame 回收超时槽位；
+    //    被超时驱逐的 r1.frame_id 不算「干净 ACK」，is_frame_completed_cleanly 必须保持 false！
+    std::this_thread::sleep_for(std::chrono::milliseconds(130));
+    assert(broker.has_ready_client_or_record_drop());
+
+    PublishReceipt r3{};
+    assert(broker.publish_frame(frame, ViewWindow{}, FrameMotionInfo{}, CropCopyFn{}, 1004, &r3));
+    assert(r3.delivered_clients == 1 && r3.frame_id > r2.frame_id);
+    assert(!broker.is_frame_completed_cleanly(r1.frame_id));
+
+    // 5. 客户端排空 3 条分发并 ACK r3：r3 立即变为干净完成，r1 仍保留超时标记
+    FrameDispatchMsg last_msg{};
+    for (int i = 0; i < 3; ++i) {
+        IpcHeader h{};
+        std::vector<uint8_t> p;
+        assert(client.recv_msg(h, p, 1000));
+        assert(h.msg_type == MSG_FRAME_DISPATCH);
+        std::memcpy(&last_msg, p.data(), sizeof(last_msg));
+    }
+    assert(last_msg.frame_id == r3.frame_id);
+    FrameAckMsg ack{};
+    ack.stream_id = last_msg.stream_id;
+    ack.frame_id = last_msg.frame_id;
+    ack.slot_index = last_msg.slot_index;
+    ack.generation = last_msg.generation;
+    ack.client_id = resp.client_id;
+    assert(client.send_msg(MSG_FRAME_ACK, &ack, sizeof(ack)));
+    for (int i = 0; i < 50 && !broker.is_frame_completed_cleanly(r3.frame_id); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    assert(broker.is_frame_completed_cleanly(r3.frame_id));
+    assert(!broker.is_frame_completed_cleanly(r1.frame_id));
+
+    client.disconnect();
+    broker.stop();
+
+    // 6. 槽位充足（slot_count > max_in_flight）但客户端满载：
+    //    has_ready_client_or_record_drop 返回 false 记 drop；直接 publish_frame 返回 true 但回执为 0。
+    FrameBroker spare_broker;
+    BrokerOptions spare_opt;
+    spare_opt.slot_count = 4;
+    spare_opt.slot_size = 64 * 1024;
+    spare_opt.max_in_flight_per_client = 2;
+    spare_opt.lease_timeout = std::chrono::milliseconds(500);
+    assert(spare_broker.start(stream_id + 1, "/tmp", spare_opt, &err));
+
+    UnixSocketClient spare_client;
+    assert(spare_client.connect(spare_broker.socket_path(), &err));
+    assert(spare_client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+    resp_payload.clear();
+    assert(spare_client.recv_msg(resp_hdr, resp_payload, 1000));
+    HandshakeResp spare_resp{};
+    std::memcpy(&spare_resp, resp_payload.data(), sizeof(spare_resp));
+    for (int i = 0; i < 50 && spare_broker.client_count() == 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    assert(spare_broker.client_count() == 1);
+
+    PublishReceipt s1{}, s2{}, s_drop{};
+    assert(spare_broker.publish_frame(frame, ViewWindow{}, FrameMotionInfo{}, CropCopyFn{}, 2001, &s1));
+    assert(spare_broker.publish_frame(frame, ViewWindow{}, FrameMotionInfo{}, CropCopyFn{}, 2002, &s2));
+    assert(s1.delivered_clients == 1 && s2.delivered_clients == 1);
+
+    assert(!spare_broker.has_ready_client_or_record_drop());
+    ClientInfo spare_info{};
+    assert(spare_broker.get_client_info(spare_resp.client_id, spare_info));
+    assert(spare_info.dropped_frames == 1);
+
+    assert(spare_broker.publish_frame(frame, ViewWindow{}, FrameMotionInfo{}, CropCopyFn{}, 2003, &s_drop));
+    assert(s_drop.delivered_clients == 0 && s_drop.frame_id == 0);
+    assert(spare_broker.get_client_info(spare_resp.client_id, spare_info));
+    assert(spare_info.dropped_frames == 2);
+
+    spare_client.disconnect();
+    spare_broker.stop();
+    std::cout << "[PASS] test_frame_broker_readiness_receipt_and_clean_completion" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     // 子进程是「包形态」的桩算法可执行文件：自带算法类，argv 只有 broker 相关参数。
     const char* consumer_bin = (argc > 1) ? argv[1] : nullptr;
@@ -2180,6 +2328,7 @@ int main(int argc, char* argv[]) {
     test_frame_broker_windowed_publish();
     test_frame_broker_invalid_source_rejected();
     test_shm_pool_move_resets_source_and_broker_publish_stop_race();
+    test_frame_broker_readiness_receipt_and_clean_completion();
     if (consumer_bin) {
         test_consumer_subprocess_e2e(consumer_bin);
         test_consumer_multi_broker_e2e(consumer_bin);

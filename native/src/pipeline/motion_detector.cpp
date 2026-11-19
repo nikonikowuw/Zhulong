@@ -133,6 +133,7 @@ bool MotionDetector::sample_y_plane(const HardwareFrame& frame, const ViewWindow
 
     ScopedDmaReader dma_reader;
     const uint8_t* y_src = nullptr;
+    bool from_dma = false;
 
     if (frame.host_planes[0] != nullptr) {
         y_src = frame.host_planes[0];
@@ -142,20 +143,40 @@ bool MotionDetector::sample_y_plane(const HardwareFrame& frame, const ViewWindow
         const size_t min_y_bytes = static_cast<size_t>(stride) * frame.height;
         const size_t map_size = std::max(frame.y_plane_size(), min_y_bytes);
         y_src = dma_reader.open(frame.dma_fd, map_size);
+        from_dma = (y_src != nullptr);
     }
 
     if (y_src == nullptr) {
         return false;
     }
 
+    std::array<uint32_t, grid_width> x_offsets{};
+    for (int x = 0; x < grid_width; ++x) {
+        x_offsets[static_cast<size_t>(x)] = (static_cast<uint32_t>(x) * sample_w) / grid_width;
+    }
+
+    // Rockchip 等 ARM64 平台的 MPP DMA-BUF 映射到用户态为 Normal-NC（写合并/非缓存）。
+    // 直接 `row[sx]` 逐字节跨步读会对每帧发出 57,600 次单字节非缓存 DDR 事务（RK3568 实测
+    // 10~14 ms/帧）；先整行 `memcpy` 进 64 字节对齐的栈上行缓冲走 NEON 128-bit 突发读，
+    // 再从 L1 缓存抽样，采样结果逐字节等价，且零堆分配（满足 noexcept 约束）。
+    constexpr size_t row_stage_capacity = 4096;
+    alignas(64) uint8_t row_stage[row_stage_capacity];
+    const bool stage_dma_rows = from_dma && sample_w <= row_stage_capacity;
+
     for (int y = 0; y < grid_height; ++y) {
         const uint32_t sy = origin_y + (static_cast<uint32_t>(y) * sample_h) / grid_height;
-        const uint8_t* row = y_src + static_cast<size_t>(sy) * stride;
+        const uint8_t* row = y_src + static_cast<size_t>(sy) * stride + origin_x;
         uint8_t* dst = out_grid + static_cast<size_t>(y) * grid_width;
 
-        for (int x = 0; x < grid_width; ++x) {
-            const uint32_t sx = origin_x + (static_cast<uint32_t>(x) * sample_w) / grid_width;
-            dst[x] = row[sx];
+        if (stage_dma_rows) {
+            std::memcpy(row_stage, row, sample_w);
+            for (int x = 0; x < grid_width; ++x) {
+                dst[x] = row_stage[x_offsets[static_cast<size_t>(x)]];
+            }
+        } else {
+            for (int x = 0; x < grid_width; ++x) {
+                dst[x] = row[x_offsets[static_cast<size_t>(x)]];
+            }
         }
     }
 

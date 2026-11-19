@@ -179,11 +179,14 @@ bool FrameBroker::start(uint64_t stream_id, const std::string& base_dir,
         for (size_t i = 0; i < options_.slot_count; ++i) {
             slots_[i].slot_index = static_cast<uint32_t>(i);
             slots_[i].generation = 1;
+            slots_[i].frame_id = 0;
             slots_[i].state = SlotState::FREE;
             slots_[i].active_leases.clear();
         }
         clients_.clear();
         task_config_payloads_.clear();
+        timed_out_frame_ids_.fill(0);
+        timed_out_cursor_ = 0;
     }
 
     // 3. 配置并启动 Unix Domain Socket 服务端
@@ -235,8 +238,77 @@ void FrameBroker::stop() {
     slots_.clear();
     clients_.clear();
     task_config_payloads_.clear();
+    timed_out_frame_ids_.fill(0);
+    timed_out_cursor_ = 0;
     dma_slots_.clear();
     has_dma_slots_ = false;
+}
+
+void FrameBroker::record_timed_out_frame_locked(uint64_t frame_id) noexcept {
+    if (frame_id == 0) {
+        return;
+    }
+    timed_out_frame_ids_[timed_out_cursor_] = frame_id;
+    timed_out_cursor_ = (timed_out_cursor_ + 1) % timed_out_frame_ids_.size();
+}
+
+bool FrameBroker::has_ready_client_or_record_drop() {
+    if (!running_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (clients_.empty()) {
+        return false;
+    }
+    for (const auto& [cid, client] : clients_) {
+        if (client.in_flight_count < options_.max_in_flight_per_client) {
+            return true;
+        }
+    }
+
+    // 与 find_or_evict_free_slot 保持完全一致的驱逐条件：仅当所有槽位均被占用且至少一个
+    // LEASED 槽位达到 lease_timeout 时，publish_frame 才会驱逐旧槽位并释放客户端配额。
+    bool has_free_slot = false;
+    bool has_evictable_slot = false;
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& slot : slots_) {
+        if (slot.state == SlotState::FREE) {
+            has_free_slot = true;
+            break;
+        }
+        if (slot.state == SlotState::LEASED) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - slot.dispatch_time);
+            if (elapsed >= options_.lease_timeout) {
+                has_evictable_slot = true;
+            }
+        }
+    }
+    if (!has_free_slot && has_evictable_slot) {
+        return true;
+    }
+
+    for (auto& [cid, client] : clients_) {
+        client.dropped_frames++;
+    }
+    return false;
+}
+
+bool FrameBroker::is_frame_completed_cleanly(uint64_t frame_id) const noexcept {
+    if (frame_id == 0) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& slot : slots_) {
+        if (slot.state != SlotState::FREE && slot.frame_id == frame_id) {
+            return false;
+        }
+    }
+    for (uint64_t timed_out_id : timed_out_frame_ids_) {
+        if (timed_out_id == frame_id) {
+            return false;
+        }
+    }
+    return true;
 }
 
 int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& lock) {
@@ -275,6 +347,10 @@ int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& lock) {
             }
         }
         slot.active_leases.clear();
+        if (slot.frame_id != 0) {
+            record_timed_out_frame_locked(slot.frame_id);
+        }
+        slot.frame_id = 0;
         slot.generation++;
         slot.state = SlotState::FREE;
         return oldest_idx;
@@ -284,12 +360,16 @@ int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& lock) {
 }
 
 bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInfo& motion) {
-    return publish_frame(frame, ViewWindow{}, motion, CropCopyFn{}, 0);
+    return publish_frame(frame, ViewWindow{}, motion, CropCopyFn{}, 0, nullptr);
 }
 
 bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& view,
                                 const FrameMotionInfo& motion, const CropCopyFn& crop,
-                                int64_t capture_time_ms) {
+                                int64_t capture_time_ms,
+                                PublishReceipt* out_receipt) {
+    if (out_receipt != nullptr) {
+        *out_receipt = PublishReceipt{};
+    }
     struct PublishGuard {
         std::atomic<uint32_t>& count;
         std::mutex& mtx;
@@ -315,6 +395,7 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
 
     int slot_idx = -1;
     uint64_t generation = 0;
+    uint64_t assigned_frame_id = 0;
     std::vector<uint32_t> target_clients;
 
     {
@@ -342,12 +423,19 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
                 client.dropped_frames++;
             }
         }
+        if (!target_clients.empty()) {
+            assigned_frame_id = frame_seq_.fetch_add(1);
+            slot.frame_id = assigned_frame_id;
+        } else {
+            slot.frame_id = 0;
+        }
     }
 
     // 如果没有任何客户端订阅/合格，直接释放槽位
     if (target_clients.empty()) {
         std::lock_guard<std::mutex> lock(mutex_);
         slots_[slot_idx].state = SlotState::FREE;
+        slots_[slot_idx].frame_id = 0;
         slots_[slot_idx].active_leases.clear();
         return true;
     }
@@ -483,7 +571,7 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
         msg.input_view[3] = actual.y2;
     }
     msg.stream_id = stream_id_;
-    msg.frame_id = frame_seq_.fetch_add(1);
+    msg.frame_id = assigned_frame_id;
     msg.pts = frame.pts;
     msg.capture_time_ms = capture_time_ms > 0
                               ? capture_time_ms
@@ -649,8 +737,12 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
     // 切换槽位状态为 LEASED（若所有目标客户端在写入期间均已断连，则直接回 FREE）
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        slots_[slot_idx].state =
-            slots_[slot_idx].active_leases.empty() ? SlotState::FREE : SlotState::LEASED;
+        if (slots_[slot_idx].active_leases.empty()) {
+            slots_[slot_idx].state = SlotState::FREE;
+            slots_[slot_idx].frame_id = 0;
+        } else {
+            slots_[slot_idx].state = SlotState::LEASED;
+        }
     }
 
     // 向各合格客户端下发帧通知 (若发送失败立即清算租约)
@@ -670,6 +762,7 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
                 slots_[slot_idx].active_leases.erase(cid);
                 if (slots_[slot_idx].active_leases.empty()) {
                     slots_[slot_idx].state = SlotState::FREE;
+                    slots_[slot_idx].frame_id = 0;
                 }
             }
         }
@@ -680,6 +773,10 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
         return false;
     }
 
+    if (out_receipt != nullptr) {
+        out_receipt->delivered_clients = sent_count;
+        out_receipt->frame_id = assigned_frame_id;
+    }
     total_published_.fetch_add(1);
     return true;
 }
@@ -758,6 +855,7 @@ bool FrameBroker::fail_publish(int slot_idx, const std::vector<uint32_t>& target
     }
     if (slot_idx >= 0 && static_cast<size_t>(slot_idx) < slots_.size()) {
         slots_[slot_idx].state = SlotState::FREE;
+        slots_[slot_idx].frame_id = 0;
         slots_[slot_idx].active_leases.clear();
     }
     total_dropped_.fetch_add(1);
@@ -792,6 +890,7 @@ void FrameBroker::handle_ack(uint32_t client_id, const FrameAckMsg& ack) {
 
     if (slot.active_leases.empty()) {
         slot.state = SlotState::FREE;
+        slot.frame_id = 0;
     }
 }
 
@@ -803,6 +902,7 @@ void FrameBroker::handle_client_disconnect(uint32_t client_id) {
         slot.active_leases.erase(client_id);
         if (slot.active_leases.empty() && slot.state == SlotState::LEASED) {
             slot.state = SlotState::FREE;
+            slot.frame_id = 0;
         }
     }
 

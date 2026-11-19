@@ -336,6 +336,38 @@ void test_plane_stride_padded() {
     std::cout << "[PASS] test_plane_stride_padded" << std::endl;
 }
 
+void test_window_origin_offset_detection() {
+    MotionDetector detector;
+    ViewWindow win{};
+    win.active = true;
+    win.x = 640;
+    win.y = 360;
+    win.w = 640;
+    win.h = 360;
+
+    auto base = create_dummy_nv12(1920, 1080, 50);
+    MotionResult res{};
+    assert(detector.detect(base, win, res));
+    assert(res.has_motion);
+
+    // 窗口外变化不触发窗口内运动
+    auto outside = create_dummy_nv12(1920, 1080, 50);
+    paint_y_rect(outside, 100, 100, 400, 300, 220);
+    assert(detector.detect(outside, win, res));
+    assert(!res.has_motion);
+
+    // 窗口内右侧区域变化必须准确映射到窗口归一化坐标
+    auto inside = create_dummy_nv12(1920, 1080, 50);
+    paint_y_rect(inside, 1000, 500, 1200, 680, 220);
+    assert(detector.detect(inside, win, res));
+    assert(res.has_motion);
+    assert(res.box_count == 1);
+    assert(res.boxes[0].x1 >= 0.45f && res.boxes[0].x2 <= 1.0f);
+    assert(res.boxes[0].y1 >= 0.30f && res.boxes[0].y2 <= 1.0f);
+
+    std::cout << "[PASS] test_window_origin_offset_detection" << std::endl;
+}
+
 } // namespace
 
 int main() {
@@ -350,6 +382,7 @@ int main() {
     test_still_heartbeat_keepalive();
     test_unsupported_input_fails_open();
     test_plane_stride_padded();
+    test_window_origin_offset_detection();
     std::cout << "All MotionDetector unit tests PASSED!" << std::endl;
     return 0;
 }

@@ -12,16 +12,20 @@
 
 #include "Zhulong/engine.h"
 #include "Zhulong/frame.hpp"
+#include "algorithm/ipc/frame_broker.hpp"
+#include "algorithm/ipc/unix_socket.hpp"
 #include "nodes/snapshot/jpeg_encoder.hpp"
 #include "pipeline/frame_publisher.hpp"
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #define CHECK(condition) \
@@ -429,51 +433,54 @@ void test_frame_publisher_snapshot_history() {
         return frame;
     };
 
-    // 1. 连续发布 14 帧（pts 100..1400）：副本环按帧数上限淘汰最旧两帧。
+    // 1. 连续发布 18 帧（pts 100..1800）：最新 4 帧留在借用环（零拷贝），
+    //    前 14 帧依次从借用环淘汰并惰性物化进副本环；副本环按 12 帧上限淘汰最旧两帧（pts 100、200）。
     //    每帧带一个单调的采集时钟 capture_time_ms = 5000 + i，作为抓拍的首选身份键。
     HardwareFrame::ConstPtr last_frame;
-    for (int64_t i = 0; i < 14; ++i) {
+    for (int64_t i = 0; i < 18; ++i) {
         last_frame = make_frame(100 + i * 100);
         publisher.push_frame(last_frame, 5000 + i);
     }
     CHECK(publisher.snapshot_cache_frames() == 12);
+    CHECK(publisher.snapshot_materialized_count() == 14);
     CHECK(publisher.snapshot_cache_bytes() > 0);
     CHECK(publisher.snapshot_miss_count() == 0);
 
-    // 2. 精确命中：取回的是副本（无 dmabuf）、像素内容与 pts 对应
-    auto exact = publisher.find_frame(1400);
+    // 2. 精确命中：最新帧在借用环中直接命中，像素内容与 pts 对应
+    auto exact = publisher.find_frame(1800);
     CHECK(exact != nullptr);
-    CHECK(exact->pts == 1400 && exact->has_pts);
+    CHECK(exact->pts == 1800 && exact->has_pts);
     CHECK(exact->width == kWidth && exact->height == kHeight);
     CHECK(exact->format == zhulong::FRAME_FORMAT_NV12);
     CHECK(exact->dma_fd < 0);
     CHECK(exact->host_planes[0] != nullptr);
     CHECK(exact->host_planes[1] == exact->host_planes[0] + static_cast<size_t>(kWidth) * kHeight);
-    CHECK(exact->host_planes[0][0] == static_cast<uint8_t>(1400 & 0xFF));
+    CHECK(exact->host_planes[0][0] == static_cast<uint8_t>(1800 & 0xFF));
     CHECK(exact->plane_strides[0] == kWidth);
 
-    // 3. 两个身份键都 <= 0：取副本环尾部，并回报「取到的就是最新帧」
+    // 3. 两个身份键都 <= 0：取借用环尾部，并回报「取到的就是最新帧」
     auto latest = publisher.resolve_frame(0, 0);
-    CHECK(latest.frame != nullptr && latest.frame->pts == 1400);
+    CHECK(latest.frame != nullptr && latest.frame->pts == 1800);
     CHECK(latest.source.exact);
-    CHECK(latest.source.has_pts && latest.source.pts == 1400);
-    CHECK(latest.source.capture_time_ms == 5013);
-    CHECK(publisher.latest_frame() != nullptr && publisher.latest_frame()->pts == 1400);
+    CHECK(latest.source.has_pts && latest.source.pts == 1800);
+    CHECK(latest.source.capture_time_ms == 5017);
+    CHECK(publisher.latest_frame() != nullptr && publisher.latest_frame()->pts == 1800);
 
     // 4. 身份键优先：capture_time_ms 精确命中，即使同时给了指向另一帧的 pts
-    auto by_time = publisher.resolve_frame(800, 5013);
-    CHECK(by_time.frame != nullptr && by_time.frame->pts == 1400);
-    CHECK(by_time.source.exact && by_time.source.capture_time_ms == 5013);
+    auto by_time = publisher.resolve_frame(800, 5017);
+    CHECK(by_time.frame != nullptr && by_time.frame->pts == 1800);
+    CHECK(by_time.source.exact && by_time.source.capture_time_ms == 5017);
 
-    // 5. 同一帧仍留在借用环里时改用借用帧（保留硬件 JPEG 直通），身份不变
-    auto by_time_hw = publisher.resolve_frame(0, 5013);
+    // 5. 同一帧仍留在借用环里时直接返回借用帧（保留硬件 JPEG 直通），身份不变
+    auto by_time_hw = publisher.resolve_frame(0, 5017);
     CHECK(by_time_hw.frame == last_frame);
-    CHECK(by_time_hw.source.exact && by_time_hw.source.capture_time_ms == 5013);
+    CHECK(by_time_hw.source.exact && by_time_hw.source.capture_time_ms == 5017);
 
-    // 6. 超出 4 帧借用环、但仍在副本环内：capture_time_ms 同样精确命中
+    // 6. 超出 4 帧借用环、但仍在副本环内：capture_time_ms 同样精确命中（惰性物化的副本）
     auto older_time = publisher.resolve_frame(0, 5002);
     CHECK(older_time.frame != nullptr && older_time.frame->pts == 300);
     CHECK(older_time.frame->dma_fd < 0);
+    CHECK(older_time.frame->host_planes[0][0] == static_cast<uint8_t>(300 & 0xFF));
     CHECK(older_time.source.exact && older_time.source.pts == 300);
     CHECK(older_time.source.capture_time_ms == 5002);
     CHECK(publisher.snapshot_miss_count() == 0);
@@ -492,15 +499,15 @@ void test_frame_publisher_snapshot_history() {
     CHECK(by_pts.source.exact && by_pts.source.pts == 800);
     CHECK(by_pts.source.capture_time_ms == 5007);
 
-    // 9. 借用环帧不带 capture_time_ms，由发布记录反查；同时给 capture_time_ms 时，
+    // 9. 借用环帧自带 capture_time_ms；同时给不匹配的 capture_time_ms 时，
     //    pts 命中不算精确（没能证实是同一帧）。
-    publisher.record_published_pts(5013, 1400, true, 0);
-    auto borrowed = publisher.resolve_frame(1400, 0);
+    publisher.record_published_pts(5017, 1800, true, 0);
+    auto borrowed = publisher.resolve_frame(1800, 0);
     CHECK(borrowed.frame == last_frame);
-    CHECK(borrowed.source.exact && borrowed.source.capture_time_ms == 5013);
+    CHECK(borrowed.source.exact && borrowed.source.capture_time_ms == 5017);
     //    ⚠️ 未证实的身份不计入 miss（那是「淘汰」的计数），但必须自报 exact=false，
     //    由宿主侧告警 —— 见 internal/record/snapshot.go 的 verifySource。
-    auto unconfirmed = publisher.resolve_frame(1400, 9999);
+    auto unconfirmed = publisher.resolve_frame(1800, 9999);
     CHECK(unconfirmed.frame == last_frame);
     CHECK(!unconfirmed.source.exact);
     CHECK(publisher.snapshot_miss_count() == 1);
@@ -515,12 +522,241 @@ void test_frame_publisher_snapshot_history() {
     CHECK(evicted != nullptr && evicted->pts == 300);
     CHECK(publisher.snapshot_miss_count() == 2);
 
-    // 6. 副本字节随返回值存活：停流清空历史后仍可安全读取
-    auto kept = publisher.find_frame(1400);
+    // 12. 副本字节随返回值存活：停流清空历史与缓冲池后仍可安全读取
+    auto kept = publisher.find_frame(800);
     publisher.stop();
     CHECK(publisher.find_frame(0) == nullptr);
     CHECK(kept != nullptr);
-    CHECK(kept->host_planes[0][0] == static_cast<uint8_t>(1400 & 0xFF));
+    CHECK(kept->host_planes[0][0] == static_cast<uint8_t>(800 & 0xFF));
+}
+
+void test_frame_publisher_lazy_eviction_with_broker() {
+    using namespace zhulong;
+    using namespace zhulong::ipc;
+
+    auto crop = [](const HardwareFrame& frame, const ViewWindow& win, uint8_t* dst, size_t size,
+                   int stride, int /*dst_dma_fd*/) {
+        if (win.w <= 0 || win.h <= 0 || frame.host_planes[0] == nullptr ||
+            frame.host_planes[1] == nullptr) {
+            return false;
+        }
+        const size_t y_bytes = static_cast<size_t>(stride) * static_cast<size_t>(win.h);
+        if (y_bytes * 3 / 2 > size) {
+            return false;
+        }
+        for (int row = 0; row < win.h; ++row) {
+            std::memcpy(dst + static_cast<size_t>(row) * static_cast<size_t>(stride),
+                        frame.host_planes[0] +
+                            static_cast<size_t>(row + win.y) * frame.plane_strides[0],
+                        static_cast<size_t>(stride));
+        }
+        for (int row = 0; row < win.h / 2; ++row) {
+            std::memcpy(dst + y_bytes + static_cast<size_t>(row) * static_cast<size_t>(stride),
+                        frame.host_planes[1] +
+                            static_cast<size_t>(row + win.y / 2) * frame.plane_strides[1],
+                        static_cast<size_t>(stride));
+        }
+        return true;
+    };
+
+    auto make_frame = [](int64_t pts, uint8_t fill) -> HardwareFrame::ConstPtr {
+        auto frame = std::make_shared<HardwareFrame>();
+        frame->width = kWidth;
+        frame->height = kHeight;
+        frame->stride = kWidth;
+        frame->vstride = kHeight;
+        frame->format = FRAME_FORMAT_NV12;
+        auto bytes = std::make_shared<std::vector<uint8_t>>(
+            static_cast<size_t>(kWidth) * kHeight * 3 / 2, fill);
+        frame->host_ptr = bytes->data();
+        frame->host_planes[0] = bytes->data();
+        frame->host_planes[1] = bytes->data() + static_cast<size_t>(kWidth) * kHeight;
+        frame->plane_strides[0] = kWidth;
+        frame->plane_strides[1] = kWidth;
+        frame->pts = pts;
+        frame->has_pts = true;
+        frame->release_fn = [bytes](HardwareFrame* /*self*/) {};
+        return frame;
+    };
+
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 6;
+    opt.slot_size = 64 * 1024;
+    opt.max_in_flight_per_client = 2;
+    opt.lease_timeout = std::chrono::milliseconds(500);
+    std::string err;
+    CHECK(broker.start(7711, "/tmp", opt, &err));
+
+    auto connect_client = [&](UnixSocketClient& client, const char* name) -> uint32_t {
+        CHECK(client.connect(broker.socket_path(), &err));
+        HandshakeReq req{};
+        req.api_version = 1;
+        std::strncpy(req.client_name, name, sizeof(req.client_name) - 1);
+        CHECK(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+        IpcHeader hdr{};
+        std::vector<uint8_t> payload;
+        CHECK(client.recv_msg(hdr, payload, 1000));
+        CHECK(hdr.msg_type == MSG_HANDSHAKE_RESP);
+        HandshakeResp resp{};
+        std::memcpy(&resp, payload.data(), sizeof(resp));
+        return resp.client_id;
+    };
+
+    auto recv_and_ack = [&](UnixSocketClient& client, uint32_t cid) -> FrameDispatchMsg {
+        IpcHeader hdr{};
+        std::vector<uint8_t> payload;
+        CHECK(client.recv_msg(hdr, payload, 1000));
+        CHECK(hdr.msg_type == MSG_FRAME_DISPATCH);
+        FrameDispatchMsg msg{};
+        std::memcpy(&msg, payload.data(), sizeof(msg));
+        FrameAckMsg ack{};
+        ack.stream_id = msg.stream_id;
+        ack.frame_id = msg.frame_id;
+        ack.slot_index = msg.slot_index;
+        ack.generation = msg.generation;
+        ack.client_id = cid;
+        CHECK(client.send_msg(MSG_FRAME_ACK, &ack, sizeof(ack)));
+        return msg;
+    };
+
+    UnixSocketClient fast_client;
+    const uint32_t fast_cid = connect_client(fast_client, "fast_snap");
+    for (int i = 0; i < 50 && broker.client_count() < 1; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(broker.client_count() == 1);
+
+    FramePublisher publisher(nullptr, &broker, crop);
+
+    // 1. 连续投递 7 帧并立即干净 ACK（无 MSG_RESULT）：借用环淘汰的 3 帧都必须零拷贝跳过！
+    for (int i = 0; i < 7; ++i) {
+        auto frame = make_frame(1000 + i * 100, static_cast<uint8_t>(10 + i));
+        PublishReceipt receipt{};
+        CHECK(broker.publish_frame(*frame, ViewWindow{}, FrameMotionInfo{}, crop, 9000 + i, &receipt));
+        CHECK(receipt.delivered_clients == 1 && receipt.frame_id > 0);
+        const auto msg = recv_and_ack(fast_client, fast_cid);
+        CHECK(msg.frame_id == receipt.frame_id);
+        for (int w = 0; w < 50 && !broker.is_frame_completed_cleanly(receipt.frame_id); ++w) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(broker.is_frame_completed_cleanly(receipt.frame_id));
+        publisher.push_frame(frame, 9000 + i, receipt.frame_id);
+    }
+    CHECK(publisher.snapshot_materialized_count() == 0);
+    CHECK(publisher.snapshot_cache_frames() == 0);
+
+    // 2. 投递第 8 帧（ct=9100）后调用 mark_result_frame 再 ACK，再推 4 帧将其挤出借用环：
+    //    尽管它已 ACK，因为曾产出 MSG_RESULT，淘汰时必须物化进副本环并精确命中。
+    {
+        auto result_frame = make_frame(2000, 0xAB);
+        PublishReceipt receipt{};
+        CHECK(broker.publish_frame(*result_frame, ViewWindow{}, FrameMotionInfo{}, crop, 9100, &receipt));
+        CHECK(receipt.delivered_clients == 1);
+        publisher.push_frame(result_frame, 9100, receipt.frame_id);
+        // 模拟 MSG_RESULT 先于 MSG_FRAME_ACK 到达
+        publisher.mark_result_frame(true, 9100, true, 2000);
+        (void)recv_and_ack(fast_client, fast_cid);
+        for (int w = 0; w < 50 && !broker.is_frame_completed_cleanly(receipt.frame_id); ++w) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(broker.is_frame_completed_cleanly(receipt.frame_id));
+    }
+    for (int i = 0; i < 4; ++i) {
+        auto filler = make_frame(2100 + i * 100, static_cast<uint8_t>(40 + i));
+        PublishReceipt receipt{};
+        CHECK(broker.publish_frame(*filler, ViewWindow{}, FrameMotionInfo{}, crop, 9101 + i, &receipt));
+        (void)recv_and_ack(fast_client, fast_cid);
+        for (int w = 0; w < 50 && !broker.is_frame_completed_cleanly(receipt.frame_id); ++w) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        publisher.push_frame(filler, 9101 + i, receipt.frame_id);
+    }
+    CHECK(publisher.snapshot_materialized_count() == 1);
+    CHECK(publisher.snapshot_cache_frames() == 1);
+    auto hit_result = publisher.resolve_frame(0, 9100);
+    CHECK(hit_result.frame != nullptr && hit_result.source.exact);
+    CHECK(hit_result.source.pts == 2000 && hit_result.source.capture_time_ms == 9100);
+    CHECK(hit_result.frame->host_planes[0][0] == 0xAB);
+
+    // 2b. 极端抢占时序：MSG_RESULT 与 MSG_FRAME_ACK 均在 push_frame 落借用环之前到达。
+    //     pending_result_marks_ 必须暂存并在 push_frame 时认领，保证淘汰时依然物化不丢失。
+    {
+        auto early_frame = make_frame(2500, 0xBC);
+        PublishReceipt receipt{};
+        CHECK(broker.publish_frame(*early_frame, ViewWindow{}, FrameMotionInfo{}, crop, 9150, &receipt));
+        CHECK(receipt.delivered_clients == 1);
+        publisher.mark_result_frame(true, 9150, true, 2500);
+        (void)recv_and_ack(fast_client, fast_cid);
+        for (int w = 0; w < 50 && !broker.is_frame_completed_cleanly(receipt.frame_id); ++w) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(broker.is_frame_completed_cleanly(receipt.frame_id));
+        publisher.push_frame(early_frame, 9150, receipt.frame_id);
+    }
+    for (int i = 0; i < 4; ++i) {
+        auto filler = make_frame(2600 + i * 100, static_cast<uint8_t>(50 + i));
+        PublishReceipt receipt{};
+        CHECK(broker.publish_frame(*filler, ViewWindow{}, FrameMotionInfo{}, crop, 9151 + i, &receipt));
+        (void)recv_and_ack(fast_client, fast_cid);
+        for (int w = 0; w < 50 && !broker.is_frame_completed_cleanly(receipt.frame_id); ++w) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        publisher.push_frame(filler, 9151 + i, receipt.frame_id);
+    }
+    CHECK(publisher.snapshot_materialized_count() == 2);
+    auto hit_early = publisher.resolve_frame(0, 9150);
+    CHECK(hit_early.frame != nullptr && hit_early.source.exact);
+    CHECK(hit_early.source.pts == 2500 && hit_early.source.capture_time_ms == 9150);
+    CHECK(hit_early.frame->host_planes[0][0] == 0xBC);
+
+    // 3. 慢客户端不 ACK 的在途帧被快客户端推送的新帧挤出借用环：
+    //    is_frame_completed_cleanly == false，淘汰时必须物化进副本环并精确命中。
+    UnixSocketClient slow_client;
+    (void)connect_client(slow_client, "slow_snap");
+    for (int i = 0; i < 50 && broker.client_count() < 2; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(broker.client_count() == 2);
+    auto wait_client_idle = [&](uint32_t cid) {
+        ClientInfo info{};
+        for (int w = 0; w < 100; ++w) {
+            if (broker.get_client_info(cid, info) && info.in_flight_count == 0) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(broker.get_client_info(cid, info) && info.in_flight_count == 0);
+    };
+    {
+        auto slow_frame = make_frame(3000, 0xCD);
+        PublishReceipt receipt{};
+        CHECK(broker.publish_frame(*slow_frame, ViewWindow{}, FrameMotionInfo{}, crop, 9200, &receipt));
+        CHECK(receipt.delivered_clients == 2);
+        // 仅快客户端 ACK，慢客户端仍在推理不 ACK
+        (void)recv_and_ack(fast_client, fast_cid);
+        wait_client_idle(fast_cid);
+        publisher.push_frame(slow_frame, 9200, receipt.frame_id);
+        CHECK(!broker.is_frame_completed_cleanly(receipt.frame_id));
+    }
+    for (int i = 0; i < 4; ++i) {
+        auto filler = make_frame(3100 + i * 100, static_cast<uint8_t>(60 + i));
+        PublishReceipt receipt{};
+        CHECK(broker.publish_frame(*filler, ViewWindow{}, FrameMotionInfo{}, crop, 9201 + i, &receipt));
+        CHECK(receipt.delivered_clients >= 1);
+        (void)recv_and_ack(fast_client, fast_cid);
+        wait_client_idle(fast_cid);
+        publisher.push_frame(filler, 9201 + i, receipt.frame_id);
+    }
+    auto hit_slow = publisher.resolve_frame(0, 9200);
+    CHECK(hit_slow.frame != nullptr && hit_slow.source.exact);
+    CHECK(hit_slow.source.pts == 3000 && hit_slow.source.capture_time_ms == 9200);
+    CHECK(hit_slow.frame->host_planes[0][0] == 0xCD);
+
+    publisher.stop();
+    slow_client.disconnect();
+    fast_client.disconnect();
+    broker.stop();
 }
 } // namespace
 
@@ -532,6 +768,7 @@ int main() {
         test_c_abi_handle_semantics();
         test_frame_publisher_find_frame();
         test_frame_publisher_snapshot_history();
+        test_frame_publisher_lazy_eviction_with_broker();
         std::cout << "snapshot_test: all checks passed" << std::endl;
         return 0;
     } catch (const std::exception &e) {

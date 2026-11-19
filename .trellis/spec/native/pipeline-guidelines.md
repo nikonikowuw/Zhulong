@@ -140,12 +140,14 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - 每路 AI 流由独占的 `FramePublisher` 线程拉取解码帧，并依据 `max(sample_fps)`（由 Go 经 C ABI `Zhulong_stream_set_publish_rate` 动态设置）执行发布侧节流；
    - 未到发布周期的帧就地丢弃释放，杜绝无意义的共享内存拷贝与 socket 通知；
    - 推送至 `FrameBroker` 后立即 reset `HardwareFrame` 句柄，杜绝慢算法跨进程反压卡死上游解码会话。
-   - ⚠️ **抓拍历史只收已下发的帧**：`FramePublisher` 的环形缓存只在 `publish_frame` 返回 `true` 后压入，与 `latest_frame()`/`find_frame()` 的「最近一次发布过的帧」契约一致；节流丢弃与发布失败都不入环。
-   - ⚠️ **抓拍历史是两级结构，借用环只有 4 帧不够用**：慢算法回传延迟经常超过 4 帧（RKNN 板端尤甚），因此除 4 帧借用环外还有一层**像素副本环**（`SnapshotFrame`，时间窗 `snapshot_window=1200ms` + 帧数 12 + 字节 24 MiB）。副本用 `WindowCrop::copy` 以 `packed_layout_for()` 的紧打包布局落到堆内存，`find_frame()` 命中时用 `release_fn` 延长字节生命周期包成临时 `HardwareFrame`（`dma_fd=-1`、`host_planes` 来自 `layout.offsets/strides`）。**绝不能靠加大借用环来扩历史**：720p 解码池只有 10 帧，多占的每个引用都会挤压 buffer group。
+   - ⚠️ **抓拍历史只收实际投递给客户端的帧**：`FramePublisher` 先通过 `broker_->has_ready_client_or_record_drop()` 做背压门控（所有客户端满载时记 drop 并跳过 `MotionDetector` 与发布，避免空转读取 DMA-BUF）；随后只在 `publish_frame(..., &receipt)` 返回 `true` 且 `receipt.delivered_clients > 0` 后入环。节流丢弃、下游满载跳过与发布失败均不进入抓拍历史。
+   - ⚠️ **抓拍历史是两级结构，借用环 4 帧 + 淘汰期按需物化副本环**：慢算法回传延迟经常超过 4 帧（RKNN 板端尤甚），因此除 4 帧借用环（`history_frames_`）外还有一层**像素副本环**（`SnapshotFrame`，时间窗 `snapshot_window=3000ms` + 帧数 12 + 字节 24 MiB，由 `SnapshotBufferPool` 复用堆缓冲避免反复 3 MiB 分配清零）。副本用 `WindowCrop::copy` 以 `packed_layout_for()` 的紧打包布局落到堆内存，`resolve_frame()` 命中时用 `release_fn` 延长字节生命周期包成临时 `HardwareFrame`（`dma_fd=-1`、`host_planes` 来自 `layout.offsets/strides`）。**绝不能靠加大借用环来扩历史**：720p 解码池只有 10 帧，多占的每个引用都会挤压 buffer group。
    - ⚠️ **未命中必须回退到 PTS 最近的帧，不能回退最新帧**：最新帧在时间上离目标最远，会把旧帧的检测框画到新画面上（证据图框偏移的直接成因）。回退同时递增 `snapshot_miss_count` 并按 1 s 限频告警 `snapshot_pts_evicted`（含 requested/nearest/delta/持有区间），让「窗口够不够」可观测。
    - ⚠️ **帧身份锚点是 `capture_time_ms`，不是 `pts`（ABI v8）**：`pts` 由源流给出，插件可以不回传（结果为 0），RTSP 重连还会重置时基（不同帧撞同一个 `pts`）。因此 `Zhulong_snapshot_request` 尾部新增 `target_capture_time_ms` 作为**首选身份键**：它由发布线程单调生成（见 §6 `capture_time_ms` 严格递增），随 broker 消息与结果 JSON 下发。匹配顺序固定为 `capture_time_ms` 精确 → `pts` 精确（借用环优先，保留硬件 JPEG 直通）→ 按给定键最近的回退帧。
    - ⚠️ **抓拍必须自证「取到的是哪一帧」**：`Zhulong_snapshot_result_t` 记录实际命中帧的 `source_pts` / `source_capture_time_ms` / `source_exact`，由 `Zhulong_snapshot_source_pts` / `Zhulong_snapshot_source_capture_time_ms` / `Zhulong_snapshot_source_exact` 读取。`exact=false` 意味着请求的帧已滑出窗口，宿主**必须**据此拒绝把证据图与该次检测结果绑定（Go 侧见 `SnapshotStore.verifySource`）。没有这三个值，宿主只能假设成功，错位就会一路静默到界面上。
-   - ⚠️ **副本环是「发布时间」的拷贝，不是「抓拍时间」的**：帧在 `publish_frame` 之后立即归还解码池，等算法结果回来已无帧可拷。想加长历史只能加副本预算（`snapshot_bytes_capacity` / `snapshot_window`），不能延后拷贝。
+   - ⚠️ **副本环在「借用环淘汰期」按需物化，绝不在发布瞬间无条件拷贝**：在非缓存 DMA-BUF（RK3568 MPP）上每帧无条件 `memcpy` 3 MiB 会吃掉单核 50%+ CPU。4 帧借用环满后淘汰队头时，先在 `latest_mutex_` 外查询 `broker_->is_frame_completed_cleanly(broker_frame_id)`，再在锁内复检 `result_seen`（同一 Unix socket 上 `MSG_RESULT` 经 `Engine::dispatch_ai_result` → `mark_result_frame` 严格早于 `MSG_FRAME_ACK`，构成 happens-before）：
+     - 若已干净 ACK 且无检测结果（静止跳过、推理无目标等），直接归还解码帧、**零像素拷贝**；
+     - 若仍在推理（未 ACK）、租约超时或已回传结果（`result_seen == true`），在 `latest_mutex_` 外物化副本后再在单次加锁内「压入副本环 + 弹出借用环」（零可见性空窗），并在锁外释放旧 `HardwareFrame` 与回收缓冲。
    - ⚠️ **确认流程**：`find_frame(pts)` 等价于 `resolve_frame(pts, 0).frame`；新增调用方一律直接用 `resolve_frame(pts, capture_time_ms)` 取身份，不要自己拼 `SnapshotSource`。
    - ⚠️ **发布失败是显式失败，不是静默丢帧**：`publish_frame` 返回 `false` 时必须已完整回滚（配额归还、槽位置 `FREE`、`total_dropped_` 递增），且**绝不**发出 `MSG_FRAME_DISPATCH`。订阅方不得假设「没收到通知 = 帧被节流丢弃」与「收到通知 = 槽位内容就是该帧」以外还有第三种状态。
    - ⚠️ **慢消费者导致发送超时后走租约清算**：`write_all` 在 `SO_SNDTIMEO` 下 `EAGAIN` 必须 `poll(POLLOUT)` 有界等待（详见 [算法插件契约 §6.4](./algo-plugin-contract.md)）。超时返回 `false` 后由 `publish_frame` 清算该客户端租约，**绝不**无界自旋 —— 否则发布线程与持 `Engine::control` 锁的广播路径会一并挂死。
@@ -162,7 +164,7 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - ⚠️ **检测失败必须 fail-open**：`MotionResult` 未被执行检测时默认 `has_motion = true`，`FrameMotionInfo` 默认同样放行；`detect()` 返回 `false`（格式不支持 / 像素拿不到）时直接把默认值发出去，**绝不**因为一次读取失败就把整条流的推理关掉。
    - ⚠️ **首帧同样 fail-open**：`MotionDetector` 没有参考底图时（流启动、`reset()` 之后、换窗重置之后）返回 `has_motion = true, box_count = 0`，下游按全帧推理。判静会让「画面里已经站着人」的启动瞬间一直空转到心跳（`MOTION_HEARTBEAT_FRAMES`），改一次裁剪区域就盲几秒。
    - ⚠️ **大面积突变同样 fail-open**：单帧变化占比超过 `max_active_ratio`（70%）时无法区分光照跳档/红外切换与近处大目标、小窗口内有人经过，因此返回 `has_motion = true, box_count = 0` 并以本帧重置底图（不设 hold）。判静会让持续的大面积运动在 hold 结束后盲到心跳。
-   - ⚠️ **DMA-BUF 帧要算上系统调用代价**：MPP 硬解帧只填 `dma_fd`，检测器每帧需要 `mmap` + `DMA_BUF_IOCTL_SYNC(START/END)` + `munmap`。这属于发布线程的常驻开销，写性能数字前先实测；不要把「检测本身零堆分配」讲成「整条路径零开销」。
+   - ⚠️ **DMA-BUF 帧要算上系统调用与非缓存访存代价**：MPP 硬解帧只填 `dma_fd` 且映射为 Normal-NC（非缓存），检测器每帧需要 `mmap` + `DMA_BUF_IOCTL_SYNC(START/END)` + `munmap`；逐字节步进读取非缓存内存会导致数百纳秒/字节的延迟放大，因此 `MotionDetector::sample_y_plane` 在 `from_dma` 路径上按行 `std::memcpy` 到栈缓冲（触发 NEON 宽突发读）后再在 L1 中下采样。写性能数字前先实测，不要把「检测本身零堆分配」讲成「整条路径零开销」。
 5. **跨层停机顺序**（Go 侧，硬约束）：
    - `camera.Stop` → `algorithm.Stop` → `native.Close`。理由：AI 消费者与 StreamHub 先撤，runner 子进程再排空，最后才销毁 broker 宿主。
    - 该顺序由 `internal/app/runtime_test.go` 的 `TestAIShutdownOrderPrecedesNativeClose` 守护；改坏顺序会让测试失败，而不是静默产生 use-after-free。

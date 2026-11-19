@@ -865,39 +865,35 @@ bool parse_json_int64(const char *data, size_t size, size_t &pos, int64_t &out_v
     return true;
 }
 
-/**
- * @brief 在宿主侧为算法回传的顶层 JSON 补齐归一化预览时间戳 `pts_us`
- *
- * 算法包（`.zpk`）独立编译分发，IPC `FrameDispatchMsg` 固定 184 字节；
- * Runner 在 `MSG_RESULT` 中原样回传 `capture_time_ms` 与 `pts`，宿主据此从
- * `FramePublisher` 的轻量标量环反查 `PreviewNormalizer` 产出的 `pts_us` 并注入顶层 JSON，
- * 零改动兼容新旧算法包。
- */
-bool enrich_ai_result_pts_us(const FramePublisher &publisher,
-                             const char *payload, size_t size,
-                             std::string &out) {
+struct ParsedResultKeys {
+    bool valid{false};
+    bool has_pts_us{false};
+    bool has_capture_time_ms{false};
+    int64_t capture_time_ms{0};
+    bool has_raw_pts{false};
+    int64_t raw_pts{0};
+    size_t json_end{0};
+};
+
+ParsedResultKeys parse_ai_result_keys(const char *payload, size_t size) noexcept {
+    ParsedResultKeys keys{};
     size_t start = 0;
     while (start < size && is_json_ws(payload[start])) {
         ++start;
     }
     if (start >= size || payload[start] != '{') {
-        return false;
+        return keys;
     }
     size_t end = size;
     while (end > start && is_json_ws(payload[end - 1])) {
         --end;
     }
     if (end <= start + 1 || payload[end - 1] != '}') {
-        return false;
+        return keys;
     }
 
     int depth = 0;
     bool expecting_key = false;
-    bool has_capture_time_ms = false;
-    int64_t capture_time_ms = 0;
-    bool has_raw_pts = false;
-    int64_t raw_pts = 0;
-
     size_t pos = start;
     while (pos < end) {
         while (pos < end && is_json_ws(payload[pos])) {
@@ -914,7 +910,7 @@ bool enrich_ai_result_pts_us(const FramePublisher &publisher,
                 if (payload[pos] == '\\') {
                     has_escape = true;
                     pos += 2;
-                    if (pos > end) return false;
+                    if (pos > end) return keys;
                     continue;
                 }
                 if (payload[pos] == '"') {
@@ -923,7 +919,7 @@ bool enrich_ai_result_pts_us(const FramePublisher &publisher,
                 ++pos;
             }
             if (pos >= end || payload[pos] != '"') {
-                return false;
+                return keys;
             }
             const size_t key_end = pos;
             ++pos; // 跳过右引号
@@ -933,7 +929,7 @@ bool enrich_ai_result_pts_us(const FramePublisher &publisher,
                     ++pos;
                 }
                 if (pos >= end || payload[pos] != ':') {
-                    return false;
+                    return keys;
                 }
                 ++pos; // 跳过 ':'
                 expecting_key = false;
@@ -941,20 +937,19 @@ bool enrich_ai_result_pts_us(const FramePublisher &publisher,
                 if (!has_escape) {
                     const std::string_view key(payload + key_start, key_end - key_start);
                     if (key == "pts_us") {
-                        return false;
-                    }
-                    if (key == "capture_time_ms" || key == "pts") {
+                        keys.has_pts_us = true;
+                    } else if (key == "capture_time_ms" || key == "pts") {
                         while (pos < end && is_json_ws(payload[pos])) {
                             ++pos;
                         }
                         int64_t parsed = 0;
                         if (parse_json_int64(payload, end, pos, parsed)) {
                             if (key == "capture_time_ms") {
-                                has_capture_time_ms = true;
-                                capture_time_ms = parsed;
+                                keys.has_capture_time_ms = true;
+                                keys.capture_time_ms = parsed;
                             } else {
-                                has_raw_pts = true;
-                                raw_pts = parsed;
+                                keys.has_raw_pts = true;
+                                keys.raw_pts = parsed;
                             }
                         }
                     }
@@ -979,11 +974,11 @@ bool enrich_ai_result_pts_us(const FramePublisher &publisher,
         if (ch == '}' || ch == ']') {
             --depth;
             if (depth < 0) {
-                return false;
+                return keys;
             }
             if (depth == 0) {
                 if (ch != '}' || pos != end - 1) {
-                    return false;
+                    return keys;
                 }
                 ++pos;
                 break;
@@ -1001,22 +996,42 @@ bool enrich_ai_result_pts_us(const FramePublisher &publisher,
         ++pos;
     }
 
-    if (depth != 0 || (!has_capture_time_ms && !has_raw_pts)) {
+    if (depth != 0) {
+        return keys;
+    }
+    keys.valid = true;
+    keys.json_end = end;
+    return keys;
+}
+
+/**
+ * @brief 在宿主侧为算法回传的顶层 JSON 补齐归一化预览时间戳 `pts_us`
+ *
+ * 算法包（`.zpk`）独立编译分发，IPC `FrameDispatchMsg` 固定 184 字节；
+ * Runner 在 `MSG_RESULT` 中原样回传 `capture_time_ms` 与 `pts`，宿主据此从
+ * `FramePublisher` 的轻量标量环反查 `PreviewNormalizer` 产出的 `pts_us` 并注入顶层 JSON，
+ * 零改动兼容新旧算法包。
+ */
+bool enrich_ai_result_pts_us(const FramePublisher &publisher,
+                             const ParsedResultKeys &keys,
+                             const char *payload, size_t size,
+                             std::string &out) {
+    if (!keys.valid || keys.has_pts_us || (!keys.has_capture_time_ms && !keys.has_raw_pts)) {
         return false;
     }
 
     int64_t pts_us = 0;
-    if (!publisher.resolve_pts_us(has_capture_time_ms, capture_time_ms,
-                                  has_raw_pts, raw_pts, pts_us)) {
+    if (!publisher.resolve_pts_us(keys.has_capture_time_ms, keys.capture_time_ms,
+                                  keys.has_raw_pts, keys.raw_pts, pts_us)) {
         return false;
     }
 
     const std::string suffix = ",\"pts_us\":" + std::to_string(pts_us);
     out.clear();
     out.reserve(size + suffix.size());
-    out.append(payload, end - 1);
+    out.append(payload, keys.json_end - 1);
     out.append(suffix);
-    out.append(payload + (end - 1), size - (end - 1));
+    out.append(payload + (keys.json_end - 1), size - (keys.json_end - 1));
     return true;
 }
 
@@ -1039,8 +1054,15 @@ void Engine::dispatch_ai_result(Zhulong_stream_id stream_id, const char* payload
     const char *dispatch_data = payload;
     size_t dispatch_size = size;
     if (publisher) {
+        const ParsedResultKeys keys = parse_ai_result_keys(payload, size);
+        // ⚠️ 必须在返回 client_read_loop（进而处理紧随其后的 MSG_FRAME_ACK）之前标脏，
+        //    确保「结果帧在借用环淘汰时必定物化进抓拍副本环」的 happens-before 不变量成立。
+        if (keys.valid && (keys.has_capture_time_ms || keys.has_raw_pts)) {
+            publisher->mark_result_frame(keys.has_capture_time_ms, keys.capture_time_ms,
+                                         keys.has_raw_pts, keys.raw_pts);
+        }
         try {
-            if (enrich_ai_result_pts_us(*publisher, payload, size, enriched)) {
+            if (enrich_ai_result_pts_us(*publisher, keys, payload, size, enriched)) {
                 dispatch_data = enriched.data();
                 dispatch_size = enriched.size();
             }

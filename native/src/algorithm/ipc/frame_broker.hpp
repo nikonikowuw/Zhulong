@@ -20,6 +20,7 @@
 #include "unix_socket.hpp"
 #include <zhulong/platform/dmabuf_allocator.hpp>
 #include <Zhulong/frame.hpp>
+#include <array>
 #include <functional>
 #include <string>
 #include <vector>
@@ -47,9 +48,22 @@ enum class SlotState {
 struct SlotTracker {
     uint32_t slot_index{0};                              /**< 槽位物理索引（0 ~ slot_count-1） */
     uint64_t generation{0};                              /**< 槽位代次（每次重新分配单调自增，防 ABA 悬挂确认） */
+    uint64_t frame_id{0};                                /**< 当前槽位承载的帧序号（FREE 时为 0） */
     SlotState state{SlotState::FREE};                    /**< 当前槽位状态机阶段 */
     std::unordered_set<uint32_t> active_leases;          /**< 当前借用该槽位的活跃客户端 ID 集合 */
     std::chrono::steady_clock::time_point dispatch_time; /**< 帧分发时间戳，用于超时驱逐判定 */
+};
+
+/**
+ * @brief 单次 publish_frame 的投递回执
+ *
+ * `publish_frame` 在「所有客户端配额已满 / 无在线客户端」时按既有契约仍返回 true
+ * （属于正常的背压丢帧而非 Broker 异常）。调用方（如 FramePublisher）需要据此区分
+ * 「确实下发给至少一个算法进程」与「零投递」，避免把未下发的帧塞进抓拍历史环。
+ */
+struct PublishReceipt {
+    size_t delivered_clients{0}; /**< 本次实际经 sendmsg 成功送达的客户端数 */
+    uint64_t frame_id{0};        /**< 送达时分配的单调帧序号（delivered_clients == 0 时为 0） */
 };
 
 /**
@@ -118,10 +132,31 @@ public:
      *
      * 与上面两参重载分开声明（而不是全部默认参数）是为了避免 `publish_frame(frame)`
      * 在两次重载之间产生歧义。
+     *
+     * @param[out] out_receipt 可选投递回执：汇报真实送达的客户端数与帧序号。
      */
     bool publish_frame(const HardwareFrame& frame, const ViewWindow& view,
                        const FrameMotionInfo& motion, const CropCopyFn& crop,
-                       int64_t capture_time_ms);
+                       int64_t capture_time_ms,
+                       PublishReceipt* out_receipt = nullptr);
+
+    /**
+     * @brief 前置检查当前是否存在可接收新帧的客户端；若全部客户端满载则记一次背压丢帧并返回 false
+     *
+     * 用于发布线程在昂贵的非缓存 DMA-BUF 运动检测之前短路：
+     * - 无客户端在线：返回 false（不记丢帧）；
+     * - 至少一个客户端在途未满，或所有槽位占满且存在已超租约超时、可被驱逐回收的槽位：返回 true；
+     * - 所有在线客户端均达在途上限且无到期可回收槽位：递增各客户端 `dropped_frames` 并返回 false。
+     */
+    bool has_ready_client_or_record_drop();
+
+    /**
+     * @brief 判断某帧是否已被全部接收客户端干净 ACK（未在途且未经历租约超时强制驱逐）
+     *
+     * 供 FramePublisher 在借用环淘汰帧时决定是否需要把像素物化到抓拍副本环：
+     * 返回 true 且该帧未收到过 `MSG_RESULT` 意味着不可能再有抓拍查询命中它，可零拷贝直接释放。
+     */
+    [[nodiscard]] bool is_frame_completed_cleanly(uint64_t frame_id) const noexcept;
 
     /**
      * @brief 检查 Broker 是否处于运行状态
@@ -206,6 +241,7 @@ private:
     void handle_ack(uint32_t client_id, const FrameAckMsg& ack);
 
     int find_or_evict_free_slot(std::unique_lock<std::mutex>& lock);
+    void record_timed_out_frame_locked(uint64_t frame_id) noexcept;
 
     /**
      * @brief 发布失败的统一回滚：归还在途配额、释放槽位、记账，返回 false。
@@ -240,6 +276,9 @@ private:
     mutable std::mutex mutex_;
     std::vector<SlotTracker> slots_;
     std::unordered_map<uint32_t, ClientInfo> clients_;
+    /** @brief 因 lease_timeout 被强制驱逐的帧序号定长环（零堆分配，防迟到结果被提前丢弃） */
+    std::array<uint64_t, 64> timed_out_frame_ids_{};
+    size_t timed_out_cursor_{0};
     ResultCallback on_result_;
 
     /**
