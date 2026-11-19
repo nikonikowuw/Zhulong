@@ -31,9 +31,13 @@ struct HelmetDecision {
  *
  * @param detections 解码后的检测框（person / head_helmet / head_nohelmet）
  * @param min_person_height_ratio 人体框最小高度（归一化），过小的人不做研判
- * @return 每个被判定人员一条；顺序与 person 检测顺序一致
+ * @param decisions 输出缓冲：入口清空，出口每个被判定人员一条，顺序与 person 检测顺序一致
+ *
+ * 用输出参数而非返回值，是为了让调用方（每 Worker 的 workspace）跨帧复用容量，
+ * 热路径上不再每帧分配一条 vector。
  */
-std::vector<HelmetDecision> associate_helmets(const std::vector<zhulong::Detection>& detections,
-                                              float min_person_height_ratio);
+void associate_helmets(const std::vector<zhulong::Detection>& detections,
+                       float min_person_height_ratio,
+                       std::vector<HelmetDecision>& decisions);
 
 } // namespace zhulong::ppe

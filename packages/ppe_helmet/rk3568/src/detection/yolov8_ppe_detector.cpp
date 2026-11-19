@@ -92,7 +92,7 @@ zhulong::Tensor& PpeDetectorWorkspace::model_input() noexcept {
     return inputs_.front();
 }
 
-bool PpeDetectorWorkspace::first_geometry_mismatch() noexcept {
+bool PpeDetectorWorkspace::should_report_geometry_mismatch() noexcept {
     if (geometry_mismatch_reported_) {
         return false;
     }
@@ -100,7 +100,7 @@ bool PpeDetectorWorkspace::first_geometry_mismatch() noexcept {
     return true;
 }
 
-bool PpeDetectorWorkspace::first_layout_mismatch() noexcept {
+bool PpeDetectorWorkspace::should_report_layout_mismatch() noexcept {
     if (layout_mismatch_reported_) {
         return false;
     }
@@ -108,14 +108,15 @@ bool PpeDetectorWorkspace::first_layout_mismatch() noexcept {
     return true;
 }
 
-std::vector<zhulong::Detection> Yolov8PpeDetector::detect(zhulong::Session& session,
-                                                          const zhulong::Image& image,
-                                                          float score_threshold,
-                                                          float nms_threshold,
-                                                          PpeDetectorWorkspace& workspace) const {
+const std::vector<zhulong::Detection>& Yolov8PpeDetector::detect(
+    zhulong::Session& session, const zhulong::Image& image, float score_threshold,
+    float nms_threshold, PpeDetectorWorkspace& workspace) const {
+    PpeDecodeBuffers& buffers = workspace.decode_buffers();
+    buffers.detections.clear();
+
     const auto& raw = image.raw_view();
     if (!session.valid() || !image_usable(raw)) {
-        return {};
+        return buffers.detections;
     }
 
     zhulong::LetterboxParams letterbox;
@@ -126,20 +127,20 @@ std::vector<zhulong::Detection> Yolov8PpeDetector::detect(zhulong::Session& sess
     const zhulong_status_t letterbox_status =
         zhulong::ops::letterbox(image, workspace.letterbox_target(), letterbox);
     if (letterbox_status != ZHULONG_PLUGIN_OK) {
-        if (workspace.first_geometry_mismatch()) {
+        if (workspace.should_report_geometry_mismatch()) {
             log_warning(kModule, "letterbox failed",
                         "status=" + std::to_string(static_cast<int>(letterbox_status)));
         }
-        return {};
+        return buffers.detections;
     }
     if (!(letterbox.scale > 0.0f)) {
-        if (workspace.first_geometry_mismatch()) {
+        if (workspace.should_report_geometry_mismatch()) {
             log_warning(kModule, "letterbox geometry invalid",
                         "scale=" + std::to_string(letterbox.scale) +
                             " pad_left=" + std::to_string(letterbox.pad_left) +
                             " pad_top=" + std::to_string(letterbox.pad_top));
         }
-        return {};
+        return buffers.detections;
     }
 
 #if !defined(ZHULONG_INFERENCE_RKNN)
@@ -148,26 +149,26 @@ std::vector<zhulong::Detection> Yolov8PpeDetector::detect(zhulong::Session& sess
 #endif
 
     const std::vector<zhulong::Tensor> outputs = session.forward(workspace.model_inputs());
-    if (outputs.size() < 6) {
-        if (workspace.first_layout_mismatch()) {
+    if (outputs.size() < kPpeStrides.size() * 2) {
+        if (workspace.should_report_layout_mismatch()) {
             log_warning(kModule, "model output layout mismatch", describe_outputs(outputs));
         }
-        return {};
+        return buffers.detections;
     }
 
-    std::vector<Yolov8PpeHeadView> heads;
-    heads.reserve(3);
-    for (const int stride : {8, 16, 32}) {
+    std::vector<Yolov8PpeHeadView>& heads = workspace.heads();
+    heads.clear();
+    for (const int stride : kPpeStrides) {
         const int grid_h = kPpeModelHeight / stride;
         const int grid_w = kPpeModelWidth / stride;
         const zhulong::Tensor* box_output = find_output(outputs, 64, grid_h, grid_w);
         const zhulong::Tensor* score_output = find_output(outputs, kClassCount, grid_h, grid_w);
         if (box_output == nullptr || score_output == nullptr) {
-            if (workspace.first_layout_mismatch()) {
+            if (workspace.should_report_layout_mismatch()) {
                 log_warning(kModule, "model output layout mismatch",
                             "stride=" + std::to_string(stride) + " " + describe_outputs(outputs));
             }
-            return {};
+            return buffers.detections;
         }
         Yolov8PpeHeadView head;
         head.box = box_output->data<float>();
@@ -186,8 +187,8 @@ std::vector<zhulong::Detection> Yolov8PpeDetector::detect(zhulong::Session& sess
     geometry.image_width = raw.width;
     geometry.image_height = raw.height;
 
-    return decode_yolov8_ppe(heads, geometry, score_threshold, nms_threshold,
-                             workspace.candidates());
+    decode_yolov8_ppe(heads, geometry, score_threshold, nms_threshold, buffers);
+    return buffers.detections;
 }
 
 } // namespace zhulong::ppe

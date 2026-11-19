@@ -83,7 +83,8 @@ void test_config() {
     check(defaults.confirm_frames == 2, "default confirm_frames");
 
     const auto custom = zhulong::ppe::resolve_ppe_config(
-        R"({"score_threshold":0.5,"nms_threshold":0.3,"min_person_height_ratio":0.1,"report_compliant":true,"confirm_frames":3})",
+        R"({"score_threshold":0.5,"nms_threshold":0.3,"min_person_height_ratio":0.1,)"
+        R"("report_compliant":true,"confirm_frames":3})",
         zhulong::ppe::PpeConfig{});
     check(custom.score_threshold == 0.5f, "custom score_threshold");
     check(custom.nms_threshold == 0.3f, "custom nms_threshold");
@@ -92,12 +93,21 @@ void test_config() {
     check(custom.confirm_frames == 3, "custom confirm_frames");
 
     const auto out_of_range = zhulong::ppe::resolve_ppe_config(
-        R"({"score_threshold":0.99,"nms_threshold":0.01,"min_person_height_ratio":0.9,"confirm_frames":2.5})",
+        R"({"score_threshold":0.99,"nms_threshold":0.01,"min_person_height_ratio":0.9,)"
+        R"("confirm_frames":2.5})",
         zhulong::ppe::PpeConfig{});
     check(out_of_range.score_threshold == 0.25f, "out-of-range score falls back");
     check(out_of_range.nms_threshold == 0.45f, "out-of-range nms falls back");
     check(out_of_range.min_person_height_ratio == 0.08f, "out-of-range height falls back");
     check(out_of_range.confirm_frames == 2, "non-integer confirm_frames falls back");
+
+    const auto frames_high =
+        zhulong::ppe::resolve_ppe_config(R"({"confirm_frames":11})", zhulong::ppe::PpeConfig{});
+    check(frames_high.confirm_frames == 2, "confirm_frames above kMaxConfirmFrames falls back");
+
+    const auto bool_type = zhulong::ppe::resolve_ppe_config(
+        R"({"report_compliant":"true"})", zhulong::ppe::PpeConfig{});
+    check(!bool_type.report_compliant, "non-literal bool falls back");
 
     const auto nested = zhulong::ppe::resolve_ppe_config(
         R"({"nested":{"score_threshold":0.8},"note":"score_threshold: 0.9"})",
@@ -109,13 +119,26 @@ void test_config() {
     check(malformed.score_threshold == 0.25f, "trailing garbage must be rejected");
 }
 
+void test_class_labels() {
+    check(std::string(zhulong::ppe::ppe_class_label(zhulong::ppe::kClassHeadHelmet)) ==
+              "head_helmet",
+          "label head_helmet");
+    check(std::string(zhulong::ppe::ppe_class_label(zhulong::ppe::kClassHeadNoHelmet)) ==
+              "head_nohelmet",
+          "label head_nohelmet");
+    check(std::string(zhulong::ppe::ppe_class_label(zhulong::ppe::kClassPerson)) == "person",
+          "label person");
+    check(std::string(zhulong::ppe::ppe_class_label(0)) == "object", "unknown class label");
+}
+
 void test_decode_person() {
     HeadFixture head(2, 8);
     head.set_anchor(1, 1, zhulong::ppe::kClassPerson);
     const zhulong::ppe::Yolov8PpeGeometry geometry{1.0f, 0, 0, 32, 32};
-    std::vector<zhulong::Detection> scratch;
+    zhulong::ppe::PpeDecodeBuffers buffers;
 
-    const auto result = zhulong::ppe::decode_yolov8_ppe({head.view}, geometry, 0.5f, 0.45f, scratch);
+    zhulong::ppe::decode_yolov8_ppe({head.view}, geometry, 0.5f, 0.45f, buffers);
+    const auto& result = buffers.detections;
     check(result.size() == 1, "decode returns one person");
     if (result.size() == 1) {
         check(result[0].class_id == zhulong::ppe::kClassPerson, "decode class person");
@@ -128,13 +151,31 @@ void test_decode_person() {
     }
 }
 
+void test_decode_buffers_reused() {
+    const zhulong::ppe::Yolov8PpeGeometry geometry{1.0f, 0, 0, 32, 32};
+    zhulong::ppe::PpeDecodeBuffers buffers;
+
+    HeadFixture head(2, 8);
+    head.set_anchor(1, 1, zhulong::ppe::kClassPerson);
+    zhulong::ppe::decode_yolov8_ppe({head.view}, geometry, 0.5f, 0.45f, buffers);
+    check(buffers.detections.size() == 1, "first decode returns one person");
+    check(buffers.candidates.size() >= buffers.detections.size(), "candidates retained in buffers");
+
+    zhulong::ppe::decode_yolov8_ppe({head.view}, geometry, 0.5f, 0.45f, buffers);
+    check(buffers.detections.size() == 1, "second decode does not accumulate detections");
+
+    zhulong::ppe::decode_yolov8_ppe({head.view}, geometry, 1.0f, 0.45f, buffers);
+    check(buffers.detections.empty(), "threshold above score yields no detections");
+}
+
 void test_decode_geometry() {
     HeadFixture head(2, 8);
     head.set_anchor(1, 1, zhulong::ppe::kClassPerson);
     const zhulong::ppe::Yolov8PpeGeometry geometry{2.0f, 0, 0, 100, 100};
-    std::vector<zhulong::Detection> scratch;
+    zhulong::ppe::PpeDecodeBuffers buffers;
 
-    const auto result = zhulong::ppe::decode_yolov8_ppe({head.view}, geometry, 0.5f, 0.45f, scratch);
+    zhulong::ppe::decode_yolov8_ppe({head.view}, geometry, 0.5f, 0.45f, buffers);
+    const auto& result = buffers.detections;
     check(result.size() == 1, "decode geometry returns one");
     if (result.size() == 1) {
         check(nearly_equal(result[0].box[0], 0.06f), "geometry x1");
@@ -143,28 +184,27 @@ void test_decode_geometry() {
         check(nearly_equal(result[0].box[3], 0.10f), "geometry y2");
     }
 
-    std::vector<zhulong::Detection> scratch_bad;
+    zhulong::ppe::PpeDecodeBuffers bad_buffers;
     const zhulong::ppe::Yolov8PpeGeometry bad{0.0f, 0, 0, 100, 100};
-    check(zhulong::ppe::decode_yolov8_ppe({head.view}, bad, 0.5f, 0.45f, scratch_bad).empty(),
-          "zero scale returns empty");
+    zhulong::ppe::decode_yolov8_ppe({head.view}, bad, 0.5f, 0.45f, bad_buffers);
+    check(bad_buffers.detections.empty(), "zero scale returns empty");
 }
 
 void test_decode_nms() {
     const zhulong::ppe::Yolov8PpeGeometry geometry{1.0f, 0, 0, 32, 32};
-    std::vector<zhulong::Detection> scratch;
+    zhulong::ppe::PpeDecodeBuffers buffers;
 
     HeadFixture first(2, 8);
     HeadFixture second(2, 8);
     first.set_anchor(1, 1, zhulong::ppe::kClassPerson);
     second.set_anchor(1, 1, zhulong::ppe::kClassPerson);
-    check(zhulong::ppe::decode_yolov8_ppe({first.view, second.view}, geometry, 0.5f, 0.45f, scratch)
-                  .size() == 1,
-          "same-class NMS suppresses duplicate");
+    zhulong::ppe::decode_yolov8_ppe({first.view, second.view}, geometry, 0.5f, 0.45f, buffers);
+    check(buffers.detections.size() == 1, "same-class NMS suppresses duplicate");
 
     HeadFixture head(2, 8);
     head.set_anchor(1, 1, zhulong::ppe::kClassHeadNoHelmet);
-    const auto distinct = zhulong::ppe::decode_yolov8_ppe(
-        {first.view, head.view}, geometry, 0.5f, 0.45f, scratch);
+    zhulong::ppe::decode_yolov8_ppe({first.view, head.view}, geometry, 0.5f, 0.45f, buffers);
+    const auto& distinct = buffers.detections;
     check(distinct.size() == 2, "per-class NMS keeps person and head");
     if (distinct.size() == 2) {
         check(distinct[0].class_id == zhulong::ppe::kClassPerson, "person kept first");
@@ -179,29 +219,32 @@ void test_association() {
     const auto helmet =
         make_detection(0.25f, 0.20f, 0.35f, 0.32f, 0.8f, zhulong::ppe::kClassHeadHelmet);
 
-    const auto violation = zhulong::ppe::associate_helmets({person, no_helmet}, 0.08f);
-    check(violation.size() == 1, "association violation count");
-    if (violation.size() == 1) {
-        check(violation[0].violation, "association violation flag");
-        check(nearly_equal(violation[0].box[0], 0.2f), "association uses person box");
-        check(nearly_equal(violation[0].person_score, 0.9f), "association person score");
-        check(nearly_equal(violation[0].head_score, 0.8f), "association head score");
+    std::vector<zhulong::ppe::HelmetDecision> decisions;
+    zhulong::ppe::associate_helmets({person, no_helmet}, 0.08f, decisions);
+    check(decisions.size() == 1, "association violation count");
+    if (decisions.size() == 1) {
+        check(decisions[0].violation, "association violation flag");
+        check(nearly_equal(decisions[0].box[0], 0.2f), "association uses person box");
+        check(nearly_equal(decisions[0].person_score, 0.9f), "association person score");
+        check(nearly_equal(decisions[0].head_score, 0.8f), "association head score");
     }
 
-    const auto compliant = zhulong::ppe::associate_helmets({person, helmet}, 0.08f);
-    check(compliant.size() == 1 && !compliant[0].violation, "association compliant");
+    zhulong::ppe::associate_helmets({person, helmet}, 0.08f, decisions);
+    check(decisions.size() == 1 && !decisions[0].violation, "association compliant");
 
-    check(zhulong::ppe::associate_helmets({person}, 0.08f).empty(), "no head means unknown");
-    check(zhulong::ppe::associate_helmets({no_helmet}, 0.08f).empty(), "no person means unknown");
+    zhulong::ppe::associate_helmets({person}, 0.08f, decisions);
+    check(decisions.empty(), "no head means unknown");
+    zhulong::ppe::associate_helmets({no_helmet}, 0.08f, decisions);
+    check(decisions.empty(), "no person means unknown");
 
     const auto tiny = make_detection(0.2f, 0.2f, 0.4f, 0.25f, 0.9f, zhulong::ppe::kClassPerson);
-    check(zhulong::ppe::associate_helmets({tiny, no_helmet}, 0.08f).empty(),
-          "too-small person skipped");
+    zhulong::ppe::associate_helmets({tiny, no_helmet}, 0.08f, decisions);
+    check(decisions.empty(), "too-small person skipped");
 
     const auto large_head =
         make_detection(0.22f, 0.18f, 0.38f, 0.50f, 0.8f, zhulong::ppe::kClassHeadNoHelmet);
-    check(zhulong::ppe::associate_helmets({person, large_head}, 0.08f).empty(),
-          "oversized head rejected");
+    zhulong::ppe::associate_helmets({person, large_head}, 0.08f, decisions);
+    check(decisions.empty(), "oversized head rejected");
 
     const auto left_person =
         make_detection(0.1f, 0.2f, 0.3f, 0.8f, 0.9f, zhulong::ppe::kClassPerson);
@@ -209,25 +252,61 @@ void test_association() {
         make_detection(0.25f, 0.2f, 0.45f, 0.8f, 0.9f, zhulong::ppe::kClassPerson);
     const auto shared_head =
         make_detection(0.26f, 0.2f, 0.34f, 0.32f, 0.8f, zhulong::ppe::kClassHeadNoHelmet);
-    const auto assigned =
-        zhulong::ppe::associate_helmets({left_person, right_person, shared_head}, 0.08f);
-    check(assigned.size() == 1, "shared head assigned once");
-    if (assigned.size() == 1) {
-        check(nearly_equal(assigned[0].box[0], 0.25f), "shared head goes to best containment");
+    zhulong::ppe::associate_helmets({left_person, right_person, shared_head}, 0.08f, decisions);
+    check(decisions.size() == 1, "shared head assigned once");
+    if (decisions.size() == 1) {
+        check(nearly_equal(decisions[0].box[0], 0.25f), "shared head goes to best containment");
     }
 
     const auto helmet_low =
         make_detection(0.25f, 0.2f, 0.35f, 0.32f, 0.6f, zhulong::ppe::kClassHeadHelmet);
     const auto no_helmet_high =
         make_detection(0.25f, 0.2f, 0.35f, 0.32f, 0.9f, zhulong::ppe::kClassHeadNoHelmet);
-    const auto both =
-        zhulong::ppe::associate_helmets({person, helmet_low, no_helmet_high}, 0.08f);
-    check(both.size() == 1 && both[0].violation, "higher-score head wins");
+    zhulong::ppe::associate_helmets({person, helmet_low, no_helmet_high}, 0.08f, decisions);
+    check(decisions.size() == 1 && decisions[0].violation, "higher-score head wins");
 
     const auto helmet_tie =
         make_detection(0.25f, 0.2f, 0.35f, 0.32f, 0.9f, zhulong::ppe::kClassHeadHelmet);
-    const auto tie = zhulong::ppe::associate_helmets({person, helmet_tie, no_helmet_high}, 0.08f);
-    check(tie.size() == 1 && tie[0].violation, "tie prefers no_helmet");
+    zhulong::ppe::associate_helmets({person, helmet_tie, no_helmet_high}, 0.08f, decisions);
+    check(decisions.size() == 1 && decisions[0].violation, "tie prefers no_helmet");
+
+    // 分数差在 kScoreTieEpsilon 以内视为平票，仍应偏向 no_helmet（避免浮点抖动翻转结论）。
+    const auto helmet_slightly_higher =
+        make_detection(0.25f, 0.2f, 0.35f, 0.32f, 0.9f + 1e-5f, zhulong::ppe::kClassHeadHelmet);
+    zhulong::ppe::associate_helmets({person, helmet_slightly_higher, no_helmet_high}, 0.08f,
+                                    decisions);
+    check(decisions.size() == 1 && decisions[0].violation, "epsilon-equal scores treat as tie");
+
+    const auto helmet_clearly_higher =
+        make_detection(0.25f, 0.2f, 0.35f, 0.32f, 0.9f + 1e-3f, zhulong::ppe::kClassHeadHelmet);
+    zhulong::ppe::associate_helmets({person, helmet_clearly_higher, no_helmet_high}, 0.08f,
+                                    decisions);
+    check(decisions.size() == 1 && !decisions[0].violation, "clear score gap beats tie rule");
+}
+
+/**
+ * @brief 关联只检查前 kPpeMaxDetections 条检测（超出部分被丢弃）
+ *
+ * 10x10 个互不重叠的格子里各放一人一头，交替排列；解码上限截断到 128 条后，
+ * 只有前 64 组仍完整可见，因此决策数应恰为 kPpeMaxDetections / 2。
+ */
+void test_association_truncation() {
+    std::vector<zhulong::Detection> detections;
+    constexpr int kCells = 10;
+    constexpr float kCell = 0.1f;
+    for (int i = 0; i < kCells * kCells; ++i) {
+        const float x = static_cast<float>(i % kCells) * kCell + 0.001f;
+        const float y = static_cast<float>(i / kCells) * kCell + 0.001f;
+        detections.push_back(
+            make_detection(x, y, x + 0.096f, y + 0.096f, 0.9f, zhulong::ppe::kClassPerson));
+        detections.push_back(make_detection(x + 0.024f, y + 0.001f, x + 0.072f, y + 0.033f, 0.8f,
+                                            zhulong::ppe::kClassHeadNoHelmet));
+    }
+
+    std::vector<zhulong::ppe::HelmetDecision> decisions;
+    zhulong::ppe::associate_helmets(detections, 0.08f, decisions);
+    check(decisions.size() == zhulong::ppe::kPpeMaxDetections / 2,
+          "association truncates to kPpeMaxDetections");
 }
 
 zhulong::ppe::HelmetDecision make_decision(bool violation, float x1 = 0.2f, float y1 = 0.2f,
@@ -267,6 +346,13 @@ void test_tracker() {
     zhulong::ppe::ViolationTracker immediate;
     check(immediate.confirm(5, {violation}, 0).size() == 1, "confirm_frames clamps to 1");
 
+    zhulong::ppe::ViolationTracker capped;
+    const int capped_required = zhulong::ppe::kMaxConfirmFrames;
+    for (int frame = 1; frame < capped_required; ++frame) {
+        check(capped.confirm(5, {violation}, 99).empty(), "confirm_frames clamps to kMax");
+    }
+    check(capped.confirm(5, {violation}, 99).size() == 1, "clamped upper bound confirms");
+
     zhulong::ppe::ViolationTracker isolated;
     isolated.confirm(1, {violation}, 2);
     isolated.confirm(2, {violation}, 2);
@@ -281,17 +367,44 @@ void test_tracker() {
     check(expiry.track_count(7) == 0, "stale track evicted");
     check(expiry.confirm(7, {violation}, 2).empty(), "evicted track starts over");
     check(expiry.confirm(7, {violation}, 2).size() == 1, "new track confirms after two frames");
+
+    zhulong::ppe::ViolationTracker manual_reset;
+    manual_reset.confirm(9, {violation}, 2);
+    check(manual_reset.track_count(9) == 1, "track present before reset");
+    manual_reset.reset(9);
+    check(manual_reset.track_count(9) == 0, "reset clears task tracks");
+    check(manual_reset.confirm(9, {violation}, 2).empty(), "reset restarts the streak");
+}
+
+/**
+ * @brief 两个高度重叠的人不得被压进同一条轨迹（回归：匹配分支漏置 used 标记）
+ */
+void test_tracker_overlap_regression() {
+    const auto left = make_decision(true, 0.10f, 0.10f, 0.40f, 0.60f);
+    const auto right = make_decision(true, 0.105f, 0.105f, 0.405f, 0.605f);
+
+    zhulong::ppe::ViolationTracker tracker;
+    check(tracker.confirm(7, {left}, 2).empty(), "overlap frame 1 not confirmed");
+    check(tracker.track_count(7) == 1, "overlap frame 1 has one track");
+
+    const auto confirmed = tracker.confirm(7, {left, right}, 2);
+    check(confirmed.size() == 1, "overlap frame 2 confirms only the matched track");
+    check(tracker.track_count(7) == 2, "overlap frame 2 opens a second track");
 }
 
 } // namespace
 
 int main() {
     test_config();
+    test_class_labels();
     test_decode_person();
+    test_decode_buffers_reused();
     test_decode_geometry();
     test_decode_nms();
     test_association();
+    test_association_truncation();
     test_tracker();
+    test_tracker_overlap_regression();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";

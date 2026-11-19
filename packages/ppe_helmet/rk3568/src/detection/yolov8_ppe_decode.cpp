@@ -1,5 +1,7 @@
 #include "detection/yolov8_ppe_decode.hpp"
 
+#include "common/box_geometry.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -9,10 +11,6 @@ namespace {
 
 /** @brief DFL 每个方向的分箱数（64 通道 ÷ 4 边） */
 constexpr int kDflBins = 16;
-/** @brief 候选上限：避免异常模型输出把内存顶穿，超出后按置信度截断 */
-constexpr size_t kMaxCandidates = 2048;
-/** @brief 单帧输出上限（按类 NMS 之后） */
-constexpr size_t kMaxDetections = 128;
 
 float sigmoid(float value) noexcept {
     return 1.0f / (1.0f + std::exp(-value));
@@ -34,19 +32,6 @@ float dfl_expectation(const float* logits, int count) noexcept {
     return weight_sum > 0.0f ? weighted_sum / weight_sum : 0.0f;
 }
 
-float box_iou(const float* a, const float* b) noexcept {
-    const float inter_w = std::min(a[2], b[2]) - std::max(a[0], b[0]);
-    const float inter_h = std::min(a[3], b[3]) - std::max(a[1], b[1]);
-    if (inter_w <= 0.0f || inter_h <= 0.0f) {
-        return 0.0f;
-    }
-    const float intersection = inter_w * inter_h;
-    const float area_a = (a[2] - a[0]) * (a[3] - a[1]);
-    const float area_b = (b[2] - b[0]) * (b[3] - b[1]);
-    const float uni = area_a + area_b - intersection;
-    return uni > 0.0f ? intersection / uni : 0.0f;
-}
-
 } // namespace
 
 const char* ppe_class_label(int32_t class_id) noexcept {
@@ -58,15 +43,17 @@ const char* ppe_class_label(int32_t class_id) noexcept {
     }
 }
 
-std::vector<zhulong::Detection> decode_yolov8_ppe(
-    const std::vector<Yolov8PpeHeadView>& heads,
-    const Yolov8PpeGeometry& geometry,
-    float score_threshold,
-    float nms_threshold,
-    std::vector<zhulong::Detection>& scratch) {
-    scratch.clear();
+void decode_yolov8_ppe(const std::vector<Yolov8PpeHeadView>& heads,
+                       const Yolov8PpeGeometry& geometry,
+                       float score_threshold,
+                       float nms_threshold,
+                       PpeDecodeBuffers& buffers) {
+    std::vector<zhulong::Detection>& candidates = buffers.candidates;
+    std::vector<zhulong::Detection>& detections = buffers.detections;
+    candidates.clear();
+    detections.clear();
     if (!(geometry.scale > 0.0f) || geometry.image_width <= 0 || geometry.image_height <= 0) {
-        return {};
+        return;
     }
 
     const float image_width = static_cast<float>(geometry.image_width);
@@ -158,42 +145,44 @@ std::vector<zhulong::Detection> decode_yolov8_ppe(
                 detection.confidence = score;
                 detection.class_id = best_class;
                 detection.label = ppe_class_label(best_class);
-                scratch.push_back(std::move(detection));
+                candidates.push_back(std::move(detection));
             }
         }
     }
 
-    if (scratch.size() > kMaxCandidates) {
-        std::nth_element(scratch.begin(), scratch.begin() + static_cast<std::ptrdiff_t>(kMaxCandidates),
-                         scratch.end(), [](const zhulong::Detection& a, const zhulong::Detection& b) {
+    if (candidates.size() > kPpeMaxCandidates) {
+        std::nth_element(candidates.begin(),
+                         candidates.begin() + static_cast<std::ptrdiff_t>(kPpeMaxCandidates),
+                         candidates.end(),
+                         [](const zhulong::Detection& a, const zhulong::Detection& b) {
                              return a.confidence > b.confidence;
                          });
-        scratch.resize(kMaxCandidates);
+        candidates.resize(kPpeMaxCandidates);
     }
 
     // 按类分组 NMS：SDK 的 ops::nms 是全局跨类抑制，会把框内的头部框一起压掉。
-    std::stable_sort(scratch.begin(), scratch.end(),
+    std::stable_sort(candidates.begin(), candidates.end(),
                      [](const zhulong::Detection& a, const zhulong::Detection& b) {
                          return a.confidence > b.confidence;
                      });
-    std::vector<zhulong::Detection> kept;
-    kept.reserve(std::min(scratch.size(), kMaxDetections));
-    std::vector<uint8_t> suppressed(scratch.size(), 0);
-    for (size_t i = 0; i < scratch.size() && kept.size() < kMaxDetections; ++i) {
+    std::vector<uint8_t>& suppressed = buffers.suppressed;
+    suppressed.assign(candidates.size(), 0);
+    detections.reserve(std::min(candidates.size(), kPpeMaxDetections));
+    for (size_t i = 0; i < candidates.size() && detections.size() < kPpeMaxDetections; ++i) {
         if (suppressed[i] != 0) {
             continue;
         }
-        kept.push_back(scratch[i]);
-        for (size_t j = i + 1; j < scratch.size(); ++j) {
-            if (suppressed[j] != 0 || scratch[j].class_id != scratch[i].class_id) {
+        // 标签都短于 std::string 的 SSO 上限，逐条拷贝不产生堆分配。
+        detections.push_back(candidates[i]);
+        for (size_t j = i + 1; j < candidates.size(); ++j) {
+            if (suppressed[j] != 0 || candidates[j].class_id != candidates[i].class_id) {
                 continue;
             }
-            if (box_iou(scratch[i].box, scratch[j].box) > nms_threshold) {
+            if (box_iou(candidates[i].box, candidates[j].box) > nms_threshold) {
                 suppressed[j] = 1;
             }
         }
     }
-    return kept;
 }
 
 } // namespace zhulong::ppe

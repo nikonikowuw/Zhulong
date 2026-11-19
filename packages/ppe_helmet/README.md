@@ -15,8 +15,10 @@
 - `confidence = min(person_score, head_score)`，避免“人头很确定、人体很虚”时分数虚高。
 - 人员没有可关联的头框（遮挡、背身、只露出半身）时视为 `unknown`：不输出，也不告警，
   避免把“没看到头”误判成“没戴帽”。
-- 同一人员同时关联到 helmet 与 nohelmet 头框时，取分数高者；平票按 `no_helmet`（安全侧）。
+- 同一人员同时关联到 helmet 与 nohelmet 头框时，取分数高者；平票（分数差 ≤ 1e-4）按
+  `no_helmet`（安全侧）。
 - 每个 `task_id` 独立做 IoU 跟踪；违规连续 `confirm_frames` 帧才上报，合规帧清零。
+- `helmet` **不走**上述时序确认：本帧有头部证据就输出一次，宿主侧若要按人去重需自行处理。
 
 宿主侧无需改动：`no_helmet` 已在 `internal/record/service.go` 的
 `alarmKeywords` 中，`helmet` 已在 `nonAlarmExactLabels` 中。

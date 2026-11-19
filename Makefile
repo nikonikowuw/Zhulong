@@ -218,6 +218,7 @@ pkg-drift-check:
 	python3 native/scripts/check_package_drift.py packages/face_recognition
 	python3 native/scripts/check_package_drift.py packages/plate_recognition
 	python3 native/scripts/check_package_drift.py packages/crowd_gathering
+	python3 native/scripts/check_package_drift.py packages/ppe_helmet
 
 # 算法包独立回归（只依赖已安装 SDK 前缀，不进 native/CMakeLists.txt）：
 # test_stub 构建不产 SDK 前缀，自动跳过；常规 onnx 宿主跑全量 onnx 包自测与金标断言。
@@ -231,7 +232,7 @@ pkg-test:
 		if [ -d "$(CURDIR)/build/deps/onnxruntime" ]; then \
 			ort_arg="ONNXRUNTIME_ROOT=$(CURDIR)/build/deps/onnxruntime"; \
 		fi; \
-		for pkg in packages/face_recognition/onnx packages/plate_recognition/onnx packages/crowd_gathering/onnx; do \
+		for pkg in packages/face_recognition/onnx packages/plate_recognition/onnx packages/crowd_gathering/onnx packages/ppe_helmet/onnx; do \
 			echo "[*] pkg-test: $$pkg"; \
 			$(MAKE) -C "$$pkg" test SDK_PREFIX="$$abs_sdk" $$ort_arg || exit 1; \
 		done; \

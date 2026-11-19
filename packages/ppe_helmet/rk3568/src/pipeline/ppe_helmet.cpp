@@ -1,5 +1,6 @@
 #include "pipeline/ppe_helmet.hpp"
 
+#include "common/box_geometry.hpp"
 #include "common/runner_log.hpp"
 
 #include <dlfcn.h>
@@ -18,6 +19,8 @@ namespace zhulong::ppe {
 namespace {
 
 constexpr char kModule[] = "ppe_helmet";
+/** @brief 任务配置缓存条目上限：超过后整体丢弃重建（缓存只是省一次 JSON 解析） */
+constexpr size_t kMaxCachedTaskConfigs = 256;
 
 std::string executable_directory() {
     char buffer[4096] = {};
@@ -45,7 +48,7 @@ std::string executable_directory() {
  * @brief 按「可执行文件同级 models/ → env → 源码树 → 相对路径」解析权重
  *
  * 装机后可执行文件与 models/ 同目录，第一顺位就是唯一可信锚点；源码树前缀只为
- * 开发期 `build/*_devtest` 不设 env 时兜底，不参与装机运行。
+ * 开发期 `build/` 下的 `*_devtest` 不设 env 时兜底，不参与装机运行。
  */
 std::string resolve_model_path(const std::string& relative) {
     std::vector<std::string> candidates;
@@ -75,13 +78,6 @@ std::string resolve_model_path(const std::string& relative) {
         }
     }
     return relative;
-}
-
-void copy_box(float* destination, const float* source) noexcept {
-    destination[0] = source[0];
-    destination[1] = source[1];
-    destination[2] = source[2];
-    destination[3] = source[3];
 }
 
 } // namespace
@@ -131,16 +127,16 @@ std::vector<zhulong::Detection> PpeHelmetPlugin::detect(zhulong::Session& sessio
     }
 
     const PpeConfig config = config_for(task_context.task_id, task_context.params.json);
-    PpeDetectorWorkspace& workspace = workspace_for(session.worker_id());
-    const std::vector<zhulong::Detection> detections =
-        detector_.detect(session, image, config.score_threshold, config.nms_threshold, workspace);
-    const std::vector<HelmetDecision> decisions =
-        associate_helmets(detections, config.min_person_height_ratio);
+    PpeWorkerWorkspace& workspace = workspace_for(session.worker_id());
+    const std::vector<zhulong::Detection>& detections =
+        detector_.detect(session, image, config.score_threshold, config.nms_threshold,
+                         workspace.detector);
+    associate_helmets(detections, config.min_person_height_ratio, workspace.decisions);
     std::vector<zhulong::Detection> results =
-        tracker_.confirm(task_context.task_id, decisions, config.confirm_frames);
+        tracker_.confirm(task_context.task_id, workspace.decisions, config.confirm_frames);
 
     if (config.report_compliant) {
-        for (const HelmetDecision& decision : decisions) {
+        for (const HelmetDecision& decision : workspace.decisions) {
             if (decision.violation) {
                 continue;
             }
@@ -162,19 +158,25 @@ PpeConfig PpeHelmetPlugin::config_for(uint64_t task_id, std::string_view raw) {
     if (it != configs_.end() && it->second.raw == raw) {
         return it->second.config;
     }
-    CachedTaskConfig cached;
+    // 配置缓存只是省一次 JSON 解析；条目随 task_id 增长，超过上限就整体丢弃重建，
+    // 保证长跑进程不随任务累积（最坏代价是下一帧多解析一次 JSON）。
+    if (it == configs_.end() && configs_.size() >= kMaxCachedTaskConfigs) {
+        configs_.clear();
+    }
+    CachedTaskConfig& cached = configs_[task_id];
     cached.config = resolve_ppe_config(raw, default_config_);
-    cached.raw.assign(raw.data(), raw.size());
-    configs_[task_id] = std::move(cached);
-    return configs_[task_id].config;
+    cached.raw.assign(raw);
+    return cached.config;
 }
 
-PpeDetectorWorkspace& PpeHelmetPlugin::workspace_for(uint32_t worker_id) {
+PpeWorkerWorkspace& PpeHelmetPlugin::workspace_for(uint32_t worker_id) {
     std::lock_guard<std::mutex> lock(workspaces_mutex_);
-    std::unique_ptr<PpeDetectorWorkspace>& workspace = workspaces_[worker_id];
+    std::unique_ptr<PpeWorkerWorkspace>& workspace = workspaces_[worker_id];
     if (!workspace) {
-        workspace = std::make_unique<PpeDetectorWorkspace>();
+        workspace = std::make_unique<PpeWorkerWorkspace>();
     }
+    // 返回 pointee 引用：unique_ptr 的地址不随 unordered_map rehash 变化，
+    // 且一个 worker 只有一个推理线程复用同一份缓冲（见 detect 调用约定）。
     return *workspace;
 }
 
