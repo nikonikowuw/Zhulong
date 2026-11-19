@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PpeHelmetConfig",
+  "type": "object",
+  "properties": {
+    "score_threshold": {
+      "type": "number",
+      "minimum": 0.05,
+      "maximum": 0.95,
+      "default": 0.25,
+      "description": "人体与头部检测的置信度阈值，越低越容易召回远景人员，代价是误检增多"
+    },
+    "nms_threshold": {
+      "type": "number",
+      "minimum": 0.1,
+      "maximum": 0.9,
+      "default": 0.45,
+      "description": "同类检测框的非极大值抑制 IoU 阈值"
+    },
+    "min_person_height_ratio": {
+      "type": "number",
+      "minimum": 0.02,
+      "maximum": 0.5,
+      "default": 0.08,
+      "description": "参与安全帽研判的人体最小高度（占画面高度的比例），过滤远景过小人员"
+    },
+    "report_compliant": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否同时上报已正确佩戴安全帽的人员框（用于调试与画框，不产生告警）"
+    },
+    "confirm_frames": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "default": 2,
+      "description": "违规连续确认帧数，单帧 head_nohelmet 可能来自侧脸或逆光，建议 2 帧以上"
+    }
+  }
+}
