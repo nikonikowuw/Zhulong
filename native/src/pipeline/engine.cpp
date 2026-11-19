@@ -23,6 +23,7 @@
 
 #include "common/log.hpp"
 #include "pipeline/engine.hpp"
+#include "nodes/decode/ascend_decoder.hpp"
 #include "nodes/decode/mpp_decoder.hpp"
 
 #include <algorithm>
@@ -152,8 +153,8 @@ void Engine::configure_decode(const Zhulong_decode_policy_t &policy) {
 }
 
 void Engine::get_decode_stats(Zhulong_decode_stats_t &out_stats) {
-    // 硬件探测首次会 dlopen MPP 库：放在 control 锁外，避免拖住全部控制操作
-    const int32_t hardware_available = MppDecodeNode::is_supported() ? 1 : 0;
+    // 硬件探测首次会 dlopen 硬件库：放在 control 锁外，避免拖住全部控制操作
+    const int32_t hardware_available = (MppDecodeNode::is_supported() || AscendDecodeNode::is_supported()) ? 1 : 0;
     std::lock_guard<std::mutex> operation(control);
     out_stats.active_sessions = static_cast<int32_t>(decode_sessions_in_use_locked());
     out_stats.max_sessions = decode_policy_.max_sessions;
@@ -244,10 +245,23 @@ std::shared_ptr<Stream> Engine::find_stream(Zhulong_stream_id id) {
 
 namespace {
 
-/** @brief 当前解码策略是否强制要求 MPP 硬解（不允许软解回退） */
-bool policy_requires_mpp(const Zhulong_decode_policy_t &policy) noexcept {
+/** @brief 当前解码策略是否强制要求硬解（不允许软解回退） */
+bool policy_requires_hardware(const Zhulong_decode_policy_t &policy) noexcept {
     return policy.backend == Zhulong_DECODE_BACKEND_MPP ||
+           policy.backend == Zhulong_DECODE_BACKEND_ASCEND ||
            (policy.backend == Zhulong_DECODE_BACKEND_AUTO && policy.allow_software_fallback == 0);
+}
+
+/** @brief 检查策略指定的硬件解码器在当前宿主上是否就绪 */
+bool hardware_decoder_supported_for(const Zhulong_decode_policy_t &policy) noexcept {
+    if (policy.backend == Zhulong_DECODE_BACKEND_MPP) {
+        return MppDecodeNode::is_supported();
+    }
+    if (policy.backend == Zhulong_DECODE_BACKEND_ASCEND) {
+        return AscendDecodeNode::is_supported();
+    }
+    // AUTO + 禁止软解回退：任意硬件后端就绪即允许准入
+    return MppDecodeNode::is_supported() || AscendDecodeNode::is_supported();
 }
 
 /** @brief 流是否已进入终态 FAILED（拉流线程已退出或正在退出，不得再复用） */
@@ -338,15 +352,17 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
     std::shared_ptr<DecodeSession> session_to_stop;
 
     // 1. 静态前置门控：若为 AI 消费且强制要求硬解，前置探测硬件是否就绪。
-    //    首次探测会 dlopen MPP 库，放在 control 锁外，不拖住其它流的控制操作。
+    //    首次探测会 dlopen 底层硬件库，放在 control 锁外，不拖住其它流的控制操作。
     Zhulong_decode_policy_t admission_policy{};
     {
         std::lock_guard<std::mutex> lock(control);
         admission_policy = decode_policy_;
     }
-    if (kind == Zhulong_CONSUMER_AI && policy_requires_mpp(admission_policy) && !MppDecodeNode::is_supported()) {
+    if (kind == Zhulong_CONSUMER_AI && policy_requires_hardware(admission_policy) &&
+        !hardware_decoder_supported_for(admission_policy)) {
         rejected_requests_.fetch_add(1, std::memory_order_relaxed);
-        ZL_LOGE(0, "pipeline.engine", "acquire_hardware_unavailable fail_closed url=%s", url.c_str());
+        ZL_LOGE(0, "pipeline.engine", "acquire_hardware_unavailable fail_closed url=%s backend=%d", url.c_str(),
+                admission_policy.backend);
         throw Failure{Zhulong_ERR_HARDWARE_UNAVAILABLE};
     }
 

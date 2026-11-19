@@ -546,6 +546,11 @@ def configure(p, sanitizer):
     # 同理，只有 rga 才校验 RGA 前缀。
     if p.get("vision_backend", "cpu") == "rga":
         args.append(f"-DZHULONG_RGA_ROOT={rga_prefix()}")
+    # 昇腾 VDEC 是**可选**后端：宿主机装了 CANN 才有头文件。只有显式导出
+    # ZHULONG_ASCEND_ROOT 才启用；未设置时该后端编译成桩（fail closed），构建不受影响。
+    ascend_root = os.environ.get("ZHULONG_ASCEND_ROOT", "").strip()
+    if ascend_root:
+        args.append(f"-DZHULONG_ASCEND_ROOT={ascend_root}")
 
     if p["mode"] != "host":
         def quote(value):

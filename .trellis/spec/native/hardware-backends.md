@@ -486,7 +486,99 @@ stride>width、缺失 stride-aware 容量、同元素数不同 dims、dtype 失�
 - 升级 BSP 时的正确顺序：先更新 `native/vendor/mpp/include/rockchip/`，编译该测试；断言失败即修镜像，
   而不是反过来改断言。
 
-## 8. 验证命令
+## 8. 华为昇腾 DVPP VDEC 解码后端契约（310P/310B）
+
+### 8.1 为什么是「编译期头文件 + 运行期 dlopen」（与 MPP 相反）
+
+MPP 敢手写 ABI 镜像，是因为 `native/vendor/mpp/include/rockchip/` vendored 了厂商头，并有
+`native/tests/mpp_abi_conformance_test.cpp` 用 `static_assert` 做护栏。Ascend **没有**可 vendored 的
+公开头，镜像错误的后果是板端静默错帧/段错误，而不是编译失败——所以这里反过来：
+
+- 编译期：`ZHULONG_ASCEND_ROOT` 指向含 `acl/acl.h` 与 `hi_dvpp.h` 的 CANN include 前缀，CMake 定义
+  `ZHULONG_HAVE_ASCEND=1`。结构体布局、字段名、常量全部由**真头文件**保证，猜错就是编译错误。
+- 运行期：22 个符号仍全部 dlopen（候选 `libacl_dvpp.so` / `libhi_dvpp.so` / `libascendcl.so` /
+  `libdvpp_utils.so`，再退 `RTLD_DEFAULT`）。任一符号缺失即整体 fail closed，**不做部分可用**。
+- 未设置 `ZHULONG_ASCEND_ROOT` 时该后端编译成桩：`ascend_vdec_compiled()` 为 false、
+  `create_vdec_channel()` 返回 nullptr，`backend = "ascend"` 直接 fail closed。
+- ⚠️ 因此**没有 CANN 的构建从不编译 `ascend_channel.cpp` 的 CANN 分支**。改动该文件后，必须在装了
+  CANN 的机器上至少 `make native-build` 一次，否则语法/字段错误会一直潜伏到板端。
+
+### 8.2 只用 `hi_mpi_vdec_*` 拉取式，不实现 `aclvdec*` 回调式
+
+| 维度 | `hi_mpi_vdec_*`（采用） | `aclvdec*`（不采用） |
+| --- | --- | --- |
+| 取帧 | `hi_mpi_vdec_get_frame` 主动拉 | 回调线程推 |
+| 与 `IDecodeNode` | send/receive 一一对应 | 需要跨线程队列桥接 |
+| PTS | `hi_vdec_stream.pts` 随包带 | 只能塞 `userData` |
+| 生命周期 | `release_frame` 显式归还 | 描述符 + 回调时序契约 |
+
+`hi_mpi_vdec_*` 属于 CANN 7.0+ 的统一媒体接口。310P1 常见的 6.x 上没有这批符号，此时
+`ascend_vdec_available()` 返回 false 并 fail closed——这是**预期**行为，不要为了兼容去补回调式分支。
+
+### 8.3 线程与 context 绑定
+
+- 进程级：`aclInit` → `aclrtSetDevice` → `hi_mpi_sys_init`，由 `Runtime` 引用计数管理；
+  `ACL_ERROR_REPEAT_INITIALIZE` 视为成功（同进程可能已有其它组件初始化过）。
+- 每通道：`aclrtCreateContext` → `aclrtSetCurrentContext` → `hi_mpi_vdec_create_chn` → `start_recv_stream`。
+- ⚠️ context 是**线程绑定**的：通道的创建、`send`、`get_frame`、`release` 必须在同一线程。当前由
+  `IDecodeNode` 的单线程 decode 循环保证；将来若改多线程，每个线程都要 `aclrtSetCurrentContext`。
+- 构造函数抛异常时析构不会执行，`CannVdecChannel` 用 try/catch 显式 `teardown()` 回滚；否则 ACL
+  引用计数永不归零，后续所有通道都建不起来。
+
+### 8.4 内存与所有权
+
+- 码流先 `aclrtMemcpy`(H2D) 到 `hi_mpi_dvpp_malloc` 的设备缓冲，再 `hi_mpi_vdec_send_stream`；输入
+  缓冲按需扩容并复用，最小 1 MiB。
+- 输出帧由驱动分配，`get_frame` 取出后**必须** `release_frame` 归还。通道缓冲数有限，漏归还的表现
+  是「解码逐渐停住」，不是报错。
+- `pending_` 以设备地址登记在途帧，`release(void*)` 精确归还；在途上限 64，超限立即归还并返回
+  `decode_again`——不阻塞、不增长。
+- 首期不做零拷贝：`receive_frame` 里 `aclrtMemcpy`(D2H) 到池化主机缓冲后**立刻**归还设备帧，
+  `HardwareFrame::dev_ptr` 留空。将来接 VPC/RGA 时再把 `dev_ptr` 交给下游。
+
+### 8.5 几何与对齐
+
+- 建通道用 `compute_vdec_geometry()`：`width_stride = align_up(max(width, 32), 16)`、
+  `height_stride = align_up(height, 2)`、`buffer_size = ws * hs * 3 / 2`。
+- ⚠️ 取帧后**以驱动实际产出为准**（`v_frame.width_stride[0]` / `height_stride[0]`）覆盖本地几何。
+  驱动可能选择更大的对齐粒度，用本地值算 UV 偏移会整体错位。
+- 输出固定 `HI_PIXEL_FORMAT_YUV_SEMIPLANAR_420`（NV12），与 `FRAME_FORMAT_NV12` 对应。
+
+### 8.6 错误与背压映射
+
+| 通道返回 | 节点返回 | 说明 |
+| --- | --- | --- |
+| `HI_ERR_VDEC_BUF_FULL` | `decode_again` | 上层 `drain_frames()` 后重发同一包（`stream.cpp` 已有该逻辑） |
+| `HI_ERR_VDEC_BUF_EMPTY` | `decode_again` | 暂时没有输出帧 |
+| 其它非 `HI_SUCCESS` | `decode_backend_failure` | 同时置 `healthy_ = false` |
+
+- `flush()` = 归还全部在途帧 → `stop_recv_stream` → `reset_chn` → `start_recv_stream`。它**同时是传输
+  错误的恢复路径**，因此不看 `healthy_`：只要通道还在就尝试救回来。
+- EOS：`send_packet(nullptr, 0, ...)` 触发 `send_eos()`；之后继续送包恒返 `AVERROR_EOF` 直到 `flush()`。
+- 取帧成功但 `virt_addr[0]` 为空属于驱动异常，按 `decode_backend_failure` 处理，**不能**当成「暂时没帧」，
+  否则调用方会空转。
+
+### 8.7 配置
+
+- `[decode] backend = "ascend"` 点名要求昇腾硬件解码。
+- `allow_software_fallback = false` 映射为 `DecoderBackend::hardware_auto`（任意硬件、禁止软解），
+  **不会**被改写成 `mpp_hw`——否则昇腾板会被误判成「用户点名要 MPP」。
+- 设备号由 `ZHULONG_ASCEND_DEVICE` 覆盖（默认 0）；多卡可见性仍由 `ASCEND_RT_VISIBLE_DEVICES` 决定。
+- 构建：`ZHULONG_ASCEND_ROOT=/usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/include`，
+  `native/scripts/build.py` 透传同名环境变量。
+
+### 8.8 ⚠️ 310P1 真机核对清单（无设备时不可跳过）
+
+1. `cat /usr/local/Ascend/ascend-toolkit/latest/version.cfg`：CANN ≥ 7.0 才有 `hi_mpi_vdec_*`。
+2. `nm -D .../lib64/libacl_dvpp.so | grep -E 'hi_mpi_vdec|hi_mpi_dvpp|hi_vdec_get'`：22 个符号是否齐全。
+3. `hi_vdec_chn_attr` / `hi_vdec_pic_info` / `hi_video_frame_info` 字段名与 `hi_pic_buf_attr` 的 6 字段
+   聚合顺序是否与头一致——不一致应在**编译期**报错，这是设计意图。
+4. `hi_mpi_vdec_get_frame` 的 `hi_vdec_stream*` 出参是否回填 `pts`；若恒为 0，需改为按送包顺序配对。
+5. 码流假设 Annex-B（RTSP 解复用产出）；上游若给 AVCC（长度前缀），必须先转换。
+6. `send_eos()` 传 `pic_info = nullptr` 是否被接受；若报参数错误，改为传一个占位 `hi_vdec_pic_info`。
+7. 连续跑 30 分钟以上，观察通道缓冲是否泄漏（`pending_` 恒不增长、解码不逐渐停住）。
+
+## 9. 验证命令
 
 ```bash
 # 1. 检查头文件依赖隔离（仅允许在 native/src/backends/{rknn,onnx}/ 引用）
@@ -540,6 +632,7 @@ ssh rk3568 "ZHULONG_JPEG_BACKEND=cpu /tmp/ZhulongJpegEncoderTests"  # 强制软�
 # 7. 算法包板端验收（rk3568 档位）：交叉只产前缀，**包在板上用自己的编译器构建**
 make board-check                                  # = native/scripts/board_check.sh
 make board-check BOARD_HOST=<ssh 主机别名>
+
 ```
 
 第 7 条走两条路，它们证明的是**不同**的事，所以两条都要：
@@ -586,3 +679,13 @@ make -C packages/face_recognition/rk3568 \
 ⚠️ **跨平台特征不可混用**：同一张脸在不同档位的向量属于不同度量空间（权重不同）。底库登记用的
 `[person].extractor_algorithm` 必须与流式识别指向**同平台**的人脸包，否则永远匹配不上且无任何报错。
 
+### 8.9 昇腾 VDEC 的验证命令
+
+```bash
+# 宿主机状态机回归（假通道驱动，不需要 CANN 与真机）
+ctest --test-dir build/native/host -R ZhulongAscendDecode --output-on-failure
+
+# 有 CANN 的机器上启用真实分支；未设置时该后端编译成桩
+ZHULONG_ASCEND_ROOT=/usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/include \
+    python3 native/scripts/build.py build
+```

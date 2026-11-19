@@ -821,7 +821,7 @@ func (a *statusSnapshotAdapter) collectDecode(
 	out.decodeActive = stats.ActiveSessions
 	out.decodeMax = stats.MaxSessions
 
-	requiresHardware := decodeBackend == "mpp" || !a.allowSoftwareFallback
+	requiresHardware := decodeBackend == "mpp" || decodeBackend == "ascend" || !a.allowSoftwareFallback
 	return requiresHardware && !stats.HardwareAvailable
 }
 

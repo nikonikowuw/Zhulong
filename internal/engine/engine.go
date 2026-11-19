@@ -86,6 +86,7 @@ const (
 	DecodeBackendAuto   DecodeBackend = 0
 	DecodeBackendMPP    DecodeBackend = 1
 	DecodeBackendFFmpeg DecodeBackend = 2
+	DecodeBackendAscend DecodeBackend = 3
 )
 
 // DecodePolicy 定义全局硬件解码策略。

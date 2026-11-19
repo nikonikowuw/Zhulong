@@ -140,6 +140,8 @@ add_library(ZhulongEngine STATIC
     src/pipeline/motion_detector.cpp
     src/pipeline/clip_recorder.cpp
     src/nodes/capture/rtsp_input.cpp
+    src/nodes/decode/ascend_channel.cpp
+    src/nodes/decode/ascend_decoder.cpp
     src/nodes/decode/decoder_factory.cpp
     src/nodes/decode/ffmpeg_decoder.cpp
     src/nodes/decode/mpp_loader.cpp
@@ -186,6 +188,7 @@ set(ZHULONG_ONNX_ROOT "" CACHE PATH "ONNX Runtime 前缀（诊断用；实际编
 set(ZHULONG_ONNX_INCLUDE_DIR "" CACHE PATH "ONNX Runtime 头文件目录（含 onnxruntime_cxx_api.h）；由 build.py 规范化")
 set(ZHULONG_ONNX_LIBRARY "" CACHE FILEPATH "ONNX Runtime 动态库文件（.so/.dylib）；由 build.py 规范化")
 set(ZHULONG_RGA_ROOT "" CACHE PATH "RGA 前缀（include/rga/im2d.h + lib/librga.so*）；仅 ZHULONG_VISION_BACKEND=rga 需要")
+set(ZHULONG_ASCEND_ROOT "" CACHE PATH "CANN include 前缀（含 acl/acl.h 与 hi_dvpp.h）；留空则不启用昇腾 VDEC 后端")
 
 if(ZHULONG_INFERENCE_BACKEND STREQUAL "")
     message(FATAL_ERROR
@@ -214,6 +217,22 @@ if(ZHULONG_VISION_BACKEND STREQUAL "rga")
     endif()
     # 与 RKNN 同理：下游目标链接 ZhulongAlgoRuntime 时需解析其传递依赖 librga.so.2 的符号。
     add_link_options(-Wl,-rpath-link,${ZHULONG_RGA_ROOT}/lib)
+endif()
+
+# 昇腾 DVPP VDEC 硬件解码后端（310P/310B）：
+# 与 MPP 的取舍不同——这里**不手写 ABI 镜像**。Ascend 没有可 vendored 的公开头，镜像错误在板端
+# 表现为静默错帧/段错误而不是编译失败，因此结构体布局与常量由 CANN 头文件在编译期保证，
+# 符号解析仍在运行期 dlopen（见 native/src/nodes/decode/ascend_channel.cpp），链接期零依赖。
+# 未设置 ZHULONG_ASCEND_ROOT 时该后端编译成桩：is_supported() 恒 false，显式选择即 fail closed。
+if(ZHULONG_ASCEND_ROOT)
+    if(NOT EXISTS "${ZHULONG_ASCEND_ROOT}/acl/acl.h")
+        message(FATAL_ERROR "昇腾前缀缺少 acl/acl.h: ${ZHULONG_ASCEND_ROOT}")
+    endif()
+    if(NOT EXISTS "${ZHULONG_ASCEND_ROOT}/hi_dvpp.h" AND NOT EXISTS "${ZHULONG_ASCEND_ROOT}/acl/dvpp/hi_dvpp.h")
+        message(FATAL_ERROR "昇腾前缀缺少 hi_dvpp.h 或 acl/dvpp/hi_dvpp.h: ${ZHULONG_ASCEND_ROOT}")
+    endif()
+    target_include_directories(ZhulongEngine PRIVATE "${ZHULONG_ASCEND_ROOT}")
+    target_compile_definitions(ZhulongEngine PRIVATE ZHULONG_HAVE_ASCEND=1)
 endif()
 
 # RKNN 推理后端：include 目录 PRIVATE（AC1），库以绝对文件路径链接。
@@ -688,6 +707,20 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongMppAbi COMMAND ZhulongMppAbiTests)
     set_tests_properties(ZhulongMppAbi PROPERTIES TIMEOUT 10)
 
+    # 昇腾 VDEC 解码节点状态机（假通道驱动，不需要 CANN 与真机）：
+    # 覆盖背压重发、D2H 回拷、设备帧归还、EOS/flush、几何对齐与错误归一化。
+    add_executable(ZhulongAscendDecodeTests tests/ascend_decoder_test.cpp)
+    target_compile_features(ZhulongAscendDecodeTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongAscendDecodeTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    # 需要 AVERROR_EOF：FFmpeg 头在 ZhulongEngine 上是 PRIVATE，测试自己补 include 目录
+    target_include_directories(ZhulongAscendDecodeTests PRIVATE ${FFMPEG_ROOT}/include)
+    target_link_libraries(ZhulongAscendDecodeTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongAscendDecode COMMAND ZhulongAscendDecodeTests)
+    set_tests_properties(ZhulongAscendDecode PROPERTIES TIMEOUT 15)
+
     # 运动区域检测算法单元测试（纯合成帧与宏块聚类）
     add_executable(ZhulongMotionDetectorTests tests/motion_detector_test.cpp)
     target_compile_features(ZhulongMotionDetectorTests PRIVATE cxx_std_17)
@@ -736,6 +769,7 @@ if(BUILD_TESTING)
         ZhulongWorkerGuardTests
         ZhulongStallWatchTests
         ZhulongResultSerializerTests
+        ZhulongAscendDecodeTests
     )
     foreach(TEST_TARGET ${ASSERT_TEST_TARGETS})
         target_compile_options(${TEST_TARGET} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)

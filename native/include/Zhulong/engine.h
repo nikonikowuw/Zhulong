@@ -116,7 +116,8 @@ typedef struct {
 typedef enum {
     Zhulong_DECODE_BACKEND_AUTO   = 0, /**< 优先硬件解码，不可用时降级为软解（开发环境默认） */
     Zhulong_DECODE_BACKEND_MPP    = 1, /**< 强制 Rockchip MPP 硬件解码，不可用时拒绝 */
-    Zhulong_DECODE_BACKEND_FFMPEG = 2  /**< 强制 FFmpeg 软解（仅供调试或无硬件环境） */
+    Zhulong_DECODE_BACKEND_FFMPEG = 2, /**< 强制 FFmpeg 软解（仅供调试或无硬件环境） */
+    Zhulong_DECODE_BACKEND_ASCEND = 3  /**< 强制华为昇腾 DVPP VDEC 硬件解码，不可用时拒绝 */
 } Zhulong_decode_backend_t;
 
 /** @brief 全局解码策略配置结构体 */

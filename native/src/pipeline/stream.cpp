@@ -203,9 +203,10 @@ bool DecodeSession::pop_frame(HardwareFrame::ConstPtr &out_frame, std::chrono::m
 
 void DecodeSession::update_metadata(const Video &video_meta) {
     std::lock_guard<std::mutex> lock(meta_mutex_);
-    // 仅当编码类型或参数集真正变化时才触发解码器重建，避免就绪回调的重复通知打断解码
+    // 仅当编码类型、参数集或宽高真正变化时才触发解码器重建，避免就绪回调的重复通知打断解码
     const bool decoder_relevant_change =
-        video_meta_.view.codec != video_meta.view.codec || video_meta_.extradata != video_meta.extradata;
+        video_meta_.view.codec != video_meta.view.codec || video_meta_.extradata != video_meta.extradata ||
+        video_meta_.view.width != video_meta.view.width || video_meta_.view.height != video_meta.view.height;
     video_meta_ = video_meta;
     time_base_num_.store(video_meta_.view.time_base_num, std::memory_order_relaxed);
     time_base_den_.store(video_meta_.view.time_base_den, std::memory_order_relaxed);
@@ -286,14 +287,15 @@ void DecodeSession::decode_loop_body() {
         DecoderBackend target_backend = DecoderBackend::automatic;
         if (policy_.backend == Zhulong_DECODE_BACKEND_MPP) {
             target_backend = DecoderBackend::mpp_hw;
+        } else if (policy_.backend == Zhulong_DECODE_BACKEND_ASCEND) {
+            target_backend = DecoderBackend::ascend_vdec;
         } else if (policy_.backend == Zhulong_DECODE_BACKEND_FFMPEG) {
             target_backend = DecoderBackend::ffmpeg_sw;
         } else {
-            if (policy_.allow_software_fallback == 0) {
-                target_backend = DecoderBackend::mpp_hw;
-            } else {
-                target_backend = DecoderBackend::automatic;
-            }
+            // 禁用软解回退时不能退化成 mpp_hw：那会在昇腾板子上被误判为「用户点名要 MPP」。
+            // hardware_auto 的语义是「硬件任意，但禁止软解」，由工厂在无硬件时 fail closed。
+            target_backend = policy_.allow_software_fallback == 0 ? DecoderBackend::hardware_auto
+                                                                  : DecoderBackend::automatic;
         }
 
         int32_t selected_codec = codec_hint;
@@ -319,7 +321,9 @@ void DecodeSession::decode_loop_body() {
                     final_tb_num,
                     final_tb_den,
                     target_backend,
-                    stream_id_
+                    stream_id_,
+                    meta.view.width,
+                    meta.view.height
                 );
                 if (decoder) {
                     decoder_generation = generation;
@@ -335,7 +339,10 @@ void DecodeSession::decode_loop_body() {
         } catch (...) {
             // std::exception 与其他异常的处置完全一致：硬解 fail-closed，其余退避重试
             decoder.reset();
-            if (target_backend == DecoderBackend::mpp_hw) {
+            const bool hardware_only = target_backend == DecoderBackend::mpp_hw ||
+                                       target_backend == DecoderBackend::ascend_vdec ||
+                                       target_backend == DecoderBackend::hardware_auto;
+            if (hardware_only) {
                 ZL_LOGE(stream_id_, "pipeline.stream", "hardware_decode_fail_closed codec=%d", selected_codec);
                 if (on_fatal_error_) {
                     on_fatal_error_(Zhulong_ERR_HARDWARE_UNAVAILABLE);

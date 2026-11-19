@@ -125,10 +125,10 @@ func ValidateTLSConfig(mode, certFile, keyFile string) error {
 // ValidateDecodeConfig validates the decode configuration section.
 func ValidateDecodeConfig(cfg DecodeConfig) error {
 	switch cfg.Backend {
-	case "", "auto", "mpp", "ffmpeg":
+	case "", "auto", "mpp", "ascend", "ffmpeg":
 		// valid
 	default:
-		return fmt.Errorf("invalid decode.backend %q: must be auto, mpp, or ffmpeg", cfg.Backend)
+		return fmt.Errorf("invalid decode.backend %q: must be auto, mpp, ascend, or ffmpeg", cfg.Backend)
 	}
 	if cfg.MaxSessions < 0 {
 		return fmt.Errorf("invalid decode.max_sessions %d: must not be negative", cfg.MaxSessions)

@@ -294,7 +294,7 @@ func healthHandler(p healthParams) gin.HandlerFunc {
 					MaxSessions:       stats.MaxSessions,
 					RejectedRequests:  stats.RejectedRequests,
 				}
-				isSoftwareForbidden := backend == "mpp" || !p.Config.Decode.AllowSoftwareFallback
+				isSoftwareForbidden := backend == "mpp" || backend == "ascend" || !p.Config.Decode.AllowSoftwareFallback
 				if isSoftwareForbidden && !stats.HardwareAvailable {
 					components["engine"] = "degraded"
 				}

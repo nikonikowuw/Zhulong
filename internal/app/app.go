@@ -77,6 +77,8 @@ func provideEngine(cfg Config) (engineOut, error) {
 	switch cfg.Decode.Backend {
 	case "mpp":
 		backend = engine.DecodeBackendMPP
+	case "ascend":
+		backend = engine.DecodeBackendAscend
 	case "ffmpeg":
 		backend = engine.DecodeBackendFFmpeg
 	default:

@@ -701,7 +701,7 @@ Zhulong_status_t Zhulong_engine_configure_decode(Zhulong_engine_h engine, const 
     return boundary([&] {
         require(engine != nullptr);
         require(policy != nullptr);
-        require(policy->backend >= 0 && policy->backend <= 2);
+        require(policy->backend >= 0 && policy->backend <= 3);
         require(policy->max_sessions >= 0);
         engine->implementation.configure_decode(*policy);
     });

@@ -92,7 +92,7 @@ int main() {
 
     Zhulong_decode_policy_t invalid_policy = {-1, 0, 0};
     if (Zhulong_engine_configure_decode(engine, &invalid_policy) != Zhulong_ERR_INVALID_ARGUMENT) return 4;
-    invalid_policy.backend = 3; // 超出枚举范围
+    invalid_policy.backend = 4; // 超出枚举范围 (0=auto, 1=mpp, 2=ffmpeg, 3=ascend)
     if (Zhulong_engine_configure_decode(engine, &invalid_policy) != Zhulong_ERR_INVALID_ARGUMENT) return 5;
     invalid_policy.backend = 0;
     invalid_policy.max_sessions = -1; // 非法负数
@@ -140,6 +140,26 @@ int main() {
 
     if (Zhulong_engine_get_decode_stats(engine, &stats) != Zhulong_OK) return 13;
     if (stats.rejected_requests != 1 || stats.active_sessions != 0) return 13;
+
+    // 3.1 测试昇腾硬件探针与 Fail-Closed 门控
+    // 在 x86 主机上未配置 CANN 时，昇腾解码不可用。当配置强制昇腾且禁止降级时，AI 拉流必须同步阻断。
+    Zhulong_decode_policy_t ascend_strict_policy{};
+    ascend_strict_policy.backend = Zhulong_DECODE_BACKEND_ASCEND;
+    ascend_strict_policy.allow_software_fallback = 0;
+    ascend_strict_policy.max_sessions = 4;
+    if (Zhulong_engine_configure_decode(engine, &ascend_strict_policy) != Zhulong_OK) return 1301;
+
+    const std::string url_ascend_fail = silent_rtsp.rtsp_url("/test_ascend_fail");
+    status = Zhulong_stream_acquire(
+        engine, url_ascend_fail.c_str(), &opts, 1002, Zhulong_CONSUMER_AI, &stream_id
+    );
+    if (status != Zhulong_ERR_HARDWARE_UNAVAILABLE) {
+        fprintf(stderr, "Expected ERR_HARDWARE_UNAVAILABLE (-15) for Ascend, got: %d\n", status);
+        return 1302;
+    }
+
+    if (Zhulong_engine_get_decode_stats(engine, &stats) != Zhulong_OK) return 1303;
+    if (stats.rejected_requests != 2 || stats.active_sessions != 0) return 1304;
 
     // 4. 测试容量准入控制 (使用 AUTO + 允许软解模式)
     Zhulong_decode_policy_t cap_policy{};
@@ -189,7 +209,7 @@ int main() {
     }
 
     if (Zhulong_engine_get_decode_stats(engine, &stats) != Zhulong_OK) return 18;
-    if (stats.active_sessions != 1 || stats.rejected_requests != 2) return 18;
+    if (stats.active_sessions != 1 || stats.rejected_requests != 3) return 18;
 
     // 4.4 既有预览流升级 AI 消费者门控拦截
     // preview_1 原先只有预览消费，现尝试为它追加 AI 消费者：因配额已满必须被拦截
@@ -202,7 +222,7 @@ int main() {
         return 19;
     }
     if (Zhulong_engine_get_decode_stats(engine, &stats) != Zhulong_OK) return 20;
-    if (stats.rejected_requests != 3) return 20;
+    if (stats.rejected_requests != 4) return 20;
 
     // 4.5 释放第 1 路 AI 消费者，验证配额原子归还
     status = Zhulong_stream_release(engine, ai_stream_1, 3001);

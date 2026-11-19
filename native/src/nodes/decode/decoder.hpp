@@ -23,6 +23,8 @@ enum class DecoderBackend {
     automatic = 0, /**< 自动选择后端 (优先硬件加速，无硬件时回退软解) */
     ffmpeg_sw = 1, /**< 静态 FFmpeg 软解 (通用 CPU 保底) */
     mpp_hw = 2,    /**< Rockchip MPP 硬件解码器 (RK3568/RK3588 专用) */
+    ascend_vdec = 3, /**< 华为昇腾 DVPP VDEC 硬件解码器 (310P/310B 专用) */
+    hardware_auto = 4, /**< 硬件自动选择，但**禁止**回退软解（allow_software_fallback=false 时使用） */
 };
 
 /**
@@ -114,13 +116,16 @@ public:
      * @param time_base_den 源流时间基分母
      * @param backend 期望的解码器后端类型
      * @param stream_id 用于原生日志关联的稳定流 ID；未提供时为 0
+     * @param width 编码图像宽度（像素）；硬件后端建通道时必须已知，软解可传 0
+     * @param height 编码图像高度（像素）；同上
      * @return Ptr 创建成功的解码节点唯一智能指针
      * @throws std::invalid_argument 不支持的编码格式
      * @throws std::runtime_error 指定后端不可用或后端初始化失败
      */
     static Ptr create(int32_t codec, const uint8_t *extradata = nullptr, size_t extradata_size = 0,
                       int32_t time_base_num = 1, int32_t time_base_den = 90000,
-                      DecoderBackend backend = DecoderBackend::automatic, uint64_t stream_id = 0);
+                      DecoderBackend backend = DecoderBackend::automatic, uint64_t stream_id = 0,
+                      int32_t width = 0, int32_t height = 0);
 
 protected:
     /** @brief 仅允许派生类构造（拷贝/移动已显式删除） */

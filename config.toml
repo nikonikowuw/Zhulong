@@ -57,7 +57,7 @@ session_ttl = "24h"
 # Whether a stream has audio is discovered by probing, not configured; whether it
 # is heard is a user gesture. Both mean there is no switch to add here.
 [decode]
-backend = "auto"                 # "auto" | "mpp" | "ffmpeg"
+backend = "auto"                 # "auto" | "mpp" | "ascend" | "ffmpeg"
 allow_software_fallback = true   # Board deployment profiles must set false (fail-closed)
 max_sessions = 8                 # Maximum concurrent physical decode streams (0 = no limit)
 
