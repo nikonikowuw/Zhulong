@@ -331,6 +331,7 @@ export function RecordDetailDialog({
         images={previewImages}
         activeIndex={open ? previewIndex : null}
         onActiveIndexChange={setPreviewIndex}
+        showBoxes={showBoxes}
       />
     </>
   )

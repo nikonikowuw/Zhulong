@@ -458,6 +458,41 @@ describe('RecordDetailDialog', () => {
     await expect.element(getByText('1 / 4')).toBeInTheDocument()
   })
 
+  it('renders detection boxes in the fullscreen preview and hides them with the detail toggle', async () => {
+    const { getByRole, getByText } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        record={mockRecognition}
+        tab='recognitions'
+      />
+    )
+
+    await userEvent.click(
+      getByRole('button', { name: '全屏查看', exact: true })
+    )
+    await expect.element(getByText('1 / 3')).toBeInTheDocument()
+    expect(
+      document.querySelectorAll('[data-testid="preview-box-primary"]')
+    ).toHaveLength(1)
+    expect(
+      document.querySelectorAll('[data-testid="preview-box-secondary"]')
+    ).toHaveLength(1)
+
+    // 关闭预览 → 隐藏标注框 → 再次全屏：框和点都应被同一个开关挡住
+    const previewCloseBtns = getByRole('button', { name: '关闭' }).elements()
+    await userEvent.click(previewCloseBtns[previewCloseBtns.length - 1])
+    await userEvent.click(getByRole('button', { name: '隐藏标注框' }))
+
+    await userEvent.click(
+      getByRole('button', { name: '全屏查看', exact: true })
+    )
+    await expect.element(getByText('1 / 3')).toBeInTheDocument()
+    expect(
+      document.querySelector('[data-testid="preview-box-primary"]')
+    ).toBeNull()
+  })
+
   it('resets fullscreen preview state when dialog closes and reopens on the same record', async () => {
     const props = {
       onOpenChange: vi.fn(),

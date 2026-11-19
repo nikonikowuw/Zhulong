@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type TFunction } from 'i18next'
+import { boxesCoincide } from '@/lib/box-geometry'
 import { copyToClipboard } from '@/lib/clipboard'
 import {
   isAlarmRecord,
@@ -10,8 +11,12 @@ import {
   type RecordItem,
   type RecordsTab,
 } from '../../data/schema'
+import { formatTargetType } from '../../data/target-type'
 import { getGalleryImageUrl, getMediaUrl } from '../common/media-utils'
-import { type RecordPreviewImageItem } from './record-image-preview-dialog'
+import {
+  type RecordPreviewBox,
+  type RecordPreviewImageItem,
+} from './record-image-preview-dialog'
 
 /** 拟真车牌徽章样式（符合行业视觉习惯并兼容暗黑模式） */
 export function getPlateBadgeStyle(color?: string): string {
@@ -93,6 +98,18 @@ export function projectLandmarksToCrop(
     )
 }
 
+function isDrawableBox(box: BoundingBox): boolean {
+  return (
+    box.length === 4 &&
+    Number.isFinite(box[0]) &&
+    Number.isFinite(box[1]) &&
+    Number.isFinite(box[2]) &&
+    Number.isFinite(box[3]) &&
+    box[2] > box[0] &&
+    box[3] > box[1]
+  )
+}
+
 /** 汇总当前记录可全屏查看的图片序列，支持跨图左右切换与缩略图跳转 */
 export function buildPreviewImages(
   record: RecordItem,
@@ -105,12 +122,45 @@ export function buildPreviewImages(
   const cap = isCaptureRecord(record) ? record : null
   const isVehicleCapture = cap !== null && tab === 'vehicles'
 
+  const fullImageBoxes: RecordPreviewBox[] = []
+  if (rec) {
+    if (isDrawableBox(rec.box)) {
+      fullImageBoxes.push({
+        box: rec.box,
+        variant: 'primary',
+        label:
+          rec.personName ||
+          (rec.matched ? t('card.matched') : t('card.stranger')),
+      })
+    }
+    if (isDrawableBox(rec.bodyBox) && !boxesCoincide(rec.bodyBox, rec.box)) {
+      fullImageBoxes.push({
+        box: rec.bodyBox,
+        variant: 'secondary',
+        label: t('detail.bodyBoxLabel'),
+      })
+    }
+  } else if (alm && isDrawableBox(alm.box)) {
+    fullImageBoxes.push({
+      box: alm.box,
+      variant: 'primary',
+      label: alm.alarmType,
+    })
+  } else if (cap && isDrawableBox(cap.box)) {
+    fullImageBoxes.push({
+      box: cap.box,
+      variant: 'primary',
+      label: formatTargetType(t, cap.targetType),
+    })
+  }
+
   if (record.imagePath) {
     previewImages.push({
       id: 'full',
       url: getMediaUrl(record.imagePath),
       title: t('detail.fullImage'),
       landmarks: rec?.landmarks ?? cap?.landmarks,
+      boxes: fullImageBoxes.length > 0 ? fullImageBoxes : undefined,
     })
   }
 

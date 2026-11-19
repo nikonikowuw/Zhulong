@@ -4,8 +4,15 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { type LandmarkPoint } from '../../data/schema'
+import { type BoundingBox, type LandmarkPoint } from '../../data/schema'
 import { RecordImagePreviewToolbar } from './record-image-preview-toolbar'
+
+/** 全屏预览里的一张图要叠加的标注框；与详情页内嵌画布保持同一套几何语义。 */
+export interface RecordPreviewBox {
+  box: BoundingBox
+  label?: string
+  variant?: 'primary' | 'secondary'
+}
 
 export interface RecordPreviewImageItem {
   id: string
@@ -13,18 +20,50 @@ export interface RecordPreviewImageItem {
   title: string
   subtitle?: string
   landmarks?: LandmarkPoint[]
+  boxes?: RecordPreviewBox[]
 }
 
 export interface RecordImagePreviewDialogProps {
   images: RecordPreviewImageItem[]
   activeIndex: number | null
   onActiveIndexChange: (index: number | null) => void
+  /** 与详情页“隐藏标注框”开关联动；关闭时框和关键点一起隐藏。 */
+  showBoxes?: boolean
+}
+
+/** 把记录里的框投影成百分比矩形；兼容历史数据里的像素坐标。 */
+function projectPreviewBox(
+  box: BoundingBox,
+  naturalWidth: number,
+  naturalHeight: number
+): { x: number; y: number; width: number; height: number } | null {
+  if (!box || box.length !== 4) return null
+  const [x1, y1, x2, y2] = box
+  if (![x1, y1, x2, y2].every(Number.isFinite)) return null
+
+  const isNormalized = x2 <= 1.05 && y2 <= 1.05
+  const nw = naturalWidth > 0 ? naturalWidth : 1920
+  const nh = naturalHeight > 0 ? naturalHeight : 1080
+
+  const left = Math.max(0, Math.min(1, isNormalized ? x1 : x1 / nw))
+  const top = Math.max(0, Math.min(1, isNormalized ? y1 : y1 / nh))
+  const right = Math.max(0, Math.min(1, isNormalized ? x2 : x2 / nw))
+  const bottom = Math.max(0, Math.min(1, isNormalized ? y2 : y2 / nh))
+  if (right <= left || bottom <= top) return null
+
+  return {
+    x: left * 100,
+    y: top * 100,
+    width: (right - left) * 100,
+    height: (bottom - top) * 100,
+  }
 }
 
 export function RecordImagePreviewDialog({
   images,
   activeIndex,
   onActiveIndexChange,
+  showBoxes = true,
 }: RecordImagePreviewDialogProps) {
   const { t } = useTranslation('records')
   const containerRef = useRef<HTMLDivElement>(null)
@@ -37,11 +76,13 @@ export function RecordImagePreviewDialog({
   const [scale, setScale] = useState(1)
   const [prevKey, setPrevKey] = useState<string | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 })
 
   const currentKey = current ? `${activeIndex}:${current.url}` : null
   if (currentKey !== prevKey) {
     setPrevKey(currentKey)
     setScale(1)
+    setNaturalSize({ width: 0, height: 0 })
   }
 
   useEffect(() => {
@@ -189,30 +230,80 @@ export function RecordImagePreviewDialog({
               <img
                 src={current.url}
                 alt={current.title}
+                onLoad={(e) =>
+                  setNaturalSize({
+                    width: e.currentTarget.naturalWidth,
+                    height: e.currentTarget.naturalHeight,
+                  })
+                }
                 className='max-h-[75vh] max-w-[90vw] rounded-lg object-contain shadow-2xl drop-shadow-[0_15px_35px_rgba(0,0,0,0.85)]'
               />
-              {current.landmarks && current.landmarks.length > 0 && (
-                <div className='pointer-events-none absolute inset-0'>
-                  {current.landmarks.map(([lx, ly], index) =>
-                    Number.isFinite(lx) &&
-                    Number.isFinite(ly) &&
-                    lx >= 0 &&
-                    lx <= 1 &&
-                    ly >= 0 &&
-                    ly <= 1 ? (
-                      <div
-                        key={`preview-landmark-${index}`}
-                        data-testid='preview-landmark-point'
-                        className='absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 ring-1 ring-black/80'
-                        style={{
-                          left: `${lx * 100}%`,
-                          top: `${ly * 100}%`,
-                        }}
-                      />
-                    ) : null
-                  )}
-                </div>
-              )}
+              {showBoxes &&
+                ((current.boxes && current.boxes.length > 0) ||
+                  (current.landmarks && current.landmarks.length > 0)) && (
+                  <div className='pointer-events-none absolute inset-0'>
+                    {current.boxes?.map((item, index) => {
+                      const rect = projectPreviewBox(
+                        item.box,
+                        naturalSize.width,
+                        naturalSize.height
+                      )
+                      if (!rect) return null
+                      const secondary = item.variant === 'secondary'
+                      return (
+                        <div
+                          key={`preview-box-${index}`}
+                          data-testid={`preview-box-${
+                            secondary ? 'secondary' : 'primary'
+                          }`}
+                          className={cn(
+                            'absolute border-2',
+                            secondary
+                              ? 'border-dashed border-violet-400/80 bg-violet-500/10'
+                              : 'border-emerald-400 bg-emerald-500/15'
+                          )}
+                          style={{
+                            left: `${rect.x}%`,
+                            top: `${rect.y}%`,
+                            width: `${rect.width}%`,
+                            height: `${rect.height}%`,
+                          }}
+                        >
+                          {item.label && (
+                            <span
+                              className={cn(
+                                'absolute start-0 -top-5 rounded px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap text-white shadow-sm',
+                                secondary
+                                  ? 'bg-violet-600/90'
+                                  : 'bg-emerald-600'
+                              )}
+                            >
+                              {item.label}
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                    {current.landmarks?.map(([lx, ly], index) =>
+                      Number.isFinite(lx) &&
+                      Number.isFinite(ly) &&
+                      lx >= 0 &&
+                      lx <= 1 &&
+                      ly >= 0 &&
+                      ly <= 1 ? (
+                        <div
+                          key={`preview-landmark-${index}`}
+                          data-testid='preview-landmark-point'
+                          className='absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 ring-1 ring-black/80'
+                          style={{
+                            left: `${lx * 100}%`,
+                            top: `${ly * 100}%`,
+                          }}
+                        />
+                      ) : null
+                    )}
+                  </div>
+                )}
             </div>
 
             {hasMultiple && (
