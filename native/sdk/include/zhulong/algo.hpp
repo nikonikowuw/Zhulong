@@ -178,6 +178,19 @@ struct Landmark {
 };
 
 /**
+ * @brief 属性标签子项 (1 张人脸或 1 个人体挂载 0~N 个属性标签)
+ *
+ * - name 为 UTF-8 属性标签（如 "Hat"、"LongSleeve"、"Female"）；
+ * - score 为该标签的概率 (0.0 ~ 1.0)，人体属性为多标签模型每个标签独立 sigmoid；
+ *   人脸属性为性别 softmax + 年龄段，互斥语义由标签命名表达；
+ * - 同一目标项内标签唯一，数组按 score 降序排列。
+ */
+struct PersonAttribute {
+    std::string name;     /**< 属性标签 (UTF-8) */
+    float score{0.0f};    /**< 属性概率 (0.0 ~ 1.0) */
+};
+
+/**
  * @brief 单张人脸项
  *
  * 包含单个人脸的位置框、质量分、关键点、底库比对命中结果以及 Top-K 候选人列表。
@@ -194,18 +207,7 @@ struct FaceItem {
     std::string matched_face_id;           /**< Top-1 命中的底照 ID (未命中时为空字符串) */
     std::vector<FaceCandidate> candidates; /**< Top-K 候选人列表，按相似度降序排列 */
     std::vector<float> features;           /**< 512 维 L2 归一化特征向量 (可选) */
-};
-
-/**
- * @brief 人体属性子项 (1 个人体挂载 0~N 个属性标签)
- *
- * - name 为 UTF-8 属性标签（如 "Hat"、"LongSleeve"、"Female"）；
- * - score 为该标签的独立概率 (0.0 ~ 1.0)，多标签模型每个标签独立 sigmoid；
- * - 同一人体项内标签唯一，数组按 score 降序排列。
- */
-struct PersonAttribute {
-    std::string name;     /**< 属性标签 (UTF-8) */
-    float score{0.0f};    /**< 属性概率 (0.0 ~ 1.0) */
+    std::vector<PersonAttribute> attributes; /**< 人脸属性列表 (按 score 降序，可为空；与人体属性互不相干) */
 };
 
 /**
@@ -279,6 +281,7 @@ struct FaceStructureItem {
     std::string matched_face_id;           /**< Top-1 命中的底照 ID (未命中为空字符串) */
     std::vector<FaceCandidate> candidates; /**< Top-K 候选人列表 */
     std::vector<float> features;           /**< 512 维 L2 归一化特征向量 (可选) */
+    std::vector<PersonAttribute> attributes; /**< 人脸属性列表 (按 score 降序，可为空) */
 };
 
 /**
@@ -475,7 +478,7 @@ static_assert(sizeof(zhulong_bbox) == 88, "zhulong_bbox must be 88 bytes");
 static_assert(sizeof(zhulong_bbox) % 8 == 0, "zhulong_bbox must be 8-byte aligned");
 static_assert(sizeof(zhulong_face_candidate) == 200, "zhulong_face_candidate must be 200 bytes");
 static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
-static_assert(sizeof(zhulong_face_item) == 280, "zhulong_face_item must be 280 bytes");
+static_assert(sizeof(zhulong_face_item) == 296, "zhulong_face_item must be 296 bytes");
 static_assert(sizeof(zhulong_face_item) % 8 == 0, "zhulong_face_item must be 8-byte aligned");
 static_assert(sizeof(zhulong_person_attribute) == 40, "zhulong_person_attribute must be 40 bytes");
 static_assert(sizeof(zhulong_person_attribute) % 8 == 0, "zhulong_person_attribute must be 8-byte aligned");
@@ -485,6 +488,8 @@ static_assert(sizeof(zhulong_plate_item) == 72, "zhulong_plate_item must be 72 b
 static_assert(sizeof(zhulong_plate_item) % 8 == 0, "zhulong_plate_item must be 8-byte aligned");
 static_assert(sizeof(zhulong_vehicle_item) == 88, "zhulong_vehicle_item must be 88 bytes");
 static_assert(sizeof(zhulong_vehicle_item) % 8 == 0, "zhulong_vehicle_item must be 8-byte aligned");
+static_assert(sizeof(zhulong_scene_structure) == 48, "zhulong_scene_structure must be 48 bytes");
+static_assert(sizeof(zhulong_scene_structure) % 8 == 0, "zhulong_scene_structure must be 8-byte aligned");
 
 /**
  * @brief 通用目标检测结果 C ABI 序列化适配器
@@ -595,11 +600,14 @@ struct ClassificationResultAdapter {
  *
  * 针对 PersonItem -> FaceItem -> FaceCandidate 多级树状嵌套结构，
  * 采用单块连续内存（Contiguous Arena Packing）打包算法：
- * 1. 统计人体总数、人脸总数与候选人总数，计算单块内存总字节大小：
- *    total_bytes = persons_bytes + faces_bytes + candidates_bytes；
+ * 1. 统计人体总数、人脸总数、候选人数、人脸属性总数与人体属性总数，计算单块内存总字节大小：
+ *    total_bytes = persons_bytes + faces_bytes + candidates_bytes
+ *                + face_attributes_bytes + attributes_bytes；
  * 2. 单次 std::malloc(total_bytes) 分配连续 Arena 内存块并清零；
- * 3. 将 Arena 划分为三段：首部为 zhulong_person_item[]，中部为 zhulong_face_item[]，尾部为 zhulong_face_candidate[]；
- * 4. 各层级的子指针（faces、candidates）直接指向 Arena 内部的绝对地址偏移；
+ * 3. 将 Arena 划分为五段：zhulong_person_item[] → zhulong_face_item[] → zhulong_face_candidate[]
+ *    → 人脸属性池 → 人体属性池（v1.5 起两池分离：人脸属性按人脸先序依次切分，
+ *    人体属性按人体序切分，互不交错，任一侧为空时该池基址为 NULL）；
+ * 4. 各层级的子指针（faces、candidates、attributes）直接指向 Arena 内部的绝对地址偏移；
  * 5. internal_token 记录 Arena 首地址指针；
  * 6. 释放时由 release(token) 执行单次 std::free，彻底回收整棵结构树，杜绝内存碎片与嵌套泄漏。
  */
@@ -623,12 +631,14 @@ struct PersonStructureResultAdapter {
         size_t n_faces = 0;
         size_t n_candidates = 0;
         size_t n_attributes = 0;
+        size_t n_face_attributes = 0;
 
         for (const auto& p : persons) {
             n_faces += p.faces.size();
             n_attributes += p.attributes.size();
             for (const auto& f : p.faces) {
                 n_candidates += f.candidates.size();
+                n_face_attributes += f.attributes.size();
             }
         }
 
@@ -642,8 +652,10 @@ struct PersonStructureResultAdapter {
         size_t persons_bytes = n_persons * sizeof(zhulong_person_item);
         size_t faces_bytes = n_faces * sizeof(zhulong_face_item);
         size_t candidates_bytes = n_candidates * sizeof(zhulong_face_candidate);
+        size_t face_attributes_bytes = n_face_attributes * sizeof(zhulong_person_attribute);
         size_t attributes_bytes = n_attributes * sizeof(zhulong_person_attribute);
-        size_t total_bytes = persons_bytes + faces_bytes + candidates_bytes + attributes_bytes;
+        size_t total_bytes = persons_bytes + faces_bytes + candidates_bytes + face_attributes_bytes +
+                             attributes_bytes;
 
         uint8_t* arena = static_cast<uint8_t*>(std::malloc(total_bytes));
         if (!arena) {
@@ -654,12 +666,17 @@ struct PersonStructureResultAdapter {
         auto* out_persons = reinterpret_cast<zhulong_person_item*>(arena);
         auto* out_faces = reinterpret_cast<zhulong_face_item*>(arena + persons_bytes);
         auto* out_candidates = reinterpret_cast<zhulong_face_candidate*>(arena + persons_bytes + faces_bytes);
-        auto* out_attributes = n_attributes > 0
+        auto* out_face_attributes = n_face_attributes > 0
             ? reinterpret_cast<zhulong_person_attribute*>(arena + persons_bytes + faces_bytes + candidates_bytes)
+            : nullptr;
+        auto* out_attributes = n_attributes > 0
+            ? reinterpret_cast<zhulong_person_attribute*>(arena + persons_bytes + faces_bytes + candidates_bytes +
+                                                          face_attributes_bytes)
             : nullptr;
 
         size_t face_idx = 0;
         size_t cand_idx = 0;
+        size_t face_attr_idx = 0;
         size_t attr_idx = 0;
 
         for (size_t i = 0; i < n_persons; ++i) {
@@ -720,6 +737,20 @@ struct PersonStructureResultAdapter {
                         }
                     } else {
                         dst_f.candidates = nullptr;
+                    }
+
+                    dst_f.attribute_count = static_cast<uint32_t>(src_f.attributes.size());
+                    if (dst_f.attribute_count > 0) {
+                        dst_f.attributes = &out_face_attributes[face_attr_idx];
+                        for (size_t k = 0; k < src_f.attributes.size(); ++k) {
+                            const auto& src_a = src_f.attributes[k];
+                            auto& dst_a = out_face_attributes[face_attr_idx++];
+                            std::strncpy(dst_a.name, src_a.name.c_str(), sizeof(dst_a.name) - 1);
+                            dst_a.name[sizeof(dst_a.name) - 1] = '\0';
+                            dst_a.score = src_a.score;
+                        }
+                    } else {
+                        dst_f.attributes = nullptr;
                     }
                 }
             } else {
@@ -886,6 +917,7 @@ struct SceneStructureResultAdapter {
         size_t n_candidates = 0;
         size_t n_feature_floats = 0;
         size_t n_attributes = 0;
+        size_t n_face_attributes = 0;
 
         for (const auto& p : scene.persons) {
             n_attributes += p.attributes.size();
@@ -893,6 +925,7 @@ struct SceneStructureResultAdapter {
 
         for (const auto& f : scene.faces) {
             n_candidates += f.candidates.size();
+            n_face_attributes += f.attributes.size();
             if (!f.features.empty() && f.features.size() <= ZHULONG_FACE_FEATURE_MAX_DIM) {
                 bool finite = true;
                 for (float v : f.features) {
@@ -919,8 +952,10 @@ struct SceneStructureResultAdapter {
         size_t faces_bytes = n_faces * sizeof(zhulong_face_structure_item);
         size_t candidates_bytes = n_candidates * sizeof(zhulong_face_candidate);
         size_t attributes_bytes = n_attributes * sizeof(zhulong_person_attribute);
+        size_t face_attributes_bytes = n_face_attributes * sizeof(zhulong_person_attribute);
         size_t features_bytes = n_feature_floats * sizeof(float);
-        size_t total_bytes = scene_bytes + persons_bytes + faces_bytes + candidates_bytes + attributes_bytes + features_bytes;
+        size_t total_bytes = scene_bytes + persons_bytes + faces_bytes + candidates_bytes + attributes_bytes +
+                             face_attributes_bytes + features_bytes;
 
         uint8_t* arena = static_cast<uint8_t*>(std::malloc(total_bytes));
         if (!arena) {
@@ -944,13 +979,20 @@ struct SceneStructureResultAdapter {
         auto* out_attributes = n_attributes > 0
             ? reinterpret_cast<zhulong_person_attribute*>(arena + scene_bytes + persons_bytes + faces_bytes + candidates_bytes)
             : nullptr;
+        auto* out_face_attributes = n_face_attributes > 0
+            ? reinterpret_cast<zhulong_person_attribute*>(arena + scene_bytes + persons_bytes + faces_bytes +
+                                                          candidates_bytes + attributes_bytes)
+            : nullptr;
         auto* out_features = n_feature_floats > 0
-            ? reinterpret_cast<float*>(arena + scene_bytes + persons_bytes + faces_bytes + candidates_bytes + attributes_bytes)
+            ? reinterpret_cast<float*>(arena + scene_bytes + persons_bytes + faces_bytes + candidates_bytes +
+                                       attributes_bytes + face_attributes_bytes)
             : nullptr;
 
         out_scene->persons = out_persons;
         out_scene->faces = out_faces;
         out_scene->face_features = out_features;
+        out_scene->face_attributes = out_face_attributes;
+        out_scene->face_attribute_total = static_cast<uint32_t>(n_face_attributes);
 
         // 填充真人体 (真人体项内 faces 恒为空，属性挂到各自的属性池)
         size_t attr_idx = 0;
@@ -985,6 +1027,7 @@ struct SceneStructureResultAdapter {
         // 填充独立人脸
         size_t cand_idx = 0;
         size_t feat_idx = 0;
+        size_t face_attr_idx = 0;
         for (size_t i = 0; i < n_faces; ++i) {
             const auto& src_f = scene.faces[i];
             auto& dst_f = out_faces[i];
@@ -1052,6 +1095,20 @@ struct SceneStructureResultAdapter {
                 }
             } else {
                 dst_f.candidates = nullptr;
+            }
+
+            dst_f.attribute_count = static_cast<uint32_t>(src_f.attributes.size());
+            if (dst_f.attribute_count > 0) {
+                dst_f.attribute_offset = static_cast<uint32_t>(face_attr_idx);
+                for (size_t k = 0; k < src_f.attributes.size(); ++k) {
+                    const auto& src_a = src_f.attributes[k];
+                    auto& dst_a = out_face_attributes[face_attr_idx++];
+                    std::strncpy(dst_a.name, src_a.name.c_str(), sizeof(dst_a.name) - 1);
+                    dst_a.name[sizeof(dst_a.name) - 1] = '\0';
+                    dst_a.score = src_a.score;
+                }
+            } else {
+                dst_f.attribute_offset = 0;
             }
         }
 

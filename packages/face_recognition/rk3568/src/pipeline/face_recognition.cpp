@@ -56,6 +56,8 @@ constexpr uint32_t kExtractSessionWorkerID = 999;
 struct ProcessedFace {
     std::array<float, 4> face_box{0.0f, 0.0f, 0.0f, 0.0f};
     zhulong::FaceItem item;
+    /** @brief 本帧原图像素 5 点关键点（人脸属性裁剪用；UnsignedChar 索引以它为对齐键） */
+    std::array<Point2f, kLandmarkCount> landmarks_pixels{};
 };
 
 /** @brief 单调时钟毫秒数：属性采样缓存只比较间隔，不依赖墙上时间（跳时不会误判过期） */
@@ -195,6 +197,10 @@ zhulong_status_t FaceRecognitionPlugin::init(const std::string& config_json) {
     // 5. 人体属性分类模型 (PPLCNet_x1_0 person_attribute) —— 可选：文件缺失/加载失败时
     //    整个属性阶段静默关闭，人体结构化结果照常输出（属性是增强信息，不是主链路）
     attribute_model_ = load_target_model("models/pplcnet_person_attribute");
+    // 6. 人脸属性分类模型 (InsightFace genderage) —— 同样可选，且独立于人体属性开关：
+    //    两个模型的权重、输入尺度、失效条件都不一样，不能因为缺一个人体属性文件就把
+    //    人脸属性一起关掉（反之亦然）
+    face_attribute_model_ = load_target_model("models/genderage_face");
 
     if (!det_model_.valid()) {
         return model_unavailable_status("models/det_10g");
@@ -229,6 +235,14 @@ zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
         }
     }
 
+    zhulong::Session face_attribute_session;
+    if (face_attribute_model_.valid()) {
+        face_attribute_session = face_attribute_model_.create_session(worker_id);
+        if (!face_attribute_session.valid()) {
+            return {};
+        }
+    }
+
     // 级联会话防降级保护：任一阶段会话创建失败，必须立即中止并返回非法 session
     if (!det_session.valid() || !quality_session.valid() || !rec_session.valid()) {
         return {};
@@ -243,6 +257,10 @@ zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
         }
         if (attribute_session.valid()) {
             attribute_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(attribute_session));
+        }
+        if (face_attribute_session.valid()) {
+            face_attribute_sessions_[worker_id] =
+                std::make_shared<zhulong::Session>(std::move(face_attribute_session));
         }
     }
     return det_session;
@@ -425,6 +443,9 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
     const std::shared_ptr<zhulong::Session> rec_session = lookup_session(rec_sessions_, worker_id);
     const std::shared_ptr<zhulong::Session> person_session = lookup_session(person_sessions_, worker_id);
 
+    // 本帧使用**检测器快照**：`set_detection_input_size` 会改写两台检测器的输入尺寸，
+    // 直接读成员就是「读者不加锁、写者加锁」的数据竞争，而且人脸/人体可能读到不同世代
+    // 的分辨率（解码网格与模型输入错位 → 静默零检出）。`detect()` 是 const，快照很廉价。
     FaceDetector det_snapshot;
     PersonDetector person_det_snapshot;
     {
@@ -520,6 +541,8 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
                 }
                 ProcessedFace processed;
                 processed.face_box = qualified_faces[i].detection.face_box;
+                processed.landmarks_pixels =
+                    pixel_landmarks(qualified_faces[i].detection, image.width(), image.height());
                 if (populate_matched_face_item(qualified_faces[i],
                                                fused_outputs[i].features,
                                                fused_outputs[i].is_fused,
@@ -528,6 +551,28 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
                                                processed.item)) {
                     processed_faces.push_back(std::move(processed));
                 }
+            }
+        }
+    }
+
+    // 3.5 人脸属性（可选阶段）：与 2.5 的人体属性是两条独立通道。
+    //     吃的是**已对齐**的人脸裁剪（与特征提取共用同一套 5 点相似变换，只是输出 96×96），
+    //     产出性别 + 年龄段，挂在人脸项自己身上而不是挂到人身上。
+    //     单个脸分类失败只让这张脸没有属性，不影响比对结果与人脸本身。
+    // 任务级覆盖是**双向**的：任务可以开也可以关，与人脸属性同级的 `resolve_person_attribute_params`
+    // 保持一致。解析失败（键不存在或无布尔值）时沿用进程级开关，不静默改判。
+    // 任务级打开但进程级模型没加载时，`lookup_session` 拿不到会话，这一阶段静默跳过。
+    bool face_attributes_enabled = default_face_attributes_enabled_;
+    if (!task_context.params.json.empty()) {
+        find_json_bool(task_context.params.json, "enable_face_attributes", face_attributes_enabled);
+    }
+    if (face_attributes_enabled && !processed_faces.empty()) {
+        const std::shared_ptr<zhulong::Session> face_attribute_session =
+            lookup_session(face_attribute_sessions_, worker_id);
+        if (face_attribute_session && face_attribute_session->valid()) {
+            for (auto& processed : processed_faces) {
+                face_attribute_classifier_.classify(*face_attribute_session, image,
+                                                    processed.landmarks_pixels, processed.item.attributes);
             }
         }
     }
@@ -572,6 +617,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
         face.matched_face_id = std::move(processed.item.matched_face_id);
         face.candidates = std::move(processed.item.candidates);
         face.features = std::move(processed.item.features);
+        face.attributes = std::move(processed.item.attributes);
         face.person_index = -1;
 
         for (size_t p_idx = 0; p_idx < person_detections.size(); ++p_idx) {
@@ -701,6 +747,8 @@ std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::
         fi.matched_face_id = std::move(f.matched_face_id);
         fi.candidates = std::move(f.candidates);
         fi.features = std::move(f.features);
+        // 人脸属性跟着人脸走：退化项（孤立脸）也一样带上，不随「有没有人体」丢失
+        fi.attributes = std::move(f.attributes);
 
         if (f.person_index >= 0 && static_cast<size_t>(f.person_index) < results.size()) {
             results[static_cast<size_t>(f.person_index)].faces.push_back(std::move(fi));
@@ -727,6 +775,12 @@ void FaceRecognitionPlugin::parse_config(const std::string& config_json) {
     // 属性采样参数同样支持「进程级配置打底、任务级 JSON 覆盖」；默认关闭以外的越界值一律回落，
     // 避免一条手写配置把属性阶段推进每帧全量推理。
     default_attribute_params_ = resolve_person_attribute_params(config_json, default_attribute_params_);
+    // 人脸属性只有开/关一个旋钮（没有采样周期：每张脸都是独立裁剪，不需要按轨迹缓存）
+    bool face_attributes_enabled = default_face_attributes_enabled_;
+    if (!config_json.empty() &&
+        find_json_bool(config_json, "enable_face_attributes", face_attributes_enabled)) {
+        default_face_attributes_enabled_ = face_attributes_enabled;
+    }
 }
 
 // ============================================================================
@@ -970,11 +1024,11 @@ zhulong_status_t FaceExtractorContext::extract(
                 enhanced_patch_buf.size() == out_rec_input.element_count()) {
                 zhulong::Tensor enhanced_patch(
                     {1, kFeaturePatchHeight, kFeaturePatchWidth, 3}, zhulong::DataType::UINT8);
-                std::copy_n(enhanced_patch_buf.data(), enhanced_patch_buf.size(), enhanced_patch.data<uint8_t>());
+                std::memcpy(enhanced_patch.data<uint8_t>(), enhanced_patch_buf.data(), enhanced_patch_buf.size());
                 float enhanced_quality = 0.0f;
                 if (quality_assessor_.assess(quality_session_, enhanced_patch, enhanced_quality) &&
                     enhanced_quality > quality_score) {
-                    std::copy_n(enhanced_patch_buf.data(), enhanced_patch_buf.size(), out_rec_input.data<uint8_t>());
+                    std::memcpy(out_rec_input.data<uint8_t>(), enhanced_patch_buf.data(), enhanced_patch_buf.size());
                     quality_score = enhanced_quality;
                 }
             }
@@ -1067,7 +1121,7 @@ zhulong_status_t FaceExtractorContext::extract(
     }
 
     // 特征抽取与融合后均为 512 维 L2 归一化单位向量
-    std::copy_n(final_features.data(), kFeatureDimension, out_features);
+    std::memcpy(out_features, final_features.data(), kFeatureDimension * sizeof(float));
     *feature_dim = static_cast<uint32_t>(kFeatureDimension);
     return ZHULONG_PLUGIN_OK;
 }

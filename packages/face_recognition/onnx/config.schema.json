@@ -75,6 +75,12 @@
       "minimum": 1,
       "maximum": 8,
       "default": 2
+    },
+    "enable_face_attributes": {
+      "type": "boolean",
+      "title": "人脸属性识别",
+      "description": "为每张人脸输出性别与年龄段（人脸属性挂在人脸项上，与人体属性互不影响）；请先确认属性模型已随包安装",
+      "default": true
     }
   },
   "additionalProperties": false

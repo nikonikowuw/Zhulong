@@ -155,12 +155,41 @@ typedef struct zhulong_face_candidate {
 } zhulong_face_candidate;
 
 /**
+ * @brief 属性标签子项 (1 张人脸或 1 个人体挂载 0~N 个属性标签)
+ *
+ * 语义约定：
+ *   - name 为 UTF-8 属性标签（以 '\0' 结尾），例如 "Hat"、"LongSleeve"、"Female"；
+ *   - score 为该属性的概率 (0.0 ~ 1.0)。人体属性来自多标签模型（每个标签独立 sigmoid，
+ *     非互斥 softmax，因此同组标签可同时出现）；性别来自二分类 softmax（仅保留胜出一项，
+ *     阈值 0.60），年龄段来自回归头，是区间而非概率，因此固定 score = 1.0；
+ *   - 人脸属性取值域：性别 "Male" / "Female"；年龄段 "Age0-18"、"Age18-30"、"Age30-45"、
+ *     "Age45-60"、"Age60+"，五档互斥（至多一项）。人体属性用 "Age18-60" / "AgeOver60"
+ *     这类粗分档，与人脸年龄段标签不同名，不会互相覆盖；
+ *   - reserved_ 必须为 0，补齐 8 字节对齐并保留未来扩展；
+ *   - 同一目标项内标签唯一，数组按 score 降序排列；
+ *   - 结构体总尺寸固定为 40 字节，满足 8 字节自然对齐。
+ *
+ * 类型名沿用 v1.4 的 zhulong_person_attribute：人脸与人体共用同一布局，仅名字带 person 历史包袱。
+ */
+typedef struct zhulong_person_attribute {
+    char     name[ZHULONG_PERSON_ATTRIBUTE_NAME_MAX_LEN]; /* 属性标签 (UTF-8, 以 '\0' 结尾) (0..32) */
+    float    score;                                       /* 属性概率 (0.0 ~ 1.0) (32..36) */
+    uint32_t reserved_;                                   /* 必须为 0 (36..40) */
+} zhulong_person_attribute;
+
+/**
  * @brief 单张人脸项
  *
  * 内存与指针约定：
  *   - landmarks 为 5 点归一化关键点坐标 [x, y] ∈ [0.0, 1.0]；
  *   - candidates 指针指向同一 Arena 内存块内的候选人数组，禁止对其单独执行 free；
- *   - 结构体总尺寸为 280 字节，满足 8 字节整除。
+ *   - 结构体总尺寸为 296 字节，满足 8 字节整除。
+ *
+ * 属性扩展段（v1.5 尾随追加，旧实现按 280 字节前缀读取仍然成立）：
+ *   - attribute_count 为该人脸挂载的属性数量（人脸属性模型，与人体属性互不相干）；
+ *   - attribute_count == 0 时 attributes 必须为 NULL，禁止解引用；
+ *   - attributes 指向同一 Arena 内存块内的属性数组（只读），禁止单独 free；
+ *   - 元素类型与人体属性共用 zhulong_person_attribute（标签 + 独立概率）。
  */
 typedef struct zhulong_face_item {
     float  box[4];                                   /* [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] */
@@ -175,24 +204,10 @@ typedef struct zhulong_face_item {
     uint32_t candidate_count;                        /* candidates 数组元素数 */
     uint32_t reserved_;                              /* 64位指针前置填充对齐 (8 字节对齐) */
     const zhulong_face_candidate* candidates;        /* 指向候选人数组 (只读，指向同一 Arena) */
+    uint32_t attribute_count;                        /* attributes 数组元素数 (v1.5 尾随追加) */
+    uint32_t attribute_reserved_;                    /* 必须为 0，补偿指针前对齐 */
+    const zhulong_person_attribute* attributes;      /* 指向人脸属性数组 (只读，指向同一 Arena；无属性时为 NULL) */
 } zhulong_face_item;
-
-/**
- * @brief 人体属性子项 (1 个人体挂载 0~N 个属性标签)
- *
- * 语义约定：
- *   - name 为 UTF-8 属性标签（以 '\0' 结尾），例如 "Hat"、"LongSleeve"、"Female"；
- *   - score 为该属性的独立概率 (0.0 ~ 1.0)，来自多标签模型（每个标签独立 sigmoid，
- *     非互斥 softmax 分布，因此同组标签可同时出现）；
- *   - reserved_ 必须为 0，补齐 8 字节对齐并保留未来扩展；
- *   - 同一人体项内标签唯一，数组按 score 降序排列；
- *   - 结构体总尺寸固定为 40 字节，满足 8 字节自然对齐。
- */
-typedef struct zhulong_person_attribute {
-    char     name[ZHULONG_PERSON_ATTRIBUTE_NAME_MAX_LEN]; /* 属性标签 (UTF-8, 以 '\0' 结尾) (0..32) */
-    float    score;                                       /* 属性概率 (0.0 ~ 1.0) (32..36) */
-    uint32_t reserved_;                                   /* 必须为 0 (36..40) */
-} zhulong_person_attribute;
 
 /**
  * @brief 结构化人体项 (1 个人体挂载 0~N 张人脸与 0~N 个属性标签)
@@ -252,8 +267,16 @@ typedef struct zhulong_plate_item {
  *   - person_index 关联到同一载荷内 persons[i]；-1 表示孤立人脸（近景特写 / 身体未检出）；
  *   - person_id / person_name / matched_face_id 为底库匹配命中身份信息（未命中为空字符串）；
  *   - candidates 指针指向同一 Arena 内存块内的候选人数组，禁止单独 free；candidate_count 为 0 时填 NULL；
- *   - reserved_[2] 显式占用 8 字节（偏移 272..280），确保随后的 64 位指针 8 字节自然对齐，零隐式编译器填充；
- *   - 结构体总尺寸严格为 288 字节，满足 8 字节自然对齐。
+ *   - 结构体总尺寸严格为 304 字节，满足 8 字节自然对齐（v1.5 尾随追加属性段，零隐式编译器填充）。
+ *
+ * 人脸属性扩展段（v1.5 尾随追加，旧实现按 288 字节前缀读取仍然成立）：
+ *   - 属性元素放在 **zhulong_scene_structure::face_attributes 共享池**里，不走每项独立指针：
+ *     连续人脸数组的元素尺寸一旦随扩展段增长，就地追加的「每项内嵌指针」会让池位置依赖
+ *     `attribute_count` 的取值，池基址随时可能落在未知字节上；共享池 + 起始下标（与
+ *     face_features / feature_offset 同一模式）让旧宿主的池基址计算始终成立；
+ *   - attribute_count 为该人脸挂载的属性数量；attribute_count == 0 时 attribute_offset 无意义；
+ *   - attribute_offset + attribute_count 不得超过池长，池由 scene->face_attribute_total 给出；
+ *   - 元素类型与人体属性共用 zhulong_person_attribute（标签 + 独立概率）。
  */
 typedef struct zhulong_face_structure_item {
     float    box[4];                                   /* [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] (0..16) */
@@ -270,16 +293,22 @@ typedef struct zhulong_face_structure_item {
     uint32_t feature_offset;                           /* scene->face_features 浮点特征池中的起始偏移 (272..276) */
     uint32_t feature_dim;                              /* 浮点特征维度 (0 表示无特征，最大 ZHULONG_FACE_FEATURE_MAX_DIM) (276..280) */
     const zhulong_face_candidate* candidates;          /* 指向候选人数组借用指针 (只读，指向同一 Arena) (280..288) */
+    uint32_t attribute_count;                          /* attributes 数组元素数 (v1.5 尾随追加) (288..292) */
+    uint32_t attribute_reserved_;                      /* 必须为 0 (292..296) */
+    uint32_t attribute_offset;                         /* scene->face_attributes 池中的起始下标 (296..300) */
+    uint32_t attribute_reserved2_;                     /* 必须为 0 (300..304) */
 } zhulong_face_structure_item;
 
 /**
  * @brief 结构化场景独立目标容器 (SCENE_STRUCTURE v2，单块 Arena 容器首部)
  *
  * 内存与遍历契约：
- *   - 本结构体位于单块 Arena 内存首部，总尺寸为 32 字节，满足 8 字节自然对齐；
+ *   - 本结构体位于单块 Arena 内存首部，总尺寸为 48 字节，满足 8 字节自然对齐
+ *     （v1.5 尾随追加 face_attributes/face_attribute_total/reserved_，旧的 32 字节前缀不变）；
  *   - persons 指向真人体数组；person_count == 0 时恒为 NULL（真人体项中 face_count 恒填 0，faces 恒为 NULL）；
  *   - 真人体项的 attribute_count/attributes 指向同一 Arena 内的属性池；无属性时 attribute_count = 0、attributes = NULL；
  *   - faces 指向独立人脸数组；face_count == 0 时恒为 NULL；
+ *   - faces[i] 的 attribute_count/attribute_offset 指向同一 Arena 内的 face_attributes 共享池；
  *   - 当且仅当 person_count == 0 && face_count == 0 时，zhulong_inference_result.count = 0 且 data = NULL；
  *   - 只要有人或脸，zhulong_inference_result.count 严格等于 person_count + face_count，
  *     zhulong_inference_result.data 指向本容器单个实例（zhulong_scene_structure*）；
@@ -291,6 +320,9 @@ typedef struct zhulong_scene_structure {
     const zhulong_person_item* persons;                /* 真人体数组指针 (person_count == 0 时为 NULL) */
     const zhulong_face_structure_item* faces;          /* 独立人脸数组指针 (face_count == 0 时为 NULL) */
     const float* face_features;                        /* 连续特征池首地址 (全帧无特征时为 NULL) */
+    const zhulong_person_attribute* face_attributes;   /* 人脸属性共享池首地址 (全帧无人脸属性时为 NULL，v1.5 尾随追加) */
+    uint32_t face_attribute_total;                     /* 人脸属性共享池元素总数 (0 表示无人脸属性) */
+    uint32_t reserved_;                                /* 必须为 0 */
 } zhulong_scene_structure;
 
 /**

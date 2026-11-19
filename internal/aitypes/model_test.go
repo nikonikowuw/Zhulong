@@ -656,3 +656,72 @@ func TestFaceFeatureVectorDecodeAndBroadcastIsolation(t *testing.T) {
 		}
 	})
 }
+
+// TestParsePersonStructureKeepsFaceAttributes 钉住旧出口 (type 3) 的人脸属性解析。
+//
+// PERSON_STRUCTURE 会把人脸从 PersonItem.Faces 搬到顶层 Faces（或退化成孤立脸），
+// 这意味着属性字段必须被**显式**带过去 —— 构造 FaceStructureItem 的每一个字面量
+// 都可能悄悄漏掉它。这里用真实载荷跑一次 ParseInferenceResult 兜底。
+func TestParsePersonStructureKeepsFaceAttributes(t *testing.T) {
+	payload := `{
+		"pts": 1000,
+		"capture_time_ms": 1731000000000,
+		"cost_ms": 42,
+		"task_type": "person_structure",
+		"persons": [
+			{
+				"body_box": [0.1, 0.1, 0.5, 0.9],
+				"body_score": 0.9,
+				"attributes": {"ShortSleeve": 0.88},
+				"faces": [
+					{
+						"box": [0.2, 0.15, 0.34, 0.30],
+						"quality": 0.9,
+						"attributes": {"Female": 0.93, "Age18-30": 1.0}
+					}
+				]
+			},
+			{
+				"body_box": [0.6, 0.2, 0.9, 0.6],
+				"body_score": 0.85,
+				"faces": [
+					{
+						"box": [0.6, 0.2, 0.9, 0.6],
+						"quality": 0.85,
+						"attributes": {"Male": 0.97}
+					}
+				]
+			}
+		]
+	}`
+
+	res, err := aitypes.ParseInferenceResult("cam_01", "algo_01", []byte(payload))
+	if err != nil {
+		t.Fatalf("ParseInferenceResult failed: %v", err)
+	}
+
+	if len(res.Faces) != 2 {
+		t.Fatalf("expected 2 faces (1 attached + 1 closeup), got %d", len(res.Faces))
+	}
+
+	// 关联人脸：人体通道与人脸通道各管各的。
+	attached := res.Faces[0]
+	if attached.PersonIndex != 0 {
+		t.Errorf("expected the first face attached to person 0, got index %d", attached.PersonIndex)
+	}
+	if attached.Attributes["Female"] != 0.93 {
+		t.Errorf("attached face must keep its own attributes, got %+v", attached.Attributes)
+	}
+	if _, ok := attached.Attributes["ShortSleeve"]; ok {
+		t.Errorf("person attributes must not leak onto the face, got %+v", attached.Attributes)
+	}
+
+	// 近景退化项：伪人体被剔除，人脸变成孤立脸，属性照样跟着走。
+	closeup := res.Faces[1]
+	if closeup.PersonIndex != -1 {
+		t.Errorf("expected the closeup face to be isolated, got index %d", closeup.PersonIndex)
+	}
+	if closeup.Attributes["Male"] != 0.97 {
+		t.Errorf("closeup face must keep its own attributes, got %+v", closeup.Attributes)
+	}
+}

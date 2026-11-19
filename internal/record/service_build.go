@@ -2,6 +2,7 @@ package record
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
@@ -40,7 +41,7 @@ func buildRecognitionRecordAndJob(
 	f ingestFrame,
 	face aitypes.FaceStructureItem,
 	bodyBox [4]float64,
-	personAttrs map[string]any,
+	attrs map[string]any,
 	trackID int64,
 	ref GalleryFaceRef,
 ) (*Recognition, snapshotJob) {
@@ -79,7 +80,7 @@ func buildRecognitionRecordAndJob(
 		BoxJSON:          marshalBox(face.Box),
 		BodyBoxJSON:      marshalBox(bodyBox),
 		LandmarksJSON:    marshalSliceOrDefault(face.Landmarks),
-		AttributesJSON:   marshalMapOrDefault(personAttrs),
+		AttributesJSON:   marshalMapOrDefault(attrs),
 		FeatureVector:    face.FeatureVector,
 		CapturedAt:       f.capturedAt,
 		CreatedAt:        time.Now().UTC(),
@@ -276,6 +277,63 @@ func marshalSliceOrDefault[T any](items []T) string {
 		return "[]"
 	}
 	return string(b)
+}
+
+// faceAttributeKeySuffix 是两条属性通道撞名时给人脸键加的后缀。
+//
+// 标签→后缀的改名约定属于**记录载荷的对外契约**（写进 `records.attributes_json`，
+// 前端与导出一律按它展示），所以必须是有名字的常量而不是散落的字面量：
+// 改这里等于改对外数据格式，需要同步 design.md 与前端。
+const faceAttributeKeySuffix = "@face"
+
+// mergeAttributeChannels 把人体的属性与人脸自身的属性合成一份记录载荷。
+//
+// 两条通道**来源不同**：人体属性来自 PPLCNet 人体属性模型（192×256 人体框，
+// AgeLess18/Age18-60/AgeOver60 三档年龄 + 服饰 + 姿态），人脸属性来自 InsightFace
+// genderage（96×96 对齐人脸，性别 + 五档年龄）。两者都可能在 "Female" 这类同名标签上
+// 各自给出分数，所以不能覆盖、也不能取最大值：
+//
+// 同名键两条通道**都保留**，人脸通道改名为 `<标签>@face`。理由：
+//   - 覆盖会静默丢掉一整条通道的证据，而且丢哪边取决于 map 遍历顺序（Go 的 map 无序）；
+//   - 取最大值看似合理，实际把「人体模型说 Female=0.54」和「人脸模型说 Male=0.98」
+//     混成一个数，两种矛盾都能被它掩盖。
+//
+// 后缀而不是前缀：现有报表与前端按「标签名是否等于某个已知属性名」匹配，后缀在
+// 视觉上仍归到同名标签附近，同时保证键集合是纯函数、不受遍历顺序影响。
+//
+// 撞名不是只可能发生一次：人脸通道自身就可能已经带 `<标签>@face`（上游合并过一轮），
+// 所以后缀要**循环追加**直到不撞（`Female@face@face`），只探一次会在两条键互相踩到时
+// 静默丢掉一条证据。人脸键按字典序处理，撞名链与 Go 的 map 迭代顺序无关 —— 否则
+// `{Female, Female@face}` 这种输入每次运行落在哪个键上都不一定。
+//
+// 只有恰好一条通道有值时直接返回它（不复制、不改名），让最常见的情况保持原样。
+func mergeAttributeChannels(personAttrs, faceAttrs map[string]any) map[string]any {
+	if len(faceAttrs) == 0 {
+		return personAttrs
+	}
+	if len(personAttrs) == 0 {
+		return faceAttrs
+	}
+	merged := make(map[string]any, len(personAttrs)+len(faceAttrs))
+	for k, v := range personAttrs {
+		merged[k] = v
+	}
+	faceKeys := make([]string, 0, len(faceAttrs))
+	for k := range faceAttrs {
+		faceKeys = append(faceKeys, k)
+	}
+	slices.Sort(faceKeys)
+	for _, k := range faceKeys {
+		key := k
+		for {
+			if _, clash := merged[key]; !clash {
+				break
+			}
+			key += faceAttributeKeySuffix
+		}
+		merged[key] = faceAttrs[k]
+	}
+	return merged
 }
 
 func marshalMapOrDefault(m map[string]any) string {

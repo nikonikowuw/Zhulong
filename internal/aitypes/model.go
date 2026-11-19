@@ -75,6 +75,10 @@ type FaceSubItem struct {
 	IsFused       bool            `json:"is_fused"`
 	Candidates    []FaceCandidate `json:"candidates"`
 	FeatureVector []byte          `json:"-"`
+	// Attributes 是挂在该张人脸自身上的属性（性别 / 年龄段），与人体的 Attributes 是两条
+	// 独立通道：人脸属性只描述这一张脸（96×96 对齐人脸的 genderage 模型），人体属性描述
+	// 整个人（192×256 人体框的服饰 / 姿态 / 粗年龄）。两者同名标签不得互相覆盖。
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
 func (f *FaceSubItem) UnmarshalJSON(data []byte) error {
@@ -108,6 +112,8 @@ type FaceStructureItem struct {
 	IsFused       bool            `json:"is_fused,omitempty"`
 	Candidates    []FaceCandidate `json:"candidates,omitempty"`
 	FeatureVector []byte          `json:"-"`
+	// Attributes 是挂在该张人脸自身上的属性（性别 / 年龄段）；见 FaceSubItem.Attributes。
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
 func (f *FaceStructureItem) UnmarshalJSON(data []byte) error {
@@ -347,14 +353,14 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		for _, p := range payload.Persons {
 			if p.IsFaceCloseup() {
 				if len(p.Faces) > 0 {
-					res.Faces = append(res.Faces, toFaceStructureItem(p.Faces[0], -1))
+					res.Faces = append(res.Faces, ToFaceStructureItem(p.Faces[0], -1))
 				}
 				continue
 			}
 
 			personIdx := int32(len(res.Persons))
 			for _, f := range p.Faces {
-				res.Faces = append(res.Faces, toFaceStructureItem(f, personIdx))
+				res.Faces = append(res.Faces, ToFaceStructureItem(f, personIdx))
 			}
 			p.Faces = make([]FaceSubItem, 0)
 			res.Persons = append(res.Persons, p)
@@ -439,8 +445,15 @@ func newInferenceResult(
 	}
 }
 
-// toFaceStructureItem converts a FaceSubItem to a top-level FaceStructureItem.
-func toFaceStructureItem(f FaceSubItem, personIdx int32) FaceStructureItem {
+// ToFaceStructureItem 把人体内嵌的人脸投影为顶层人脸项。
+//
+// 这是「内嵌人脸 → 顶层人脸」的**唯一**转换点：record 包的人脸归一化也走它。
+// 之前两边各有一份逐字段字面量，加一个字段只改一边不会编译失败，只会在运行期安静
+// 丢数据（`Attributes` 就是这么被漏过一次）。
+//
+// 关联人脸与近景孤立脸的差异只有 personIndex，其余字段必须完全一致；Landmarks 的
+// nil 归一化成空切片，保证 JSON 侧恒为数组而不是 null。
+func ToFaceStructureItem(f FaceSubItem, personIdx int32) FaceStructureItem {
 	landmarks := f.Landmarks
 	if landmarks == nil {
 		landmarks = make([][2]float64, 0)
@@ -458,6 +471,9 @@ func toFaceStructureItem(f FaceSubItem, personIdx int32) FaceStructureItem {
 		IsFused:       f.IsFused,
 		Candidates:    f.Candidates,
 		FeatureVector: f.FeatureVector,
+		// 人脸自身的属性必须跟着人脸一起搬家：这个函数是 PERSON_STRUCTURE (type 3)
+		// 的归一化出口，漏掉它会让旧出口的人脸属性在解析层就消失。
+		Attributes: f.Attributes,
 	}
 }
 

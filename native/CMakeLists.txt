@@ -741,6 +741,9 @@ if(BUILD_TESTING)
         target_compile_options(${TEST_TARGET} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
     endforeach()
 
+    # plugin_c_abi_test.c 是 C 文件，上面的 CXX_COMPILER_ID 生成式对它不生效，必须单列 -UNDEBUG。
+    target_compile_options(ZhulongPluginCAbiTests PRIVATE $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
+
     # 预览契约整形器单元测试（avcC/hvcC、B 帧时间戳与断流重置）
     add_executable(ZhulongPreviewNormalizerTests
         tests/preview_normalizer_test.cpp

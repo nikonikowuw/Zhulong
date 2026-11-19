@@ -36,6 +36,12 @@ Runner MSG_RESULT
   - `recognitions.feature_vector BLOB` 持久化流式人脸 512 维 L2 归一化 IEEE-754 小端 `float32` 向量（2048 字节），用于下游陌生人聚类与追溯。无论陌生人（`matched = false`）还是已知人员（`matched = true`）均写入特征向量。
   - **列表查询隔离**：`ListRecognitions` 分页列表查询必须通过 GORM `.Omit("feature_vector")` 显式剔除大 BLOB 字段，避免加载 SQLite overflow page 拖慢分页索引扫描与引发内存抖动；单条详情或精确查询（`GetRecognitionByID`）完整读取 BLOB。
   - **实时广播与 API 隔离**：Go 领域模型 `aitypes.FaceStructureItem.FeatureVector` 必须显式标记 `json:"-"`，严禁通过 WebSocket/SSE 实时预览向前端广播 2 KB 二进制特征，公网 API 响应模型（`RecognitionResponse`）保持无该字段。
+- **两条属性通道与 `@face` 改名契约**：
+  - 记录的 `attributes_json` 由两条**来源不同**的通道合并而成：人体属性（PPLCNet 人体属性模型，192×256 人体框，`AgeLess18/Age18-60/AgeOver60` 三档年龄 + 服饰 + 姿态）与人脸自身属性（InsightFace genderage，96×96 对齐人脸，性别 + 五档年龄）。
+  - 两条通道都可能在 `Female` 这类同名标签上各自给分，因此**不得覆盖、不得取最大值**：覆盖会静默丢掉一整条通道的证据，而且丢哪边取决于 Go 的 map 遍历顺序；取最大值会把「人体模型说 Female=0.54」和「人脸模型说 Male=0.98」这类互相矛盾的判断混成一个数。
+  - 同名键两条都保留，人脸通道改名为 `<标签>@face`。撞名可能不止一次（人脸通道自身就可能已带 `@face`，例如上游合并过一轮），改名必须**循环追加**到不撞为止（`Female@face@face`）；人脸键按字典序处理，保证键集合与映射都是纯函数、与 map 迭代顺序无关。
+  - `@face` 后缀是**对外数据契约**：它写进 `records.attributes_json`，前端与导出一律按它展示。改后缀等于改对外数据格式，必须同步 `internal/record/service_build.go` 的 `faceAttributeKeySuffix`、任务 design 与前端。
+  - 只有恰好一条通道有值时直接返回该 map（不复制、不改名），让最常见的情况保持原样；两条都空时返回 `nil`，序列化为 `{}`。
 - 记录批量写入失败时不得继续排入对应证据图任务，避免创建无数据库引用的孤儿图片。
   `ProcessInferenceResult` 会把首个持久化错误连同层信息返回给调用方（StreamHub 按 camera_id 记一条 Warn），
   抓拍落盘失败不上抛 —— 那是后台 worker 的事，与「这条结果是否被消费」无关。

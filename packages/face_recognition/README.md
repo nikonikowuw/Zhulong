@@ -19,7 +19,7 @@ packages/face_recognition/
 └── rk3568/                   RK3568 RKNN 档位（与 onnx 共享通用算法源码，受漂移门禁约束）
     ├── manifest.json         包元信息（platform.target=rk3568）
     ├── config.schema.json    与 onnx 档位逐字节同步的配置契约
-    ├── models/               对应 .rknn 量化权重（含 ediffiqa_t.rknn INT8、pplcnet_person_attribute.rknn INT8）
+    ├── models/               对应 .rknn 量化权重（含 ediffiqa_t.rknn INT8、pplcnet_person_attribute.rknn INT8、genderage_face.rknn）
     └── ...
 ```
 
@@ -82,6 +82,16 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
    - **按轨迹采样缓存（重要）**：属性模型是单目标分类器，RK3568 上 **4.27 ms/人**（INT8，官方实测；换算成单帧多人仍需按人数线性放大）。监控画面里逐帧给每个人各跑一次会随人数线性吃掉算力，因此包内按人体框 IoU `>= 0.30` 关联出包内轨迹（**绝不写入 `track_id`**，宿主独占人员跟踪身份），只对"新出现或距上次分类已满 `person_attribute_refresh_ms`"的人重新推理；单帧最多分类 `person_attribute_max_persons` 人（按框面积降序，近景优先），其余人沿用缓存属性。轨迹 5 秒未见即淘汰，单 worker 上限 64 条。
    - **降级语义**：模型文件缺失/加载失败、或分类失败时，该人本帧不带 `attributes`（保留上一次缓存），人体检测、人脸识别、抓拍与记录链路完全不受影响。人体项属性字段属于 C ABI 1.4 追加段（`zhulong_person_item` 40 → 56 字节，仅尾部追加），旧宿主读取时自然忽略。
 
+7. **人脸属性识别（`src/attribute/face_attribute.*`，可选阶段）**
+   - InsightFace `genderage`（rknn_model_zoo `examples/age_gender`），在**已对齐**的人脸上做性别 + 年龄段分类：复用 3 阶段那套 112×112 相似变换，再乘 `96/112` 裁出 `96×96` RGB，`Tensor({1,96,96,3}, UINT8)` 原始像素直接喂入（转换脚本用 `mean=[[0,0,0]]/std=[[1,1,1]]` 把归一化烘进了图内，**不要**再归一化）。
+   - **输出两个张量**（`SPLIT_OUTPUT=1` 把最后一层 Concat 拆开，避免在 NPU 上做 concat）：`[1,2]` 性别 logits 走 `softmax(min-max)`；`[1,1]` age_raw `×100` 得年。
+   - **性别阈值 0.60**：低于阈值不输出任何性别标签——模型自己都不确定时输出一个 0.52 的标签只会污染下游报表。
+   - **年龄只给区间，且固定 `score=1.0`**：回归头没有概率语义，伪造一个置信度会误导下游。分五档 `Age0-18` / `Age18-30` / `Age30-45` / `Age45-60` / `Age60+`。依据是 SCface 2009 年真实年龄对照（n=20）**MAE 3.6 年、相关系数 −0.036** —— 绝对年龄不可用，区间才有意义。
+   - **与人体属性是两条独立通道**：人脸属性挂在 `faces[]` 的 `attributes` 上，人体属性挂在 `persons[]` 上，互不覆盖。两者标签空间重叠（都有 `Female`），宿主合并识别记录时**两条都保留**，人脸那条改名 `<标签>@face`（见 `internal/record/service_build.go`）。注意人体通道的年龄档是三段（`AgeLess18`/`Age18-60`/`AgeOver60`），人脸通道是五段，键名不同不会撞。
+   - **代价**：RK3568 上约 **1.84 ms/张**（INT8，split 版实测，300 次三轮取最小），逐张实跑不再采样——单帧十几张脸也只有几十毫秒，远低于人体属性那条通道的成本。
+   - **降级语义**：模型缺失/加载失败时整段跳过，插件照常可用；人脸属性字段属于 C ABI 1.5 追加段（`zhulong_face_item` 280 → 296、`zhulong_scene_structure` 32 → 48 字节，仅尾部追加），旧宿主读取时自然忽略。
+   - **onnx 档位暂无人脸属性**：该档位没有 `genderage_face.onnx`，人脸属性恒为空（静默降级，不报错）。代码与 rk3568 档位完全一致，补上模型文件即可生效。
+
 ## 配置参数与三层生效优先级
 
 参数支持三层生效优先级：
@@ -102,6 +112,7 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
 | `enable_person_attributes` | 人体属性识别 | true | 布尔 | 为每个人体输出衣着/性别/年龄段/朝向等 26 类属性 |
 | `person_attribute_refresh_ms` | 属性刷新间隔 | 1000 | 200 – 10000 | 同一个人多久重新识别一次属性 (单位: 毫秒) |
 | `person_attribute_max_persons` | 单帧属性人数 | 2 | 1 – 8 | 每帧最多识别几个人（框面积大者优先） |
+| `enable_face_attributes` | 人脸属性识别 | true | 布尔 | 为每张人脸输出性别与年龄段（与人体属性互不覆盖） |
 
 ### 2. 高阶/专家调优参数（收归算法包 `.env` 或任务 JSON 源码模式）
 

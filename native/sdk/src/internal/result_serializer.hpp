@@ -89,21 +89,22 @@ inline std::string encode_features_b64(const float* features, uint32_t count)
 }
 
 /**
- * @brief 将单个人体的属性写成 JSON 对象片段（无属性时不输出任何内容）
+ * @brief 将一组属性写成 JSON 对象片段（无属性时不输出任何内容）
  *
  * 输出形如 `,"attributes":{"Hat":0.9,"Female":0.7}`。非有限分数会被丢弃，
- * 保证单行 JSON 永远合法；标签唯一性由插件保证。
+ * 保证单行 JSON 永远合法；标签唯一性由插件保证。人脸与人体属性共用同一段输出逻辑：
+ * 两者在 JSON 中都是「属性名 → 概率」的扁平对象。
  */
-inline void append_person_attributes(std::ostringstream& ss, const zhulong_person_item& person)
+inline void append_attributes(std::ostringstream& ss, uint32_t count, const zhulong_person_attribute* attributes)
 {
-    if (person.attribute_count == 0 || !person.attributes)
+    if (count == 0 || !attributes)
     {
         return;
     }
     uint32_t valid_count = 0;
-    for (uint32_t i = 0; i < person.attribute_count; ++i)
+    for (uint32_t i = 0; i < count; ++i)
     {
-        if (std::isfinite(person.attributes[i].score))
+        if (std::isfinite(attributes[i].score))
         {
             ++valid_count;
         }
@@ -117,9 +118,9 @@ inline void append_person_attributes(std::ostringstream& ss, const zhulong_perso
 
     ss << ",\"attributes\":{";
     bool first = true;
-    for (uint32_t i = 0; i < person.attribute_count; ++i)
+    for (uint32_t i = 0; i < count; ++i)
     {
-        const auto& attr = person.attributes[i];
+        const auto& attr = attributes[i];
         if (!std::isfinite(attr.score))
         {
             continue;
@@ -203,7 +204,7 @@ inline std::string serialize_inference_result(uint64_t stream_id,
                << ",\"body_box\":[" << p.body_box[0] << "," << p.body_box[1] << ","
                << p.body_box[2] << "," << p.body_box[3] << "]"
                << ",\"body_score\":" << p.body_score;
-            append_person_attributes(ss, p);
+            append_attributes(ss, p.attribute_count, p.attributes);
             ss << ",\"faces\":[";
             for (uint32_t j = 0; j < p.face_count; ++j)
             {
@@ -218,7 +219,7 @@ inline std::string serialize_inference_result(uint64_t stream_id,
                     if (k > 0) ss << ",";
                     ss << "[" << f.landmarks[k][0] << "," << f.landmarks[k][1] << "]";
                 }
-                ss << "],\"matched\":" << (f.matched ? "true" : "false")
+                ss << "]" << ",\"matched\":" << (f.matched ? "true" : "false")
                    << ",\"similarity\":" << f.similarity
                    << ",\"person_id\":" << runner::json_quote(f.person_id)
                    << ",\"person_name\":" << runner::json_quote(f.person_name)
@@ -233,7 +234,9 @@ inline std::string serialize_inference_result(uint64_t stream_id,
                        << ",\"face_id\":" << runner::json_quote(c.face_id)
                        << ",\"similarity\":" << c.similarity << "}";
                 }
-                ss << "]}";
+                ss << "]";
+                append_attributes(ss, f.attribute_count, f.attributes);
+                ss << "}";
             }
             ss << "]}";
         }
@@ -287,7 +290,7 @@ inline std::string serialize_inference_result(uint64_t stream_id,
                    << ",\"body_box\":[" << p.body_box[0] << "," << p.body_box[1] << ","
                    << p.body_box[2] << "," << p.body_box[3] << "]"
                    << ",\"body_score\":" << p.body_score;
-                append_person_attributes(ss, p);
+                append_attributes(ss, p.attribute_count, p.attributes);
                 ss << ",\"faces\":[]}";
             }
         }
@@ -329,6 +332,17 @@ inline std::string serialize_inference_result(uint64_t stream_id,
                        << ",\"similarity\":" << c.similarity << "}";
                 }
                 fs << "]";
+                if (scene->face_attributes && f.attribute_count > 0)
+                {
+                    // 场景级共享池：attribute_offset 是池内起始下标，池基址与
+                    // attribute_count 的取值无关（连续数组布局不允许按条件推进基址）。
+                    const uint64_t attr_end =
+                        static_cast<uint64_t>(f.attribute_offset) + static_cast<uint64_t>(f.attribute_count);
+                    if (attr_end <= scene->face_attribute_total)
+                    {
+                        append_attributes(fs, f.attribute_count, scene->face_attributes + f.attribute_offset);
+                    }
+                }
                 face_base[i] = fs.str();
 
                 if (scene->face_features && f.feature_dim > 0 && f.feature_dim <= ZHULONG_FACE_FEATURE_MAX_DIM)

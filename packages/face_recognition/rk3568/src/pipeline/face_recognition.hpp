@@ -14,6 +14,7 @@
 #include "feature/extractor.hpp"
 #include "matching/matcher.hpp"
 #include "quality/quality_assessor.hpp"
+#include "attribute/face_attribute.hpp"
 #include "attribute/person_attribute.hpp"
 #include "common/face_feature_fusion.hpp"
 #include "common/match_config.hpp"
@@ -179,17 +180,21 @@ private:
     zhulong::Model rec_model_;
     /** @brief 人体属性分类模型（可选：文件缺失或加载失败时整个属性阶段静默关闭） */
     zhulong::Model attribute_model_;
+    /** @brief 人脸属性分类模型（可选，与人体属性互相独立：任一缺失只关掉自己那条通道） */
+    zhulong::Model face_attribute_model_;
     std::mutex sessions_mu_;
     mutable std::mutex detector_mu_;
     SessionTable person_sessions_;
     SessionTable quality_sessions_;
     SessionTable rec_sessions_;
     SessionTable attribute_sessions_;
+    SessionTable face_attribute_sessions_;
     PersonDetector person_detector_;
     FaceDetector detector_;
     FaceQualityAssessor quality_assessor_;
     FaceFeatureExtractor extractor_;
     PersonAttributeClassifier attribute_classifier_;
+    FaceAttributeClassifier face_attribute_classifier_;
     Matcher matcher_;
     TaskFeatureFusionManager fusion_manager_;
     /** @brief worker_id → 属性采样缓存；与 `sessions_mu_` 分开，推理期间不阻塞会话查找 */
@@ -199,6 +204,8 @@ private:
     MatchParams default_match_params_{load_match_params_from_env()};
     /** @brief 进程级默认属性采样参数；任务级 JSON 在此之上覆盖 */
     PersonAttributeParams default_attribute_params_{};
+    /** @brief 人脸属性开关的进程级默认值；任务级 JSON 在此之上覆盖 */
+    bool default_face_attributes_enabled_{true};
 };
 
 /**

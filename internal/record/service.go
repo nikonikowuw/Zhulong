@@ -396,40 +396,13 @@ func planPersonStructure(res aitypes.InferenceResult) personStructurePlan {
 			if len(p.Faces) == 0 {
 				continue
 			}
-			f := p.Faces[0]
-			faces = append(faces, aitypes.FaceStructureItem{
-				Box:           f.Box,
-				Quality:       f.Quality,
-				Landmarks:     f.Landmarks,
-				Matched:       f.Matched,
-				Similarity:    f.Similarity,
-				PersonIndex:   -1,
-				PersonID:      f.PersonID,
-				PersonName:    f.PersonName,
-				MatchedFaceID: f.MatchedFaceID,
-				IsFused:       f.IsFused,
-				Candidates:    f.Candidates,
-				FeatureVector: f.FeatureVector,
-			})
+			faces = append(faces, aitypes.ToFaceStructureItem(p.Faces[0], -1))
 			continue
 		}
 
 		personIdx := int32(len(persons))
 		for _, f := range p.Faces {
-			faces = append(faces, aitypes.FaceStructureItem{
-				Box:           f.Box,
-				Quality:       f.Quality,
-				Landmarks:     f.Landmarks,
-				Matched:       f.Matched,
-				Similarity:    f.Similarity,
-				PersonIndex:   personIdx,
-				PersonID:      f.PersonID,
-				PersonName:    f.PersonName,
-				MatchedFaceID: f.MatchedFaceID,
-				IsFused:       f.IsFused,
-				Candidates:    f.Candidates,
-				FeatureVector: f.FeatureVector,
-			})
+			faces = append(faces, aitypes.ToFaceStructureItem(f, personIdx))
 		}
 		p.Faces = nil
 		persons = append(persons, p)
@@ -560,7 +533,10 @@ func (s *Service) planPersonCaptures(
 			score:      face.Quality,
 			box:        face.Box,
 			landmarks:  face.Landmarks,
-			attrsJSON:  "{}",
+			// 人脸抓拍的属性来自**这张脸自己**（性别 / 年龄段）。过去这里写死 "{}"，
+			// 因为算法侧只有人体属性一条通道；人脸属性接上后继续写 "{}" 会让抓拍记录
+			// 与识别记录不一致（同一次检出，一个带属性一个不带）。
+			attrsJSON: marshalMapOrDefault(face.Attributes),
 		})
 		captures = append(captures, capture)
 		jobs = append(jobs, job)
@@ -578,6 +554,9 @@ type recognitionDraft struct {
 	trackID     int64
 	bodyBox     [4]float64
 	personAttrs map[string]any
+	// faceAttrs 是这张脸自身的属性（性别 / 年龄段），与 personAttrs 是两条独立通道：
+	// 人脸属性优先挂到自己身上，只有孤立脸（无关联人体）时才需要两者择一。
+	faceAttrs map[string]any
 }
 
 // planRecognitions 决策本轮要落库的识别记录。
@@ -603,7 +582,7 @@ func (s *Service) planRecognitions(
 			f,
 			d.face,
 			d.bodyBox,
-			d.personAttrs,
+			mergeAttributeChannels(d.personAttrs, d.faceAttrs),
 			d.trackID,
 			gallery[d.face.MatchedFaceID],
 		)
@@ -657,6 +636,7 @@ func (s *Service) filterRecognitions(
 			trackID:     trackID,
 			bodyBox:     bodyBox,
 			personAttrs: personAttrs,
+			faceAttrs:   face.Attributes,
 		})
 	}
 

@@ -7038,6 +7038,11 @@ const docTemplate = `{
         "aitypes.FaceSubItem": {
             "type": "object",
             "properties": {
+                "attributes": {
+                    "description": "Attributes 是挂在该张人脸自身上的属性（性别 / 年龄段），与人体的 Attributes 是两条\n独立通道：人脸属性只描述这一张脸（96×96 对齐人脸的 genderage 模型），人体属性描述\n整个人（192×256 人体框的服饰 / 姿态 / 粗年龄）。两者同名标签不得互相覆盖。",
+                    "type": "object",
+                    "additionalProperties": {}
+                },
                 "box": {
                     "type": "array",
                     "items": {

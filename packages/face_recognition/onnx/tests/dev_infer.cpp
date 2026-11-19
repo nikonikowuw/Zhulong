@@ -246,6 +246,40 @@ std::string attribute_summary(const std::vector<zhulong::PersonAttribute>& attri
     return text;
 }
 
+/** @brief 人脸终端注记的公共拼装：身份（命中者姓名 / 关联人体下标）+ 人脸属性
+ *
+ *  只打属性会让「比对结果是否还接得上」这件事实测不出来；只打身份则看不出属性阶段
+ *  是否真的跑过。两者都拼上，`--verify` 与肉眼核对才能同时覆盖。
+ *  `person_index` 传 -1 表示该类型没有人体关联（内嵌的 `FaceItem`）。
+ */
+std::string face_annotation_text(bool matched, const std::string& person_name, int32_t person_index,
+                                 const std::vector<zhulong::PersonAttribute>& attributes) {
+    std::string text;
+    if (matched && !person_name.empty()) {
+        text = person_name;
+    } else if (person_index >= 0) {
+        text = "person#" + std::to_string(person_index);
+    } else {
+        text = "face";
+    }
+    const std::string attribute_text = attribute_summary(attributes);
+    if (!attribute_text.empty()) {
+        text += " | ";
+        text += attribute_text;
+    }
+    return text;
+}
+
+/** @brief 场级人脸项（带 person_index）的注记 */
+std::string face_annotation(const zhulong::FaceStructureItem& face) {
+    return face_annotation_text(face.matched, face.person_name, face.person_index, face.attributes);
+}
+
+/** @brief 嵌在人体项里的人脸（`FaceItem` 没有 person_index）的注记 */
+std::string face_annotation(const zhulong::FaceItem& face) {
+    return face_annotation_text(face.matched, face.person_name, -1, face.attributes);
+}
+
 /** @brief 属性自检：名字必须在标签表内、分数在 (0,1]、按分数降序，且不超过 26 条 */
 bool valid_attributes(const std::vector<zhulong::PersonAttribute>& attributes) {
     if (attributes.size() > static_cast<size_t>(zhulong::face::kPersonAttributeCount)) {
@@ -564,12 +598,15 @@ int main(int argc, char** argv) {
     task_context.params.json = std::string_view(task_config_json);
 
     const auto started = std::chrono::steady_clock::now();
-    const auto persons = plugin.detect_persons(session, zhulong::Image(frame), task_context);
+    // 走产品主路径（SCENE_STRUCTURE）：人脸属性只挂在这个出口上，用 `detect_persons`
+    // 自测会让「人脸属性没接上」这类回归在出图里完全看不出来。
+    const zhulong::SceneStructure scene =
+        plugin.detect_scene_structure(session, zhulong::Image(frame), task_context);
     const double cost_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 
     std::vector<DetailRow> rows;
-    for (const auto& person : persons) {
+    for (const auto& person : scene.persons) {
         DetailRow row_person;
         row_person.kind = "person";
         row_person.label = "body";
@@ -579,22 +616,33 @@ int main(int argc, char** argv) {
         draw_box(canvas.data(), width, height, row_person.box, 0, 255, 0);
         rows.push_back(row_person);
 
+        // 真人体项内部的 faces 恒为空（场级入口把每张脸平铺进 scene.faces），这里仍遍历，
+        // 是为了在「实现退化回旧布局」时不留死角。
         for (const auto& face : person.faces) {
             DetailRow row_face;
             row_face.kind = "face";
             row_face.label = face.matched ? "matched" : "unmatched";
             row_face.score = face.quality;
             std::memcpy(row_face.box, face.box, sizeof(row_face.box));
-            if (!face.person_name.empty()) {
-                row_face.text = face.person_name;
-            }
+            row_face.text = face_annotation(face);
             draw_box(canvas.data(), width, height, row_face.box, 255, 128, 0);
             rows.push_back(row_face);
         }
     }
+    for (const auto& face : scene.faces) {
+        DetailRow row_face;
+        row_face.kind = "face";
+        row_face.label = face.matched ? "matched" : "unmatched";
+        row_face.score = face.quality;
+        std::memcpy(row_face.box, face.box, sizeof(row_face.box));
+        // 身份与属性都要留：只打属性会让「比对结果是否还接得上」这件事实测不出来。
+        row_face.text = face_annotation(face);
+        draw_box(canvas.data(), width, height, row_face.box, 255, 128, 0);
+        rows.push_back(row_face);
+    }
 
-    const char* result_type_name = "person_structure";
-    const uint32_t count = static_cast<uint32_t>(persons.size());
+    const char* result_type_name = "scene_structure";
+    const uint32_t count = static_cast<uint32_t>(scene.persons.size() + scene.faces.size());
     print_table(sample_path, result_type_name, count, cost_ms, rows);
 
     // 先落地再宣告成功：反过来写会在写盘失败时同时输出「failed to write」和

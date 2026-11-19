@@ -121,6 +121,7 @@ var (
 	DetectionCaptureCooldownKeyForTest = detectionCaptureCooldownKey
 	AlarmCooldownKeyForTest            = alarmCooldownKey
 	SnapshotRelDirForTest              = snapshotRelDir
+	MergeAttributeChannelsForTest      = mergeAttributeChannels
 )
 
 func CooldownRecordsCountForTest(cm *CooldownManager) int {

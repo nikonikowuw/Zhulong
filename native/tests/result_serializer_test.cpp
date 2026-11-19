@@ -201,12 +201,118 @@ static void test_person_attributes_serialization()
     assert(all_nan_json.find("\"attributes\":") == std::string::npos);
 }
 
+// 人脸属性必须挂在人脸对象上，且与人体属性互不串味：
+// 同一个 label 名在两个通道上出现时，不得互相覆盖或合并。
+static void test_face_attributes_serialization()
+{
+    zhulong_person_attribute face_attrs[2]{};
+    std::strncpy(face_attrs[0].name, "Female", sizeof(face_attrs[0].name) - 1);
+    face_attrs[0].score = 0.12f;
+    std::strncpy(face_attrs[1].name, "Age18-30", sizeof(face_attrs[1].name) - 1);
+    face_attrs[1].score = 0.66f;
+
+    zhulong_person_attribute person_attrs[1]{};
+    std::strncpy(person_attrs[0].name, "Female", sizeof(person_attrs[0].name) - 1);
+    person_attrs[0].score = 0.93f;
+
+    zhulong_face_structure_item faces[2]{};
+    faces[0].box[2] = 0.5f;
+    faces[0].box[3] = 0.5f;
+    faces[0].quality = 0.9f;
+    faces[0].person_index = 0;
+    faces[0].attribute_count = 2;
+    faces[0].attribute_offset = 0;
+
+    faces[1].box[0] = 0.6f;
+    faces[1].box[2] = 0.9f;
+    faces[1].box[3] = 0.5f;
+    faces[1].quality = 0.8f;
+    faces[1].person_index = -1;
+    faces[1].attribute_count = 0;
+    faces[1].attribute_offset = 0;
+
+    zhulong_person_item person{};
+    person.body_box[2] = 0.5f;
+    person.body_box[3] = 0.9f;
+    person.body_score = 0.9f;
+    person.attribute_count = 1;
+    person.attributes = person_attrs;
+
+    zhulong_scene_structure scene{};
+    scene.person_count = 1;
+    scene.persons = &person;
+    scene.face_count = 2;
+    scene.faces = faces;
+    scene.face_attributes = face_attrs;
+    scene.face_attribute_total = 2;
+
+    zhulong_inference_result res{};
+    res.result_type = ZHULONG_RESULT_TYPE_SCENE_STRUCTURE;
+    res.count = 3;
+    res.data = &scene;
+
+    const std::string json = serialize_inference_result(1, 100, 200, 10, &res, "face_algo");
+
+    // 人体属性照旧挂在人体上
+    assert(json.find("\"body_score\":0.9,\"attributes\":{\"Female\":0.93}") != std::string::npos);
+    // 人脸属性挂在人脸对象末尾，顺序与张量内的标签顺序一致
+    assert(json.find("\"person_index\":0,\"person_id\":\"\",\"person_name\":\"\"") != std::string::npos);
+    assert(json.find("\"attributes\":{\"Female\":0.12,\"Age18-30\":0.66}") != std::string::npos);
+    // 两张人脸 + 一个人体，共 3 个 attributes 对象（人脸 1 个、人体 1 个、第二张脸没有）
+    size_t first = json.find("\"attributes\":");
+    size_t second = json.find("\"attributes\":", first + 1);
+    assert(first != std::string::npos && second != std::string::npos);
+    assert(json.find("\"attributes\":", second + 1) == std::string::npos);
+
+    // attribute_offset 越界时必须整体放弃该人脸属性，不能读到池外内存
+    faces[0].attribute_offset = 1;
+    const std::string oob_json = serialize_inference_result(1, 100, 200, 10, &res, "face_algo");
+    assert(oob_json.find("\"Age18-30\"") == std::string::npos);
+    assert(oob_json.find("\"Female\":0.12") == std::string::npos);
+    // 人体属性不受影响
+    assert(oob_json.find("\"Female\":0.93") != std::string::npos);
+
+    // 池指针为空时不得解引用
+    faces[0].attribute_offset = 0;
+    scene.face_attributes = nullptr;
+    const std::string null_json = serialize_inference_result(1, 100, 200, 10, &res, "face_algo");
+    assert(null_json.find("\"Age18-30\"") == std::string::npos);
+    assert(null_json.find("\"Female\":0.12") == std::string::npos);
+
+    // PERSON_STRUCTURE 布局下的人脸属性（人脸内嵌指针）
+    scene.face_attributes = face_attrs;
+    zhulong_face_item person_face{};
+    person_face.box[2] = 0.5f;
+    person_face.box[3] = 0.5f;
+    person_face.quality = 0.9f;
+    person_face.attribute_count = 2;
+    person_face.attributes = face_attrs;
+
+    zhulong_person_item carrier{};
+    carrier.body_box[2] = 0.5f;
+    carrier.body_box[3] = 0.9f;
+    carrier.body_score = 0.9f;
+    carrier.face_count = 1;
+    carrier.faces = &person_face;
+
+    zhulong_inference_result person_res{};
+    person_res.result_type = ZHULONG_RESULT_TYPE_PERSON_STRUCTURE;
+    person_res.count = 1;
+    person_res.data = &carrier;
+
+    const std::string person_json = serialize_inference_result(1, 100, 200, 10, &person_res, "face_algo");
+    assert(person_json.find("\"attributes\":{\"Female\":0.12,\"Age18-30\":0.66}") != std::string::npos);
+    // 没有人体属性时不得凭空造一个
+    assert(person_json.find("\"body_score\":0.9,\"attributes\"") == std::string::npos);
+}
+
 int main()
 {
     test_base64_encode_basic();
     test_encode_features_b64();
     test_serializer_budget_protection();
     test_person_attributes_serialization();
+    test_face_attributes_serialization();
     std::cout << "All result_serializer tests passed!\n";
     return 0;
 }
