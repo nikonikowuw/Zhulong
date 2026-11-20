@@ -268,7 +268,7 @@ func (s *Store) ListPersons(ctx context.Context, params ListPersonsParams) ([]Pe
 	if search != "" {
 		// The keyword is data, not a pattern: % and _ must match themselves instead of
 		// turning a search for "50%" into a full-table wildcard.
-		likePattern := "%" + escapeLike(search) + "%"
+		likePattern := "%" + database.EscapeLike(search) + "%"
 		g = g.Where(`name LIKE ? ESCAPE '\' OR (person_id IS NOT NULL AND person_id LIKE ? ESCAPE '\')`,
 			likePattern, likePattern)
 	}
@@ -329,7 +329,7 @@ func (s *Store) ListAllPersonsForExport(ctx context.Context, search, faceStatus 
 	g := gorm.G[Person](db).Scopes()
 	search = strings.TrimSpace(search)
 	if search != "" {
-		likePattern := "%" + escapeLike(search) + "%"
+		likePattern := "%" + database.EscapeLike(search) + "%"
 		g = g.Where(`name LIKE ? ESCAPE '\' OR (person_id IS NOT NULL AND person_id LIKE ? ESCAPE '\')`,
 			likePattern, likePattern)
 	}
@@ -398,20 +398,6 @@ func faceCountsByPerson(ctx context.Context, db *gorm.DB, ids []string) (map[str
 		}
 	}
 	return counts, nil
-}
-
-// escapeLike neutralises the LIKE metacharacters of a user-supplied keyword.
-//
-// The escape character is the backslash declared by the callers' ESCAPE clause, so a
-// backslash in the input has to be escaped first; doing it in the other order would
-// double-escape the metacharacters added for % and _.
-func escapeLike(s string) string {
-	r := strings.NewReplacer(
-		`\`, `\\`,
-		`%`, `\%`,
-		`_`, `\_`,
-	)
-	return r.Replace(s)
 }
 
 // ListPersonsForGallery returns one page of persons with every face template, feature

@@ -4875,6 +4875,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Search person name or employee ID (snapshot, case-insensitive substring)",
+                        "name": "search",
+                        "in": "query"
+                    },
+                    {
                         "type": "boolean",
                         "description": "Filter by match status",
                         "name": "matched",

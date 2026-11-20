@@ -1,6 +1,7 @@
 package record
 
 import (
+	"strings"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
@@ -14,7 +15,10 @@ type ListRecognitionsQuery struct {
 	// 对接业务系统时用后者，界面上按人员档案点进去时用前者。
 	PersonID         string `form:"personId"`
 	PersonExternalID string `form:"personExternalId"`
-	Matched          *bool  `form:"matched"`
+	// Search 按姓名或工号模糊过滤识别记录的人员快照。界面上用户只知道姓名和
+	// 工号，内部 persons.id 不应成为唯一的检索入口。
+	Search  string `form:"search"`
+	Matched *bool  `form:"matched"`
 	// Dedup 为 true 时把当前筛选结果按同相机同人员折叠为一条，只影响展示。
 	Dedup     bool   `form:"dedup"`
 	StartTime string `form:"startTime"`
@@ -36,6 +40,7 @@ func (q *ListRecognitionsQuery) ToFilter() (RecognitionFilter, error) {
 		CameraID:         q.CameraID,
 		PersonID:         q.PersonID,
 		PersonExternalID: q.PersonExternalID,
+		Search:           strings.TrimSpace(q.Search),
 		Matched:          q.Matched,
 		Dedup:            q.Dedup,
 		StartTime:        start,

@@ -6,20 +6,6 @@ import (
 	"time"
 )
 
-func TestEscapeLikeNeutralisesWildcards(t *testing.T) {
-	cases := map[string]string{
-		"粤B88888": `粤B88888`,
-		"%":       `\%`,
-		"_":       `\_`,
-		`a\%b`:    `a\\\%b`,
-	}
-	for in, want := range cases {
-		if got := escapeLike(in); got != want {
-			t.Errorf("escapeLike(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestSVGIntrinsicSize(t *testing.T) {
 	cases := []struct {
 		name   string

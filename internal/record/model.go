@@ -116,9 +116,12 @@ type RecognitionFilter struct {
 	// the internal row id once a person has been assigned one.
 	PersonID         string
 	PersonExternalID string
-	Matched          *bool
-	StartTime        *time.Time
-	EndTime          *time.Time
+	// Search matches the person_name and person_external_id snapshots. PersonID
+	// remains for direct links; humans search by name or employee ID.
+	Search    string
+	Matched   *bool
+	StartTime *time.Time
+	EndTime   *time.Time
 	// Dedup 只在列表读取时把当前筛选结果按「相机 + 人员」折叠为一条，不改变存储。
 	Dedup bool
 	// Window 是已解析的分页窗口。store 直接用它，不再自行从 page/pageSize

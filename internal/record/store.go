@@ -184,6 +184,12 @@ func recognitionWhere(filter RecognitionFilter) (string, []any) {
 		conditions = append(conditions, "person_external_id = ?")
 		args = append(args, filter.PersonExternalID)
 	}
+	if filter.Search != "" {
+		// The keyword is data, not a pattern: % and _ must match themselves.
+		pattern := "%" + database.EscapeLike(filter.Search) + "%"
+		conditions = append(conditions, `(person_name LIKE ? ESCAPE '\' OR person_external_id LIKE ? ESCAPE '\')`)
+		args = append(args, pattern, pattern)
+	}
 	if filter.Matched != nil {
 		conditions = append(conditions, "matched = ?")
 		args = append(args, *filter.Matched)

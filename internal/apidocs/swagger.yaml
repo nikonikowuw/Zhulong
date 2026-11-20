@@ -5827,6 +5827,11 @@ paths:
         in: query
         name: personExternalId
         type: string
+      - description: Search person name or employee ID (snapshot, case-insensitive
+          substring)
+        in: query
+        name: search
+        type: string
       - description: Filter by match status
         in: query
         name: matched

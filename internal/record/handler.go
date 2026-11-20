@@ -42,6 +42,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Param        cameraId query string false "Filter by camera ID"
 // @Param        personId query string false "Filter by internal person row ID"
 // @Param        personExternalId query string false "Filter by external business key (persons.person_id snapshot)"
+// @Param        search query string false "Search person name or employee ID (snapshot, case-insensitive substring)"
 // @Param        matched query bool false "Filter by match status"
 // @Param        dedup query bool false "Collapse filtered recognitions to one per camera and person (display only)"
 // @Param        startTime query string false "Start time (RFC3339)"

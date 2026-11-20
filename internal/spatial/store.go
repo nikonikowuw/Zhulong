@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -153,7 +152,7 @@ func (s *Store) QueryVehicleCaptures(ctx context.Context, f TrajectoryFilter) ([
 	if len(f.CameraIDs) == 0 {
 		return []RawDetectionPoint{}, nil
 	}
-	pattern := "%" + escapeLike(f.MatchKey) + "%"
+	pattern := "%" + database.EscapeLike(f.MatchKey) + "%"
 	points := []RawDetectionPoint{}
 	err := s.db(ctx).Table("captures").
 		Select(
@@ -199,22 +198,4 @@ func (s *Store) QueryPersonRecognitions(ctx context.Context, f TrajectoryFilter)
 		return nil, err
 	}
 	return points, nil
-}
-
-// likeReplacer neutralises SQL LIKE wildcard characters.
-var likeReplacer = strings.NewReplacer(
-	`\`,
-	`\\`,
-	`%`,
-	`\%`,
-	`_`,
-	`\_`,
-)
-
-// escapeLike neutralises the LIKE metacharacters of a user-supplied substring.
-//
-// Without it a plate of "%" matches every vehicle capture, and "_" silently turns
-// into a single-character wildcard. The query must pair this with ESCAPE '\'.
-func escapeLike(value string) string {
-	return likeReplacer.Replace(value)
 }
