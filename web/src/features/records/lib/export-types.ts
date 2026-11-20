@@ -27,6 +27,13 @@ export interface ExportProgress {
   total: number
   percent?: number
   message?: string
+  /**
+   * 已写入 IndexedDB 且可复用的图片数。
+   *
+   * 中断后只需补做剩余部分，UI 用它把“已保存”的能力讲给用户听，
+   * 比“进度 62%”更能消除“关了就要重来”的焦虑。
+   */
+  saved?: number
 }
 
 export interface OverlayLabelContext {

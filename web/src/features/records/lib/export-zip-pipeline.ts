@@ -7,6 +7,7 @@ import {
   type ExportDraftOptions,
   type ExportTaskDraft,
 } from './export-db'
+import { getImageWorkerConcurrency } from './export-image-worker-pool'
 import {
   assertNotAborted,
   buildManifest,
@@ -54,7 +55,9 @@ export {
   type OverlayLabelContext,
 } from './export-types'
 
-const IMAGE_CONCURRENCY = 3
+// 并发度与 Worker 池大小一致：图片处理在 Worker 里，主线程只收发消息，
+// 所以这里的并发不再是「主线程同时开几个 canvas」，而是「几个 Worker 并行」。
+const IMAGE_CONCURRENCY = getImageWorkerConcurrency()
 const MANIFEST_KEY = 'manifest.json'
 const DRAFT_PERSIST_EVERY = 10
 const DRAFT_PERSIST_INTERVAL_MS = 1_000
@@ -108,13 +111,21 @@ export async function executeRecordsExport(
   assertNotAborted(signal)
 
   const progressLabels = labels?.progress
-  const emit: EmitExportProgress = (phase, current, total, message, ratio) => {
+  const emit: EmitExportProgress = (
+    phase,
+    current,
+    total,
+    message,
+    ratio,
+    stats
+  ) => {
     onProgress?.({
       phase,
       current,
       total,
       percent: percentFor(phase, ratio),
       message,
+      ...(stats?.saved === undefined ? {} : { saved: stats.saved }),
     })
   }
 
@@ -363,7 +374,8 @@ export async function executeRecordsExport(
       totalJobs,
       progressLabels?.processingImages?.(0, totalJobs) ??
         `Processing images: 0 / ${totalJobs}`,
-      completedSet.size / denominator
+      completedSet.size / denominator,
+      { saved: completedSet.size }
     )
 
     try {
@@ -399,7 +411,8 @@ export async function executeRecordsExport(
             totalJobs,
             progressLabels?.processingImages?.(processed, totalJobs) ??
               `Processing images: ${processed} / ${totalJobs}`,
-            processed / denominator
+            processed / denominator,
+            { saved: completedSet.size }
           )
         }
       })

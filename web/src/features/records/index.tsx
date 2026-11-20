@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { AlertTriangle, Camera, CarFront, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -18,6 +18,7 @@ import { CapturesView } from './components/views/captures-view'
 import { RecognitionsView } from './components/views/recognitions-view'
 import { type RecordsTab } from './data/schema'
 import { useRecordsPage } from './hooks/use-records-page'
+import { useExportJobStore } from './lib/export-job-store'
 
 const LazyRecordsExportDialog = lazy(() =>
   import('./components/export/records-export-dialog').then((m) => ({
@@ -73,6 +74,15 @@ export function Records() {
     handleDateRangeChange,
     handleResetFilters,
   } = useRecordsPage()
+
+  // 全局进度卡发来的「续传上次导出」请求：对话框有完整的草稿上下文，
+  // 所以这里只负责把它打开，具体的续传确认交给 ExportDraftBanner。
+  const resumeRequested = useExportJobStore((s) => s.resumeRequested)
+  useEffect(() => {
+    if (!resumeRequested) return
+    useExportJobStore.getState().consumeResumeRequest()
+    setExportDialogOpen(true)
+  }, [resumeRequested, setExportDialogOpen])
 
   return (
     <>

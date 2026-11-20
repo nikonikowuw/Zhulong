@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Download, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { triggerDownload } from '@/lib/csv'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -15,13 +14,8 @@ import {
 import { type CameraNameLookup } from '../../data/camera-label'
 import { type RecordItem, type RecordsTab } from '../../data/schema'
 import { exportDb, type ExportTaskDraft } from '../../lib/export-db'
-import {
-  executeRecordsExport,
-  ExportLimitError,
-  HARD_MAX_IMAGES,
-  type ExportLabels,
-  type ExportProgress,
-} from '../../lib/export-zip-pipeline'
+import { useExportJobStore } from '../../lib/export-job-store'
+import { HARD_MAX_IMAGES, type ExportLabels } from '../../lib/export-types'
 import { RecordsExportOptionsPanel } from './records-export-options-panel'
 import {
   ExportDraftBanner,
@@ -90,9 +84,11 @@ export function RecordsExportDialog({
   const [maxImagesText, setMaxImagesText] = useState(String(DEFAULT_MAX_IMAGES))
   const maxImages = clampMaxImages(Number.parseInt(maxImagesText, 10))
 
-  const [isExporting, setIsExporting] = useState(false)
-  const [progress, setProgress] = useState<ExportProgress | null>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
+  const jobStatus = useExportJobStore((s) => s.status)
+  const jobProgress = useExportJobStore((s) => s.progress)
+  const startExportJob = useExportJobStore((s) => s.start)
+  const cancelExportJob = useExportJobStore((s) => s.cancel)
+  const isExporting = jobStatus === 'running'
   const [pendingDraft, setPendingDraft] = useState<ExportTaskDraft | null>(null)
 
   useEffect(() => {
@@ -169,17 +165,7 @@ export function RecordsExportDialog({
     })
   }
 
-  const handleCancelExport = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-    }
-    setIsExporting(false)
-    setProgress(null)
-    toast.info(t('export.cancelled'))
-  }
-
-  const handleStartExport = async (resumeTaskId?: string) => {
+  const handleStartExport = (resumeTaskId?: string) => {
     if (mode === 'selection' && selectedItems.length === 0 && !resumeTaskId) {
       toast.error(t('export.emptySelection'))
       return
@@ -190,91 +176,47 @@ export function RecordsExportDialog({
       return
     }
 
-    const controller = new AbortController()
-    abortControllerRef.current = controller
-    setIsExporting(true)
-    setProgress({
-      phase: 'preparing',
-      current: 0,
-      total: 100,
-      percent: 0,
-      message: t('export.preparing'),
+    const started = startExportJob({
+      resumeTaskId,
+      selectedRecords:
+        mode === 'selection'
+          ? { tab: activeTab, items: selectedItems }
+          : undefined,
+      queryConfig:
+        mode === 'batch'
+          ? {
+              tabs: Array.from(selectedTabs),
+              cameraId: queryParams?.cameraId,
+              startTime: queryParams?.startTime,
+              endTime: queryParams?.endTime,
+              matched: queryParams?.matched,
+              personId: queryParams?.personId,
+              alarmType: queryParams?.alarmType,
+              targetType: queryParams?.targetType,
+            }
+          : undefined,
+      exportCsv,
+      exportImages,
+      burnOverlay,
+      imageKind,
+      maxImages: limitImages ? maxImages : undefined,
+      labels: exportLabels,
+      resolveCameraName: cameraName,
     })
 
-    try {
-      const result = await executeRecordsExport({
-        resumeTaskId,
-        selectedRecords:
-          mode === 'selection'
-            ? { tab: activeTab, items: selectedItems }
-            : undefined,
-        queryConfig:
-          mode === 'batch'
-            ? {
-                tabs: Array.from(selectedTabs),
-                cameraId: queryParams?.cameraId,
-                startTime: queryParams?.startTime,
-                endTime: queryParams?.endTime,
-                matched: queryParams?.matched,
-                personId: queryParams?.personId,
-                alarmType: queryParams?.alarmType,
-                targetType: queryParams?.targetType,
-              }
-            : undefined,
-        exportCsv,
-        exportImages,
-        burnOverlay,
-        imageKind,
-        maxImages: limitImages ? maxImages : undefined,
-        labels: exportLabels,
-        signal: controller.signal,
-        resolveCameraName: cameraName,
-        onProgress: setProgress,
-      })
-
-      if (controller.signal.aborted) return
-
-      triggerDownload(result.blob, result.filename)
-      setPendingDraft(null)
-
-      if (result.failedImages > 0) {
-        toast.warning(
-          t('export.partialFailure', { count: result.failedImages })
-        )
-      } else {
-        toast.success(t('export.success'))
-      }
-      onOpenChange(false)
-    } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') return
-      if (err instanceof ExportLimitError) {
-        toast.error(
-          t('export.tooManyRecords', { total: err.actual, limit: err.limit })
-        )
-        return
-      }
-      toast.error(
-        t('export.failedWithReason', {
-          reason: err instanceof Error ? err.message : String(err),
-        })
-      )
-    } finally {
-      if (abortControllerRef.current === controller) {
-        setIsExporting(false)
-        setProgress(null)
-        abortControllerRef.current = null
-      }
+    if (!started) {
+      toast.info(t('export.alreadyRunning'))
+      return
     }
+
+    // 任务由进程内 store 接管：立刻关闭弹窗，用户继续浏览，进度在右下角卡片
+    toast.info(t('export.backgroundStarted'))
+    setPendingDraft(null)
+    onOpenChange(false)
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (isExporting) handleCancelExport()
-        onOpenChange(next)
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='max-w-md sm:max-w-lg'>
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2 text-lg'>
@@ -301,7 +243,12 @@ export function RecordsExportDialog({
         )}
 
         {isExporting ? (
-          <ExportProgressPanel progress={progress} />
+          <div className='space-y-2'>
+            <ExportProgressPanel progress={jobProgress} />
+            <p className='text-center text-[11px] text-muted-foreground'>
+              {t('export.backgroundHint')}
+            </p>
+          </div>
         ) : (
           <RecordsExportOptionsPanel
             mode={mode}
@@ -328,16 +275,26 @@ export function RecordsExportDialog({
 
         <DialogFooter className='gap-2 sm:gap-0'>
           {isExporting ? (
-            <Button
-              type='button'
-              variant='destructive'
-              size='sm'
-              onClick={handleCancelExport}
-              className='gap-1.5'
-            >
-              <X className='size-3.5' />
-              <span>{t('export.cancelBtn')}</span>
-            </Button>
+            <>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={() => onOpenChange(false)}
+              >
+                {t('export.closeDialog')}
+              </Button>
+              <Button
+                type='button'
+                variant='destructive'
+                size='sm'
+                onClick={cancelExportJob}
+                className='gap-1.5'
+              >
+                <X className='size-3.5' />
+                <span>{t('export.cancelBtn')}</span>
+              </Button>
+            </>
           ) : (
             <>
               <Button

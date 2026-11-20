@@ -15,7 +15,12 @@ import {
   burnOverlayOnImage,
   type OverlayBurnOptions,
 } from './canvas-overlay-drawer'
+import { assertNotAborted, delay, isAbortError } from './export-abort'
 import { exportDb, type ExportDraftOptions } from './export-db'
+import {
+  runImageJobInPool,
+  WorkerUnsupportedError,
+} from './export-image-worker-pool'
 import {
   type ExportLabels,
   type ExportManifest,
@@ -28,6 +33,9 @@ import { fetchImageAsBlob, MediaFetchError } from './media-fetch'
 const REPORT_KEY_PREFIX = '__reports__/'
 const REPORT_KEY_SUFFIX = '_records.csv'
 export const JOBS_ARTIFACT_KEY = '__jobs__.json'
+
+/** Worker 路径判定不可用后不再逐张探测，直接走主线程回退 */
+let workerImagePathDisabled = false
 
 const overlayOptionsSchema = z.object({
   primaryBox: boxSchema.optional(),
@@ -66,38 +74,12 @@ interface ResumeSnapshot {
   reports: Map<RecordsTab, Uint8Array>
 }
 
-function abortError(): DOMException {
-  return new DOMException('Export cancelled', 'AbortError')
-}
-
-export function isAbortError(err: unknown): boolean {
-  return err instanceof DOMException && err.name === 'AbortError'
-}
-
-export function assertNotAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw abortError()
-}
-
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(abortError())
-      return
-    }
-    const onAbort = () => {
-      clearTimeout(timer)
-      reject(abortError())
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }, ms)
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
-}
+export { assertNotAborted, isAbortError } from './export-abort'
 
 function isRetryable(err: unknown): boolean {
   if (isAbortError(err)) return false
+  // 环境不支持 Worker 时重试只是浪费时间：整体回退主线程一次就够
+  if (err instanceof WorkerUnsupportedError) return false
   if (err instanceof MediaFetchError) {
     return err.status >= 500 || err.status === 408 || err.status === 429
   }
@@ -336,10 +318,26 @@ export async function loadResumeSnapshot(
   }
 }
 
+/**
+ * 图片任务执行入口：优先走 Worker 池，环境不支持时永久回退主线程。
+ *
+ * Worker 内同样带拉流，所以失败语义（`MediaFetchError` 的 HTTP 状态码）会经
+ * 协议回传并在主线程重建，重试策略不受线程边界影响。
+ */
 export async function processImageJob(
   job: ImageJob,
   signal?: AbortSignal
 ): Promise<Uint8Array> {
+  if (!workerImagePathDisabled) {
+    try {
+      return await retryAsync(() => runImageJobInPool(job, signal), signal)
+    } catch (err) {
+      if (isAbortError(err)) throw err
+      if (!(err instanceof WorkerUnsupportedError)) throw err
+      workerImagePathDisabled = true
+    }
+  }
+
   const hasOverlay = Object.keys(job.overlayOptions).length > 0
   const blob = await retryAsync(
     () =>

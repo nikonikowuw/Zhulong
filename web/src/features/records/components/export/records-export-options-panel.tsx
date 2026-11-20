@@ -8,10 +8,7 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Switch } from '@/components/ui/switch'
 import { type RecordsTab } from '../../data/schema'
-import {
-  DEFAULT_MAX_RECORDS,
-  HARD_MAX_IMAGES,
-} from '../../lib/export-zip-pipeline'
+import { DEFAULT_MAX_RECORDS, HARD_MAX_IMAGES } from '../../lib/export-types'
 
 export interface RecordsExportOptionsPanelProps {
   mode: 'selection' | 'batch'

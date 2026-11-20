@@ -6,6 +6,7 @@ import { SearchProvider } from '@/context/search-provider'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '@/components/layout/app-sidebar'
 import { SkipToMain } from '@/components/skip-to-main'
+import { RecordsExportJobIndicator } from '@/features/records/job-indicator'
 
 type AuthenticatedLayoutProps = {
   children?: React.ReactNode
@@ -35,6 +36,8 @@ export function AuthenticatedLayout({ children }: AuthenticatedLayoutProps) {
           >
             {children ?? <Outlet />}
           </SidebarInset>
+          {/* 导出任务不跟页面走：进度卡挂在全局布局上，跨路由可见 */}
+          <RecordsExportJobIndicator />
         </SidebarProvider>
       </LayoutProvider>
     </SearchProvider>

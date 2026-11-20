@@ -14,7 +14,9 @@ export type EmitExportProgress = (
   current: number,
   total: number,
   message: string | undefined,
-  ratio: number
+  ratio: number,
+  /** 附加计数：`saved` 表示已落盘可复用的图片数 */
+  stats?: { saved?: number }
 ) => void
 
 function assertNotAborted(signal?: AbortSignal): void {

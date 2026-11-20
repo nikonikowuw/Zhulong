@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import { exportDb } from '../../lib/export-db'
+import { useExportJobStore } from '../../lib/export-job-store'
 import { RecordsExportDialog } from './records-export-dialog'
 
 describe('RecordsExportDialog', () => {
@@ -174,6 +175,10 @@ describe('RecordsExportDialog', () => {
       updatedAt: Date.now(),
     })
 
+    const startSpy = vi
+      .spyOn(useExportJobStore.getState(), 'start')
+      .mockReturnValue(true)
+
     const screen = await render(
       <RecordsExportDialog
         open={true}
@@ -197,5 +202,68 @@ describe('RecordsExportDialog', () => {
     expect(
       screen.getByText('请至少选择一种导出内容（报表或图片）').query()
     ).toBeNull()
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    startSpy.mockRestore()
+  })
+
+  it('runs the export and closes the dialog on start', async () => {
+    const startSpy = vi
+      .spyOn(useExportJobStore.getState(), 'start')
+      .mockReturnValue(true)
+    const handleOpenChange = vi.fn()
+    const screen = await render(
+      <RecordsExportDialog
+        open={true}
+        onOpenChange={handleOpenChange}
+        activeTab='recognitions'
+        mode='batch'
+      />
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: '开始导出' }))
+
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    expect(handleOpenChange).toHaveBeenCalledWith(false)
+    startSpy.mockRestore()
+  })
+
+  it('shows the running job and keeps it alive when the dialog is closed', async () => {
+    useExportJobStore.setState({
+      status: 'running',
+      progress: {
+        phase: 'processing_images',
+        current: 1,
+        total: 4,
+        percent: 25,
+        message: '正在处理图片：1 / 4',
+      },
+      error: null,
+      failedImages: 0,
+    })
+
+    const handleOpenChange = vi.fn()
+    const screen = await render(
+      <RecordsExportDialog
+        open={true}
+        onOpenChange={handleOpenChange}
+        activeTab='recognitions'
+        mode='batch'
+      />
+    )
+
+    await expect
+      .element(
+        screen.getByText(
+          '导出在本页面内进行，关闭或刷新标签页会中断，但已完成的图片会保留'
+        )
+      )
+      .toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: '关闭窗口' }))
+
+    expect(handleOpenChange).toHaveBeenCalledWith(false)
+    expect(useExportJobStore.getState().status).toBe('running')
+
+    useExportJobStore.setState({ status: 'idle', progress: null })
   })
 })
