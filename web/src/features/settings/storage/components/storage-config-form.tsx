@@ -353,12 +353,12 @@ export function StorageConfigForm({
             </div>
 
             {/* Core Settings: Retention Policies */}
-            <div className='grid grid-cols-1 gap-4 sm:grid-cols-3'>
+            <div className='flex flex-col gap-4 sm:flex-row sm:items-start'>
               <FormField
                 control={form.control}
                 name='recordingsRetentionDays'
                 render={({ field }) => (
-                  <FormItem>
+                  <FormItem className='min-w-0 flex-1'>
                     <FormLabel>
                       {t('form.recordings_days', {
                         defaultValue: '视频录像保留天数',
@@ -387,7 +387,7 @@ export function StorageConfigForm({
                 control={form.control}
                 name='snapshotsRetentionDays'
                 render={({ field }) => (
-                  <FormItem>
+                  <FormItem className='min-w-0 flex-1'>
                     <FormLabel>
                       {t('form.snapshots_days', {
                         defaultValue: 'AI抓拍保留天数',
@@ -417,7 +417,7 @@ export function StorageConfigForm({
                 control={form.control}
                 name='exportsRetentionHours'
                 render={({ field }) => (
-                  <FormItem>
+                  <FormItem className='min-w-0 flex-1'>
                     <FormLabel>
                       {t('form.exports_hours', {
                         defaultValue: '临时导出保留小时',

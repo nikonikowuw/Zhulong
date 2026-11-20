@@ -81,6 +81,8 @@ export default defineConfig({
             ...configDefaults.exclude,
             'src/components/config-drawer.test.tsx',
             'src/features/tasks/components/region-editor-dialog.test.tsx',
+            // 布局回归：桌面宽屏下的三列对齐，默认 414px 视口下会整体退化为单列。
+            'src/features/settings/storage/components/storage-config-form.test.tsx',
           ],
         },
         {
@@ -89,6 +91,7 @@ export default defineConfig({
           include: [
             'src/components/config-drawer.test.tsx',
             'src/features/tasks/components/region-editor-dialog.test.tsx',
+            'src/features/settings/storage/components/storage-config-form.test.tsx',
           ],
           viewport: { width: 1280, height: 896 },
         },
