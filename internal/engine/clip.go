@@ -10,6 +10,7 @@ import "C"
 
 import (
 	"context"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"unsafe"
@@ -105,8 +106,8 @@ func (e *Engine) configureRecorder(
 
 // TriggerClip 在该路流上发起或延长一个事件录像片段。
 func (s *Stream) TriggerClip(ctx context.Context, req ClipTriggerRequest) (ClipTriggerResult, error) {
-	if req.Path == "" || strings.IndexByte(req.Path, 0) >= 0 {
-		return ClipTriggerResult{}, nativeErrorf("trigger_clip", StatusInvalidArgument, "invalid clip path")
+	if req.Path == "" || strings.IndexByte(req.Path, 0) >= 0 || !filepath.IsAbs(req.Path) {
+		return ClipTriggerResult{}, nativeErrorf("trigger_clip", StatusInvalidArgument, "clip path must be absolute")
 	}
 	ref, err := s.lease(ctx)
 	if err != nil {

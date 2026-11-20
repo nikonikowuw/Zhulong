@@ -267,6 +267,39 @@ func TestTriggerCreatesClipAndLocksAlarm(t *testing.T) {
 	}
 }
 
+func TestTriggerResolvesRelativeMediaRootToAbsolutePath(t *testing.T) {
+	e := newEnv(t)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	relRoot, err := filepath.Rel(cwd, e.root)
+	if err != nil {
+		t.Fatalf("relative root: %v", err)
+	}
+	if filepath.IsAbs(relRoot) {
+		t.Fatalf("test setup: expected relative root, got %q", relRoot)
+	}
+
+	e.svc = recording.NewService(e.store, e.hub, staticRoot{root: relRoot}, e.gate, zap.NewNop(), recording.Options{
+		PollInterval:        10 * time.Millisecond,
+		CleanupInitialDelay: time.Hour,
+		Now:                 func() time.Time { return e.now },
+	})
+	e.insertAlarm("alarm_rel", "cam_01")
+
+	if _, _, err := e.svc.Trigger(context.Background(), alarmTrigger("alarm_rel")); err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+	req := e.hub.lastRequest(t)
+	if !filepath.IsAbs(req.Path) {
+		t.Fatalf("trigger path must be absolute for native ABI, got %q", req.Path)
+	}
+	if !strings.HasPrefix(req.Path, e.root+string(os.PathSeparator)) {
+		t.Fatalf("trigger path %q is outside media root %q", req.Path, e.root)
+	}
+}
+
 // AC3（Go 侧）：同一相机连续 3 个事件只生成 1 个片段，偏移单调递增；识别事件不加锁。
 func TestTriggerExtendsActiveClip(t *testing.T) {
 	e := newEnv(t)

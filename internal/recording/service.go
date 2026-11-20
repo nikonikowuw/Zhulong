@@ -196,7 +196,12 @@ func (s *Service) Trigger(ctx context.Context, req TriggerRequest) (clipID strin
 	}
 	newID := idutil.New()
 	relPath := ClipRelPath(req.CameraID, capturedAt, newID)
-	absPath := filepath.Join(root, filepath.FromSlash(relPath))
+	// Native 的 clip 触发器只接受绝对路径；storage 的 mediaDirectory 允许相对
+	// 路径（默认 data/media），这里必须相对进程工作目录解析后再下发。
+	absPath, err := filepath.Abs(filepath.Join(root, filepath.FromSlash(relPath)))
+	if err != nil {
+		return "", 0, fmt.Errorf("resolve clip path: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o750); err != nil {
 		return "", 0, fmt.Errorf("create clip directory: %w", err)
 	}

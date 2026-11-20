@@ -57,6 +57,9 @@ func TestStreamClipValidationErrors(t *testing.T) {
 	if _, err := stream.TriggerClip(ctx, ClipTriggerRequest{}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("empty path: got %v, want ErrInvalidArgument", err)
 	}
+	if _, err := stream.TriggerClip(ctx, ClipTriggerRequest{Path: "relative/clip.mp4"}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("relative path: got %v, want ErrInvalidArgument", err)
+	}
 	if _, err := eng.PollClipEvents(nil, 4); !errors.Is(err, ErrInvalidArgument) { //nolint:staticcheck // testing nil context guard
 		t.Fatalf("nil context PollClipEvents: got %v, want ErrInvalidArgument", err)
 	}
