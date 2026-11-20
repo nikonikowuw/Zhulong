@@ -144,3 +144,43 @@ Implemented the storage emergency self-heal fix: used/(used+free) usage accounti
 
 - 11-03-task-crop-region 待完成板端 spike 与 RGA 第二刀验证
 - 11-12-stranger-cluster-trajectory 在另一窗口继续规划推进
+
+
+## Session 100: Archive event clip recording task
+<!-- trellis-session: v=2 fp=fc679ac9db766302 -->
+
+**Date**: 2026-11-20
+**Task**: Archive event clip recording task
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+归档 11-17-event-clip-recording（事件录像片段）：Native ClipRecorder（GOP 环形缓冲 + 有界写队列 + fMP4 remux）、ABI v7/v8、internal/recording 服务与 000038 迁移、storage .lock 保护、records 详情播放器与任务配置表单均已合入 dev。保留规划中的 11-12-stranger-cluster-trajectory 与 11-15-face-track-fusion-identity。
+
+### Main Changes
+
+- 归档 11-17-event-clip-recording：告警/识别事件从 AI main 流解码前旁路取包，拼前后片段原样 remux 为 fMP4
+- 同相机事件合并延长（≤120s）、事件记 clip_offset_ms；写盘不反压，队列溢出在关键帧截断标 truncated
+- storage 对被告警引用的片段加 .lock 免疫 TTL/水位清理；文件名用 evt- 前缀避开 mediaPrefix 的 _ 分组
+- 前端 records 详情内嵌播放器按 offsetMs 定位、codec 不支持时降级为下载，列表显示有录像标记
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `40306dd` | feat(recording): implement event clip recording and person attributes |
+| `9888307` | fix(recording): resolve clip paths to absolute |
+
+### Testing
+
+- [OK] 本次仅归档，未重跑 make check；归档前 git 工作区干净，相关代码早前已合入 dev
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- RK3568 实测校准 32 MiB 环形缓冲上限与 120s 片段上限
+- 11-12-stranger-cluster-trajectory、11-15-face-track-fusion-identity 仍在规划，未归档
