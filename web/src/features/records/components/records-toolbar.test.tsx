@@ -31,7 +31,7 @@ describe('RecordsToolbar', () => {
     vi.restoreAllMocks()
   })
 
-  it('fetches alarmTypes / targetTypes only on their corresponding tabs and debounces personId input', async () => {
+  it('fetches alarmTypes / targetTypes only on their corresponding tabs and debounces the person keyword input', async () => {
     const alarmTypesSpy = vi
       .spyOn(recordsApi, 'getAlarmTypes')
       .mockResolvedValue(['tripwire'])
@@ -39,7 +39,7 @@ describe('RecordsToolbar', () => {
       .spyOn(recordsApi, 'getCaptureTargetTypes')
       .mockResolvedValue(['person'])
 
-    const onPersonIdChange = vi.fn()
+    const onSearchChange = vi.fn()
 
     const screen = await renderWithQuery(
       <RecordsToolbar
@@ -49,7 +49,7 @@ describe('RecordsToolbar', () => {
         onViewChange={vi.fn()}
         onCameraChange={vi.fn()}
         onDateRangeChange={vi.fn()}
-        onPersonIdChange={onPersonIdChange}
+        onSearchChange={onSearchChange}
         onResetFilters={vi.fn()}
       />
     )
@@ -57,18 +57,49 @@ describe('RecordsToolbar', () => {
     expect(alarmTypesSpy).not.toHaveBeenCalled()
     expect(targetTypesSpy).not.toHaveBeenCalled()
 
-    const input = screen.getByPlaceholder('输入人员 ID 搜索')
-    await userEvent.type(input, 'p-123')
+    const input = screen.getByPlaceholder('按姓名或工号搜索')
+    await userEvent.type(input, '张三')
 
     // 防抖窗口期内不应立刻触发逐字符回调
-    expect(onPersonIdChange).not.toHaveBeenCalled()
+    expect(onSearchChange).not.toHaveBeenCalled()
 
     await vi.waitFor(
       () => {
-        expect(onPersonIdChange).toHaveBeenCalledExactlyOnceWith('p-123')
+        expect(onSearchChange).toHaveBeenCalledExactlyOnceWith('张三')
       },
       { timeout: 1000 }
     )
+  })
+
+  it('shows a removable chip for a deep-linked person id instead of a raw id input', async () => {
+    const onPersonIdChange = vi.fn()
+    const onSearchChange = vi.fn()
+
+    const screen = await renderWithQuery(
+      <RecordsToolbar
+        tab='recognitions'
+        view='table'
+        dateRange={{ isDefaultWindow: true, preset: 'today' }}
+        personId='person_alice'
+        personName='Alice'
+        search='EMP-0'
+        onViewChange={vi.fn()}
+        onCameraChange={vi.fn()}
+        onDateRangeChange={vi.fn()}
+        onPersonIdChange={onPersonIdChange}
+        onSearchChange={onSearchChange}
+        onResetFilters={vi.fn()}
+      />
+    )
+
+    // 关键字框只承载人名/工号，深链的人员 ID 不能显示成可编辑文本
+    const input = screen.getByPlaceholder('按姓名或工号搜索')
+    await expect.element(input).toHaveValue('EMP-0')
+    await expect.element(screen.getByText('人员：Alice')).toBeVisible()
+
+    await userEvent.click(screen.getByRole('button', { name: '清除人员筛选' }))
+    expect(onPersonIdChange).toHaveBeenCalledExactlyOnceWith(undefined)
+    expect(onSearchChange).not.toHaveBeenCalled()
   })
 })
 

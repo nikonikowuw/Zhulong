@@ -67,6 +67,7 @@ async function requestRecordPage(
         pageSize,
         cameraId: query.cameraId,
         personId: query.personId,
+        search: query.search,
         matched: query.matched,
         startTime: query.startTime,
         endTime,

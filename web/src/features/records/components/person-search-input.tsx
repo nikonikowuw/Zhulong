@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { Input } from '@/components/ui/input'
 
-const PERSON_ID_DEBOUNCE_MS = 300
+const PERSON_SEARCH_DEBOUNCE_MS = 300
 
-export interface PersonIdSearchInputProps {
+export interface PersonSearchInputProps {
   value: string
   placeholder: string
   onCommit: (next?: string) => void
 }
 
-export function PersonIdSearchInput({
+/**
+ * 人员关键字搜索框：按姓名或工号检索，提交的是用户看得懂的业务键，
+ * 而不是内部 persons.id。
+ */
+export function PersonSearchInput({
   value,
   placeholder,
   onCommit,
-}: PersonIdSearchInputProps) {
+}: PersonSearchInputProps) {
   const [draft, setDraft] = useState(value)
   const [syncedValue, setSyncedValue] = useState(value)
   const onCommitRef = useRef(onCommit)
@@ -33,7 +37,7 @@ export function PersonIdSearchInput({
     if (normalizedDraft === normalizedValue) return
     const timer = setTimeout(() => {
       onCommitRef.current(normalizedDraft || undefined)
-    }, PERSON_ID_DEBOUNCE_MS)
+    }, PERSON_SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [draft, value])
 

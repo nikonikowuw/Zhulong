@@ -38,6 +38,8 @@ export function Records() {
     matched,
     dedup,
     personId,
+    personName,
+    personSearch,
     alarmType,
     targetType,
     cameraName,
@@ -66,6 +68,7 @@ export function Records() {
     handleCameraChange,
     handleMatchedChange,
     handlePersonIdChange,
+    handlePersonSearchChange,
     handleAlarmTypeChange,
     handleTargetTypeChange,
     handleDedupChange,
@@ -142,6 +145,8 @@ export function Records() {
               dateRange={activeRange}
               matched={matched}
               personId={personId}
+              personName={personName}
+              search={personSearch}
               dedup={dedup}
               alarmType={alarmType}
               targetType={targetType}
@@ -150,6 +155,7 @@ export function Records() {
               onDateRangeChange={handleDateRangeChange}
               onMatchedChange={handleMatchedChange}
               onPersonIdChange={handlePersonIdChange}
+              onSearchChange={handlePersonSearchChange}
               onAlarmTypeChange={handleAlarmTypeChange}
               onTargetTypeChange={handleTargetTypeChange}
               onDedupChange={handleDedupChange}

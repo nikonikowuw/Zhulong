@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { Cross2Icon } from '@radix-ui/react-icons'
-import { CopyCheck, LayoutGrid, Table as TableIcon } from 'lucide-react'
+import { CopyCheck, LayoutGrid, Table as TableIcon, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -19,7 +20,7 @@ import {
 } from '../data/time-presets'
 import { useAlarmTypes } from '../hooks/use-alarm-types'
 import { useCaptureTargetTypes } from '../hooks/use-capture-target-types'
-import { PersonIdSearchInput } from './person-id-search-input'
+import { PersonSearchInput } from './person-search-input'
 import { RecordsDateRangePicker } from './records-date-range-picker'
 
 export interface RecordsToolbarProps {
@@ -29,7 +30,11 @@ export interface RecordsToolbarProps {
   /** 已解析的生效时间窗口（含默认「今日全天」），标签与实际查询同源 */
   dateRange: ResolvedRecordsWindow
   matched?: 'all' | 'true' | 'false'
+  /** 深链带入的内部人员 ID；正常检索走 search（姓名/工号）。 */
   personId?: string
+  /** personId 解析出的姓名，仅用于筛选 chip 的展示。 */
+  personName?: string
+  search?: string
   dedup?: boolean
   alarmType?: string
   targetType?: string
@@ -38,6 +43,7 @@ export interface RecordsToolbarProps {
   onDateRangeChange: (range: RecordsDateRange) => void
   onMatchedChange?: (matched?: 'all' | 'true' | 'false') => void
   onPersonIdChange?: (personId?: string) => void
+  onSearchChange?: (search?: string) => void
   onDedupChange?: (dedup: boolean) => void
   onAlarmTypeChange?: (alarmType?: string) => void
   onTargetTypeChange?: (targetType?: string) => void
@@ -51,6 +57,8 @@ export function RecordsToolbar({
   dateRange,
   matched,
   personId,
+  personName,
+  search,
   dedup,
   alarmType,
   targetType,
@@ -59,6 +67,7 @@ export function RecordsToolbar({
   onDateRangeChange,
   onMatchedChange,
   onPersonIdChange,
+  onSearchChange,
   onDedupChange,
   onAlarmTypeChange,
   onTargetTypeChange,
@@ -94,6 +103,7 @@ export function RecordsToolbar({
     !dateRange.isDefaultWindow ||
     (matched && matched !== 'all') ||
     personId ||
+    search ||
     alarmType ||
     (tab === 'captures' && targetType)
   )
@@ -103,11 +113,34 @@ export function RecordsToolbar({
       {/* 左侧：搜索/类型选择在最首位，紧接着是各个过滤控件 */}
       <div className='flex flex-1 flex-wrap items-center gap-2'>
         {tab === 'recognitions' && (
-          <PersonIdSearchInput
-            value={personId ?? ''}
-            placeholder={t('filters.personIdPlaceholder')}
-            onCommit={(next) => onPersonIdChange?.(next)}
-          />
+          <>
+            <PersonSearchInput
+              value={search ?? ''}
+              placeholder={t('filters.personSearchPlaceholder')}
+              onCommit={(next) => onSearchChange?.(next)}
+            />
+            {personId && (
+              <Badge
+                variant='secondary'
+                className='h-8 gap-1 rounded-md px-2 text-xs font-normal'
+              >
+                <span>
+                  {t('filters.personFilterChip', {
+                    name: personName ?? t('filters.unknownPerson'),
+                  })}
+                </span>
+                <button
+                  type='button'
+                  aria-label={t('filters.clearPersonFilter')}
+                  title={t('filters.clearPersonFilter')}
+                  onClick={() => onPersonIdChange?.(undefined)}
+                  className='rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                >
+                  <X className='size-3' />
+                </button>
+              </Badge>
+            )}
+          </>
         )}
 
         {tab === 'alarms' && (

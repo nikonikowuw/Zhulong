@@ -39,8 +39,10 @@
     "targetType": "目標類型",
     "allTargetTypes": "全部目標類型",
     "targetTypePlaceholder": "選擇目標類型",
-    "personId": "人員 ID",
-    "personIdPlaceholder": "輸入人員 ID 搜尋",
+    "personSearchPlaceholder": "依姓名或工號搜尋",
+    "personFilterChip": "人員：{{name}}",
+    "unknownPerson": "未命名人員",
+    "clearPersonFilter": "清除人員篩選",
     "reset": "重置篩選",
     "refresh": "重新整理"
   },

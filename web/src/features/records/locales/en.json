@@ -39,8 +39,10 @@
     "targetType": "Target Type",
     "allTargetTypes": "All Target Types",
     "targetTypePlaceholder": "Select target type",
-    "personId": "Person ID",
-    "personIdPlaceholder": "Search person ID",
+    "personSearchPlaceholder": "Search name or employee ID",
+    "personFilterChip": "Person: {{name}}",
+    "unknownPerson": "Unnamed person",
+    "clearPersonFilter": "Clear person filter",
     "reset": "Reset",
     "refresh": "Refresh"
   },

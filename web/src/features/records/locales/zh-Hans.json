@@ -39,8 +39,10 @@
     "targetType": "目标类型",
     "allTargetTypes": "全部目标类型",
     "targetTypePlaceholder": "选择目标类型",
-    "personId": "人员 ID",
-    "personIdPlaceholder": "输入人员 ID 搜索",
+    "personSearchPlaceholder": "按姓名或工号搜索",
+    "personFilterChip": "人员：{{name}}",
+    "unknownPerson": "未命名人员",
+    "clearPersonFilter": "清除人员筛选",
     "reset": "重置筛选",
     "refresh": "刷新"
   },

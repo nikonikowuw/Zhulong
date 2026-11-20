@@ -307,6 +307,8 @@ export function CameraCreateForm({ onSubmit, isPending }: Props) {
 2. **目标路由的深链接消费规范**：
    - **抓拍记录 (`/records`)**：
      通过 Search 参数传入 `{ tab: 'recognitions', personId }`，确保进入页面时切换到「人脸比对」标签页且列表已自动按此人员过滤。
+     `personId` 是内部 ID，只用于深链；工具栏不得把它渲染成可编辑输入框，而是解析出姓名后显示为可关闭的筛选 chip（档案已删除时退回兜底文案）。
+     用户自己输入的人员检索一律走 `search` 参数（姓名或工号快照的模糊匹配），不要求用户知道内部 ID。
    - **时空轨迹 (`/spatial`)**：
      通过 Search 参数传入 `{ targetType: 'person', personId }`。当默认地图与人员底库缓存就绪后，页面必须自动以「今天」（`today`）为默认时间跨度发起一次轨迹检索，减少用户二次点击。
    - **人员底库 (`/persons`)**：

@@ -33,6 +33,7 @@ export const recordsApi = {
         cameraId: params?.cameraId?.trim() || undefined,
         personId: params?.personId?.trim() || undefined,
         personExternalId: params?.personExternalId?.trim() || undefined,
+        search: params?.search?.trim() || undefined,
         matched:
           params?.matched !== undefined ? String(params.matched) : undefined,
         dedup: params?.dedup ? 'true' : undefined,

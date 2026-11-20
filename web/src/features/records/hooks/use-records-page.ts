@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
+import { usePerson } from '@/features/persons/contract'
 import {
   type RecordItem,
   type RecordsSearchParams,
@@ -45,9 +46,14 @@ export function useRecordsPage() {
 
   const matched = search.matched
   const personId = search.personId
+  const personSearch = search.search
   const dedup = search.dedup === 'true'
   const alarmType = search.alarmType
   const targetType = search.targetType
+
+  // 深链只带内部 persons.id，展示时解析成姓名；档案已被删除时退回 null。
+  const personQuery = usePerson(personId)
+  const personName = personQuery.data?.name
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [selectedRecord, setSelectedRecord] = useState<RecordItem | null>(null)
@@ -85,6 +91,7 @@ export function useRecordsPage() {
           pageSize,
           cameraId,
           personId,
+          search: personSearch,
           matched:
             matched === 'true' ? true : matched === 'false' ? false : undefined,
           dedup,
@@ -128,6 +135,7 @@ export function useRecordsPage() {
         page: 1,
         matched: undefined,
         personId: undefined,
+        search: undefined,
         alarmType: undefined,
         targetType: undefined,
       })
@@ -212,6 +220,11 @@ export function useRecordsPage() {
     [updateSearch]
   )
 
+  const handlePersonSearchChange = useCallback(
+    (nextSearch?: string) => updateSearch({ search: nextSearch, page: 1 }),
+    [updateSearch]
+  )
+
   const handleAlarmTypeChange = useCallback(
     (nextAt?: string) => updateSearch({ alarmType: nextAt, page: 1 }),
     [updateSearch]
@@ -260,6 +273,7 @@ export function useRecordsPage() {
       endTime: undefined,
       matched: undefined,
       personId: undefined,
+      search: undefined,
       alarmType: undefined,
       targetType: undefined,
       page: 1,
@@ -301,6 +315,7 @@ export function useRecordsPage() {
       matched:
         matched === 'true' ? true : matched === 'false' ? false : undefined,
       personId,
+      search: personSearch,
       alarmType,
       targetType,
     }),
@@ -310,6 +325,7 @@ export function useRecordsPage() {
       activeRange.endTime,
       matched,
       personId,
+      personSearch,
       alarmType,
       targetType,
     ]
@@ -327,6 +343,8 @@ export function useRecordsPage() {
     matched,
     dedup,
     personId,
+    personName,
+    personSearch,
     alarmType,
     targetType,
     cameraName,
@@ -355,6 +373,7 @@ export function useRecordsPage() {
     handleCameraChange,
     handleMatchedChange,
     handlePersonIdChange,
+    handlePersonSearchChange,
     handleAlarmTypeChange,
     handleTargetTypeChange,
     handleDedupChange,

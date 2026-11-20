@@ -64,6 +64,7 @@ describe('recordsApi', () => {
         page: 1,
         pageSize: 20,
         cameraId: 'cam-1',
+        search: '  张三  ',
         matched: true,
       })
 
@@ -73,7 +74,10 @@ describe('recordsApi', () => {
           pageSize: 20,
           cameraId: 'cam-1',
           personId: undefined,
+          personExternalId: undefined,
+          search: '张三',
           matched: 'true',
+          dedup: undefined,
           startTime: undefined,
           endTime: undefined,
         },

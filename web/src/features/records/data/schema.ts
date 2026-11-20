@@ -203,6 +203,8 @@ export interface GetRecognitionsParams {
   cameraId?: string
   personId?: string
   personExternalId?: string
+  /** 按姓名或工号快照模糊检索；面向人看的检索入口。 */
+  search?: string
   matched?: boolean
   /** 仅影响展示：按相机和人员折叠为一条（保留最近一条），不删除数据。 */
   dedup?: boolean
@@ -252,6 +254,7 @@ export const recordsSearchSchema = z.object({
   // 识别专属
   matched: z.enum(['all', 'true', 'false']).optional().catch(undefined),
   personId: z.string().optional().catch(undefined),
+  search: z.string().optional().catch(undefined),
   dedup: z.enum(['true', 'false']).optional().catch(undefined),
   // 告警专属
   alarmType: z.string().optional().catch(undefined),

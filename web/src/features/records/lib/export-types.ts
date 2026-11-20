@@ -71,6 +71,7 @@ export interface ExportQueryConfig {
   endTime?: string
   matched?: boolean
   personId?: string
+  search?: string
   alarmType?: string
   targetType?: string
 }

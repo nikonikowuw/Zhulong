@@ -34,6 +34,7 @@ export interface RecordsExportDialogProps {
     endTime?: string
     matched?: boolean
     personId?: string
+    search?: string
     alarmType?: string
     targetType?: string
   }
@@ -191,6 +192,7 @@ export function RecordsExportDialog({
               endTime: queryParams?.endTime,
               matched: queryParams?.matched,
               personId: queryParams?.personId,
+              search: queryParams?.search,
               alarmType: queryParams?.alarmType,
               targetType: queryParams?.targetType,
             }
