@@ -50,6 +50,22 @@ pnpm test            # Vitest 浏览器无头模式测试 (--browser.headless vi
 
 ⚠️ `pnpm` 的目录参数是 `--dir <DIR>`（或 `-C`），**不是** npm 的 `--prefix`。
 
+### 1.2 开发迭代与最终门禁
+
+`make frontend-check` 是全仓门禁，不会根据 Git 改动自动缩小检查范围。开发迭代中不要在每次修改后运行它或 `make check`；先对改动文件和受影响的测试运行定向检查：
+
+```bash
+cd web
+pnpm exec prettier --check src/features/<feature>/<file>.tsx
+pnpm exec eslint src/features/<feature>/<file>.tsx
+pnpm test -- src/features/<feature>/<file>.test.tsx
+```
+
+测试路径也可以指定一个受影响的目录，以覆盖同一特性内相关用例。共享组件、公共 API、路由或配置变更时，应扩大到受影响的特性/测试范围；仍不需要无条件跑全仓套件。Vitest 仍运行真实无头浏览器测试，不要为了提速改成 JSDOM。
+
+完整类型检查、生产构建和全量测试留到任务收尾阶段统一执行一次。`make check` 已包含
+`make frontend-check`，收尾时不要再单独重复运行 `make frontend-check`。未运行完整门禁时，应明确报告实际运行的定向检查和未覆盖的门禁，不得把它描述为全量通过。
+
 ---
 
 ## 2. 自动化测试规范 (Vitest + Playwright Browser Runner)
