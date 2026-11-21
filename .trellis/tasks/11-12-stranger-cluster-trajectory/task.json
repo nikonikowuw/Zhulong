@@ -1,8 +1,8 @@
 {
   "id": "stranger-cluster-trajectory",
   "name": "stranger-cluster-trajectory",
-  "title": "陌生人聚类与跨摄像头轨迹",
-  "description": "把 recognitions 的陌生人特征聚类成稳定档案，并回答某个陌生人经过哪些摄像头",
+  "title": "陌生人疑似人员档案与跨摄像头轨迹",
+  "description": "把 recognitions 的未匹配特征聚成疑似人员档案：出现频次、涉及相机、抓拍轨迹，支持人工合并/拆分与转正入册",
   "status": "planning",
   "dev_type": null,
   "scope": "stranger,record,spatial,web",
