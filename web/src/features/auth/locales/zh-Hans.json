@@ -1,7 +1,9 @@
 {
   "init": {
-    "cardTitle": "系统初始化",
-    "cardDescription": "首次启动 · 请创建最高权限系统管理员",
+    "cardTitle": "初始化管理员",
+    "cardDescription": "这台设备还没有管理员账号",
+    "badge": "首次部署",
+    "badgeHint": "完成后自动登录",
     "usernameLabel": "管理员用户名 (3~32 位)",
     "usernamePlaceholder": "请输入用户名（例如：admin）",
     "passwordLabel": "设置密码 (至少 8 位)",
@@ -16,6 +18,7 @@
     "passwordMismatch": "两次密码不一致",
     "submitting": "保存凭据中...",
     "submit": "激活并进入控制台",
+    "trustNote": "凭据仅保存在本机，不会上传云端",
     "success": "系统管理员账号初始化成功！"
   },
   "login": {
@@ -25,14 +28,23 @@
     "usernamePlaceholder": "请输入用户名",
     "passwordLabel": "密码",
     "passwordPlaceholder": "请输入密码",
-    "rememberMe": "保持登录状态",
     "submitting": "登录中...",
     "submit": "登录",
     "welcomeBack": "欢迎回来，管理员 {{username}}！"
   },
   "layout": {
     "brand": "烛龙 · Zhulong",
-    "accelerationActive": "Linux ARM64 · NPU 加速活跃"
+    "tagline": "边缘智能录像与算力平台",
+    "healthProbing": "正在探测服务状态…",
+    "healthReady": "服务就绪",
+    "healthDegraded": "服务降级",
+    "healthStarting": "服务启动中",
+    "healthUnavailable": "无法连接服务",
+    "statusUnknown": "无法确认设备初始化状态",
+    "statusRetry": "重试",
+    "decodeHardware": "硬件解码",
+    "decodeSoftware": "软件解码",
+    "copyright": "Zhulong Project © {{year}}"
   },
   "validation": {
     "usernameRequired": "请输入用户名",

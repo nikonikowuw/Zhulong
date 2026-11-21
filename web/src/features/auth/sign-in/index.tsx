@@ -1,9 +1,12 @@
 import { type ReactElement, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import { Lock, Shield } from 'lucide-react'
+import { AlertTriangle, Lock } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
+import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import {
   Card,
   CardContent,
@@ -14,8 +17,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { authApi, type AuthUser } from '../api/auth-api'
 import { AuthLayout } from '../auth-layout'
-import { InitForm } from '../components/init-form'
 import { LoginForm } from '../components/login-form'
+import { SetupCard } from '../components/setup-card'
 
 export function SignIn(): ReactElement {
   const navigate = useNavigate()
@@ -24,7 +27,12 @@ export function SignIn(): ReactElement {
   const { t } = useTranslation('auth')
 
   // Probe the backend system-administrator initialization status
-  const { data: status, isLoading: isStatusLoading } = useQuery({
+  const {
+    data: status,
+    isLoading: isStatusLoading,
+    isError: isStatusError,
+    refetch,
+  } = useQuery({
     queryKey: ['auth', 'status'],
     queryFn: () => authApi.getStatus(),
     staleTime: 10_000,
@@ -70,46 +78,21 @@ export function SignIn(): ReactElement {
           <CardContent className='space-y-4'>
             <div className='space-y-2'>
               <Skeleton className='h-3.5 w-16' />
-              <Skeleton className='h-9 w-full' />
+              <Skeleton className='h-11 w-full' />
             </div>
             <div className='space-y-2'>
               <Skeleton className='h-3.5 w-12' />
-              <Skeleton className='h-9 w-full' />
+              <Skeleton className='h-11 w-full' />
             </div>
-            <div className='flex justify-between py-1'>
-              <Skeleton className='h-4 w-24' />
-              <Skeleton className='h-3.5 w-20' />
-            </div>
-            <Skeleton className='h-9 w-full rounded-md' />
+            <Skeleton className='h-11 w-full rounded-md' />
           </CardContent>
         </Card>
       )
     }
 
     if (isSetupMode) {
-      /* First-launch setup wizard card (only when the backend returns initialized: false) */
-      return (
-        <Card className='border-emerald-500/30 bg-card/90 shadow-2xl backdrop-blur-xl'>
-          <CardHeader className='space-y-1.5 pb-5'>
-            <div className='flex items-center gap-2.5'>
-              <div className='flex size-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 ring-1 ring-emerald-500/20 dark:text-emerald-400'>
-                <Shield className='size-4.5' />
-              </div>
-              <div>
-                <CardTitle className='text-lg font-bold tracking-tight'>
-                  {t('init.cardTitle')}
-                </CardTitle>
-                <CardDescription className='text-xs'>
-                  {t('init.cardDescription')}
-                </CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <InitForm onSuccess={handleSuccess} />
-          </CardContent>
-        </Card>
-      )
+      /* First-launch setup: 强制路径，必须是整页最醒目的东西 */
+      return <SetupCard onSuccess={handleSuccess} />
     }
 
     /* Regular administrator password login card */
@@ -137,5 +120,36 @@ export function SignIn(): ReactElement {
     )
   }
 
-  return <AuthLayout>{renderCard()}</AuthLayout>
+  return (
+    <AuthLayout>
+      <div className='space-y-3'>
+        {/* 状态探测失败时不能装作「一切正常」：运维会以为设备已初始化、反复试密码。
+            这里明说「无法确认」，并给一次就地重试。 */}
+        {isStatusError ? (
+          <div
+            role='alert'
+            className={cn(
+              'flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs',
+              STATUS_LEVEL_CLASS.warning
+            )}
+          >
+            <span className='flex min-w-0 items-center gap-1.5'>
+              <AlertTriangle className='size-3.5 shrink-0' aria-hidden='true' />
+              <span className='truncate'>{t('layout.statusUnknown')}</span>
+            </span>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              className='h-8 shrink-0 px-2.5 text-xs'
+              onClick={() => void refetch()}
+            >
+              {t('layout.statusRetry')}
+            </Button>
+          </div>
+        ) : null}
+        {renderCard()}
+      </div>
+    </AuthLayout>
+  )
 }

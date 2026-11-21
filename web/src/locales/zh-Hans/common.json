@@ -246,6 +246,7 @@
     "noContent": "无返回内容",
     "notModified": "内容未变更",
     "sessionExpired": "会话已失效，请重新登录",
-    "internalError": "服务器内部错误"
+    "internalError": "服务器内部错误",
+    "badGateway": "无法连接 Zhulong 服务，请确认后端已启动后重试"
   }
 }

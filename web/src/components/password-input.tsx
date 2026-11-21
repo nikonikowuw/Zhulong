@@ -3,6 +3,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from './ui/button'
+import { Input } from './ui/input'
 
 type PasswordInputProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
@@ -11,6 +12,13 @@ type PasswordInputProps = Omit<
   ref?: React.Ref<HTMLInputElement>
 }
 
+/**
+ * 密码输入框 = shadcn `Input` + 显隐切换按钮。
+ *
+ * 复用 `Input` 而不是手写 `<input>`：`aria-invalid:border-destructive`
+ * 这类状态样式只在 `Input` 里维护一份，手写副本会让「校验失败时密码框
+ * 边框不变红」这种不一致再次发生。
+ */
 export function PasswordInput({
   className,
   disabled,
@@ -21,10 +29,10 @@ export function PasswordInput({
   const { t } = useTranslation()
 
   return (
-    <div className={cn('relative rounded-md', className)}>
-      <input
+    <div className='relative'>
+      <Input
         type={showPassword ? 'text' : 'password'}
-        className='flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50'
+        className={cn('pe-11', className)}
         ref={ref}
         disabled={disabled}
         {...props}
@@ -34,7 +42,9 @@ export function PasswordInput({
         size='icon'
         variant='ghost'
         disabled={disabled}
-        className='absolute inset-e-1 top-1/2 h-6 w-6 -translate-y-1/2 rounded-md text-muted-foreground'
+        // `before:` 把命中区从 36×36 扩到 44×44（WCAG 2.5.5 建议值），
+        // 视觉尺寸不变，避免在 36px 输入框里塞一个过大的按钮。
+        className='absolute inset-e-0.5 top-1/2 size-9 -translate-y-1/2 text-muted-foreground before:absolute before:-inset-1 before:content-[""]'
         onClick={() => setShowPassword((prev) => !prev)}
       >
         {showPassword ? <Eye size={18} /> : <EyeOff size={18} />}

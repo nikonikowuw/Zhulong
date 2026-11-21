@@ -246,6 +246,7 @@
     "noContent": "No content.",
     "notModified": "Content not modified!",
     "sessionExpired": "Session expired, please sign in again.",
-    "internalError": "Internal Server Error!"
+    "internalError": "Internal Server Error!",
+    "badGateway": "Cannot reach the Zhulong service. Make sure the backend is running and try again."
   }
 }

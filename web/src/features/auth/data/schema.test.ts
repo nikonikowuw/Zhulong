@@ -17,12 +17,10 @@ describe('Auth Schemas', () => {
       const result = loginSchema.safeParse({
         username: 'admin',
         password: 'password123',
-        rememberMe: true,
       })
       expect(result.success).toBe(true)
       if (result.success) {
         expect(result.data.username).toBe('admin')
-        expect(result.data.rememberMe).toBe(true)
       }
     })
 
@@ -30,7 +28,6 @@ describe('Auth Schemas', () => {
       const result = loginSchema.safeParse({
         username: '   ',
         password: 'password123',
-        rememberMe: true,
       })
       expect(result.success).toBe(false)
       if (!result.success) {
@@ -42,7 +39,6 @@ describe('Auth Schemas', () => {
       const result = loginSchema.safeParse({
         username: 'admin',
         password: '',
-        rememberMe: true,
       })
       expect(result.success).toBe(false)
       if (!result.success) {

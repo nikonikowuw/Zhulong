@@ -246,6 +246,7 @@
     "noContent": "無回傳內容",
     "notModified": "內容未變更",
     "sessionExpired": "工作階段已失效，請重新登入",
-    "internalError": "伺服器內部錯誤"
+    "internalError": "伺服器內部錯誤",
+    "badGateway": "無法連線 Zhulong 服務，請確認後端已啟動後重試"
   }
 }

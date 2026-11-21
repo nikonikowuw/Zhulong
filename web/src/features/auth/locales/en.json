@@ -1,7 +1,9 @@
 {
   "init": {
-    "cardTitle": "System Initialization",
-    "cardDescription": "First launch · Create the highest-privilege system administrator",
+    "cardTitle": "Set up your administrator",
+    "cardDescription": "This device has no administrator account yet",
+    "badge": "First launch",
+    "badgeHint": "You'll be signed in when done",
     "usernameLabel": "Administrator username (3-32 characters)",
     "usernamePlaceholder": "Enter a username (e.g. admin)",
     "passwordLabel": "Set password (at least 8 characters)",
@@ -16,6 +18,7 @@
     "passwordMismatch": "Passwords do not match",
     "submitting": "Saving credentials...",
     "submit": "Activate and enter console",
+    "trustNote": "Credentials never leave this device",
     "success": "System administrator account initialized successfully!"
   },
   "login": {
@@ -25,14 +28,23 @@
     "usernamePlaceholder": "Enter username",
     "passwordLabel": "Password",
     "passwordPlaceholder": "Enter password",
-    "rememberMe": "Keep me signed in",
     "submitting": "Signing in...",
     "submit": "Sign in",
     "welcomeBack": "Welcome back, administrator {{username}}!"
   },
   "layout": {
     "brand": "Zhulong",
-    "accelerationActive": "Linux ARM64 · NPU acceleration active"
+    "tagline": "Intelligent NVR & Edge Computing",
+    "healthProbing": "Probing service…",
+    "healthReady": "Service ready",
+    "healthDegraded": "Service degraded",
+    "healthStarting": "Service starting",
+    "healthUnavailable": "Service unreachable",
+    "statusUnknown": "Unable to confirm initialization state",
+    "statusRetry": "Retry",
+    "decodeHardware": "Hardware decode",
+    "decodeSoftware": "Software decode",
+    "copyright": "Zhulong Project © {{year}}"
   },
   "validation": {
     "usernameRequired": "Please enter a username",

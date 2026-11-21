@@ -10,7 +10,6 @@ export function createLoginSchema(t: TFunction) {
     password: z
       .string()
       .min(1, t('validation.passwordRequired', { ns: 'auth' })),
-    rememberMe: z.boolean(),
   })
 }
 
