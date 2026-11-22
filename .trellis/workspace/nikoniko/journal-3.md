@@ -184,3 +184,40 @@ Implemented the storage emergency self-heal fix: used/(used+free) usage accounti
 
 - RK3568 实测校准 32 MiB 环形缓冲上限与 120s 片段上限
 - 11-12-stranger-cluster-trajectory、11-15-face-track-fusion-identity 仍在规划，未归档
+
+
+## Session 101: Optimize tasks ChannelTaskDialog UI & calibration UX
+<!-- trellis-session: v=2 fp=5e960fe8522d4a3d -->
+
+**Date**: 2026-11-22
+**Task**: Optimize tasks ChannelTaskDialog UI & calibration UX
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+Optimized ChannelTaskDialog responsive layout (<1024px vertical stacking & visible budget meter), prevented overlapping ROI/MASK pointer hijack during drawing, synced params tab & raw JSON mode on validation errors, added Ctrl/Cmd+Z and Delete/Backspace canvas shortcuts with editable-target guards, and preserved crop and per-algorithm undo stacks across algorithm switches.
+
+### Main Changes
+
+- Responsive ChannelTaskDialog & visible budget meter across breakpoints
+- Non-hijacking pointer pass-through for ROI/MASK overlap drawing
+- Controlled params/schedule tab switching + auto JSON mode on malformed config
+- Keyboard undo/delete shortcuts guarded against inputs and IME
+- Scoped region vs task-level crop undo history in useRegionEditor
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b07ce90` | fix(tasks): preserve crop undo history and prevent drawing hijack on region canvas |
+| `bf3be81` | feat(tasks): polish channel task dialog responsive layout, validation tab sync, and shortcuts |
+
+### Testing
+
+- [OK] pnpm --dir web test src/features/tasks src/lib/i18n.test.ts (20 files, 210 tests passed)
+- [OK] pnpm --dir web run format:check, lint, build (passed)
+
+### Status
+
+[OK] **Completed**

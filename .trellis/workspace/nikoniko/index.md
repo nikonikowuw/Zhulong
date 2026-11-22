@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 100
-- **Last Active**: 2026-11-20
+- **Total Sessions**: 101
+- **Last Active**: 2026-11-22
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~186 | Active |
+| `journal-3.md` | ~223 | Active |
 | `journal-2.md` | ~1954 | Archived |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 101 | 2026-11-22 | Optimize tasks ChannelTaskDialog UI & calibration UX | `b07ce90`, `bf3be81` | `dev` |
 | 100 | 2026-11-20 | Archive event clip recording task | `40306dd`, `9888307` | `dev` |
 | 99 | 2026-11-12 | Archive face-recognition CCTV optimization and 4 completed tasks | `d4e7d32`, `7c66dcc`, `8c57267`, `5c114de`, `3d069f0`, `77bf723` | `dev` |
 | 98 | 2026-11-06 | Finish alert-push task | `36a936a`, `1501b46`, `e1968bc`, `464baa0`, `c474103` | `dev` |
