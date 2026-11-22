@@ -2,6 +2,7 @@
 trigger: glob
 globs:
   - 'internal/**/*.go'
+priority: 100
 description: Go 代码风格规范（换行排版、变量初始化、早返回控制流、传参上限与包内排序）
 ---
 
