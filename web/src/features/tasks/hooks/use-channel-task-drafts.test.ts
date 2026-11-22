@@ -228,4 +228,68 @@ describe('useChannelTaskDrafts', () => {
     expect(result.current.drafts['algo-face']?.clipConfigJson).toBe(clipJson)
     expect(result.current.drafts['algo-smoke']?.clipConfigJson).toBe('{}')
   })
+
+  it('preserves crop undo history across algorithm switches without clobbering the active algorithm draft', async () => {
+    const { result, act } = await renderDrafts()
+
+    act(() => {
+      result.current.regionEditor.snapshot()
+      result.current.regionEditor.setCrop([0.1, 0.1, 0.8, 0.8])
+    })
+
+    act(() => result.current.toggleAlgo('algo-smoke', true))
+    expect(result.current.activeAlgoId).toBe('algo-smoke')
+    expect(result.current.regionEditor.crop).toEqual([0.1, 0.1, 0.8, 0.8])
+    expect(result.current.regionEditor.canUndo).toBe(true)
+
+    act(() => {
+      result.current.regionEditor.snapshot()
+      result.current.regionEditor.createRect('roi', [0.2, 0.2, 0.5, 0.5])
+    })
+    expect(result.current.regionEditor.draft.roi).toHaveLength(1)
+
+    // 第一次撤销：只回退 algo-smoke 的 ROI，保留 crop
+    act(() => result.current.regionEditor.undo())
+    expect(result.current.regionEditor.draft.roi).toHaveLength(0)
+    expect(result.current.regionEditor.crop).toEqual([0.1, 0.1, 0.8, 0.8])
+    expect(result.current.regionEditor.canUndo).toBe(true)
+
+    // 第二次撤销：继续回退跨算法前设置的 crop，且不干扰当前 algo-smoke 草稿
+    act(() => result.current.regionEditor.undo())
+    expect(result.current.regionEditor.crop).toBeNull()
+    expect(result.current.regionEditor.draft.roi).toHaveLength(0)
+
+    // 切回 algo-face：其原有 ROI 仍完好
+    act(() => result.current.selectActiveAlgo('algo-face'))
+    expect(result.current.regionEditor.draft.roi).toHaveLength(1)
+  })
+
+  it('isolates per-algorithm region undo stacks and clears history on camera switch', async () => {
+    const { result, act } = await renderDrafts()
+
+    act(() => {
+      result.current.regionEditor.snapshot()
+      result.current.regionEditor.createRect('roi', [0.2, 0.2, 0.5, 0.5])
+    })
+    expect(result.current.regionEditor.draft.roi).toHaveLength(2)
+
+    // 切到 algo-smoke 时，不可误撤销 algo-face 的区域变更
+    act(() => result.current.toggleAlgo('algo-smoke', true))
+    expect(result.current.regionEditor.canUndo).toBe(false)
+
+    // 切回 algo-face 后仍可撤销先前的区域新增
+    act(() => result.current.selectActiveAlgo('algo-face'))
+    expect(result.current.regionEditor.canUndo).toBe(true)
+    act(() => result.current.regionEditor.undo())
+    expect(result.current.regionEditor.draft.roi).toHaveLength(1)
+
+    // 切换摄像头后重置撤销历史
+    act(() => {
+      result.current.regionEditor.snapshot()
+      result.current.regionEditor.setCrop([0.1, 0.1, 0.6, 0.6])
+    })
+    expect(result.current.regionEditor.canUndo).toBe(true)
+    act(() => result.current.changeCamera('cam-02'))
+    expect(result.current.regionEditor.canUndo).toBe(false)
+  })
 })

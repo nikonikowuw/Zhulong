@@ -32,6 +32,11 @@ export {
 
 /** 无草稿时的稳定空对象：避免每次渲染新建字面量把 useCallback 依赖打穿。 */
 const EMPTY_DRAFTS: Record<string, AlgoDraftItem> = {}
+const EMPTY_REGION_SCOPE = '__none__'
+
+function scopeKeyForAlgo(algoId: string | null): string {
+  return algoId ?? EMPTY_REGION_SCOPE
+}
 
 export interface ChannelTaskDraftsOptions {
   initialCameraId: string
@@ -142,7 +147,11 @@ export function useChannelTaskDrafts({
 
   // crop 属于任务（= 相机），与当前选中算法无关：切算法不重载，切相机才重载。
   const initialCrop = tasksByCameraId.get(initialCameraId)?.crop ?? null
-  const regionEditor = useRegionEditor(initialRegionJson, initialCrop)
+  const regionEditor = useRegionEditor(
+    initialRegionJson,
+    initialCrop,
+    scopeKeyForAlgo(state.activeAlgoId)
+  )
   const {
     reset: resetRegion,
     resetCrop,
@@ -166,7 +175,7 @@ export function useChannelTaskDrafts({
         algoId,
         currentRegionJson: serializeCurrentRegion(),
       })
-      resetRegion(regionJsonFor(algoId))
+      resetRegion(regionJsonFor(algoId), scopeKeyForAlgo(algoId))
     },
     [state.activeAlgoId, serializeCurrentRegion, regionJsonFor, resetRegion]
   )
@@ -192,7 +201,10 @@ export function useChannelTaskDrafts({
       })
 
       if (nextActiveAlgoId !== state.activeAlgoId) {
-        resetRegion(regionJsonFor(nextActiveAlgoId))
+        resetRegion(
+          regionJsonFor(nextActiveAlgoId),
+          scopeKeyForAlgo(nextActiveAlgoId)
+        )
       }
     },
     [
@@ -236,7 +248,8 @@ export function useChannelTaskDrafts({
         activeAlgoId
           ? (draftsForCamera[activeAlgoId]?.regionConfigJson ??
               EMPTY_CONFIG_JSON)
-          : EMPTY_CONFIG_JSON
+          : EMPTY_CONFIG_JSON,
+        scopeKeyForAlgo(activeAlgoId)
       )
       resetCrop(nextCrop)
     },

@@ -286,4 +286,58 @@ describe('RegionCanvas', () => {
     expect(onCreate).not.toHaveBeenCalled()
     expect(onSelect).not.toHaveBeenCalled()
   })
+
+  it('draws a new rect starting inside an existing ROI without moving the existing rect', async () => {
+    const onCreate = vi.fn()
+    const onChange = vi.fn()
+    const onSelect = vi.fn()
+    await renderCanvas({
+      tool: 'mask',
+      draft: {
+        roi: [{ id: 'roi-1', rect: [0.1, 0.1, 0.8, 0.8] }],
+        mask: [],
+      },
+      onCreate,
+      onChange,
+      onSelect,
+    })
+
+    const rect = canvasRoot().getBoundingClientRect()
+    const start = {
+      clientX: rect.left + rect.width * 0.25,
+      clientY: rect.top + rect.height * 0.25,
+    }
+    const end = {
+      clientX: rect.left + rect.width * 0.6,
+      clientY: rect.top + rect.height * 0.6,
+    }
+    // 使用浏览器真实命中测试目标派发 mousedown：若未对旧框设 pointer-events-none，
+    // 命中目标会落到 ROI #1 并被 startMove 拦截，无法创建 MASK。
+    const hitTarget =
+      document.elementFromPoint(start.clientX, start.clientY) ?? canvasRoot()
+    expect(hitTarget).toBe(canvasRoot())
+
+    await act(async () => {
+      hitTarget.dispatchEvent(
+        new MouseEvent('mousedown', { bubbles: true, button: 0, ...start })
+      )
+    })
+    await act(async () => {
+      window.dispatchEvent(
+        new MouseEvent('mousemove', { bubbles: true, ...end })
+      )
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+    })
+
+    expect(onSelect).toHaveBeenCalledWith(null)
+    expect(onSelect).not.toHaveBeenCalledWith({ category: 'roi', index: 0 })
+    expect(onChange).not.toHaveBeenCalled()
+    expect(onCreate).toHaveBeenCalledTimes(1)
+    const [category, created] = onCreate.mock.calls[0]
+    expect(category).toBe('mask')
+    expect(created[0]).toBeCloseTo(0.25, 2)
+    expect(created[1]).toBeCloseTo(0.25, 2)
+    expect(created[2]).toBeCloseTo(0.6, 2)
+    expect(created[3]).toBeCloseTo(0.6, 2)
+  })
 })

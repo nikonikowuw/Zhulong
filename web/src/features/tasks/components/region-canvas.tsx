@@ -96,6 +96,8 @@ export function RegionCanvas({
 
   const cropRect = crop && !isFullFrame(crop) ? crop : null
   const cropEditable = tool === 'crop' && !disabled
+  const rectInteractive = !disabled && tool === 'select'
+  const rectPassThrough = !disabled && tool !== 'select'
 
   const renderItem = (
     item: RegionItem,
@@ -121,10 +123,19 @@ export function RegionCanvas({
           categoryRegionClass(hue),
           isSelected
             ? 'shadow-lg ring-2 ring-primary ring-offset-1'
-            : 'hover:border-foreground/60',
-          disabled ? 'cursor-not-allowed' : 'cursor-move'
+            : rectInteractive && 'hover:border-foreground/60',
+          // 仅在启用的非选择工具（绘制 ROI / MASK / Crop / 绊线）下穿透指针，支持在旧框内叠画新框；
+          // disabled 态保留命中并由 beginDrag 拦截，维持 cursor-not-allowed 反馈。
+          rectPassThrough && 'pointer-events-none',
+          disabled
+            ? 'cursor-not-allowed'
+            : rectInteractive
+              ? 'cursor-move'
+              : 'cursor-crosshair'
         )}
-        onMouseDown={startMove(category, idx, item.rect)}
+        onMouseDown={
+          rectPassThrough ? undefined : startMove(category, idx, item.rect)
+        }
       >
         {isMask && (
           <span
@@ -154,7 +165,7 @@ export function RegionCanvas({
         />
 
         {/* 四角缩放手柄 */}
-        {isSelected && !disabled && (
+        {isSelected && rectInteractive && (
           <>
             {RESIZE_HANDLES.map((handle) => (
               <div

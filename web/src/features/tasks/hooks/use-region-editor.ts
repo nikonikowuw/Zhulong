@@ -31,8 +31,8 @@ export interface RegionEditorController {
   counts: { roi: number; mask: number; tripwires?: number }
   /** 任务级裁剪窗口；`null` = 全幅。与 ROI/MASK 同处一个撤销栈。 */
   crop: Rect | null
-  /** 载入新的 ROI 基线（切换算法时调用），并清空撤销历史。**不动 crop**。 */
-  reset: (value: string) => void
+  /** 载入新的 ROI 基线（切换算法时调用）。传入 `nextScopeKey` 时保留历史栈以保护 Crop 与其它算法撤销记录。 */
+  reset: (value: string, nextScopeKey?: string) => void
   /** 载入新的 crop 基线（打开弹窗/切换相机时调用），并清空撤销历史。 */
   resetCrop: (value: Rect | null) => void
   setTool: (tool: RegionTool) => void
@@ -53,10 +53,38 @@ export interface RegionEditorController {
   serializeCrop: () => Rect | null
 }
 
-/** 一次撤销快照同时覆盖区域与裁剪：两套独立栈会让一次 Ctrl+Z 只回退一半。 */
-interface EditorSnapshot {
+/** 一次撤销快照按操作对象分类：region 归属各自算法作用域，crop 归属通道级；共用单一有序时间线。 */
+type EditorHistoryEntry =
+  | { kind: 'region'; scopeKey: string; draft: RegionDraft }
+  | { kind: 'crop'; crop: Rect | null }
+
+interface PendingSnapshot {
+  scopeKey: string
   draft: RegionDraft
   crop: Rect | null
+}
+
+function findLatestUndoIndex(
+  history: EditorHistoryEntry[],
+  scopeKey: string
+): number {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i]
+    if (entry.kind === 'crop' || entry.scopeKey === scopeKey) {
+      return i
+    }
+  }
+  return -1
+}
+
+function appendHistoryEntry(
+  history: EditorHistoryEntry[],
+  entry: EditorHistoryEntry
+): EditorHistoryEntry[] {
+  const next = [...history, entry]
+  return next.length > MAX_HISTORY
+    ? next.slice(next.length - MAX_HISTORY)
+    : next
 }
 
 /**
@@ -70,7 +98,8 @@ interface EditorSnapshot {
  */
 export function useRegionEditor(
   initialValue: string = EMPTY_REGION_JSON,
-  initialCrop: Rect | null = null
+  initialCrop: Rect | null = null,
+  initialScopeKey: string = 'default'
 ): RegionEditorController {
   const idSeqRef = useRef(0)
   const makeId = useCallback(() => {
@@ -90,40 +119,86 @@ export function useRegionEditor(
   })
   const [crop, setCropState] = useState<Rect | null>(initialCrop)
   const [cropBaseline, setCropBaseline] = useState<Rect | null>(initialCrop)
-  const [history, setHistory] = useState<EditorSnapshot[]>([])
+  const [scopeKey, setScopeKey] = useState<string>(initialScopeKey)
+  const [history, setHistory] = useState<EditorHistoryEntry[]>([])
   const [selected, setSelected] = useState<RegionSelection | null>(null)
   const [tool, setTool] = useState<RegionTool>('select')
 
-  // 事件回调里读取「最新草稿/历史」，避免把它们塞进 useCallback 依赖导致回调频繁重建。
-  // 必须在 effect 里同步：渲染期写 ref 会触发 react-hooks/refs。
+  // 事件回调里同步维护最新引用，既避免把它们塞进 useCallback 依赖，也防止同批多次调用读到陈旧值。
   const draftRef = useRef(draft)
+  const historyRef = useRef(history)
+  const cropRef = useRef(crop)
+  const scopeKeyRef = useRef(scopeKey)
+  const pendingSnapshotRef = useRef<PendingSnapshot | null>(null)
+
   useEffect(() => {
     draftRef.current = draft
   }, [draft])
-  const historyRef = useRef(history)
   useEffect(() => {
     historyRef.current = history
   }, [history])
-  const cropRef = useRef(crop)
   useEffect(() => {
     cropRef.current = crop
   }, [crop])
+  useEffect(() => {
+    scopeKeyRef.current = scopeKey
+  }, [scopeKey])
+
+  const pushHistory = useCallback((entry: EditorHistoryEntry) => {
+    const next = appendHistoryEntry(historyRef.current, entry)
+    historyRef.current = next
+    setHistory(next)
+  }, [])
+
+  const consumePendingAs = useCallback(
+    (kind: 'region' | 'crop') => {
+      const pending = pendingSnapshotRef.current
+      if (!pending) return
+      pendingSnapshotRef.current = null
+      if (kind === 'crop') {
+        pushHistory({ kind: 'crop', crop: pending.crop })
+      } else {
+        pushHistory({
+          kind: 'region',
+          scopeKey: pending.scopeKey,
+          draft: pending.draft,
+        })
+      }
+    },
+    [pushHistory]
+  )
 
   const reset = useCallback(
-    (value: string) => {
+    (value: string, nextScopeKey?: string) => {
       const next = toDraft(parseRegionConfig(value), makeId)
+      pendingSnapshotRef.current = null
+      draftRef.current = next
       setDraft(next)
       setBaseline(next)
-      setHistory([])
+      if (nextScopeKey !== undefined) {
+        scopeKeyRef.current = nextScopeKey
+        setScopeKey(nextScopeKey)
+      } else {
+        // 未指定新作用域时仅清理当前算法的区域栈，保留任务级 Crop 撤销记录。
+        const kept = historyRef.current.filter(
+          (entry) =>
+            entry.kind === 'crop' || entry.scopeKey !== scopeKeyRef.current
+        )
+        historyRef.current = kept
+        setHistory(kept)
+      }
       setSelected(null)
       setTool('select')
     },
     [makeId]
   )
 
-  // ⚠️ 切算法会调 reset()，但 crop 属于任务而不是算法：这里绝不碰 crop，
-  // 否则「切一次算法 = 清空裁剪窗口」。
+  // ⚠️ 切算法会调 reset()，但 crop 属于任务而不是算法：这里绝不碰 crop；
+  // 只有切换相机调 resetCrop() 时才清空整条通道的撤销历史。
   const resetCrop = useCallback((value: Rect | null) => {
+    pendingSnapshotRef.current = null
+    cropRef.current = value
+    historyRef.current = []
     setCropState(value)
     setCropBaseline(value)
     setHistory([])
@@ -131,70 +206,105 @@ export function useRegionEditor(
   }, [])
 
   const snapshot = useCallback(() => {
-    setHistory((prev) => {
-      const next = [...prev, { draft: draftRef.current, crop: cropRef.current }]
-      return next.length > MAX_HISTORY
-        ? next.slice(next.length - MAX_HISTORY)
-        : next
-    })
+    pendingSnapshotRef.current = {
+      scopeKey: scopeKeyRef.current,
+      draft: draftRef.current,
+      crop: cropRef.current,
+    }
   }, [])
 
   const undo = useCallback(() => {
     const prev = historyRef.current
-    if (prev.length === 0) return
-    const last = prev[prev.length - 1]
-    setDraft(last.draft)
-    setCropState(last.crop)
-    setHistory(prev.slice(0, -1))
-    setSelected(null)
+    const targetIdx = findLatestUndoIndex(prev, scopeKeyRef.current)
+    if (targetIdx === -1) return
+    pendingSnapshotRef.current = null
+    const target = prev[targetIdx]
+    const nextHistory = prev.filter((_, i) => i !== targetIdx)
+    historyRef.current = nextHistory
+    setHistory(nextHistory)
+    if (target.kind === 'crop') {
+      cropRef.current = target.crop
+      setCropState(target.crop)
+    } else {
+      draftRef.current = target.draft
+      setDraft(target.draft)
+      setSelected(null)
+    }
   }, [])
 
-  const changeDraft = useCallback((next: RegionDraft) => {
-    setDraft(next)
-  }, [])
+  const changeDraft = useCallback(
+    (next: RegionDraft) => {
+      consumePendingAs('region')
+      draftRef.current = next
+      setDraft(next)
+    },
+    [consumePendingAs]
+  )
 
   const createRect = useCallback(
     (category: RegionCategory, rect: Rect) => {
       const items = draftItems(draftRef.current, category)
-      if (items.length >= MAX_RECTS_PER_CATEGORY) return
+      if (items.length >= MAX_RECTS_PER_CATEGORY) {
+        pendingSnapshotRef.current = null
+        return
+      }
+      consumePendingAs('region')
       const next = withDraftItems(draftRef.current, category, [
         ...items,
         { id: makeId(), rect },
       ])
+      draftRef.current = next
       setDraft(next)
       setSelected({ category, index: items.length })
     },
-    [makeId]
+    [consumePendingAs, makeId]
   )
 
   const deleteRect = useCallback(
     (category: RegionCategory, index: number) => {
-      snapshot()
+      pendingSnapshotRef.current = null
+      pushHistory({
+        kind: 'region',
+        scopeKey: scopeKeyRef.current,
+        draft: draftRef.current,
+      })
       const items = draftItems(draftRef.current, category)
-      setDraft(
-        withDraftItems(
-          draftRef.current,
-          category,
-          items.filter((_, i) => i !== index)
-        )
+      const next = withDraftItems(
+        draftRef.current,
+        category,
+        items.filter((_, i) => i !== index)
       )
+      draftRef.current = next
+      setDraft(next)
       setSelected(null)
     },
-    [snapshot]
+    [pushHistory]
   )
 
   const select = useCallback((selection: RegionSelection | null) => {
     setSelected(selection)
   }, [])
 
-  const setCrop = useCallback((rect: Rect | null) => {
-    setCropState(rect)
-  }, [])
+  const setCrop = useCallback(
+    (rect: Rect | null) => {
+      consumePendingAs('crop')
+      cropRef.current = rect
+      setCropState(rect)
+    },
+    [consumePendingAs]
+  )
 
   const clearCrop = useCallback(() => {
-    snapshot()
+    pendingSnapshotRef.current = null
+    pushHistory({ kind: 'crop', crop: cropRef.current })
+    cropRef.current = null
     setCropState(null)
-  }, [snapshot])
+  }, [pushHistory])
+
+  const canUndo = useMemo(
+    () => findLatestUndoIndex(history, scopeKey) !== -1,
+    [history, scopeKey]
+  )
 
   const isDirty = useMemo(
     () =>
@@ -228,7 +338,7 @@ export function useRegionEditor(
       draft,
       selected,
       tool,
-      canUndo: history.length > 0,
+      canUndo,
       isDirty,
       counts,
       crop,
@@ -250,7 +360,7 @@ export function useRegionEditor(
       draft,
       selected,
       tool,
-      history.length,
+      canUndo,
       isDirty,
       counts,
       crop,
