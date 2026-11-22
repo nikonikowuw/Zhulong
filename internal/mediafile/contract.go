@@ -25,3 +25,8 @@ type DeviceInspector interface {
 	InspectFS(path string) (*storage.FSStats, error)
 	GetRootDeviceID() (uint64, error)
 }
+
+// DeliveryModeProvider reports the active HTTP delivery mode ("proxy" or "redirect").
+type DeliveryModeProvider interface {
+	DeliveryMode(ctx context.Context) string
+}

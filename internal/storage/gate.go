@@ -117,6 +117,61 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 	return health
 }
 
+// EvaluateSpool checks local spool disk capacity and spool quota for remote backends.
+func (g *EmergencyGate) EvaluateSpool(
+	stats *FSStats,
+	cfg *StorageConfig,
+	spoolUsedBytes int64,
+	isDismounted bool,
+) StorageHealthStatus {
+	health, transition := g.evaluateSpoolLocked(
+		stats,
+		cfg,
+		spoolUsedBytes,
+		isDismounted,
+	)
+	transition.fire(g)
+
+	return health
+}
+
+func (g *EmergencyGate) evaluateSpoolLocked(
+	stats *FSStats,
+	cfg *StorageConfig,
+	spoolUsedBytes int64,
+	isDismounted bool,
+) (StorageHealthStatus, gateTransition) {
+	if stats == nil || cfg == nil || isDismounted || stats.IsReadOnly {
+		return g.evaluateLocked(stats, cfg, isDismounted)
+	}
+
+	spoolLimit := cfg.SpoolMaxMB * 1024 * 1024
+	spoolExceeded := spoolLimit > 0 && spoolUsedBytes >= spoolLimit
+	if spoolExceeded {
+		var transition gateTransition
+		g.mu.Lock()
+		prevEmergency := g.isEmergency.Swap(true)
+		transition.markBlocked(&g.canWrite)
+		g.reason = "local spool buffer quota exceeded"
+		if !prevEmergency {
+			g.logger.Warn("storage gate: emergency write stop activated by spool quota",
+				zap.Int64("spool_used_bytes", spoolUsedBytes),
+				zap.Int64("spool_max_mb", cfg.SpoolMaxMB),
+			)
+			transition.onStop = g.onEmergencyStop
+			transition.stopReason = g.reason
+		}
+		g.mu.Unlock()
+		return StatusEmergencyStopped, transition
+	}
+
+	health, transition := g.evaluateLocked(stats, cfg, false)
+	if health == StatusHealthy && spoolLimit > 0 && spoolUsedBytes*100 >= spoolLimit*80 {
+		return StatusWarning, transition
+	}
+	return health, transition
+}
+
 // evaluateLocked mutates the gate and reports which edges fired. The caller owns
 // delivering them after the mutex is released.
 func (g *EmergencyGate) evaluateLocked(

@@ -2,253 +2,344 @@ package mediafile
 
 import (
 	"context"
-	"io/fs"
-	"os"
-	"path/filepath"
+	"io"
+	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 )
 
-// Service exposes controlled read access to media files under the media root.
+const defaultPresignTTL = 10 * time.Minute
+
+// Service exposes controlled read access to media objects stored in filestore.
 //
-// It performs byte transfer only: no decoding, demuxing, remuxing, transcoding
-// or slicing happens here, and no directory listing exists. Listing, filtering
-// and pagination belong to the event domain, which stores media references in
-// its own table and queries them with SQL.
+// It performs byte transfer and presign resolution only: no decoding, demuxing,
+// remuxing, transcoding, slicing, or directory enumeration happens here.
 type Service struct {
-	provider  MediaRootProvider
-	inspector DeviceInspector
-	logger    *zap.Logger
+	store        filestore.Store
+	provider     MediaRootProvider
+	inspector    DeviceInspector
+	deliveryMode DeliveryModeProvider
+	presignTTL   time.Duration
+	logger       *zap.Logger
 
 	mu       sync.RWMutex
 	rootPath string
-	resolver *resolver
+	localMgr *filestore.Manager
 }
 
-// NewService creates the media file service.
+// NewService creates the legacy provider-backed media file service backed by filestore.LocalDriver.
 //
-// The constructor is pure: it opens no file and builds no os.Root handle. The
-// handle is created lazily on the first request, because a constructor that
-// touches the filesystem would run before the application lifecycle starts and
-// would fail startup for a media directory that is not mounted yet.
+// The constructor is pure: it opens no files, directories, or sockets.
 func NewService(provider MediaRootProvider, inspector DeviceInspector, logger *zap.Logger) *Service {
+	return NewServiceWithStore(StoreOptions{
+		Provider:  provider,
+		Inspector: inspector,
+		Logger:    logger,
+	})
+}
+
+// StoreOptions configures a Service backed directly by filestore.Store.
+type StoreOptions struct {
+	Store        filestore.Store
+	Provider     MediaRootProvider
+	Inspector    DeviceInspector
+	DeliveryMode DeliveryModeProvider
+	PresignTTL   time.Duration
+	Logger       *zap.Logger
+}
+
+// NewServiceWithStore creates a media file service backed by a pluggable filestore.Store
+// (and optional DeliveryModeProvider for HTTP redirect offloading).
+func NewServiceWithStore(opts StoreOptions) *Service {
+	logger := opts.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	ttl := opts.PresignTTL
+	if ttl <= 0 {
+		ttl = defaultPresignTTL
+	}
 	return &Service{
-		provider:  provider,
-		inspector: inspector,
-		logger:    logger.Named("mediafile.service"),
+		store:        opts.Store,
+		provider:     opts.Provider,
+		inspector:    opts.Inspector,
+		deliveryMode: opts.DeliveryMode,
+		presignTTL:   ttl,
+		logger:       logger.Named("mediafile.service"),
 	}
 }
 
-// GetEntry returns metadata for a single media file.
-//
-// The path must be relative to the media root, with no leading slash. Callers
-// holding a URL path segment (which always carries a leading slash) must strip
-// it first; see the handler's relativeMediaPath.
+// GetEntry returns metadata for a single media file without opening its byte stream.
 func (s *Service) GetEntry(ctx context.Context, relPath string) (*MediaEntry, error) {
-	r, err := s.currentResolver(ctx)
+	cleanKey, err := filestore.ValidateMediaKey(relPath)
 	if err != nil {
 		return nil, err
 	}
 
-	clean, info, err := r.stat(relPath)
+	store, err := s.resolveStore(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if info.IsDir() {
-		return nil, apperr.Invalid("MEDIA_NOT_A_FILE", "Media path is not a file", nil)
+
+	info, err := store.Stat(ctx, cleanKey)
+	if err != nil {
+		return nil, err
 	}
 
-	return entryFromFileInfo(clean, info), nil
+	return entryFromObjectInfo(cleanKey, info), nil
 }
 
-// OpenContent resolves a media file and returns an open handle plus its
-// metadata, ready to be handed to http.ServeContent.
+// OpenContent resolves a media object and returns a seekable byte stream plus
+// object metadata ready to be handed to http.ServeContent.
 //
-// The path must be relative to the media root, with no leading slash.
-//
-// The caller owns the returned file and must close it.
-func (s *Service) OpenContent(ctx context.Context, relPath string) (*os.File, fs.FileInfo, error) {
-	r, err := s.currentResolver(ctx)
+// The caller owns the returned ReadSeekCloser and must close it.
+func (s *Service) OpenContent(ctx context.Context, relPath string) (io.ReadSeekCloser, filestore.ObjectInfo, error) {
+	cleanKey, err := filestore.ValidateMediaKey(relPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, filestore.ObjectInfo{}, err
 	}
 
-	file, err := r.open(relPath)
+	store, err := s.resolveStore(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, filestore.ObjectInfo{}, err
 	}
 
-	info, err := file.Stat()
+	rc, info, err := store.Open(ctx, cleanKey)
 	if err != nil {
-		closeFileBestEffort(file)
-		return nil, nil, apperr.Internal("MEDIA_ENTRY_UNREADABLE", "Media entry could not be read", err)
-	}
-	// os.Root.Open succeeds on a directory, so the "must be a file" rule has
-	// to be enforced here rather than assumed from a failed open.
-	if info.IsDir() {
-		closeFileBestEffort(file)
-		return nil, nil, apperr.Invalid("MEDIA_NOT_A_FILE", "Media path is not a file", nil)
+		return nil, filestore.ObjectInfo{}, err
 	}
 
-	return file, info, nil
+	return rc, info, nil
 }
 
-// GetRootInfo reports whether the media root is usable and what it is mounted
-// on. It backs both the frontend availability probe and operator diagnostics.
+// ResolveRedirect checks whether active deliveryMode == "redirect" applies to
+// relPath and returns a time-limited direct S3 presigned GET URL.
 //
-// Availability reuses the resolver's own validation, so a root that has fallen
-// through to the system filesystem is reported unavailable here for the same
-// reason a read would be refused, instead of the endpoint advertising a root
-// that content requests would then reject.
+// When deliveryMode != "redirect", active driver does not implement Presigner,
+// or an unmigrated object exists only in local fallback, it returns ("", false, nil)
+// so ServeContent seamlessly falls back to streaming bytes via OpenContent.
+func (s *Service) ResolveRedirect(ctx context.Context, relPath string) (string, bool, error) {
+	urlStr, ok, err := s.presignMedia(
+		ctx,
+		relPath,
+		s.presignTTL,
+		true,
+	)
+	return urlStr, ok, err
+}
+
+// PresignMediaURL resolves an optional direct presigned URL for alert dispatchers
+// when remote redirect delivery is active for a media key.
+func (s *Service) PresignMediaURL(
+	ctx context.Context,
+	relPath string,
+	ttl time.Duration,
+) (string, bool, error) {
+	if ttl <= 0 {
+		ttl = s.presignTTL
+	}
+	return s.presignMedia(
+		ctx,
+		relPath,
+		ttl,
+		false,
+	)
+}
+
+func (s *Service) presignMedia(
+	ctx context.Context,
+	relPath string,
+	ttl time.Duration,
+	failIfMissingEverywhere bool,
+) (string, bool, error) {
+	cleanKey, err := filestore.ValidateMediaKey(relPath)
+	if err != nil {
+		return "", false, err
+	}
+	if !s.isRedirectDelivery(ctx) {
+		return "", false, nil
+	}
+
+	store, err := s.resolveStore(ctx)
+	if err != nil {
+		return "", false, err
+	}
+
+	presigner, ok := store.(filestore.Presigner)
+	if !ok {
+		return "", false, nil
+	}
+	if capable, ok := store.(filestore.PresignCapable); ok && !capable.SupportsPresign() {
+		return "", false, nil
+	}
+
+	if spoolCheck, hasSpoolCheck := store.(interface {
+		ExistsInSpool(context.Context, string) (bool, error)
+	}); hasSpoolCheck {
+		if inSpool, spoolErr := spoolCheck.ExistsInSpool(ctx, cleanKey); spoolErr == nil && inSpool {
+			return "", false, nil
+		}
+	}
+
+	if checker, hasPrimaryCheck := store.(interface {
+		ExistsInPrimary(context.Context, string) (bool, error)
+	}); hasPrimaryCheck {
+		inPrimary, primaryErr := checker.ExistsInPrimary(ctx, cleanKey)
+		if primaryErr != nil {
+			return "", false, primaryErr
+		}
+		if !inPrimary {
+			// Object may still reside on local fallback or be completely absent;
+			// let OpenContent stream fallback or produce the canonical 404 envelope.
+			return "", false, nil
+		}
+	} else if failIfMissingEverywhere {
+		exists, existsErr := store.Exists(ctx, cleanKey)
+		if existsErr != nil {
+			return "", false, existsErr
+		}
+		if !exists {
+			return "", false, apperr.NotFound(
+				"MEDIA_ENTRY_NOT_FOUND",
+				"Media entry not found",
+				filestore.ErrNotFound,
+			)
+		}
+	}
+
+	urlStr, err := presigner.PresignGet(ctx, cleanKey, ttl)
+	if err != nil {
+		if filestore.IsPresignUnsupported(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return urlStr, true, nil
+}
+
+// GetRootInfo reports active backend health, device identity, and logical namespace readiness.
 func (s *Service) GetRootInfo(ctx context.Context) (*MediaRootInfo, error) {
-	rootPath, err := s.provider.MediaRoot(ctx)
+	store, err := s.resolveStore(ctx)
 	if err != nil {
-		return nil, apperr.Internal("MEDIA_ROOT_UNAVAILABLE", "Media root is not configured", err)
+		return nil, err
 	}
 
+	health, healthErr := store.Health(ctx)
 	info := &MediaRootInfo{
-		MediaRoot:   rootPath,
-		Directories: detectDirectories(rootPath),
+		Available: healthErr == nil && health.Available,
+		Directories: MediaDirectories{
+			Recordings: hasNamespaceDir(ctx, store, filestore.NamespaceRecordings),
+			Snapshots:  hasNamespaceDir(ctx, store, filestore.NamespaceSnapshots),
+			Exports:    hasNamespaceDir(ctx, store, filestore.NamespaceExports),
+		},
 	}
 
-	if _, err := s.currentResolver(ctx); err != nil {
-		info.Available = false
-		return info, nil
+	if inspector, ok := store.(filestore.LocalRootInspector); ok {
+		info.MediaRoot = inspector.LocalRoot()
 	}
-	info.Available = true
 
-	// Device details are only meaningful where the inspector reads real kernel
-	// telemetry; elsewhere storage returns synthetic values.
-	if s.inspector != nil && deviceTelemetryIsReal {
-		stats, statsErr := s.inspector.InspectFS(rootPath)
-		if statsErr != nil {
-			// The volume cannot be verified, so it must not be advertised as
-			// usable: content requests would fail the same check.
-			info.Available = false
-			return info, nil
-		}
-		info.DeviceID = stats.DeviceID
-		info.MountPoint = stats.MountPoint
-		info.FSType = stats.FSType
-		info.IsReadOnly = stats.IsReadOnly
-		if rootDev, devErr := s.inspector.GetRootDeviceID(); devErr == nil {
-			info.RootDevice = rootDev
-			info.IsExternal = stats.DeviceID != rootDev
-		}
+	if healthErr == nil && (store.Backend() != filestore.BackendLocal || deviceTelemetryIsReal) {
+		info.DeviceID = health.DeviceID
+		info.RootDevice = health.RootDeviceID
+		info.MountPoint = health.MountPoint
+		info.FSType = health.FSType
+		info.IsExternal = health.IsExternal
+		info.IsReadOnly = health.IsReadOnly
 	}
 
 	return info, nil
 }
 
-// currentResolver returns a resolver bound to the currently configured media
-// root, rebuilding the handle when the configuration changed.
-func (s *Service) currentResolver(ctx context.Context) (*resolver, error) {
+func (s *Service) isRedirectDelivery(ctx context.Context) bool {
+	if s.deliveryMode == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(s.deliveryMode.DeliveryMode(ctx)), "redirect")
+}
+
+func (s *Service) resolveStore(ctx context.Context) (filestore.Store, error) {
+	if s.store != nil {
+		return s.store, nil
+	}
+	if s.provider == nil {
+		return nil, apperr.Internal("MEDIA_ROOT_UNAVAILABLE", "Media root is not configured", filestore.ErrStoreUnavailable)
+	}
+
 	rootPath, err := s.provider.MediaRoot(ctx)
 	if err != nil {
 		return nil, apperr.Internal("MEDIA_ROOT_UNAVAILABLE", "Media root is not configured", err)
 	}
+	if strings.TrimSpace(rootPath) == "" {
+		return nil, apperr.Internal("MEDIA_ROOT_UNAVAILABLE", "Media root is not configured", filestore.ErrStoreUnavailable)
+	}
 
 	s.mu.RLock()
-	if s.resolver != nil && s.rootPath == rootPath {
-		current := s.resolver
+	if s.localMgr != nil && s.rootPath == rootPath {
+		mgr := s.localMgr
 		s.mu.RUnlock()
-		return current, nil
+		return mgr, nil
 	}
 	s.mu.RUnlock()
 
-	return s.rebuildResolver(rootPath)
+	return s.syncLocalManager(rootPath)
 }
 
-// rebuildResolver swaps in a handle for the configured root.
-//
-// The previous handle is closed while holding the write lock. That is safe for
-// in-flight requests: an already-opened file keeps its own descriptor, which
-// stays readable after the root handle is closed. What must not happen is
-// closing a handle another goroutine is still calling Open on, which is exactly
-// what the write lock prevents.
-func (s *Service) rebuildResolver(rootPath string) (*resolver, error) {
+func (s *Service) syncLocalManager(rootPath string) (filestore.Store, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Another goroutine may have rebuilt it while this one waited for the lock.
-	if s.resolver != nil && s.rootPath == rootPath {
-		return s.resolver, nil
+	if s.localMgr != nil && s.rootPath == rootPath {
+		return s.localMgr, nil
 	}
 
-	fresh, err := newResolver(rootPath, s.inspector)
-	if err != nil {
+	var mountInspector filestore.MountInspector
+	if s.inspector != nil {
+		mountInspector = &deviceInspectorMountAdapter{inspector: s.inspector}
+	}
+	localCfg := filestore.LocalConfig{
+		RootDir:   rootPath,
+		Inspector: mountInspector,
+		Logger:    s.logger,
+	}
+
+	if s.localMgr == nil {
+		s.localMgr = filestore.NewManager(filestore.ManagerConfig{
+			Local:  localCfg,
+			Logger: s.logger,
+		})
+	} else if err := s.localMgr.ConfigureLocal(localCfg); err != nil {
 		return nil, err
 	}
-
-	previous := s.resolver
-	s.resolver = fresh
 	s.rootPath = rootPath
-
-	if previous != nil {
-		if err := previous.Close(); err != nil {
-			s.logger.Warn("failed to close previous media root handle", zap.Error(err))
-		}
-	}
-
-	return fresh, nil
+	return s.localMgr, nil
 }
 
-// detectDirectories reports which media subdirectories exist.
-//
-// It stats the three known names directly and never enumerates a directory:
-// listing is outside this service's contract, so production code here must
-// contain no directory-enumeration call at all. resolver_test.go enforces that.
-func detectDirectories(rootPath string) MediaDirectories {
-	var dirs MediaDirectories
-	targets := map[string]*bool{
-		"recordings": &dirs.Recordings,
-		"snapshots":  &dirs.Snapshots,
-		"exports":    &dirs.Exports,
+func hasNamespaceDir(ctx context.Context, store filestore.Store, namespace string) bool {
+	if inspector, ok := store.(filestore.LocalRootInspector); ok {
+		return inspector.HasNamespaceDir(ctx, namespace)
 	}
-	for name, target := range targets {
-		info, err := os.Stat(filepath.Join(rootPath, name))
-		*target = err == nil && info.IsDir()
-	}
-	return dirs
+	return true
 }
 
-// entryFromFileInfo builds the public metadata payload from a path that the
-// resolver has already validated.
-func entryFromFileInfo(relPath string, info fs.FileInfo) *MediaEntry {
+func entryFromObjectInfo(relPath string, info filestore.ObjectInfo) *MediaEntry {
 	return &MediaEntry{
 		Path:       relPath,
-		Name:       info.Name(),
-		SizeBytes:  info.Size(),
-		ModifiedAt: info.ModTime().UTC(),
+		Name:       info.Name,
+		SizeBytes:  info.SizeBytes,
+		ModifiedAt: info.ModifiedAt.UTC(),
 	}
 }
 
-// closeFileBestEffort closes a read-only file handle.
-//
-// AGENTS.md forbids swallowing errors with `_ = fn()`, so this helper provides
-// an explicit, documented location for best-effort cleanup on read handles.
-func closeFileBestEffort(file *os.File) {
-	if file == nil {
+func closeReadSeekCloser(c io.Closer) {
+	if c == nil {
 		return
 	}
-	if err := file.Close(); err != nil {
-		// Intentionally ignored on read-only handles: data is already consumed
-		// or another error takes precedence.
-	}
-}
-
-// closeRootBestEffort closes an os.Root handle during error rollback.
-func closeRootBestEffort(root *os.Root) {
-	if root == nil {
-		return
-	}
-	if err := root.Close(); err != nil {
-		// Intentionally ignored during constructor rollback when returning a more specific error.
+	if err := c.Close(); err != nil {
+		// Intentionally ignored on read-only handles: stream is finished or primary error wins.
 	}
 }

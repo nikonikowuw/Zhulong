@@ -17,7 +17,7 @@ type MediaFileComponents struct {
 	ProtectedRoutes RouteRegistrar
 }
 
-// NewMediaFileComponents constructs the media file module.
+// NewMediaFileComponents constructs the legacy provider-backed media file module.
 //
 // The constructor is pure: it binds dependencies and allocates memory only. It
 // opens no file and builds no os.Root handle, so application startup cannot
@@ -27,7 +27,16 @@ func NewMediaFileComponents(
 	inspector DeviceInspector,
 	logger *zap.Logger,
 ) MediaFileComponents {
-	service := NewService(provider, inspector, logger)
+	return NewMediaFileComponentsWithStore(StoreOptions{
+		Provider:  provider,
+		Inspector: inspector,
+		Logger:    logger,
+	})
+}
+
+// NewMediaFileComponentsWithStore constructs a filestore-backed media file module.
+func NewMediaFileComponentsWithStore(opts StoreOptions) MediaFileComponents {
+	service := NewServiceWithStore(opts)
 	handler := NewHandler(service)
 
 	return MediaFileComponents{

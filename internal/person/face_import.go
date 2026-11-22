@@ -580,9 +580,6 @@ func (s *Service) enrollFaceRecord(
 		return nil, &faceProcessError{code: "FACE_LIMIT_EXCEEDED", message: faceLimitMessage(targetPerson.Name)}
 	}
 
-	if err := os.MkdirAll(s.facesDir, 0755); err != nil {
-		return nil, &faceProcessError{code: "STORAGE_ERROR", message: "创建人脸存储目录失败"}
-	}
 	ext := photo.Ext
 	if ext == "" {
 		ext = ".jpg"
@@ -592,20 +589,21 @@ func (s *Service) enrollFaceRecord(
 	if err != nil {
 		return nil, &faceProcessError{code: "STORAGE_ERROR", message: "生成人脸文件名失败"}
 	}
-	savePath := filepath.Join(s.facesDir, fileName)
-	if err := os.WriteFile(savePath, photo.Image, 0644); err != nil {
+	objectKey, err := s.putFaceObject(ctx, fileName, photo.Image)
+	if err != nil {
 		return nil, &faceProcessError{code: "STORAGE_ERROR", message: "写入人脸图片文件失败"}
 	}
 
 	face := &Face{
-		ID:            faceID,
-		PersonRowID:   targetPerson.ID,
-		ImagePath:     fileName,
-		FeatureVector: photo.Features,
-		CreatedAt:     time.Now().UTC(),
+		ID:             faceID,
+		PersonRowID:    targetPerson.ID,
+		ImagePath:      fileName,
+		StorageBackend: s.storageBackend(),
+		FeatureVector:  photo.Features,
+		CreatedAt:      time.Now().UTC(),
 	}
 
-	if _, err := s.addFaceRowWithLimit(ctx, face, savePath); err != nil {
+	if _, err := s.addFaceRowWithLimit(ctx, face, objectKey); err != nil {
 		return nil, faceImportEnrollError(err, targetPerson.Name)
 	}
 

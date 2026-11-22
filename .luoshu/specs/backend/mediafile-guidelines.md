@@ -194,11 +194,11 @@ f, err := root.Open(relPath)         // 返回 *os.File，支持 Seek，可直�
   已在传输中的请求 ──➔ 继续用旧句柄完成（文件已打开，fd 有效）
 ```
 
-- 媒体根的真源是 `storage` 配置：每次请求经 `MediaRootProvider` 读取，**不得在本包缓存配置值**；
-- `resolver` 缓存 `(rootPath, *os.Root, selfDev)`，不一致则重建；
-- **换根时必须一起重采 `selfDev`**，否则会拿旧盘设备号校验新盘；
-- 用 `sync.RWMutex`：读路径持 `RLock` 完成 `Open`，切换时持 `Lock` 替换并关闭。**不能**在替换时无锁 `Close()`（会让在途 `Open` 拿到 `EBADF`）；
-- **不迁移旧盘数据**（`storage-guidelines.md` §1.3 禁止 TB 级跨盘拷贝）。旧盘文件在热切换后**不再可见**，属已知限制。
+- 媒体存储的真源是统一对象存储抽象：底层由 `filestore.Manager` 负责槽位热重载与本地只读回落；
+- 本包通过 `filestore.Store` 与 `Presigner` 获取媒体内容与元数据：
+  - 本地存储（`local`）：经 `os.Root` 执行四层防护校验并以 `http.ServeContent` 传输 Range 裸字节；
+  - 远端对象存储（`s3`）：当 `deliveryMode` 为 `proxy` 时通过 HTTP Range 按需拉取并向客户端回传 206 裸字节流；当 `deliveryMode` 为 `redirect` 时返回 302 临时重定向至 S3 Presigned URL（附带 `Cache-Control: no-store`）；
+- 切至远端后，历史本地媒体经 `filestore.Manager` 的 `OpenFallbackContent` 提供透明向后回落读取。
 
 ---
 

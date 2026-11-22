@@ -1,15 +1,16 @@
 package record
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"go.uber.org/zap"
 )
 
@@ -85,9 +86,14 @@ type SnapshotStore struct {
 	logger   *zap.Logger
 
 	// depsMu 保护装配期注入的清理器与观察者：worker goroutine 读、接线期写。
-	depsMu   sync.RWMutex
-	cleaner  SnapshotPathCleaner
-	observer SnapshotJobObserver
+	depsMu    sync.RWMutex
+	fileStore filestore.Store
+	cleaner   SnapshotPathCleaner
+	observer  SnapshotJobObserver
+
+	localMu   sync.RWMutex
+	localRoot string
+	localMgr  *filestore.Manager
 
 	queue     chan snapshotJob
 	stop      chan struct{}
@@ -164,6 +170,85 @@ func (s *SnapshotStore) Stop() {
 	s.enqMu.Unlock()
 
 	s.wg.Wait()
+
+	s.localMu.Lock()
+	localMgr := s.localMgr
+	s.localMgr = nil
+	s.localMu.Unlock()
+	if localMgr != nil {
+		if err := localMgr.Close(); err != nil {
+			s.logger.Warn("close snapshot fallback filestore manager failed", zap.Error(err))
+		}
+	}
+}
+
+// SetFileStore configures the unified filestore backend for snapshot writes and lock backfills.
+func (s *SnapshotStore) SetFileStore(store filestore.Store) {
+	s.depsMu.Lock()
+	s.fileStore = store
+	s.depsMu.Unlock()
+}
+
+// Backend returns the active storage backend identifier ("local" or "s3").
+func (s *SnapshotStore) Backend() string {
+	if s == nil {
+		return filestore.BackendLocal
+	}
+	s.depsMu.RLock()
+	store := s.fileStore
+	s.depsMu.RUnlock()
+	if store == nil {
+		return filestore.BackendLocal
+	}
+	return store.Backend()
+}
+
+func (s *SnapshotStore) resolveStore(ctx context.Context) (filestore.Store, error) {
+	s.depsMu.RLock()
+	store := s.fileStore
+	s.depsMu.RUnlock()
+	if store != nil {
+		return store, nil
+	}
+
+	if s.media == nil {
+		return nil, errors.New("snapshot media root is unavailable")
+	}
+	rootPath, err := s.media.MediaRoot(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolve media root: %w", err)
+	}
+	if rootPath == "" {
+		return nil, errors.New("snapshot media root is empty")
+	}
+
+	s.localMu.RLock()
+	if s.localMgr != nil && s.localRoot == rootPath {
+		mgr := s.localMgr
+		s.localMu.RUnlock()
+		return mgr, nil
+	}
+	s.localMu.RUnlock()
+
+	s.localMu.Lock()
+	defer s.localMu.Unlock()
+	if s.localMgr != nil && s.localRoot == rootPath {
+		return s.localMgr, nil
+	}
+	localCfg := filestore.LocalConfig{
+		RootDir: rootPath,
+		Logger:  s.logger,
+	}
+	if s.localMgr == nil {
+		s.localMgr = filestore.NewManager(filestore.ManagerConfig{
+			Local:  localCfg,
+			Logger: s.logger,
+		})
+	} else if err := s.localMgr.ConfigureLocal(localCfg); err != nil {
+		return nil, err
+	}
+	s.localRoot = rootPath
+	return s.localMgr, nil
 }
 
 // SetPathCleaner 注入落盘失败时的路径清理器。
@@ -269,35 +354,35 @@ func (s *SnapshotStore) worker() {
 
 // run 执行一次抓拍 + 写盘。所有错误只记日志，不向上传播。
 func (s *SnapshotStore) run(job snapshotJob) {
-	root, images, ok := s.capture(job)
+	store, images, ok := s.capture(job)
 	if !ok {
 		s.clearRecordPaths(job)
 		s.notifyObserver(job, nil)
 		return
 	}
 
-	written := s.writeOutputs(job, root, images)
+	written := s.writeOutputs(job, store, images)
 	if len(written) == 0 {
 		s.clearRecordPaths(job)
 	}
 	s.notifyObserver(job, written)
 }
 
-// capture 依次做写入门闸、媒体根解析与原生抓拍。返回 false 表示本次什么都没写。
-func (s *SnapshotStore) capture(job snapshotJob) (string, map[int]engine.SnapshotImage, bool) {
+// capture 依次做写入门闸、存储解析与原生抓拍。返回 false 表示本次什么都没写。
+func (s *SnapshotStore) capture(job snapshotJob) (filestore.Store, map[int]engine.SnapshotImage, bool) {
 	// 存储熔断时不写：写满的盘会让整机录像停摆，抓拍没有资格抢占。
 	if s.gate != nil && !s.gate.CanWrite() {
 		s.logger.Warn("storage gate is closed, skipping snapshot",
 			zap.String("camera_id", job.cameraID))
-		return "", nil, false
+		return nil, nil, false
 	}
 
 	ctx := context.Background()
-	root, err := s.media.MediaRoot(ctx)
+	store, err := s.resolveStore(ctx)
 	if err != nil {
-		s.logger.Warn("resolve media root for snapshot failed",
+		s.logger.Warn("resolve filestore for snapshot failed",
 			zap.String("camera_id", job.cameraID), zap.Error(err))
-		return "", nil, false
+		return nil, nil, false
 	}
 
 	images, err := s.provider.Snapshot(ctx, job.cameraID, engine.SnapshotOptions{
@@ -309,7 +394,7 @@ func (s *SnapshotStore) capture(job snapshotJob) (string, map[int]engine.Snapsho
 	if err != nil {
 		s.logger.Warn("snapshot capture failed",
 			zap.String("camera_id", job.cameraID), zap.Error(err))
-		return "", nil, false
+		return nil, nil, false
 	}
 	s.verifySource(job, images)
 
@@ -319,7 +404,7 @@ func (s *SnapshotStore) capture(job snapshotJob) (string, map[int]engine.Snapsho
 		byIndex[img.BoxIndex] = img
 	}
 
-	return root, byIndex, true
+	return store, byIndex, true
 }
 
 // verifySource 断言本次抓拍取到的确实是检测结果对应的那一帧。
@@ -367,7 +452,7 @@ func (s *SnapshotStore) verifySource(job snapshotJob, images []engine.SnapshotIm
 // writeOutputs 把抓拍结果写到各自的目标路径，返回「哪些相对路径确实写成了」。
 func (s *SnapshotStore) writeOutputs(
 	job snapshotJob,
-	root string,
+	store filestore.Store,
 	byIndex map[int]engine.SnapshotImage,
 ) map[string]struct{} {
 	written := make(map[string]struct{}, len(job.outputs))
@@ -383,7 +468,12 @@ func (s *SnapshotStore) writeOutputs(
 			)
 			continue
 		}
-		if s.writeOutput(job, root, out, img) {
+		if s.writeOutput(
+			job,
+			store,
+			out,
+			img,
+		) {
 			written[out.relPath] = struct{}{}
 		}
 	}
@@ -394,45 +484,27 @@ func (s *SnapshotStore) writeOutputs(
 // writeOutput 写一张图。返回 false 表示该图未落盘（调用方据此清空对应路径）。
 func (s *SnapshotStore) writeOutput(
 	job snapshotJob,
-	root string,
+	store filestore.Store,
 	out snapshotOutput,
 	img engine.SnapshotImage,
 ) bool {
-	abs := filepath.Join(root, out.relPath)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
-		s.logger.Warn(
-			"create snapshot directory failed",
-			zap.String("camera_id", job.cameraID),
-			zap.String("dir", filepath.Dir(abs)),
-			zap.Error(err),
-		)
-		return false
-	}
-
-	marker := abs + ".lock"
-	if out.protected {
-		// Write the marker before the image so a concurrent cleaner cannot
-		// collect the file between its creation and protection.
-		if err := os.WriteFile(marker, nil, 0o640); err != nil {
-			s.logger.Warn("protect snapshot file failed",
-				zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
-			return false
-		}
-	}
-
-	// 0o640：证据图需要被服务进程之外的只读消费者（巡检脚本、导出工具）读取，
-	// 因此保留组读权限；但不给其他用户，避免多租户宿主上的越权读取。
-	if err := os.WriteFile(abs, img.JPEG, 0o640); err != nil {
-		if out.protected {
-			if removeErr := os.Remove(marker); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				s.logger.Warn("remove snapshot protection marker after write failure",
-					zap.String("path", marker), zap.Error(removeErr))
-			}
-		}
+	relKey := filepath.ToSlash(out.relPath)
+	err := store.Put(
+		context.Background(),
+		relKey,
+		bytes.NewReader(img.JPEG),
+		filestore.PutOptions{
+			Size:        int64(len(img.JPEG)),
+			ContentType: "image/jpeg",
+			Mode:        0o640,
+			Protected:   out.protected,
+		},
+	)
+	if err != nil {
 		s.logger.Warn(
 			"write snapshot file failed",
 			zap.String("camera_id", job.cameraID),
-			zap.String("path", abs),
+			zap.String("key", relKey),
 			zap.Error(err),
 		)
 		return false
@@ -441,7 +513,7 @@ func (s *SnapshotStore) writeOutput(
 	s.logger.Debug(
 		"snapshot file written successfully",
 		zap.String("camera_id", job.cameraID),
-		zap.String("path", abs),
+		zap.String("key", relKey),
 		zap.Int("bytes", len(img.JPEG)),
 	)
 
@@ -482,40 +554,40 @@ func (s *SnapshotStore) notifyObserver(job snapshotJob, written map[string]struc
 	observer.OnSnapshotJobDone(job.targetTable, job.targetID, SnapshotJobResult{Outputs: outs})
 }
 
-// EnsureEvidenceLocks writes missing .lock sidecars for existing evidence
-// images. It is used once at startup to protect historical alarm images that
-// predate the current "write lock before image" convention. The operation is
-// idempotent and uses os.Root so a poisoned DB path cannot escape the media root.
+// EnsureEvidenceLocks writes missing .lock sidecars for existing local evidence
+// images. Remote backends enforce protection via SQLite EvidenceGuard and return 0.
 func (s *SnapshotStore) EnsureEvidenceLocks(ctx context.Context, relPaths []string) (int, error) {
-	if s == nil || s.media == nil {
-		return 0, errors.New("snapshot media root is unavailable")
+	if s == nil {
+		return 0, errors.New("snapshot store is nil")
 	}
 	if len(relPaths) == 0 {
 		return 0, nil
 	}
 
-	rootPath, err := s.media.MediaRoot(ctx)
+	store, err := s.resolveStore(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("resolve media root: %w", err)
+		return 0, err
 	}
-	root, err := os.OpenRoot(rootPath)
-	if err != nil {
-		return 0, fmt.Errorf("open media root %q: %w", rootPath, err)
+	if store.Backend() != filestore.BackendLocal {
+		return 0, nil
 	}
-	defer func() {
-		if err := root.Close(); err != nil {
-			// The root is only a handle; a close failure must not turn a completed
-			// backfill into an error.
-		}
-	}()
+	markers, ok := store.(filestore.ProtectionMarkerStore)
+	if !ok {
+		return 0, nil
+	}
 
 	var written int
 	for _, rel := range relPaths {
-		ok, err := ensureEvidenceLock(root, rel)
-		if err != nil {
-			return written, err
+		locked, ensureErr := ensureEvidenceLock(
+			ctx,
+			store,
+			markers,
+			rel,
+		)
+		if ensureErr != nil {
+			return written, ensureErr
 		}
-		if ok {
+		if locked {
 			written++
 		}
 	}
@@ -523,42 +595,41 @@ func (s *SnapshotStore) EnsureEvidenceLocks(ctx context.Context, relPaths []stri
 	return written, nil
 }
 
-// ensureEvidenceLock 为一个已存在的证据图补写 .lock 旁车文件。
-// 返回 false 表示该条目被跳过（路径为空、不存在或是目录）。
-func ensureEvidenceLock(root *os.Root, rel string) (bool, error) {
+func ensureEvidenceLock(
+	ctx context.Context,
+	store filestore.Store,
+	markers filestore.ProtectionMarkerStore,
+	rel string,
+) (bool, error) {
 	if rel == "" {
 		return false, nil
 	}
-	rel = filepath.FromSlash(rel)
-
-	info, err := root.Stat(rel)
+	cleanKey, err := filestore.ValidateObjectKeyForWrite(filepath.ToSlash(rel))
 	if err != nil {
-		if os.IsNotExist(err) {
+		return false, fmt.Errorf("validate evidence key %q: %w", rel, err)
+	}
+
+	exists, err := store.Exists(ctx, cleanKey)
+	if err != nil {
+		if errors.Is(err, filestore.ErrNotAFile) {
 			return false, nil
 		}
-		return false, fmt.Errorf("stat evidence %q: %w", rel, err)
+		return false, fmt.Errorf("stat evidence %q: %w", cleanKey, err)
 	}
-	if info.IsDir() {
+	if !exists {
 		return false, nil
 	}
 
-	marker := rel + ".lock"
-	_, lstatErr := root.Lstat(marker)
-	if lstatErr == nil {
-		return false, nil
-	}
-	if !os.IsNotExist(lstatErr) {
-		return false, fmt.Errorf("stat evidence lock %q: %w", marker, lstatErr)
-	}
-
-	file, err := root.OpenFile(marker, os.O_CREATE|os.O_WRONLY, 0o640)
+	hasMarker, err := markers.HasProtectionMarker(ctx, cleanKey)
 	if err != nil {
-		return false, fmt.Errorf("write evidence lock %q: %w", marker, err)
+		return false, fmt.Errorf("check evidence lock %q: %w", cleanKey, err)
 	}
-	if err := file.Close(); err != nil {
-		return false, fmt.Errorf("close evidence lock %q: %w", marker, err)
+	if hasMarker {
+		return false, nil
 	}
-
+	if err := markers.EnsureProtectionMarker(ctx, cleanKey); err != nil {
+		return false, fmt.Errorf("create evidence lock %q: %w", cleanKey, err)
+	}
 	return true, nil
 }
 

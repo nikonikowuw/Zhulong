@@ -107,13 +107,16 @@ func TestService_CreateAndGetMap(t *testing.T) {
 		t.Errorf("unexpected created map response: %+v", created)
 	}
 
-	// 4. GetMapFile
-	filePath, mimeType, err := svc.GetMapFile(ctx, created.ID)
+	// 4. OpenMapFile
+	reader, info, mimeType, err := svc.OpenMapFile(ctx, created.ID)
 	if err != nil {
-		t.Fatalf("GetMapFile failed: %v", err)
+		t.Fatalf("OpenMapFile failed: %v", err)
 	}
-	if filePath == "" || mimeType != "image/png" {
-		t.Errorf("unexpected map file path or mime: %s, %s", filePath, mimeType)
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close map reader: %v", err)
+	}
+	if info.SizeBytes <= 0 || mimeType != "image/png" {
+		t.Errorf("unexpected map info or mime: %+v, %s", info, mimeType)
 	}
 
 	// 5. List
@@ -126,8 +129,7 @@ func TestService_CreateAndGetMap(t *testing.T) {
 	if err := svc.DeleteMap(ctx, created.ID); err != nil {
 		t.Fatalf("DeleteMap failed: %v", err)
 	}
-	_, _, err = svc.GetMapFile(ctx, created.ID)
-	if err == nil {
+	if _, _, _, err = svc.OpenMapFile(ctx, created.ID); err == nil {
 		t.Error("expected error after delete, got nil")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -128,6 +129,7 @@ func (s *Store) CreateRecognition(ctx context.Context, rec *Recognition) error {
 	if err != nil {
 		return err
 	}
+	rec.StorageBackend = normalizeStorageBackend(rec.StorageBackend)
 	rec.CapturedAt, rec.CreatedAt = normalizeTimestamps(rec.CapturedAt, rec.CreatedAt, time.Now().UTC())
 	return gorm.G[Recognition](db).Create(ctx, rec)
 }
@@ -140,6 +142,7 @@ func (s *Store) CreateRecognitionBatch(ctx context.Context, recs []*Recognition)
 		if r == nil {
 			continue
 		}
+		r.StorageBackend = normalizeStorageBackend(r.StorageBackend)
 		r.CapturedAt, r.CreatedAt = normalizeTimestamps(r.CapturedAt, r.CreatedAt, now)
 		valid = append(valid, r)
 	}
@@ -304,6 +307,7 @@ func (s *Store) CreateAlarm(ctx context.Context, alarm *Alarm) error {
 	if err != nil {
 		return err
 	}
+	alarm.StorageBackend = normalizeStorageBackend(alarm.StorageBackend)
 	alarm.CapturedAt, alarm.CreatedAt = normalizeTimestamps(alarm.CapturedAt, alarm.CreatedAt, time.Now().UTC())
 	return gorm.G[Alarm](db).Create(ctx, alarm)
 }
@@ -316,6 +320,7 @@ func (s *Store) CreateAlarmBatch(ctx context.Context, alarms []*Alarm) error {
 		if a == nil {
 			continue
 		}
+		a.StorageBackend = normalizeStorageBackend(a.StorageBackend)
 		a.CapturedAt, a.CreatedAt = normalizeTimestamps(a.CapturedAt, a.CreatedAt, now)
 		valid = append(valid, a)
 	}
@@ -374,6 +379,7 @@ func (s *Store) CreateCapture(ctx context.Context, cap *Capture) error {
 	if err != nil {
 		return err
 	}
+	cap.StorageBackend = normalizeStorageBackend(cap.StorageBackend)
 	cap.CapturedAt, cap.CreatedAt = normalizeTimestamps(cap.CapturedAt, cap.CreatedAt, time.Now().UTC())
 	return gorm.G[Capture](db).Create(ctx, cap)
 }
@@ -386,10 +392,18 @@ func (s *Store) CreateCaptureBatch(ctx context.Context, caps []*Capture) error {
 		if c == nil {
 			continue
 		}
+		c.StorageBackend = normalizeStorageBackend(c.StorageBackend)
 		c.CapturedAt, c.CreatedAt = normalizeTimestamps(c.CapturedAt, c.CreatedAt, now)
 		valid = append(valid, c)
 	}
 	return s.createInBatches(ctx, valid)
+}
+
+func normalizeStorageBackend(backend string) string {
+	if strings.TrimSpace(backend) == "" {
+		return filestore.BackendLocal
+	}
+	return strings.TrimSpace(backend)
 }
 
 // createInBatches 是批量写入的唯一入口：空集合直接返回，避免为一个空事务去取连接。

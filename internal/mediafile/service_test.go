@@ -120,7 +120,7 @@ func TestService_RejectsDirectoryAsNotAFile(t *testing.T) {
 
 	file, _, err := svc.OpenContent(context.Background(), "recordings/cam-01")
 	if file != nil {
-		closeFileBestEffort(file)
+		closeReadSeekCloser(file)
 	}
 	assertAppErrorCode(
 		t,
@@ -138,10 +138,14 @@ func TestService_OpenContentReturnsSeekableFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenContent: %v", err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			t.Errorf("close opened stream: %v", closeErr)
+		}
+	}()
 
-	if info.IsDir() {
-		t.Fatal("expected a regular file")
+	if info.SizeBytes <= 0 {
+		t.Fatalf("expected non-empty regular file, got %+v", info)
 	}
 	// ServeContent needs a ReadSeeker; a root handle that returned a
 	// non-seekable stream would break range support.
@@ -407,7 +411,7 @@ func TestService_ConcurrentOpenDuringHotSwitch(t *testing.T) {
 				if _, err := file.Read(buf); err != nil {
 					t.Errorf("read while switching roots: %v", err)
 				}
-				closeFileBestEffort(file)
+				closeReadSeekCloser(file)
 			}
 		}()
 	}

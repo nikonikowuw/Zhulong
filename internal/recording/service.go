@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
@@ -39,15 +40,21 @@ type Options struct {
 	CleanupInitialDelay time.Duration
 	// MaxClipMs caps one clip's length; <=0 uses DefaultMaxClipMs.
 	MaxClipMs int64
+	// UploadWorkers and UploadQueueSize control bounded async spool uploads.
+	UploadWorkers   int
+	UploadQueueSize int
 	// Now overrides the clock (tests).
 	Now func() time.Time
 }
 
 // activeClip tracks a clip that native is still writing, keyed by native seq.
 type activeClip struct {
-	clipID   string
-	cameraID string
-	absPath  string
+	clipID         string
+	cameraID       string
+	relPath        string
+	absPath        string
+	storageBackend string
+	protected      bool
 }
 
 // Service triggers event clips and keeps event_clips consistent with native state.
@@ -64,11 +71,15 @@ type Service struct {
 	cleanupInterval time.Duration
 	cleanupDelay    time.Duration
 	maxClipMs       int64
+	uploadWorkers   int
+	uploadQueueSize int
 	now             func() time.Time
 
-	depsMu      sync.RWMutex
-	retention   RetentionDaysProvider
-	fileChecker ClipFileChecker
+	depsMu         sync.RWMutex
+	retention      RetentionDaysProvider
+	fileChecker    ClipFileChecker
+	fileStore      filestore.Store
+	targetProvider StorageTargetProvider
 
 	// triggerMu serializes trigger → insert → map registration so that an extension
 	// racing a creation on the same camera always finds the clip row and map entry.
@@ -78,6 +89,13 @@ type Service struct {
 	active   map[uint64]activeClip
 	// pollMu serializes poll rounds (loop vs. Stop's final poll).
 	pollMu sync.Mutex
+
+	uploadMu     sync.Mutex
+	uploadCh     chan uploadJob
+	uploadOpen   bool
+	uploadCancel context.CancelFunc
+	uploadWG     sync.WaitGroup
+	uploading    map[string]bool
 
 	lifeMu  sync.Mutex
 	cancel  context.CancelFunc
@@ -108,8 +126,11 @@ func NewService(
 		cleanupInterval: DefaultCleanupInterval,
 		cleanupDelay:    DefaultCleanupInitialDelay,
 		maxClipMs:       DefaultMaxClipMs,
+		uploadWorkers:   defaultUploadWorkers,
+		uploadQueueSize: defaultUploadQueueSize,
 		now:             func() time.Time { return time.Now().UTC() },
 		active:          map[uint64]activeClip{},
+		uploading:       map[string]bool{},
 	}
 	if opts.PollInterval > 0 {
 		s.pollInterval = opts.PollInterval
@@ -122,6 +143,12 @@ func NewService(
 	}
 	if opts.MaxClipMs > 0 {
 		s.maxClipMs = opts.MaxClipMs
+	}
+	if opts.UploadWorkers > 0 {
+		s.uploadWorkers = opts.UploadWorkers
+	}
+	if opts.UploadQueueSize > 0 {
+		s.uploadQueueSize = opts.UploadQueueSize
 	}
 	if opts.Now != nil {
 		s.now = func() time.Time { return opts.Now().UTC() }
@@ -171,22 +198,54 @@ func (s *Service) ActiveClips() int {
 // event row. Alarm clips get a ".lock" sidecar so storage never evicts them.
 //
 // Errors never imply the event row is affected beyond clip_id staying NULL.
+func (s *Service) resolveTarget(ctx context.Context) (StorageTarget, error) {
+	if tp := s.currentTargetProvider(); tp != nil {
+		target, err := tp.RecordingTarget(ctx)
+		if err != nil {
+			return StorageTarget{}, err
+		}
+		if target.Backend == "" {
+			target.Backend = filestore.BackendLocal
+		}
+		return target, nil
+	}
+	if s.media == nil {
+		return StorageTarget{}, ErrClipUnavailable
+	}
+	root, err := s.media.MediaRoot(ctx)
+	if err != nil {
+		return StorageTarget{}, fmt.Errorf("resolve media root: %w", err)
+	}
+	return StorageTarget{
+		Backend:  filestore.BackendLocal,
+		MediaDir: root,
+	}, nil
+}
+
 func (s *Service) Trigger(ctx context.Context, req TriggerRequest) (clipID string, offsetMs int64, err error) {
 	if err := validateTrigger(req); err != nil {
 		return "", 0, err
 	}
-	if s.hub == nil || s.media == nil || s.store == nil {
+	if s.hub == nil || s.store == nil {
 		return "", 0, ErrClipUnavailable
 	}
 	if s.gate != nil && !s.gate.CanWrite() {
 		return "", 0, ErrClipSkipped
 	}
 
-	root, err := s.media.MediaRoot(ctx)
+	target, err := s.resolveTarget(ctx)
 	if err != nil {
-		return "", 0, fmt.Errorf("resolve media root: %w", err)
+		return "", 0, err
 	}
-	if strings.TrimSpace(root) == "" {
+	writeDir := target.MediaDir
+	storageBackend := filestore.BackendLocal
+	uploadStatus := UploadStatusLocal
+	if target.Backend != "" && target.Backend != filestore.BackendLocal {
+		storageBackend = target.Backend
+		uploadStatus = UploadStatusPending
+		writeDir = target.SpoolDir
+	}
+	if strings.TrimSpace(writeDir) == "" {
 		return "", 0, ErrClipUnavailable
 	}
 
@@ -196,9 +255,9 @@ func (s *Service) Trigger(ctx context.Context, req TriggerRequest) (clipID strin
 	}
 	newID := idutil.New()
 	relPath := ClipRelPath(req.CameraID, capturedAt, newID)
-	// Native 的 clip 触发器只接受绝对路径；storage 的 mediaDirectory 允许相对
-	// 路径（默认 data/media），这里必须相对进程工作目录解析后再下发。
-	absPath, err := filepath.Abs(filepath.Join(root, filepath.FromSlash(relPath)))
+	// Native 的 clip 触发器只接受绝对路径；storage 的目录允许相对路径，
+	// 这里必须相对进程工作目录解析后再下发。
+	absPath, err := filepath.Abs(filepath.Join(writeDir, filepath.FromSlash(relPath)))
 	if err != nil {
 		return "", 0, fmt.Errorf("resolve clip path: %w", err)
 	}
@@ -211,7 +270,15 @@ func (s *Service) Trigger(ctx context.Context, req TriggerRequest) (clipID strin
 		ptsUS = *req.PTSUS
 	}
 
-	clip, offsetMs, err := s.triggerAndRegister(ctx, req, newID, relPath, absPath, ptsUS)
+	clip, offsetMs, err := s.triggerAndRegister(ctx, triggerRegistration{
+		req:            req,
+		newID:          newID,
+		relPath:        relPath,
+		absPath:        absPath,
+		ptsUS:          ptsUS,
+		storageBackend: storageBackend,
+		uploadStatus:   uploadStatus,
+	})
 	if err != nil {
 		return "", 0, err
 	}
@@ -219,7 +286,7 @@ func (s *Service) Trigger(ctx context.Context, req TriggerRequest) (clipID strin
 	if err := s.store.AttachClip(ctx, req.EventKind, req.EventID, clip.clipID, offsetMs); err != nil {
 		return "", 0, err
 	}
-	if req.EventKind == EventKindAlarm {
+	if req.EventKind == EventKindAlarm && storageBackend == filestore.BackendLocal {
 		if err := ensureLock(clip.absPath); err != nil {
 			// 关联已经写入：锁失败只降级为告警日志，返回 clipID 让调用方知道关联存在。
 			s.logger.Warn("write event clip lock failed",
@@ -229,20 +296,28 @@ func (s *Service) Trigger(ctx context.Context, req TriggerRequest) (clipID strin
 	return clip.clipID, offsetMs, nil
 }
 
+type triggerRegistration struct {
+	req            TriggerRequest
+	newID          string
+	relPath        string
+	absPath        string
+	ptsUS          int64
+	storageBackend string
+	uploadStatus   UploadStatus
+}
+
 func (s *Service) triggerAndRegister(
 	ctx context.Context,
-	req TriggerRequest,
-	newID, relPath, absPath string,
-	ptsUS int64,
+	reg triggerRegistration,
 ) (activeClip, int64, error) {
 	s.triggerMu.Lock()
 	defer s.triggerMu.Unlock()
 
-	res, err := s.hub.TriggerClip(ctx, req.CameraID, ClipTriggerRequest{
-		EventPTSUS: ptsUS,
-		PostMs:     int64(req.Policy.PostSeconds) * 1000,
+	res, err := s.hub.TriggerClip(ctx, reg.req.CameraID, ClipTriggerRequest{
+		EventPTSUS: reg.ptsUS,
+		PostMs:     int64(reg.req.Policy.PostSeconds) * 1000,
 		MaxMs:      s.maxClipMs,
-		Path:       absPath,
+		Path:       reg.absPath,
 	})
 	if err != nil {
 		return activeClip{}, 0, fmt.Errorf("trigger clip: %w", err)
@@ -254,24 +329,38 @@ func (s *Service) triggerAndRegister(
 		clip, ok := s.active[res.Seq]
 		s.activeMu.Unlock()
 		if !ok {
-			return activeClip{}, 0, fmt.Errorf("%w (seq=%d camera=%s)", ErrClipStateLost, res.Seq, req.CameraID)
+			return activeClip{}, 0, fmt.Errorf(
+				"%w (seq=%d camera=%s)",
+				ErrClipStateLost,
+				res.Seq,
+				reg.req.CameraID,
+			)
 		}
 		return clip, offsetMs, nil
 	}
 
 	row := &EventClip{
-		ID:        newID,
-		CameraID:  req.CameraID,
-		Path:      relPath,
-		Codec:     res.Codec,
-		Status:    ClipStatusRecording,
-		StartedAt: s.now(),
+		ID:             reg.newID,
+		CameraID:       reg.req.CameraID,
+		Path:           reg.relPath,
+		Codec:          res.Codec,
+		Status:         ClipStatusRecording,
+		StorageBackend: reg.storageBackend,
+		UploadStatus:   reg.uploadStatus,
+		StartedAt:      s.now(),
 	}
 	if err := s.store.CreateClip(ctx, row); err != nil {
 		// native 仍在写这个文件：无行引用的孤儿文件交给 storage 的 recordings TTL 清理。
 		return activeClip{}, 0, fmt.Errorf("insert event clip: %w", err)
 	}
-	clip := activeClip{clipID: newID, cameraID: req.CameraID, absPath: absPath}
+	clip := activeClip{
+		clipID:         reg.newID,
+		cameraID:       reg.req.CameraID,
+		relPath:        reg.relPath,
+		absPath:        reg.absPath,
+		storageBackend: reg.storageBackend,
+		protected:      reg.req.EventKind == EventKindAlarm,
+	}
 	s.activeMu.Lock()
 	s.active[res.Seq] = clip
 	s.activeMu.Unlock()
@@ -348,8 +437,13 @@ func (s *Service) Start(ctx context.Context) error {
 		return nil
 	}
 
+	s.startUploadWorkers(ctx)
+
 	if err := s.RepairLeftovers(ctx); err != nil {
 		s.logger.Warn("repair leftover event clips failed", zap.Error(err))
+	}
+	if err := s.RecoverPendingUploads(ctx); err != nil {
+		s.logger.Warn("recover pending clip uploads failed", zap.Error(err))
 	}
 
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -364,9 +458,9 @@ func (s *Service) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop ends the loops, then drains completion events one final time so clips flushed
-// by native during camera shutdown get their terminal state. Leftovers are repaired on
-// the next Start.
+// Stop ends the loops, drains completion events one final time so clips flushed
+// by native during camera shutdown get their terminal state, and drains any
+// queued remote spool uploads before returning.
 func (s *Service) Stop(ctx context.Context) error {
 	s.lifeMu.Lock()
 	cancel := s.cancel
@@ -389,6 +483,9 @@ func (s *Service) Stop(ctx context.Context) error {
 	select {
 	case <-done:
 	case <-ctx.Done():
+		if drainErr := s.drainUploadWorkers(ctx); drainErr != nil {
+			s.logger.Debug("drain upload queue after canceled stop", zap.Error(drainErr))
+		}
 		return fmt.Errorf("stop recording loops: %w", ctx.Err())
 	}
 
@@ -396,6 +493,9 @@ func (s *Service) Stop(ctx context.Context) error {
 		if err := s.PollOnce(ctx); err != nil {
 			s.logger.Warn("final event clip poll failed", zap.Error(err))
 		}
+	}
+	if err := s.drainUploadWorkers(ctx); err != nil {
+		return fmt.Errorf("drain event clip upload queue: %w", err)
 	}
 	return nil
 }
@@ -489,6 +589,9 @@ func (s *Service) applyEvent(ctx context.Context, ev ClipEvent) {
 	}
 	if status == ClipStatusFailed {
 		s.removeOrphanLock(clip.absPath)
+		if clip.storageBackend != "" && clip.storageBackend != filestore.BackendLocal {
+			s.removeIfEmpty(clip.absPath)
+		}
 	}
 	// Stop() 可能在 pollLoop 刚出队后取消 loopCtx；用独立有界上下文完成落库，避免丢失已完成事件。
 	dbCtx, dbCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -507,6 +610,16 @@ func (s *Service) applyEvent(ctx context.Context, ev ClipEvent) {
 	}
 	if !updated {
 		s.logger.Debug("clip completion matched no recording row", zap.String("clip_id", clip.clipID))
+		return
+	}
+	if status != ClipStatusFailed && clip.storageBackend != "" && clip.storageBackend != filestore.BackendLocal {
+		s.enqueueUpload(uploadJob{
+			clipID:         clip.clipID,
+			relPath:        clip.relPath,
+			absPath:        clip.absPath,
+			storageBackend: clip.storageBackend,
+			protected:      clip.protected,
+		})
 	}
 }
 
@@ -525,23 +638,32 @@ func (s *Service) RepairLeftovers(ctx context.Context) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	if s.media == nil {
-		return fmt.Errorf("repair %d clips: %w", len(rows), ErrClipUnavailable)
-	}
-	root, err := s.media.MediaRoot(ctx)
+	target, err := s.resolveTarget(ctx)
 	if err != nil {
-		return fmt.Errorf("resolve media root: %w", err)
+		return err
 	}
+	localRoot := strings.TrimSpace(target.MediaDir)
 	if checker := s.clipFileChecker(); checker != nil {
-		// 挂载点未就绪时（fallthrough）不得把残留 recording 行全部误判为失败。
-		if _, checkErr := checker.ClipFileExists(ctx, rows[0].Path); checkErr != nil {
-			return fmt.Errorf("media root unavailable for repair: %w", checkErr)
+		for i := range rows {
+			if rows[i].StorageBackend != "" && rows[i].StorageBackend != filestore.BackendLocal {
+				continue
+			}
+			// 挂载点未就绪时（fallthrough）不得把残留 recording 行全部误判为失败。
+			if _, checkErr := checker.ClipFileExists(ctx, rows[i].Path); checkErr != nil {
+				return fmt.Errorf("media root unavailable for repair: %w", checkErr)
+			}
+			break
 		}
 	}
 
 	var errs []error
 	for i := range rows {
-		if err := s.repairClip(ctx, root, &rows[i]); err != nil {
+		clipRoot := localRoot
+		if rows[i].StorageBackend != "" && rows[i].StorageBackend != filestore.BackendLocal &&
+			strings.TrimSpace(target.SpoolDir) != "" {
+			clipRoot = target.SpoolDir
+		}
+		if err := s.repairClip(ctx, clipRoot, &rows[i]); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -629,14 +751,16 @@ func (s *Service) removeIfEmpty(p string) {
 // Cleanup
 // =========================================================================
 
-// CleanupOnce deletes completed/truncated rows whose file storage has removed, and
-// failed rows older than RecordingsRetentionDays. A stat error other than "not exist"
-// aborts the round (never treat uncertainty as deletion).
+// CleanupOnce retries pending remote uploads, deletes completed/truncated rows
+// whose file storage has removed, and deletes failed rows older than retention.
 func (s *Service) CleanupOnce(ctx context.Context) error {
 	if s.store == nil {
 		return nil
 	}
 	var errs []error
+	if err := s.RecoverPendingUploads(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	if err := s.pruneMissingFiles(ctx); err != nil {
 		errs = append(errs, err)
 	}
@@ -647,20 +771,14 @@ func (s *Service) CleanupOnce(ctx context.Context) error {
 }
 
 func (s *Service) pruneMissingFiles(ctx context.Context) error {
-	if s.media == nil {
-		return nil
-	}
-	root, err := s.media.MediaRoot(ctx)
+	target, err := s.resolveTarget(ctx)
 	if err != nil {
-		return fmt.Errorf("resolve media root: %w", err)
+		return err
 	}
-	if strings.TrimSpace(root) == "" {
-		return nil
-	}
-	if _, err := os.Stat(root); err != nil {
-		// 媒体盘未挂载时所有文件都「不存在」：绝不能据此清空整张表。
-		return fmt.Errorf("media root unavailable: %w", err)
-	}
+	localRoot := strings.TrimSpace(target.MediaDir)
+	checker := s.clipFileChecker()
+	store := s.currentFileStore()
+	localRootStatVerified := false
 
 	cursor := ""
 	var deleted int64
@@ -676,26 +794,63 @@ func (s *Service) pruneMissingFiles(ctx context.Context) error {
 			break
 		}
 		var missing []string
-		checker := s.clipFileChecker()
 		for i := range rows {
-			if checker != nil {
-				exists, checkErr := checker.ClipFileExists(ctx, rows[i].Path)
-				if checkErr != nil {
-					return fmt.Errorf("check clip %q: %w", rows[i].ID, checkErr)
+			row := rows[i]
+			if row.StorageBackend != "" && row.StorageBackend != filestore.BackendLocal {
+				if row.UploadStatus == UploadStatusPending || row.UploadStatus == UploadStatusFailed {
+					exists, checkErr := s.remoteOrSpoolClipExists(
+						ctx,
+						target.SpoolDir,
+						store,
+						row.Path,
+					)
+					if checkErr != nil {
+						return fmt.Errorf("check spooled clip %q: %w", row.ID, checkErr)
+					}
+					if !exists {
+						missing = append(missing, row.ID)
+					}
+					continue
 				}
-				if !exists {
-					missing = append(missing, rows[i].ID)
+				if store != nil {
+					exists, exErr := store.Exists(ctx, filepath.ToSlash(row.Path))
+					if exErr != nil {
+						return fmt.Errorf("check remote clip %q: %w", row.ID, exErr)
+					}
+					if !exists {
+						missing = append(missing, row.ID)
+					}
 				}
 				continue
 			}
-			abs := filepath.Join(root, filepath.FromSlash(rows[i].Path))
+
+			if checker != nil {
+				exists, checkErr := checker.ClipFileExists(ctx, row.Path)
+				if checkErr != nil {
+					return fmt.Errorf("check clip %q: %w", row.ID, checkErr)
+				}
+				if !exists {
+					missing = append(missing, row.ID)
+				}
+				continue
+			}
+			if localRoot == "" {
+				continue
+			}
+			if !localRootStatVerified {
+				if _, statErr := os.Stat(localRoot); statErr != nil {
+					return fmt.Errorf("media root unavailable: %w", statErr)
+				}
+				localRootStatVerified = true
+			}
+			abs := filepath.Join(localRoot, filepath.FromSlash(row.Path))
 			_, statErr := os.Stat(abs)
 			switch {
 			case statErr == nil:
 			case os.IsNotExist(statErr):
-				missing = append(missing, rows[i].ID)
+				missing = append(missing, row.ID)
 			default:
-				return fmt.Errorf("stat clip %q: %w", rows[i].ID, statErr)
+				return fmt.Errorf("stat clip %q: %w", row.ID, statErr)
 			}
 		}
 		n, err := s.store.DeleteClips(ctx, missing)
@@ -712,6 +867,26 @@ func (s *Service) pruneMissingFiles(ctx context.Context) error {
 		s.logger.Info("deleted event clip rows whose files were removed", zap.Int64("rows", deleted))
 	}
 	return nil
+}
+
+func (s *Service) remoteOrSpoolClipExists(
+	ctx context.Context,
+	spoolDir string,
+	store filestore.Store,
+	relPath string,
+) (bool, error) {
+	if strings.TrimSpace(spoolDir) != "" {
+		abs := filepath.Join(spoolDir, filepath.FromSlash(relPath))
+		if _, err := os.Stat(abs); err == nil {
+			return true, nil
+		} else if !os.IsNotExist(err) {
+			return false, err
+		}
+	}
+	if store != nil {
+		return store.Exists(ctx, filepath.ToSlash(relPath))
+	}
+	return false, nil
 }
 
 func (s *Service) pruneFailed(ctx context.Context) error {

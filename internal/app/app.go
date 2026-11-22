@@ -22,6 +22,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/faceextract"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/gb28181"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
@@ -394,31 +395,87 @@ var systemInfoModule = fx.Module("systeminfo",
 type storageOut struct {
 	fx.Out
 
-	Repository      storage.Repository
-	Inspector       storage.PathInspector
-	Gate            *storage.EmergencyGate
-	Cleaner         *storage.CleanerEngine
-	Service         *storage.Service
-	Handler         *storage.Handler
-	Lifecycle       storageLifecycle
-	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+	Repository         storage.Repository
+	Inspector          storage.PathInspector
+	Gate               *storage.EmergencyGate
+	Cleaner            *storage.CleanerEngine
+	Service            *storage.Service
+	Handler            *storage.Handler
+	Lifecycle          storageLifecycle
+	FileStore          *filestore.Manager
+	FileStoreLifecycle fileStoreLifecycle
+	ProtectedRoutes    RouteRegistrar `group:"protected_routes"`
 }
 
-func provideStorage(
-	dbProvider database.DBProvider,
-	auditSvc *audit.Service,
-	logger *zap.Logger,
-) storageOut {
-	comp := storage.NewStorageComponents(dbProvider, auditSvc, logger)
+type storageParams struct {
+	fx.In
+
+	DBProvider   database.DBProvider
+	AuditService *audit.Service
+	Config       Config
+	CamCipher    *camera.LazyCipher       `optional:"true"`
+	CamManager   *camera.LifecycleManager `optional:"true"`
+	AsyncJobs    *asyncjob.Service        `optional:"true"`
+	Logger       *zap.Logger
+}
+
+func provideStorage(p storageParams) storageOut {
+	var secretCipher storage.SecretCipher
+	if p.CamCipher != nil {
+		secretCipher = p.CamCipher
+	}
+	comp := storage.NewStorageComponentsWithCipher(
+		p.DBProvider,
+		secretCipher,
+		p.AuditService,
+		p.Logger,
+	)
+	if p.CamManager != nil {
+		p.CamManager.AddEncryptedDataProbe(comp.Service)
+	}
+
+	namespaceRoots := resolveLocalNamespaceRoots(p.Config)
+	mountInspector := &filestoreMountInspectorAdapter{inspector: comp.Inspector}
+	fsMgr := filestore.NewManager(filestore.ManagerConfig{
+		Local: filestore.LocalConfig{
+			RootDir:        storage.DefaultStorageConfig().MediaDirectory,
+			NamespaceRoots: namespaceRoots,
+			Inspector:      mountInspector,
+			Logger:         p.Logger,
+		},
+		LocalFallback: true,
+		Logger:        p.Logger,
+	})
+
+	comp.Service.SetRemoteStore(fsMgr)
+	comp.Service.SetRemotePruneProvider(&appRemotePruneProvider{dbProvider: p.DBProvider})
+	comp.Service.SetRemoteClipReconciler(reconcileRemoteDeletedClips(p.DBProvider, p.Logger))
+	comp.Service.SetMigrationSource(newSQLiteStorageMigrationSource(p.DBProvider, namespaceRoots))
+	if p.AsyncJobs != nil {
+		comp.Service.SetAsyncJobs(p.AsyncJobs)
+		p.AsyncJobs.RegisterHandler(comp.MigrationHandler)
+	}
+	comp.Service.SetConfigChangeListener(
+		makeFileStoreConfigSync(fileStoreConfigSyncDeps{
+			mgr:            fsMgr,
+			svc:            comp.Service,
+			namespaceRoots: namespaceRoots,
+			inspector:      mountInspector,
+			logger:         p.Logger,
+		}),
+	)
+
 	return storageOut{
-		Repository:      comp.Repository,
-		Inspector:       comp.Inspector,
-		Gate:            comp.Gate,
-		Cleaner:         comp.Cleaner,
-		Service:         comp.Service,
-		Handler:         comp.Handler,
-		Lifecycle:       comp.Lifecycle,
-		ProtectedRoutes: comp.ProtectedRoutes,
+		Repository:         comp.Repository,
+		Inspector:          comp.Inspector,
+		Gate:               comp.Gate,
+		Cleaner:            comp.Cleaner,
+		Service:            comp.Service,
+		Handler:            comp.Handler,
+		Lifecycle:          comp.Lifecycle,
+		FileStore:          fsMgr,
+		FileStoreLifecycle: fsMgr,
+		ProtectedRoutes:    comp.ProtectedRoutes,
 	}
 }
 
@@ -428,6 +485,15 @@ var storageModule = fx.Module("storage",
 
 // --- Media File Module ---
 
+type mediaFileParams struct {
+	fx.In
+
+	StorageSvc *storage.Service
+	Inspector  storage.PathInspector
+	FileStore  *filestore.Manager
+	Logger     *zap.Logger
+}
+
 type mediaFileOut struct {
 	fx.Out
 
@@ -436,19 +502,16 @@ type mediaFileOut struct {
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
 }
 
-// provideMediaFile wires the read-only media file service onto the storage
-// service, which owns the media root configuration and the filesystem
-// telemetry used for fallthrough detection.
-func provideMediaFile(
-	storageSvc *storage.Service,
-	inspector storage.PathInspector,
-	logger *zap.Logger,
-) mediaFileOut {
-	comp := mediafile.NewMediaFileComponents(
-		mediafile.NewMediaRootProvider(storageSvc),
-		mediafile.NewDeviceInspector(inspector),
-		logger,
-	)
+// provideMediaFile wires the read-only media file service onto the shared
+// filestore.Manager and storage delivery policy.
+func provideMediaFile(p mediaFileParams) mediaFileOut {
+	comp := mediafile.NewMediaFileComponentsWithStore(mediafile.StoreOptions{
+		Store:        p.FileStore,
+		Provider:     mediafile.NewMediaRootProvider(p.StorageSvc),
+		Inspector:    mediafile.NewDeviceInspector(p.Inspector),
+		DeliveryMode: mediafile.NewDeliveryModeProvider(p.StorageSvc),
+		Logger:       p.Logger,
+	})
 	return mediaFileOut{
 		Service:         comp.Service,
 		Handler:         comp.Handler,
@@ -646,6 +709,7 @@ type personParams struct {
 	Supervisor  *algorunner.Supervisor
 	RecordStore *record.Store
 	AsyncJobs   *asyncjob.Service
+	FileStore   *filestore.Manager
 	Logger      *zap.Logger
 }
 
@@ -682,6 +746,7 @@ func providePerson(p personParams) personOut {
 		RequirePersonIDForEnrollment: p.Config.RequirePersonIDForEnrollment,
 		RecognitionKeyBackfiller:     keyBackfiller,
 		AsyncJobs:                    p.AsyncJobs,
+		FileStore:                    p.FileStore,
 	}
 	comp := person.NewPersonComponents(p.DBProvider, facesDir, p.Logger, opts)
 	if p.AsyncJobs != nil {
@@ -783,6 +848,7 @@ type recordingParams struct {
 	StreamHub  *camera.StreamHub
 	Engine     *engine.Engine
 	Storage    *storage.Service
+	FileStore  *filestore.Manager
 	MediaFiles *mediafile.Service `optional:"true"`
 	Logger     *zap.Logger
 }
@@ -799,6 +865,8 @@ func provideRecording(p recordingParams) recordingOut {
 		recording.Options{},
 	)
 	svc.SetRetentionDaysProvider(recordingRetentionDaysProvider{storage: p.Storage})
+	svc.SetFileStore(p.FileStore)
+	svc.SetTargetProvider(recordingTargetAdapter{storage: p.Storage})
 	if p.MediaFiles != nil {
 		svc.SetFileChecker(recordSnapshotFileChecker{media: p.MediaFiles})
 	}
@@ -832,6 +900,7 @@ type recordParams struct {
 	DBProvider database.DBProvider
 	StreamHub  *camera.StreamHub
 	Storage    *storage.Service
+	FileStore  *filestore.Manager
 	MediaFiles *mediafile.Service
 	Recording  *recording.Service    `optional:"true"`
 	ClipPolicy *task.ClipPolicyCache `optional:"true"`
@@ -904,6 +973,7 @@ func provideRecord(p recordParams) recordOut {
 		0, // 0 = 使用 engine.DefaultSnapshotQuality
 		p.Logger,
 	)
+	snapshots.SetFileStore(p.FileStore)
 	snapshots.SetPathCleaner(comp.Store)
 	comp.Service.SetSnapshotStore(snapshots)
 
@@ -944,10 +1014,16 @@ type spatialOut struct {
 func provideSpatial(
 	dbProvider database.DBProvider,
 	config Config,
+	fileStore *filestore.Manager,
 	logger *zap.Logger,
 ) spatialOut {
 	mapsDir := filepath.Join(config.DataDir, "maps")
-	comps := spatial.NewSpatialComponents(dbProvider, mapsDir, logger)
+	comps := spatial.NewSpatialComponentsWithOptions(
+		dbProvider,
+		mapsDir,
+		logger,
+		spatial.Options{FileStore: fileStore},
+	)
 	return spatialOut{
 		Lifecycle:       comps.Lifecycle,
 		ProtectedRoutes: comps.ProtectedRoutes,

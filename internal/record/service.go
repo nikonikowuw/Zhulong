@@ -12,6 +12,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -475,7 +476,11 @@ func (s *Service) processPersonStructure(ctx context.Context, f ingestFrame) err
 	recognitions, recognitionJobs := s.planRecognitions(ctx, f, plan, personIDs, faceIDs)
 
 	var errs []error
+	backend := s.storageBackend()
 	if len(recognitions) > 0 {
+		for _, rec := range recognitions {
+			rec.StorageBackend = backend
+		}
 		if err := s.store.CreateRecognitionBatch(ctx, recognitions); err != nil {
 			errs = append(errs, fmt.Errorf("insert recognitions: %w", err))
 		} else {
@@ -486,6 +491,9 @@ func (s *Service) processPersonStructure(ctx context.Context, f ingestFrame) err
 	}
 	// 人体/人脸抓拍只落库，不对外发事件（识别事件已是同一帧的下游表示）。
 	if len(captures) > 0 {
+		for _, capRow := range captures {
+			capRow.StorageBackend = backend
+		}
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			errs = append(errs, fmt.Errorf("insert captures: %w", err))
 		} else {
@@ -675,6 +683,10 @@ func (s *Service) processVehicleStructure(ctx context.Context, f ingestFrame) er
 	if len(captures) == 0 {
 		return nil
 	}
+	backend := s.storageBackend()
+	for _, capRow := range captures {
+		capRow.StorageBackend = backend
+	}
 	if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 		return fmt.Errorf("insert vehicle captures: %w", err)
 	}
@@ -725,7 +737,11 @@ func (s *Service) processDetection(ctx context.Context, f ingestFrame) error {
 	captures, captureJobs := s.planDetectionCaptures(f)
 
 	var errs []error
+	backend := s.storageBackend()
 	if len(alarms) > 0 {
+		for _, alarm := range alarms {
+			alarm.StorageBackend = backend
+		}
 		if err := s.store.CreateAlarmBatch(ctx, alarms); err != nil {
 			errs = append(errs, fmt.Errorf("insert alarms: %w", err))
 		} else {
@@ -734,6 +750,9 @@ func (s *Service) processDetection(ctx context.Context, f ingestFrame) error {
 		}
 	}
 	if len(captures) > 0 {
+		for _, capRow := range captures {
+			capRow.StorageBackend = backend
+		}
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			errs = append(errs, fmt.Errorf("insert captures: %w", err))
 		} else {
@@ -852,6 +871,10 @@ func (s *Service) processClassification(ctx context.Context, f ingestFrame) erro
 	if len(alarms) == 0 {
 		return nil
 	}
+	backend := s.storageBackend()
+	for _, alarm := range alarms {
+		alarm.StorageBackend = backend
+	}
 	if err := s.store.CreateAlarmBatch(ctx, alarms); err != nil {
 		return fmt.Errorf("insert classification alarms: %w", err)
 	}
@@ -859,6 +882,13 @@ func (s *Service) processClassification(ctx context.Context, f ingestFrame) erro
 	s.triggerAlarmClips(ctx, f, alarms)
 
 	return nil
+}
+
+func (s *Service) storageBackend() string {
+	if sink := s.snapshotSink(); sink != nil {
+		return sink.Backend()
+	}
+	return filestore.BackendLocal
 }
 
 // =========================================================================

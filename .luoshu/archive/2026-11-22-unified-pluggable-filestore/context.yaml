@@ -1,0 +1,32 @@
+version: 1
+change_id: 2026-11-22-unified-pluggable-filestore
+mode: full
+base_commit: 70fbc793af27f8dbfbe83d88a6d3de584c74df99
+created_at: 2026-11-22T06:56:35.490Z
+specs:
+  - architecture.md
+  - backend/mediafile-guidelines.md
+  - backend/storage-guidelines.md
+  - backend/record-guidelines.md
+  - backend/spatial-guidelines.md
+  - backend/alertpush-guidelines.md
+  - backend/dependency-injection.md
+  - backend/http-api-guidelines.md
+  - backend/database-guidelines.md
+  - backend/openapi-and-asyncjob-guidelines.md
+  - frontend/development-guidelines.md
+  - guides/cross-layer-thinking-guide.md
+rules:
+  - data/media-storage-boundary
+  - data/sqlite-persistence
+  - go-host/host-lifecycle
+  - go-host/http-contract
+  - go-host/route-auth-boundary
+  - go-host/sensitive-logging
+  - go-host/code-style
+  - web/frontend-api-boundary
+  - web/frontend-browser-tests
+new_specs:
+  - path: backend/filestore-guidelines.md
+    rationale: 新增统一文件与对象存储抽象包 internal/filestore，需定义逻辑 Key 边界、Local/S3 驱动契约、Spool 异步上传、凭据加密与读回落规则。
+    approved: true

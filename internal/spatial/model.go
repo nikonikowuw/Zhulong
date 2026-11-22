@@ -6,13 +6,14 @@ import (
 
 // CanvasMap represents a 2D floorplan or campus layout image persisted in SQLite.
 type CanvasMap struct {
-	ID        string    `gorm:"primaryKey;column:id" json:"id"`
-	Name      string    `gorm:"column:name;not null" json:"name"`
-	ImagePath string    `gorm:"column:image_path;not null" json:"imagePath"`
-	Width     int       `gorm:"column:width;not null;default:0" json:"width"`
-	Height    int       `gorm:"column:height;not null;default:0" json:"height"`
-	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
-	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+	ID             string    `gorm:"primaryKey;column:id" json:"id"`
+	Name           string    `gorm:"column:name;not null" json:"name"`
+	ImagePath      string    `gorm:"column:image_path;not null" json:"imagePath"`
+	StorageBackend string    `gorm:"column:storage_backend;not null;default:'local'" json:"-"`
+	Width          int       `gorm:"column:width;not null;default:0" json:"width"`
+	Height         int       `gorm:"column:height;not null;default:0" json:"height"`
+	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
 }
 
 // TableName returns the table name for GORM.

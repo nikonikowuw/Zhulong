@@ -126,20 +126,40 @@ func (h *Handler) GetContent(c *gin.Context) {
 	h.ServeContent(c, relativeMediaPath(c.Param("path")))
 }
 
-// ServeContent streams raw bytes for a relative media path with range and HEAD support.
+// ServeContent streams raw bytes (or issues HTTP 302 redirect on GET when redirect
+// delivery is enabled on a presignable remote backend) with Range and HEAD support.
 // It applies mediafile's four-layer path protection and deterministic content typing.
 func (h *Handler) ServeContent(c *gin.Context, relPath string) {
-	// Every validation happens before ServeContent is called. Once it starts
-	// writing, it owns the status line and Content-Length, so an error written
-	// afterwards would corrupt the response instead of replacing it.
-	file, info, err := h.service.OpenContent(c.Request.Context(), relPath)
+	// Every validation happens before writing headers or ServeContent. Once
+	// ServeContent starts, it owns status line and Content-Length.
+	//
+	// Keep HEAD on OpenContent + ServeContent rather than redirecting to a GET-signed
+	// S3 URL, which would fail signature validation if a client follows the redirect
+	// with HEAD.
+	if c.Request.Method != http.MethodHead {
+		redirectURL, shouldRedirect, err := h.service.ResolveRedirect(c.Request.Context(), relPath)
+		if err != nil {
+			writeMediaError(c, err)
+			return
+		}
+		if shouldRedirect && redirectURL != "" {
+			c.Header("Cache-Control", "no-store")
+			c.Redirect(http.StatusFound, redirectURL)
+			return
+		}
+	}
+
+	reader, info, err := h.service.OpenContent(c.Request.Context(), relPath)
 	if err != nil {
 		writeMediaError(c, err)
 		return
 	}
-	defer closeFileBestEffort(file)
+	defer closeReadSeekCloser(reader)
 
-	contentType := contentTypeForPath(info.Name())
+	contentType := contentTypeForPath(info.Name)
+	if contentType == "application/octet-stream" && info.ContentType != "" {
+		contentType = info.ContentType
+	}
 	c.Header("Content-Type", contentType)
 	// No Content-Disposition: attachment. It would force a download and defeat
 	// inline preview, which is the entire purpose of this endpoint.
@@ -148,7 +168,13 @@ func (h *Handler) ServeContent(c *gin.Context, relPath string) {
 	// would hand the browser a cached copy of a file that no longer exists.
 	// ServeContent's Last-Modified plus If-Modified-Since is enough for files
 	// that are immutable once written.
-	http.ServeContent(c.Writer, c.Request, info.Name(), info.ModTime(), file)
+	http.ServeContent(
+		c.Writer,
+		c.Request,
+		info.Name,
+		info.ModifiedAt,
+		reader,
+	)
 }
 
 // relativeMediaPath converts a Gin wildcard parameter into the relative media

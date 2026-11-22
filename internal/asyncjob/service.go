@@ -241,13 +241,6 @@ func (s *Service) ListJobs(ctx context.Context, jobType string, limit, offset in
 // releases the handler's artifacts through JobAborter. Unknown ids and jobs
 // that already finished are rejected instead of silently acknowledged.
 func (s *Service) CancelJob(ctx context.Context, id string) error {
-	s.cancelsMu.Lock()
-	cancelFn, running := s.cancels[id]
-	s.cancelsMu.Unlock()
-	if running && cancelFn != nil {
-		cancelFn()
-	}
-
 	if err := s.store.CancelJobRecord(ctx, id); err != nil {
 		switch {
 		case errors.Is(err, ErrNotFound):
@@ -257,6 +250,13 @@ func (s *Service) CancelJob(ctx context.Context, id string) error {
 		default:
 			return apperr.Internal("DATABASE_ERROR", "Failed to cancel async job", err)
 		}
+	}
+
+	s.cancelsMu.Lock()
+	cancelFn, running := s.cancels[id]
+	s.cancelsMu.Unlock()
+	if running && cancelFn != nil {
+		cancelFn()
 	}
 
 	s.logger.Info("cancelled async job", zap.String("id", id))
@@ -403,6 +403,8 @@ func (s *Service) executeJob(jobID string) {
 			ResultJSON: job.ResultJSON,
 			ErrorCode:  CodeJobShutdown,
 		})
+	case errors.Is(execErr, context.Canceled) || jobCtx.Err() != nil:
+		s.logger.Info("async job cancelled during execution", zap.String("id", jobID))
 	default:
 		// The raw cause belongs to the server log; the job row stores a stable code.
 		s.logger.Warn("async job failed", zap.String("id", jobID), zap.Error(execErr))

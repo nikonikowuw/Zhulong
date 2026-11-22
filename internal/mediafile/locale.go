@@ -39,5 +39,10 @@ func init() {
 			"zh-Hans": "媒体路径不是文件",
 			"zh-Hant": "媒體路徑不是檔案",
 		},
+		"PRESIGN_UNSUPPORTED": {
+			"en":      "Active storage backend does not support presigned URLs",
+			"zh-Hans": "当前存储后端不支持预签名直链",
+			"zh-Hant": "目前儲存後端不支援預簽名直連",
+		},
 	})
 }

@@ -125,4 +125,68 @@ describe('storageApi', () => {
     expect(res).toEqual(mockSummary)
     expect(apiClient.post).toHaveBeenCalledWith('/system/storage/cleanup')
   })
+
+  it('testConnection sends POST /system/storage/test-connection and parses response', async () => {
+    const connRes = {
+      backend: 's3' as const,
+      reachable: true,
+      writable: true,
+    }
+    vi.spyOn(apiClient, 'post').mockResolvedValueOnce(mockResponse(connRes))
+
+    const payload = {
+      backend: 's3' as const,
+      s3: {
+        endpoint: 'http://127.0.0.1:9000',
+        region: 'us-east-1',
+        bucket: 'zhulong-media',
+        prefix: '',
+        usePathStyle: true,
+        useTls: false,
+        insecureSkipVerify: false,
+        accessKeyId: 'minioadmin',
+        secretAccessKey: 'miniosecret',
+        quotaGb: 0,
+      },
+    }
+    const res = await storageApi.testConnection(payload)
+    expect(res).toEqual(connRes)
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/system/storage/test-connection',
+      payload
+    )
+  })
+
+  it('startMigration and getLatestMigration handle job lifecycle and null state', async () => {
+    const mockJob = {
+      jobId: 'job-01',
+      status: 'PROCESSING' as const,
+      progress: 50,
+      total: 10,
+      processed: 5,
+      succeeded: 5,
+      failed: 0,
+      deleteLocal: false,
+      createdAt: '2026-11-22T08:00:00Z',
+      updatedAt: '2026-11-22T08:00:05Z',
+      finishedAt: null,
+    }
+    vi.spyOn(apiClient, 'post').mockResolvedValueOnce(mockResponse(mockJob))
+    const started = await storageApi.startMigration({ deleteLocal: false })
+    expect(started).toEqual(mockJob)
+    expect(apiClient.post).toHaveBeenCalledWith('/system/storage/migrate', {
+      deleteLocal: false,
+    })
+
+    vi.spyOn(apiClient, 'get').mockResolvedValueOnce(mockResponse(null))
+    const emptyLatest = await storageApi.getLatestMigration()
+    expect(emptyLatest).toBeNull()
+  })
+
+  it('rejects malformed status payloads at Zod boundary', async () => {
+    vi.spyOn(apiClient, 'get').mockResolvedValueOnce(
+      mockResponse({ bad: true })
+    )
+    await expect(storageApi.getStatus()).rejects.toThrow()
+  })
 })

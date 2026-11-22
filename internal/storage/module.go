@@ -31,6 +31,12 @@ func (l *storageLifecycleImpl) RegisterWriteObserver(observer func(blocked bool)
 	l.service.RegisterWriteObserver(observer)
 }
 
+// SyncStore reloads stored configuration and synchronizes the active filestore
+// backend once host encryption keys have been initialized.
+func (l *storageLifecycleImpl) SyncStore(ctx context.Context) error {
+	return l.service.SyncStore(ctx)
+}
+
 func (l *storageLifecycleImpl) Stop(ctx context.Context) error {
 	l.logger.Info("stopping system storage lifecycle")
 	return l.service.Stop(ctx)
@@ -43,14 +49,15 @@ type RouteRegistrar interface {
 
 // StorageComponents bundles all instantiated media storage components and adapters.
 type StorageComponents struct {
-	Repository      Repository
-	Inspector       PathInspector
-	Gate            *EmergencyGate
-	Cleaner         *CleanerEngine
-	Service         *Service
-	Handler         *Handler
-	Lifecycle       StorageLifecycle
-	ProtectedRoutes RouteRegistrar
+	Repository       Repository
+	Inspector        PathInspector
+	Gate             *EmergencyGate
+	Cleaner          *CleanerEngine
+	Service          *Service
+	Handler          *Handler
+	Lifecycle        StorageLifecycle
+	ProtectedRoutes  RouteRegistrar
+	MigrationHandler *MigrationJobHandler
 }
 
 // NewStorageComponents instantiates and wires media storage components.
@@ -59,11 +66,27 @@ func NewStorageComponents(
 	auditor *audit.Service,
 	logger *zap.Logger,
 ) StorageComponents {
+	return NewStorageComponentsWithCipher(
+		dbProvider,
+		nil,
+		auditor,
+		logger,
+	)
+}
+
+// NewStorageComponentsWithCipher instantiates storage components with credential
+// encryption support for remote backends.
+func NewStorageComponentsWithCipher(
+	dbProvider database.DBProvider,
+	cipher SecretCipher,
+	auditor *audit.Service,
+	logger *zap.Logger,
+) StorageComponents {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 
-	repo := NewRepository(dbProvider, logger)
+	repo := NewRepositoryWithCipher(dbProvider, cipher, logger)
 	inspector := NewDefaultPathInspector()
 	gate := NewEmergencyGate(logger)
 	cleaner := NewCleanerEngine(inspector, logger, CleanerOptions{CapacityProbe: probeCapacity})
@@ -72,6 +95,7 @@ func NewStorageComponents(
 		Inspector: inspector,
 		Gate:      gate,
 		Cleaner:   cleaner,
+		Cipher:    cipher,
 		Logger:    logger,
 	})
 	if auditor != nil {
@@ -83,15 +107,17 @@ func NewStorageComponents(
 		service: svc,
 		logger:  logger,
 	}
+	migrationHandler := NewMigrationJobHandler(svc)
 
 	return StorageComponents{
-		Repository:      repo,
-		Inspector:       inspector,
-		Gate:            gate,
-		Cleaner:         cleaner,
-		Service:         svc,
-		Handler:         handler,
-		Lifecycle:       lifecycle,
-		ProtectedRoutes: handler,
+		Repository:       repo,
+		Inspector:        inspector,
+		Gate:             gate,
+		Cleaner:          cleaner,
+		Service:          svc,
+		Handler:          handler,
+		Lifecycle:        lifecycle,
+		ProtectedRoutes:  handler,
+		MigrationHandler: migrationHandler,
 	}
 }

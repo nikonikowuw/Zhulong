@@ -3,6 +3,7 @@ package mediafile
 import (
 	"context"
 
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 )
 
@@ -30,8 +31,29 @@ func (p *storageMediaRootProvider) MediaRoot(ctx context.Context) (string, error
 	return cfg.MediaDirectory, nil
 }
 
+// NewDeliveryModeProvider reads the configured HTTP delivery mode ("proxy" or "redirect")
+// from storage.Service without caching stale config across hot updates.
+func NewDeliveryModeProvider(service *storage.Service) DeliveryModeProvider {
+	return &storageDeliveryModeProvider{service: service}
+}
+
+type storageDeliveryModeProvider struct {
+	service *storage.Service
+}
+
+func (p *storageDeliveryModeProvider) DeliveryMode(ctx context.Context) string {
+	if p == nil || p.service == nil {
+		return storage.DeliveryModeProxy
+	}
+	cfg, err := p.service.GetConfig(ctx)
+	if err != nil || cfg == nil || cfg.Backend != storage.BackendS3 || cfg.DeliveryMode == "" {
+		return storage.DeliveryModeProxy
+	}
+	return cfg.DeliveryMode
+}
+
 // storageDeviceInspector adapts storage.PathInspector to the narrower
-// DeviceInspector contract used by the resolver.
+// DeviceInspector contract used by LocalDriver mount telemetry checks.
 type storageDeviceInspector struct {
 	inspector storage.PathInspector
 }
@@ -47,4 +69,25 @@ func (d *storageDeviceInspector) InspectFS(path string) (*storage.FSStats, error
 
 func (d *storageDeviceInspector) GetRootDeviceID() (uint64, error) {
 	return d.inspector.GetRootDeviceID()
+}
+
+type deviceInspectorMountAdapter struct {
+	inspector DeviceInspector
+}
+
+func (a *deviceInspectorMountAdapter) InspectMount(path string) (filestore.MountTelemetry, error) {
+	stats, err := a.inspector.InspectFS(path)
+	if err != nil {
+		return filestore.MountTelemetry{}, err
+	}
+	return filestore.MountTelemetry{
+		DeviceID:   stats.DeviceID,
+		MountPoint: stats.MountPoint,
+		FSType:     stats.FSType,
+		IsReadOnly: stats.IsReadOnly,
+	}, nil
+}
+
+func (a *deviceInspectorMountAdapter) RootDeviceID() (uint64, error) {
+	return a.inspector.GetRootDeviceID()
 }

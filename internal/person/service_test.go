@@ -695,13 +695,15 @@ func TestOpenFaceImageStaysInsideFacesDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFaceImage failed: %v", err)
 	}
-	if info.Name() != face.ImagePath {
-		t.Errorf("expected %q, got %q", face.ImagePath, info.Name())
+	if info.Name != face.ImagePath {
+		t.Errorf("expected %q, got %q", face.ImagePath, info.Name)
 	}
-	if info.IsDir() {
-		t.Error("expected a regular file, got a directory")
+	if info.SizeBytes <= 0 {
+		t.Error("expected a non-empty regular file")
 	}
-	file.Close()
+	if closeErr := file.Close(); closeErr != nil {
+		t.Fatalf("close face reader: %v", closeErr)
+	}
 
 	// Rows from an older deployment may hold an absolute path; it resolves only when
 	// it lives inside the faces directory.

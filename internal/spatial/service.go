@@ -1,6 +1,7 @@
 package spatial
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -11,8 +12,7 @@ import (
 	"io"
 	"math"
 	"mime"
-	"os"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +22,7 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 )
 
@@ -33,6 +34,9 @@ const (
 	// maxMapNameRunes mirrors the HTTP binding limit so the service cannot persist
 	// a name the API would have rejected.
 	maxMapNameRunes = 64
+
+	// maxMapFileBytes bounds uploaded canvas map size buffered for header decoding.
+	maxMapFileBytes = 32 << 20
 )
 
 // allowedMapExtensions lists the accepted base map formats. Animated formats are
@@ -54,23 +58,45 @@ type trajectoryWindow struct {
 
 // Service coordinates spatial maps, camera layout calibration, and trajectory generation.
 type Service struct {
-	store   *Store
-	mapsDir string
-	logger  *zap.Logger
+	store     *Store
+	fileStore filestore.Store
+	mapsDir   string
+	logger    *zap.Logger
 }
 
-// NewService instantiates a spatial Service.
-//
-// It only binds dependencies: the maps directory is created by the domain's
-// start hook (see SpatialLifecycle), never here.
+// NewService instantiates a spatial Service backed by LocalDriver on mapsDir.
 func NewService(store *Store, mapsDir string, logger *zap.Logger) *Service {
+	return NewServiceWithStore(
+		store,
+		mapsDir,
+		nil,
+		logger,
+	)
+}
+
+// NewServiceWithStore instantiates a spatial Service with pluggable filestore.
+func NewServiceWithStore(
+	store *Store,
+	mapsDir string,
+	fileStore filestore.Store,
+	logger *zap.Logger,
+) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	if fileStore == nil {
+		fileStore = filestore.NewLocalDriver(filestore.LocalConfig{
+			NamespaceRoots: map[string]string{
+				filestore.NamespaceMaps: mapsDir,
+			},
+			Logger: logger,
+		})
+	}
 	return &Service{
-		store:   store,
-		mapsDir: mapsDir,
-		logger:  logger,
+		store:     store,
+		fileStore: fileStore,
+		mapsDir:   mapsDir,
+		logger:    logger,
 	}
 }
 
@@ -97,37 +123,48 @@ func (s *Service) GetMap(ctx context.Context, id string) (*CanvasMapResponse, er
 	return &res, nil
 }
 
-// GetMapFile resolves the absolute filesystem path and MIME type for serving the map image.
-func (s *Service) GetMapFile(ctx context.Context, id string) (string, string, error) {
+// OpenMapFile resolves the filestore stream, metadata, and MIME type for serving a map image.
+func (s *Service) OpenMapFile(
+	ctx context.Context,
+	id string,
+) (filestore.ReadSeekCloser, filestore.ObjectInfo, string, error) {
 	m, err := s.store.GetMap(ctx, id)
 	if err != nil {
-		return "", "", mapLookupError(err)
+		return nil, filestore.ObjectInfo{}, "", mapLookupError(err)
 	}
-	fullPath := filepath.Join(s.mapsDir, m.ImagePath)
-	if _, err := os.Stat(fullPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", "", apperr.New(
+	key, err := mapObjectKey(m.ImagePath)
+	if err != nil {
+		return nil, filestore.ObjectInfo{}, "", apperr.New(
+			apperr.KindInvalid,
+			"MAP_PATH_INVALID",
+			"invalid canvas map image path",
+			err,
+		)
+	}
+
+	rc, info, err := s.fileStore.Open(ctx, key)
+	if err != nil {
+		if filestore.IsNotFound(err) {
+			return nil, filestore.ObjectInfo{}, "", apperr.New(
 				apperr.KindNotFound,
 				"MAP_FILE_NOT_FOUND",
 				"canvas map image file not found",
 				err,
 			)
 		}
-		return "", "", apperr.New(
+		return nil, filestore.ObjectInfo{}, "", apperr.New(
 			apperr.KindInternal,
 			"MAP_STORAGE_ERROR",
 			"failed to read canvas map image",
 			err,
 		)
 	}
-	mimeType := mime.TypeByExtension(filepath.Ext(m.ImagePath))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-	return fullPath, mimeType, nil
+
+	return rc, info, mapMimeType(m.ImagePath), nil
 }
 
-// CreateMap saves the uploaded map image to disk and creates the map entity.
+// CreateMap validates, decodes intrinsic dimensions, stores the map image via
+// filestore, and persists the map entity in SQLite.
 func (s *Service) CreateMap(
 	ctx context.Context,
 	name string,
@@ -139,7 +176,7 @@ func (s *Service) CreateMap(
 		return nil, err
 	}
 
-	ext := strings.ToLower(filepath.Ext(filename))
+	ext := strings.ToLower(path.Ext(filename))
 	if _, ok := allowedMapExtensions[ext]; !ok {
 		return nil, apperr.New(
 			apperr.KindInvalid,
@@ -149,17 +186,21 @@ func (s *Service) CreateMap(
 		)
 	}
 
-	mapID := idutil.New()
-	relPath := mapID + ext
-	fullPath := filepath.Join(s.mapsDir, relPath)
-
-	if err := s.writeMapFile(fullPath, file); err != nil {
-		return nil, err
+	data, err := io.ReadAll(io.LimitReader(file, maxMapFileBytes+1))
+	if err != nil {
+		return nil, apperr.New(
+			apperr.KindInternal,
+			"MAP_STORAGE_ERROR",
+			"failed to read uploaded canvas map",
+			err,
+		)
+	}
+	if int64(len(data)) > maxMapFileBytes {
+		return nil, apperr.PayloadTooLarge("FILE_TOO_LARGE", "canvas map exceeds maximum allowed size", nil)
 	}
 
-	width, height, ok := readImageSize(fullPath, ext)
+	width, height, ok := decodeIntrinsicSize(bytes.NewReader(data), ext)
 	if !ok {
-		s.removeFile(fullPath, zap.String("map_id", mapID))
 		return nil, apperr.New(
 			apperr.KindInvalid,
 			"IMAGE_SIZE_UNREADABLE",
@@ -168,15 +209,48 @@ func (s *Service) CreateMap(
 		)
 	}
 
+	mapID := idutil.New()
+	relPath := mapID + ext
+	objectKey, keyErr := mapObjectKey(relPath)
+	if keyErr != nil {
+		return nil, apperr.New(
+			apperr.KindInternal,
+			"MAP_STORAGE_ERROR",
+			"invalid generated map key",
+			keyErr,
+		)
+	}
+
+	putOpts := filestore.PutOptions{
+		Size:        int64(len(data)),
+		ContentType: mapMimeType(relPath),
+		Mode:        0o644,
+	}
+	putErr := s.fileStore.Put(
+		ctx,
+		objectKey,
+		bytes.NewReader(data),
+		putOpts,
+	)
+	if putErr != nil {
+		return nil, apperr.New(
+			apperr.KindInternal,
+			"MAP_STORAGE_ERROR",
+			"failed to store canvas map file",
+			putErr,
+		)
+	}
+
 	entity := &CanvasMap{
-		ID:        mapID,
-		Name:      name,
-		ImagePath: relPath,
-		Width:     width,
-		Height:    height,
+		ID:             mapID,
+		Name:           name,
+		ImagePath:      relPath,
+		StorageBackend: s.storageBackend(),
+		Width:          width,
+		Height:         height,
 	}
 	if err := s.store.CreateMap(ctx, entity); err != nil {
-		s.removeFile(fullPath, zap.String("map_id", mapID))
+		s.deleteMapObject(ctx, objectKey, zap.String("map_id", mapID))
 		return nil, databaseError("failed to save canvas map", err)
 	}
 
@@ -208,7 +282,9 @@ func (s *Service) DeleteMap(ctx context.Context, id string) error {
 	if err := s.store.DeleteMap(ctx, id); err != nil {
 		return databaseError("failed to delete canvas map", err)
 	}
-	s.removeFile(filepath.Join(s.mapsDir, m.ImagePath), zap.String("map_id", id))
+	if key, keyErr := mapObjectKey(m.ImagePath); keyErr == nil {
+		s.deleteMapObject(ctx, key, zap.String("map_id", id))
+	}
 	return nil
 }
 
@@ -535,78 +611,51 @@ func databaseError(msg string, err error) error {
 	)
 }
 
-// writeMapFile streams the upload to its final path, removing a partial file so a
-// failed write never leaves an orphan behind.
-func (s *Service) writeMapFile(fullPath string, src io.Reader) error {
-	out, err := os.Create(fullPath)
-	if err != nil {
-		return apperr.New(
-			apperr.KindInternal,
-			"MAP_STORAGE_ERROR",
-			"failed to create canvas map file",
-			err,
-		)
+func (s *Service) storageBackend() string {
+	if s.fileStore == nil {
+		return filestore.BackendLocal
 	}
-	if _, err := io.Copy(out, src); err != nil {
-		s.closeFile(out, fullPath)
-		s.removeFile(fullPath)
-		return apperr.New(
-			apperr.KindInternal,
-			"MAP_STORAGE_ERROR",
-			"failed to write canvas map file",
-			err,
-		)
-	}
-	if err := out.Close(); err != nil {
-		s.removeFile(fullPath)
-		return apperr.New(
-			apperr.KindInternal,
-			"MAP_STORAGE_ERROR",
-			"failed to flush canvas map file",
-			err,
-		)
-	}
-	return nil
+	return s.fileStore.Backend()
 }
 
-func (s *Service) closeFile(f *os.File, path string) {
-	if err := f.Close(); err != nil {
-		s.logger.Warn("failed to close canvas map file", zap.String("path", path), zap.Error(err))
-	}
-}
-
-// removeFile deletes a best-effort artefact. Cleanup happens on error paths where
-// the caller already reports a more specific failure, so a failed removal is only logged.
-func (s *Service) removeFile(path string, fields ...zap.Field) {
-	if path == "" {
+func (s *Service) deleteMapObject(ctx context.Context, key string, fields ...zap.Field) {
+	if key == "" || s.fileStore == nil {
 		return
 	}
-	err := os.Remove(path)
-	if err == nil || errors.Is(err, os.ErrNotExist) {
+	err := s.fileStore.Delete(ctx, key)
+	if err == nil || filestore.IsNotFound(err) {
 		return
 	}
 	s.logger.Warn(
 		"failed to remove canvas map image",
-		append(fields, zap.String("path", path), zap.Error(err))...,
+		append(fields, zap.String("key", key), zap.Error(err))...,
 	)
 }
 
-// readImageSize reports the intrinsic pixel size of a base map.
-//
-// SVG needs its own reader: image.DecodeConfig understands raster formats only,
-// which is why SVG maps used to be stored with an invented 1920×1080 size.
-func readImageSize(path, ext string) (int, int, bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, 0, false
+func mapObjectKey(imagePath string) (string, error) {
+	trimmed := strings.TrimSpace(imagePath)
+	if trimmed == "" || strings.ContainsRune(trimmed, '\x00') {
+		return "", filestore.ErrInvalidKey
 	}
+	slash := strings.TrimPrefix(strings.ReplaceAll(trimmed, "\\", "/"), "/")
+	if !strings.HasPrefix(slash, filestore.NamespaceMaps+"/") {
+		slash = filestore.NamespaceMaps + "/" + slash
+	}
+	return filestore.ValidateObjectKeyForWrite(slash)
+}
 
-	width, height, ok := decodeIntrinsicSize(f, ext)
-	// 关闭失败按读取失败处理：一个读不全的文件尺寸不可信，不能拿它建底图。
-	if closeErr := f.Close(); closeErr != nil {
-		return 0, 0, false
+func mapMimeType(name string) string {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".svg":
+		return "image/svg+xml"
+	case ".webp":
+		return "image/webp"
+	default:
+		if mimeType := mime.TypeByExtension(path.Ext(name)); mimeType != "" {
+			return mimeType
+		}
+		return filestore.ContentTypeForKey(name)
 	}
-	return width, height, ok
 }
 
 // decodeIntrinsicSize reads the size of an already-open base map.

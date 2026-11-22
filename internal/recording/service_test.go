@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/recording"
 	"go.uber.org/zap"
 )
@@ -795,5 +796,51 @@ func TestFallthroughAbortAndOrphanLockCleanup(t *testing.T) {
 	}
 	if got := e.clip(rec.ID).Status; got != recording.ClipStatusRecording {
 		t.Fatalf("RepairLeftovers must not fail rows when media root falls through, got %q", got)
+	}
+}
+
+func TestRepairLeftovers_MixedS3AndLocalStillChecksFallthrough(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+
+	s3Rec := &recording.EventClip{
+		ID:             "C_MIX_S3",
+		CameraID:       "cam_01",
+		Path:           recording.ClipRelPath("cam_01", e.now, "C_MIX_S3"),
+		Status:         recording.ClipStatusRecording,
+		StorageBackend: filestore.BackendS3,
+		StartedAt:      e.now,
+	}
+	localRec := &recording.EventClip{
+		ID:             "C_MIX_LOCAL",
+		CameraID:       "cam_01",
+		Path:           recording.ClipRelPath("cam_01", e.now, "C_MIX_LOCAL"),
+		Status:         recording.ClipStatusRecording,
+		StorageBackend: filestore.BackendLocal,
+		StartedAt:      e.now.Add(time.Second),
+	}
+	for _, row := range []*recording.EventClip{s3Rec, localRec} {
+		if err := e.store.CreateClip(ctx, row); err != nil {
+			t.Fatalf("create %s: %v", row.ID, err)
+		}
+	}
+
+	var checkedPath string
+	e.svc.SetFileChecker(stubClipFileChecker{
+		fn: func(_ context.Context, relPath string) (bool, error) {
+			checkedPath = relPath
+			return false, errors.New("media root fallen through")
+		},
+	})
+	if err := e.svc.RepairLeftovers(ctx); err == nil {
+		t.Fatal("expected RepairLeftovers error when any row is local and root falls through")
+	}
+	if checkedPath != localRec.Path {
+		t.Fatalf("expected fallthrough check against local row %q, got %q", localRec.Path, checkedPath)
+	}
+	for _, id := range []string{s3Rec.ID, localRec.ID} {
+		if got := e.clip(id).Status; got != recording.ClipStatusRecording {
+			t.Fatalf("expected %s to remain recording on fallthrough, got %q", id, got)
+		}
 	}
 }

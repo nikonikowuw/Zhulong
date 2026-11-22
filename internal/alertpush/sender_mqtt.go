@@ -274,13 +274,14 @@ func (s *MQTTSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 	case ImageModeBase64:
 		s.attachBase64Image(ctx, &payload, ev)
 	case ImageModeURL:
-		populateSignedURLs(
-			&payload,
-			ev,
-			s.opts.PublicBaseURL,
-			s.opts.Signer,
-			s.opts.SignedURLTTL,
-		)
+		populateSignedURLs(ctx, signedURLParams{
+			Payload:       &payload,
+			Event:         ev,
+			PublicBaseURL: s.opts.PublicBaseURL,
+			Signer:        s.opts.Signer,
+			Media:         s.opts.Media,
+			TTL:           s.opts.SignedURLTTL,
+		})
 	}
 
 	data, err := json.Marshal(payload)
@@ -371,10 +372,10 @@ func (s *MQTTSender) attachBase64Image(
 		}
 	}()
 
-	if info.Size() > maxMQTTBase64Bytes {
+	if info.SizeBytes > maxMQTTBase64Bytes {
 		s.logger.Warn(
 			"image size exceeds 500KB limit, dropping base64 image",
-			zap.Int64("bytes", info.Size()),
+			zap.Int64("bytes", info.SizeBytes),
 			zap.String("path", ev.ImagePath),
 		)
 		payload.ImageReady = false

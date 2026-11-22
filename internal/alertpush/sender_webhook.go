@@ -11,7 +11,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
-	"os"
 	"strings"
 	"time"
 
@@ -230,20 +229,22 @@ func (s *WebhookSender) buildRequest(
 	if s.opts.ImageMode == ImageModeMultipart {
 		return s.buildMultipartRequest(ctx, payload, ev)
 	}
-	return s.buildJSONRequest(payload, ev)
+	return s.buildJSONRequest(ctx, payload, ev)
 }
 
 func (s *WebhookSender) buildJSONRequest(
+	ctx context.Context,
 	payload AlarmPayload,
 	ev record.AlarmEvent,
 ) (*http.Request, func(), error) {
-	populateSignedURLs(
-		&payload,
-		ev,
-		s.opts.PublicBaseURL,
-		s.opts.Signer,
-		s.opts.SignedURLTTL,
-	)
+	populateSignedURLs(ctx, signedURLParams{
+		Payload:       &payload,
+		Event:         ev,
+		PublicBaseURL: s.opts.PublicBaseURL,
+		Signer:        s.opts.Signer,
+		Media:         s.opts.Media,
+		TTL:           s.opts.SignedURLTTL,
+	})
 
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -264,7 +265,7 @@ func (s *WebhookSender) buildMultipartRequest(
 	payload AlarmPayload,
 	ev record.AlarmEvent,
 ) (*http.Request, func(), error) {
-	var file *os.File
+	var file io.ReadSeekCloser
 	cleanup := func() {
 		if file == nil {
 			return

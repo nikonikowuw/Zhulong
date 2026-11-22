@@ -270,3 +270,12 @@ func verifyNotFallenThrough(inspector DeviceInspector, mediaRoot string, selfDev
 func isFallenThrough(selfDev, statsDev, rootDev uint64) bool {
 	return selfDev != rootDev && statsDev == rootDev
 }
+
+func closeRootBestEffort(root *os.Root) {
+	if root == nil {
+		return
+	}
+	if err := root.Close(); err != nil {
+		// Intentionally ignored during constructor rollback when a more specific error wins.
+	}
+}

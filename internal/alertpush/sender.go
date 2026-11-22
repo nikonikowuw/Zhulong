@@ -2,14 +2,14 @@ package alertpush
 
 import (
 	"context"
-	"io/fs"
+	"io"
 	"net/url"
-	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 )
@@ -25,7 +25,13 @@ var reservedHeaders = map[string]struct{}{
 
 // MediaReader abstracts read access to media files with four-layer path protection.
 type MediaReader interface {
-	OpenContent(ctx context.Context, relPath string) (*os.File, fs.FileInfo, error)
+	OpenContent(ctx context.Context, relPath string) (io.ReadSeekCloser, filestore.ObjectInfo, error)
+}
+
+// MediaPresigner optionally resolves direct presigned URLs (e.g. S3/MinIO)
+// when redirect delivery is active for a media key.
+type MediaPresigner interface {
+	PresignMediaURL(ctx context.Context, relPath string, ttl time.Duration) (string, bool, error)
 }
 
 // Sender defines the delivery mechanism for an alert destination.
@@ -404,33 +410,56 @@ func buildAlarmPayload(ev record.AlarmEvent, deviceID string) AlarmPayload {
 	return payload
 }
 
-func populateSignedURLs(
-	payload *AlarmPayload,
-	ev record.AlarmEvent,
-	publicBaseURL string,
-	signer *URLSigner,
-	ttl time.Duration,
-) {
-	if signer == nil || publicBaseURL == "" {
-		return
-	}
-	if ev.ImageReady && ev.ImagePath != "" {
-		if u, err := generateSignedURL(publicBaseURL, signer, ev.ImagePath, ttl); err == nil {
-			payload.ImageURL = &u
-			payload.ImageReady = true
+type signedURLParams struct {
+	Payload       *AlarmPayload
+	Event         record.AlarmEvent
+	PublicBaseURL string
+	Signer        *URLSigner
+	Media         MediaReader
+	TTL           time.Duration
+}
+
+func populateSignedURLs(ctx context.Context, p signedURLParams) {
+	if p.Event.ImageReady && p.Event.ImagePath != "" {
+		if u, err := resolveSignedOrPresignedURL(ctx, p, p.Event.ImagePath); err == nil && u != "" {
+			p.Payload.ImageURL = &u
+			p.Payload.ImageReady = true
 		}
 	}
-	if ev.CropReady && ev.CropPath != "" {
-		if u, err := generateSignedURL(publicBaseURL, signer, ev.CropPath, ttl); err == nil {
-			payload.CropURL = &u
+	if p.Event.CropReady && p.Event.CropPath != "" {
+		if u, err := resolveSignedOrPresignedURL(ctx, p, p.Event.CropPath); err == nil && u != "" {
+			p.Payload.CropURL = &u
 		}
 	}
-	hasFaceGallery := payload.Face != nil && ev.Face != nil && ev.Face.GalleryImagePath != ""
+	hasFaceGallery := p.Payload.Face != nil && p.Event.Face != nil && p.Event.Face.GalleryImagePath != ""
 	if hasFaceGallery {
-		if u, err := generateSignedURL(publicBaseURL, signer, ev.Face.GalleryImagePath, ttl); err == nil {
-			payload.Face.GalleryURL = &u
+		if u, err := resolveSignedOrPresignedURL(ctx, p, p.Event.Face.GalleryImagePath); err == nil && u != "" {
+			p.Payload.Face.GalleryURL = &u
 		}
 	}
+}
+
+func resolveSignedOrPresignedURL(
+	ctx context.Context,
+	p signedURLParams,
+	relPath string,
+) (string, error) {
+	if p.Media != nil {
+		if presigner, ok := p.Media.(MediaPresigner); ok {
+			if urlStr, handled, err := presigner.PresignMediaURL(ctx, relPath, p.TTL); err == nil && handled && urlStr != "" {
+				return urlStr, nil
+			}
+		}
+	}
+	if p.Signer == nil || p.PublicBaseURL == "" {
+		return "", nil
+	}
+	return generateSignedURL(
+		p.PublicBaseURL,
+		p.Signer,
+		relPath,
+		p.TTL,
+	)
 }
 
 // generateSignedURL generates an absolute signed URL using the public base URL and URLSigner.

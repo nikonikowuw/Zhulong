@@ -6,6 +6,7 @@ import { ContentSection } from '../components/content-section'
 import { ManualCleanupDialog } from './components/manual-cleanup-dialog'
 import { StorageCapacityBar } from './components/storage-capacity-bar'
 import { StorageConfigForm } from './components/storage-config-form'
+import { StorageMigrationCard } from './components/storage-migration-card'
 import { useStorageConfig, useStorageStatus } from './hooks/use-storage'
 
 export function SettingsStorage() {
@@ -35,7 +36,7 @@ export function SettingsStorage() {
       title={t('page.title', { defaultValue: '存储与生命周期' })}
       desc={t('page.desc', {
         defaultValue:
-          '配置边缘媒体存储挂载路径、statfs 水位感知监控、外挂盘掉线防穿透保护以及双水位回差自动清理策略。',
+          '配置边缘媒体存储后端（本地文件系统 LocalFS、MinIO 或 S3 兼容云对象存储）、本地 Spool 缓冲盘以及双水位回差自动清理策略。',
       })}
     >
       <div className='space-y-6'>
@@ -88,11 +89,14 @@ export function SettingsStorage() {
             </div>
           </div>
         ) : (
-          <StorageConfigForm
-            initialConfig={config}
-            status={status}
-            onConfigUpdated={handleRefresh}
-          />
+          <>
+            <StorageConfigForm
+              initialConfig={config}
+              status={status}
+              onConfigUpdated={handleRefresh}
+            />
+            <StorageMigrationCard enabled={config.backend === 's3'} />
+          </>
         )}
       </div>
     </ContentSection>

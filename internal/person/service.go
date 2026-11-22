@@ -30,6 +30,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 )
 
@@ -130,6 +131,10 @@ type Options struct {
 
 	// AsyncJobs is the system-wide background task runner.
 	AsyncJobs AsyncJobSubmitter
+
+	// FileStore provides unified object storage under the "faces" namespace.
+	// When nil (e.g. unit tests), NewService constructs a LocalDriver rooted at facesDir.
+	FileStore filestore.Store
 }
 
 // AsyncJobSubmitter abstracts job submission and lifecycle inspection against the system background task runner.
@@ -147,6 +152,7 @@ type Service struct {
 	galleryNotifier              GalleryNotifier
 	keyBackfiller                RecognitionKeyBackfiller
 	asyncJobs                    AsyncJobSubmitter
+	fileStore                    filestore.Store
 	facesDir                     string
 	tempDir                      string
 	logger                       *zap.Logger
@@ -160,6 +166,15 @@ func NewService(store *Store, facesDir string, logger *zap.Logger, opts Options)
 		logger = zap.NewNop()
 	}
 	tempDir := filepath.Join(filepath.Dir(facesDir), "tmp")
+	fileStore := opts.FileStore
+	if fileStore == nil {
+		fileStore = filestore.NewLocalDriver(filestore.LocalConfig{
+			NamespaceRoots: map[string]string{
+				filestore.NamespaceFaces: facesDir,
+			},
+			Logger: logger,
+		})
+	}
 
 	return &Service{
 		store:                        store,
@@ -167,6 +182,7 @@ func NewService(store *Store, facesDir string, logger *zap.Logger, opts Options)
 		galleryNotifier:              opts.GalleryNotifier,
 		keyBackfiller:                opts.RecognitionKeyBackfiller,
 		asyncJobs:                    opts.AsyncJobs,
+		fileStore:                    fileStore,
 		facesDir:                     facesDir,
 		tempDir:                      tempDir,
 		logger:                       logger.Named("person.service"),
@@ -502,25 +518,67 @@ func (s *Service) removeFaceFile(imagePath string) {
 	if imagePath == "" {
 		return
 	}
-	rel, err := s.faceStorageName(imagePath)
+	key, err := s.faceObjectKey(imagePath)
 	if err != nil {
 		s.logger.Warn(
-			"skipped deletion of face file outside faces directory",
+			"skipped deletion of face file outside faces namespace",
 			zap.String("path", imagePath),
 			zap.Error(err),
 		)
 		return
 	}
-	root, err := os.OpenRoot(s.facesDir)
+	if err := s.fileStore.Delete(context.Background(), key); err != nil && !filestore.IsNotFound(err) {
+		s.logger.Warn("failed to delete face file", zap.String("key", key), zap.Error(err))
+	}
+}
+
+func (s *Service) storageBackend() string {
+	if s.fileStore == nil {
+		return filestore.BackendLocal
+	}
+	return s.fileStore.Backend()
+}
+
+func (s *Service) faceObjectKey(imagePath string) (string, error) {
+	rel, err := s.faceStorageName(imagePath)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			s.logger.Warn("failed to open faces directory for deletion", zap.String("dir", s.facesDir), zap.Error(err))
-		}
+		return "", err
+	}
+	slashRel := strings.TrimPrefix(filepath.ToSlash(rel), "/")
+	if !strings.HasPrefix(slashRel, filestore.NamespaceFaces+"/") {
+		slashRel = filestore.NamespaceFaces + "/" + slashRel
+	}
+	return slashRel, nil
+}
+
+func (s *Service) putFaceObject(ctx context.Context, fileName string, data []byte) (string, error) {
+	key, err := s.faceObjectKey(fileName)
+	if err != nil {
+		return "", err
+	}
+	opts := filestore.PutOptions{
+		Size:        int64(len(data)),
+		ContentType: filestore.ContentTypeForKey(key),
+		Mode:        0o644,
+	}
+	putErr := s.fileStore.Put(
+		ctx,
+		key,
+		bytes.NewReader(data),
+		opts,
+	)
+	if putErr != nil {
+		return "", putErr
+	}
+	return key, nil
+}
+
+func (s *Service) deleteFaceObject(ctx context.Context, key string) {
+	if key == "" || s.fileStore == nil {
 		return
 	}
-	defer root.Close()
-	if err := root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.logger.Warn("failed to delete face file", zap.String("path", rel), zap.Error(err))
+	if err := s.fileStore.Delete(ctx, key); err != nil && !filestore.IsNotFound(err) {
+		s.logger.Warn("failed to clean up face object", zap.String("key", key), zap.Error(err))
 	}
 }
 
@@ -688,15 +746,12 @@ func tooLargeError() error {
 //
 // The returned flag says whether the row became the person's primary face, as decided
 // inside the inserting transaction.
-func (s *Service) addFaceRowWithLimit(ctx context.Context, face *Face, savePath string) (bool, error) {
+func (s *Service) addFaceRowWithLimit(ctx context.Context, face *Face, objectKey string) (bool, error) {
 	isPrimary, err := s.store.AddFaceWithLimit(ctx, face, MaxFacesPerPerson)
 	if err == nil {
 		return isPrimary, nil
 	}
-	if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-		s.logger.Warn("failed to clean up face image after enrollment failure",
-			zap.String("path", savePath), zap.Error(rmErr))
-	}
+	s.deleteFaceObject(ctx, objectKey)
 	return false, err
 }
 
@@ -882,27 +937,24 @@ func (s *Service) enrollFace(ctx context.Context, personMeta *Person, upload Fac
 	}
 	featBytes := float32ToBytes(features)
 
-	if err := os.MkdirAll(s.facesDir, 0755); err != nil {
-		return nil, "", apperr.Internal("STORAGE_ERROR", "Failed to create faces directory", err)
-	}
-
 	faceID := idutil.New()
 	fileName, err := faceFileName(personMeta.ID, faceID, ext)
 	if err != nil {
 		return nil, "", err
 	}
-	savePath := filepath.Join(s.facesDir, fileName)
-	if err := os.WriteFile(savePath, fullBytes, 0644); err != nil {
+	objectKey, err := s.putFaceObject(ctx, fileName, fullBytes)
+	if err != nil {
 		return nil, "", apperr.Internal("STORAGE_ERROR", "Failed to save face image", err)
 	}
 
 	face := &Face{
-		ID:            faceID,
-		PersonRowID:   personMeta.ID,
-		ImagePath:     fileName,
-		FeatureVector: featBytes,
+		ID:             faceID,
+		PersonRowID:    personMeta.ID,
+		ImagePath:      fileName,
+		StorageBackend: s.storageBackend(),
+		FeatureVector:  featBytes,
 	}
-	return face, savePath, nil
+	return face, objectKey, nil
 }
 
 // UpsertPersonByExternalID provisions a person by their external business key.
@@ -1001,7 +1053,7 @@ func (s *Service) AddFaceByExternalID(
 		return nil, personLookupError(err, "Failed to verify person")
 	}
 
-	face, savePath, err := s.enrollFace(ctx, personMeta, upload)
+	face, objectKey, err := s.enrollFace(ctx, personMeta, upload)
 	if err != nil {
 		return nil, err
 	}
@@ -1009,10 +1061,7 @@ func (s *Service) AddFaceByExternalID(
 	if upload.Replace {
 		removed, err := s.store.ReplaceFaces(ctx, personMeta.ID, face)
 		if err != nil {
-			if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-				s.logger.Warn("failed to clean up face image after replace failure",
-					zap.String("path", savePath), zap.Error(rmErr))
-			}
+			s.deleteFaceObject(ctx, objectKey)
 			return nil, apperr.Internal("FACE_REPLACE_FAILED", "Failed to replace face templates", err)
 		}
 
@@ -1029,7 +1078,7 @@ func (s *Service) AddFaceByExternalID(
 	}
 
 	// Normal append enrollment
-	isPrimary, err := s.addFaceRowWithLimit(ctx, face, savePath)
+	isPrimary, err := s.addFaceRowWithLimit(ctx, face, objectKey)
 	if err != nil {
 		return nil, faceEnrollError(err, personMeta.Name)
 	}
@@ -1140,49 +1189,48 @@ func (s *Service) GetPersonByExternalID(ctx context.Context, externalID string) 
 // prefix check followed by a separate open leaves exactly the window a symlink inside
 // the faces directory needs: os.Root resolves relative to the directory handle and
 // refuses anything that escapes it, absolute symlink targets included.
-func (s *Service) OpenFaceImage(ctx context.Context, personID, faceID string) (*os.File, os.FileInfo, error) {
+func (s *Service) OpenFaceImage(
+	ctx context.Context,
+	personID, faceID string,
+) (filestore.ReadSeekCloser, filestore.ObjectInfo, error) {
 	face, err := s.store.GetFace(ctx, faceID)
 	if err != nil {
-		return nil, nil, faceLookupError(err, "Failed to load face")
+		return nil, filestore.ObjectInfo{}, faceLookupError(err, "Failed to load face")
 	}
 	if face.PersonRowID != personID {
-		return nil, nil, apperr.NotFound("FACE_NOT_FOUND", "Face not found", nil)
+		return nil, filestore.ObjectInfo{}, apperr.NotFound("FACE_NOT_FOUND", "Face not found", nil)
 	}
 
-	rel, err := s.faceStorageName(face.ImagePath)
+	key, err := s.faceObjectKey(face.ImagePath)
 	if err != nil {
-		return nil, nil, err
+		return nil, filestore.ObjectInfo{}, err
 	}
 
-	root, err := os.OpenRoot(s.facesDir)
+	rc, info, err := s.fileStore.Open(ctx, key)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil, apperr.NotFound("IMAGE_NOT_FOUND", "Face image file not found on disk", err)
+		return nil, filestore.ObjectInfo{}, mapFaceOpenError(err)
+	}
+	return rc, info, nil
+}
+
+func mapFaceOpenError(err error) error {
+	if filestore.IsNotFound(err) || errors.Is(err, filestore.ErrNotAFile) {
+		return apperr.NotFound("IMAGE_NOT_FOUND", "Face image file not found on disk", err)
+	}
+	if errors.Is(err, filestore.ErrPathEscape) || errors.Is(err, filestore.ErrInvalidKey) ||
+		errors.Is(err, filestore.ErrInvalidNamespace) {
+		return apperr.Invalid("INVALID_IMAGE_PATH", "image path escapes allowed storage directory", err)
+	}
+	var appErr *apperr.Error
+	if errors.As(err, &appErr) && appErr != nil {
+		switch appErr.Code {
+		case "MEDIA_PATH_ESCAPE", "MEDIA_PATH_INVALID", "MEDIA_KIND_INVALID":
+			return apperr.Invalid("INVALID_IMAGE_PATH", appErr.Message, err)
+		case "MEDIA_ROOT_UNAVAILABLE":
+			return apperr.Internal("STORAGE_ERROR", "Failed to open faces directory", err)
 		}
-		return nil, nil, apperr.Internal("STORAGE_ERROR", "Failed to open faces directory", err)
 	}
-	// Files opened through the root stay valid after it is closed.
-	defer root.Close()
-
-	file, err := root.Open(rel)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil, apperr.NotFound("IMAGE_NOT_FOUND", "Face image file not found on disk", err)
-		}
-		return nil, nil, apperr.Invalid("INVALID_IMAGE_PATH", "image path escapes allowed storage directory", err)
-	}
-
-	info, err := file.Stat()
-	if err != nil {
-		file.Close()
-		return nil, nil, apperr.Internal("STORAGE_ERROR", "Failed to stat face image", err)
-	}
-	if info.IsDir() {
-		// os.Root.Open succeeds on a directory; a face image never is one.
-		file.Close()
-		return nil, nil, apperr.NotFound("IMAGE_NOT_FOUND", "Face image file not found on disk", nil)
-	}
-	return file, info, nil
+	return apperr.Internal("STORAGE_ERROR", "Failed to read face image", err)
 }
 
 func isFinite(f float32) bool {

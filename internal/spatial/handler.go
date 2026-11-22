@@ -159,11 +159,16 @@ func (h *Handler) DeleteMap(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /spatial/maps/{id}/image [get]
 func (h *Handler) GetMapImage(c *gin.Context) {
-	filePath, mimeType, err := h.service.GetMapFile(c.Request.Context(), c.Param("id"))
+	reader, info, mimeType, err := h.service.OpenMapFile(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		httputil.WriteErrorWithLogger(c, err, h.logger)
 		return
 	}
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			h.logger.Debug("close canvas map reader", zap.Error(closeErr))
+		}
+	}()
 	c.Header("Content-Type", mimeType)
 	// The map belongs to the authenticated operator session, so a shared proxy must
 	// not cache it; the file itself is immutable once uploaded.
@@ -172,7 +177,13 @@ func (h *Handler) GetMapImage(c *gin.Context) {
 	// Neutralises script execution if the file is opened directly: an <img> tag
 	// already refuses to run SVG script, navigating to the URL does not.
 	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-	http.ServeFile(c.Writer, c.Request, filePath)
+	http.ServeContent(
+		c.Writer,
+		c.Request,
+		info.Name,
+		info.ModifiedAt,
+		reader,
+	)
 }
 
 // UploadMap godoc

@@ -6264,6 +6264,119 @@ const docTemplate = `{
                 }
             }
         },
+        "/system/storage/migrate": {
+            "post": {
+                "description": "Queues an asynchronous background job migrating historical local snapshots, recordings, faces, and spatial maps to the active remote S3 store.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Start local-to-remote media asset migration job",
+                "parameters": [
+                    {
+                        "description": "Migration options",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/storage.StartMigrationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/storage.MigrationJobResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "STORAGE_MIGRATION_IN_PROGRESS",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "STORAGE_MIGRATION_REQUIRES_S3 or VALIDATION_FAILED",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "DATABASE_ERROR",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "STORAGE_MIGRATION_UNAVAILABLE",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/storage/migrate/latest": {
+            "get": {
+                "description": "Returns the most recent local-to-remote asset migration job status, or null when no job has been submitted yet.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get latest local-to-remote storage migration job",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/storage.MigrationJobResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "DATABASE_ERROR",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "STORAGE_MIGRATION_UNAVAILABLE",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/system/storage/status": {
             "get": {
                 "description": "Retrieves disk capacity metrics, categorized usage breakdown, mount point, and current health status.",
@@ -6304,7 +6417,7 @@ const docTemplate = `{
         },
         "/system/storage/test": {
             "post": {
-                "description": "Runs a write probe, filesystem detection, and volume identity check on a candidate path.",
+                "description": "Runs a local path write probe and telemetry check, or delegates to S3 connectivity test when backend is set.",
                 "consumes": [
                     "application/json"
                 ],
@@ -6314,10 +6427,10 @@ const docTemplate = `{
                 "tags": [
                     "system"
                 ],
-                "summary": "Test candidate storage directory",
+                "summary": "Test candidate storage directory or backend connection",
                 "parameters": [
                     {
-                        "description": "Target directory path to test",
+                        "description": "Target directory path to test (or ConnectionTestRequest when backend is set)",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -6328,7 +6441,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Path test result (or ConnectionTestResponse when backend is set)",
                         "schema": {
                             "allOf": [
                                 {
@@ -6346,7 +6459,65 @@ const docTemplate = `{
                         }
                     },
                     "422": {
-                        "description": "VALIDATION_FAILED",
+                        "description": "VALIDATION_FAILED or INVALID_STORAGE_CONFIG",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "STORAGE_TELEMETRY_UNAVAILABLE",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/storage/test-connection": {
+            "post": {
+                "description": "Validates write connectivity against a candidate local directory or S3/MinIO bucket configuration without persisting settings.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Test local or remote S3 storage connection",
+                "parameters": [
+                    {
+                        "description": "Connection probe parameters",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/storage.ConnectionTestRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/storage.ConnectionTestResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "422": {
+                        "description": "INVALID_STORAGE_CONFIG or VALIDATION_FAILED",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -10230,6 +10401,112 @@ const docTemplate = `{
                 }
             }
         },
+        "storage.ConnectionTestRequest": {
+            "type": "object",
+            "required": [
+                "backend"
+            ],
+            "properties": {
+                "backend": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "s3": {
+                    "$ref": "#/definitions/storage.S3Config"
+                }
+            }
+        },
+        "storage.ConnectionTestResponse": {
+            "type": "object",
+            "properties": {
+                "backend": {
+                    "type": "string"
+                },
+                "deviceId": {
+                    "type": "integer"
+                },
+                "errorReason": {
+                    "type": "string"
+                },
+                "freeBytes": {
+                    "type": "integer"
+                },
+                "fsType": {
+                    "type": "string"
+                },
+                "isExternal": {
+                    "type": "boolean"
+                },
+                "isMount": {
+                    "type": "boolean"
+                },
+                "mountPoint": {
+                    "description": "Local path telemetry populated when backend is \"local\".",
+                    "type": "string"
+                },
+                "reachable": {
+                    "type": "boolean"
+                },
+                "totalBytes": {
+                    "type": "integer"
+                },
+                "writable": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "storage.MigrationJobResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "currentFile": {
+                    "type": "string"
+                },
+                "currentStage": {
+                    "type": "string"
+                },
+                "deleteLocal": {
+                    "type": "boolean"
+                },
+                "errorCode": {
+                    "type": "string"
+                },
+                "errorMessage": {
+                    "type": "string"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "finishedAt": {
+                    "type": "string"
+                },
+                "jobId": {
+                    "type": "string"
+                },
+                "processed": {
+                    "type": "integer"
+                },
+                "progress": {
+                    "type": "integer"
+                },
+                "status": {
+                    "$ref": "#/definitions/asyncjob.JobStatus"
+                },
+                "succeeded": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
         "storage.PathTestRequest": {
             "type": "object",
             "required": [
@@ -10318,9 +10595,64 @@ const docTemplate = `{
                 "PruneTriggerEmergency"
             ]
         },
+        "storage.S3Config": {
+            "type": "object",
+            "properties": {
+                "accessKeyId": {
+                    "type": "string"
+                },
+                "bucket": {
+                    "type": "string"
+                },
+                "endpoint": {
+                    "type": "string"
+                },
+                "hasSecretAccessKey": {
+                    "type": "boolean"
+                },
+                "insecureSkipVerify": {
+                    "type": "boolean"
+                },
+                "prefix": {
+                    "type": "string"
+                },
+                "quotaGb": {
+                    "type": "integer"
+                },
+                "region": {
+                    "type": "string"
+                },
+                "secretAccessKey": {
+                    "description": "SecretAccessKey is write-only on incoming update/test payloads and is always\ncleared before returning persisted configurations over HTTP or logging.",
+                    "type": "string"
+                },
+                "usePathStyle": {
+                    "type": "boolean"
+                },
+                "useTls": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "storage.StartMigrationRequest": {
+            "type": "object",
+            "properties": {
+                "deleteLocal": {
+                    "type": "boolean"
+                }
+            }
+        },
         "storage.StorageConfig": {
             "type": "object",
             "properties": {
+                "backend": {
+                    "description": "\"local\" (default) | \"s3\"",
+                    "type": "string"
+                },
+                "deliveryMode": {
+                    "description": "\"proxy\" (default) | \"redirect\"",
+                    "type": "string"
+                },
                 "emergencyStopMinMb": {
                     "description": "Write-stop free-space floor in MB",
                     "type": "integer"
@@ -10337,6 +10669,10 @@ const docTemplate = `{
                     "description": "Cleaner wake-up usage (50..95)",
                     "type": "integer"
                 },
+                "localFallback": {
+                    "description": "Fallback read to MediaDirectory when S3 misses",
+                    "type": "boolean"
+                },
                 "lowWatermarkPercent": {
                     "description": "Cleaner sleep usage (40..85)",
                     "type": "integer"
@@ -10349,8 +10685,19 @@ const docTemplate = `{
                     "description": "Recording retention in days (1..365)",
                     "type": "integer"
                 },
+                "s3": {
+                    "$ref": "#/definitions/storage.S3Config"
+                },
                 "snapshotsRetentionDays": {
                     "description": "Snapshot retention in days (1..730)",
+                    "type": "integer"
+                },
+                "spoolDirectory": {
+                    "description": "Local spool dir for remote backends",
+                    "type": "string"
+                },
+                "spoolMaxMb": {
+                    "description": "Local spool size floor/cap in MB",
                     "type": "integer"
                 }
             }
@@ -10375,6 +10722,10 @@ const docTemplate = `{
         "storage.StorageStatus": {
             "type": "object",
             "properties": {
+                "backend": {
+                    "description": "Active backend: \"local\" | \"s3\"",
+                    "type": "string"
+                },
                 "breakdown": {
                     "description": "Categorized usage breakdown",
                     "allOf": [
@@ -10408,8 +10759,24 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "mountPoint": {
-                    "description": "Mount point where the media directory lives",
+                    "description": "Mount point where the media/spool directory lives",
                     "type": "string"
+                },
+                "remoteError": {
+                    "type": "string"
+                },
+                "remoteHealthy": {
+                    "description": "True for local backend or healthy S3 bucket",
+                    "type": "boolean"
+                },
+                "spoolDirectory": {
+                    "type": "string"
+                },
+                "spoolFreeBytes": {
+                    "type": "integer"
+                },
+                "spoolUsedBytes": {
+                    "type": "integer"
                 },
                 "status": {
                     "description": "Current health status",
@@ -10466,11 +10833,16 @@ const docTemplate = `{
                 "exportsRetentionHours",
                 "highWatermarkPercent",
                 "lowWatermarkPercent",
-                "mediaDirectory",
                 "recordingsRetentionDays",
                 "snapshotsRetentionDays"
             ],
             "properties": {
+                "backend": {
+                    "type": "string"
+                },
+                "deliveryMode": {
+                    "type": "string"
+                },
                 "emergencyStopMinMb": {
                     "type": "integer",
                     "maximum": 102400,
@@ -10491,6 +10863,9 @@ const docTemplate = `{
                     "maximum": 95,
                     "minimum": 50
                 },
+                "localFallback": {
+                    "type": "boolean"
+                },
                 "lowWatermarkPercent": {
                     "type": "integer",
                     "maximum": 85,
@@ -10504,10 +10879,19 @@ const docTemplate = `{
                     "maximum": 365,
                     "minimum": 1
                 },
+                "s3": {
+                    "$ref": "#/definitions/storage.S3Config"
+                },
                 "snapshotsRetentionDays": {
                     "type": "integer",
                     "maximum": 730,
                     "minimum": 1
+                },
+                "spoolDirectory": {
+                    "type": "string"
+                },
+                "spoolMaxMb": {
+                    "type": "integer"
                 }
             }
         },

@@ -11,7 +11,13 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 )
+
+// Options configures optional spatial domain collaborators.
+type Options struct {
+	FileStore filestore.Store
+}
 
 // SpatialComponents groups instantiated spatial domain services.
 type SpatialComponents struct {
@@ -30,18 +36,17 @@ type SpatialLifecycle interface {
 }
 
 type spatialLifecycleImpl struct {
-	mapsDir string
-	logger  *zap.Logger
+	mapsDir   string
+	fileStore filestore.Store
+	logger    *zap.Logger
 }
 
-// Start creates the on-disk home of the base maps.
-//
-// The directory belongs here, not in NewService: constructors only bind
-// dependencies (dependency-injection.md §1.3), and a data directory that is not
-// writable must surface as a start failure the runtime can report as degraded.
+// Start prepares the local base maps directory when operating in local mode.
 func (l *spatialLifecycleImpl) Start(ctx context.Context) error {
-	if err := os.MkdirAll(l.mapsDir, 0o755); err != nil {
-		return fmt.Errorf("create canvas map directory %q: %w", l.mapsDir, err)
+	if l.fileStore == nil || l.fileStore.Backend() == filestore.BackendLocal {
+		if err := os.MkdirAll(l.mapsDir, 0o755); err != nil {
+			return fmt.Errorf("create canvas map directory %q: %w", l.mapsDir, err)
+		}
 	}
 	l.logger.Info("spatial service started", zap.String("maps_dir", l.mapsDir))
 	return nil
@@ -57,21 +62,41 @@ type RouteRegistrar interface {
 	RegisterRoutes(rg *gin.RouterGroup)
 }
 
-// NewSpatialComponents constructs all spatial domain singletons.
+// NewSpatialComponents constructs all spatial domain singletons backed by LocalDriver on mapsDir.
 func NewSpatialComponents(
 	dbProvider database.DBProvider,
 	mapsDir string,
 	logger *zap.Logger,
 ) *SpatialComponents {
+	return NewSpatialComponentsWithOptions(
+		dbProvider,
+		mapsDir,
+		logger,
+		Options{},
+	)
+}
+
+// NewSpatialComponentsWithOptions constructs spatial domain singletons with optional filestore injection.
+func NewSpatialComponentsWithOptions(
+	dbProvider database.DBProvider,
+	mapsDir string,
+	logger *zap.Logger,
+	opts Options,
+) *SpatialComponents {
 	store := NewStore(dbProvider)
-	service := NewService(store, mapsDir, logger)
+	service := NewServiceWithStore(
+		store,
+		mapsDir,
+		opts.FileStore,
+		logger,
+	)
 	handler := NewHandler(service, logger)
 
 	return &SpatialComponents{
 		Store:           store,
 		Service:         service,
 		Handler:         handler,
-		Lifecycle:       &spatialLifecycleImpl{mapsDir: mapsDir, logger: logger},
+		Lifecycle:       &spatialLifecycleImpl{mapsDir: mapsDir, fileStore: service.fileStore, logger: logger},
 		ProtectedRoutes: handler,
 		UploadRoutes:    handler.UploadRouteRegistrar(),
 	}

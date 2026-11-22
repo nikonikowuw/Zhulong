@@ -1,7 +1,7 @@
 {
   "page": {
     "title": "Storage & Lifecycle",
-    "desc": "Configure edge media mount paths, statfs watermark monitoring, dismount fallthrough protection, and hysteresis automated cleanup."
+    "desc": "Configure edge media storage backends (LocalFS, MinIO, or S3-compatible object storage), statfs watermark monitoring, local spooling, and hysteresis automated cleanup."
   },
   "overview": {
     "title": "Storage Capacity & Health Overview",
@@ -13,7 +13,12 @@
     "root_fs": "Root Filesystem",
     "write_ok": "Write Permitted",
     "write_blocked": "Write Suspended",
-    "refreshing": "Refreshing metrics..."
+    "refreshing": "Refreshing metrics...",
+    "backend_local": "LocalFS",
+    "backend_s3": "S3 / MinIO",
+    "remote_healthy": "Remote Connected",
+    "remote_unhealthy": "Remote Unreachable",
+    "spool_usage": "Local Spool ({{dir}}): Used {{used}} · Free {{free}}"
   },
   "status": {
     "healthy": "Normal",
@@ -28,6 +33,13 @@
     "snapshots": "AI Snapshots",
     "exports": "Exports",
     "other": "Other Files"
+  },
+  "backend": {
+    "label": "Storage Backend Provider",
+    "local_title": "Local Filesystem (LocalFS)",
+    "local_desc": "Store media directly on local disks or external block mounts.",
+    "s3_title": "MinIO / Cloud Object Storage (S3)",
+    "s3_desc": "Store recordings, snapshots, face templates, and maps in MinIO, AWS S3, Alibaba OSS, or Tencent COS."
   },
   "form": {
     "title": "Media Storage Path & Retention Policies",
@@ -50,6 +62,65 @@
     "btn_save": "Save Configuration",
     "save_success": "Storage configuration updated successfully!",
     "mediaDirectoryPlaceholder": "Absolute media root path, e.g. /mnt/storage/media or data/media"
+  },
+  "s3": {
+    "section_title": "Object Storage Connection & Delivery",
+    "preset_minio": "MinIO Preset",
+    "preset_cloud": "Cloud OSS / S3 Preset",
+    "endpoint": "Endpoint URL",
+    "endpoint_placeholder": "e.g. http://127.0.0.1:9000 or https://s3.amazonaws.com",
+    "region": "Region",
+    "region_placeholder": "e.g. us-east-1 or cn-hangzhou",
+    "bucket": "Bucket Name",
+    "bucket_placeholder": "e.g. zhulong-media",
+    "prefix": "Key Prefix (Optional)",
+    "prefix_placeholder": "e.g. site-01/edge",
+    "access_key_id": "Access Key ID",
+    "secret_access_key": "Secret Access Key",
+    "secret_saved_placeholder": "Saved — leave blank to keep existing key",
+    "secret_new_placeholder": "Enter S3 / MinIO secret key",
+    "secret_saved_hint": "A secret key is already encrypted on this host. Leave empty to keep it unchanged.",
+    "use_path_style": "Path-Style Addressing",
+    "use_path_style_desc": "Required by most MinIO and self-hosted S3 deployments.",
+    "use_tls": "Enable TLS (HTTPS)",
+    "use_tls_desc": "Derived automatically from http:// or https:// endpoint scheme.",
+    "insecure_skip_verify": "Skip TLS Certificate Verification",
+    "insecure_skip_verify_desc": "Only enable for self-signed certificates in isolated LANs.",
+    "delivery_mode": "Media Delivery Mode",
+    "delivery_proxy": "Host Proxy Stream (Recommended)",
+    "delivery_proxy_desc": "Media bytes flow through the Zhulong host with existing cookie auth and HTTP Range support. No bucket CORS needed.",
+    "delivery_redirect": "Presigned 302 Redirect",
+    "delivery_redirect_desc": "Redirect clients to short-lived presigned object URLs. Requires client reachability to S3, HTTPS alignment, and bucket CORS rules.",
+    "local_fallback": "Local Fallback Read",
+    "local_fallback_desc": "Fall back to local media directory when an unmigrated object misses in S3.",
+    "spool_directory": "Local Spool Directory",
+    "spool_directory_desc": "Temporary local staging directory before event clips are uploaded to S3.",
+    "spool_max_mb": "Local Spool Cap (MB)",
+    "quota_gb": "Remote Bucket Soft Quota (GB)",
+    "quota_gb_desc": "Set 0 to enforce retention TTL only, or >0 to cap indexed remote storage.",
+    "btn_test_connection": "Test Connection",
+    "testing_connection": "Probing S3 endpoint & write permissions...",
+    "conn_valid": "Object storage reachable and writable",
+    "conn_invalid": "Object storage connection failed",
+    "conn_success": "S3 / MinIO connection and write check passed!",
+    "conn_failed": "Failed to connect or write to S3 bucket"
+  },
+  "migration": {
+    "title": "Historical Media Asset Migration",
+    "desc": "Copy existing local snapshots, recordings, face templates, and floor maps into the active S3 bucket and switch their metadata records.",
+    "delete_local": "Delete local source files after verified upload",
+    "delete_local_desc": "Keep disabled while testing to preserve local fallback copies.",
+    "btn_start": "Start Migration",
+    "started": "Background migration job queued.",
+    "running": "Migrating",
+    "status_pending": "Queued",
+    "status_extracting": "Preparing",
+    "status_processing": "Migrating",
+    "status_completed": "Completed",
+    "status_failed": "Failed",
+    "status_cancelled": "Cancelled",
+    "summary": "Processed {{processed}}/{{total}} · Succeeded {{succeeded}} · Failed {{failed}}",
+    "current_file": "Current object: {{file}}"
   },
   "advanced": {
     "title": "Advanced Watermark & Emergency Stop Policies",
@@ -81,6 +152,15 @@
   },
   "validation": {
     "mediaDirectoryRequired": "Please enter a valid media storage path",
+    "endpointRequired": "Please enter an S3 / MinIO endpoint",
+    "endpointInvalid": "Endpoint must be host[:port] or http(s)://host[:port] without path or query",
+    "bucketRequired": "Please enter an S3 bucket name",
+    "accessKeyRequired": "Please enter an S3 access key ID",
+    "secretKeyRequired": "Please enter a secret access key when configuring S3 for the first time",
+    "spoolDirectoryRequired": "Please enter a local spool directory",
+    "spoolMaxMin": "Spool cap must be at least 128 MB",
+    "spoolMaxMax": "Spool cap cannot exceed 1048576 MB",
+    "quotaMin": "Bucket quota cannot be negative",
     "daysMin": "Retention must be at least 1 day",
     "daysMax365": "Retention cannot exceed 365 days",
     "daysMax730": "Retention cannot exceed 730 days",

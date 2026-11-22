@@ -1,8 +1,6 @@
-import { useMemo, useState } from 'react'
-import { z } from 'zod'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { type TFunction } from 'i18next'
 import {
   FolderSearch,
   CheckCircle2,
@@ -12,6 +10,8 @@ import {
   Save,
   RotateCcw,
   Loader2,
+  HardDrive,
+  Cloud,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -37,88 +37,24 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import {
+  useTestStorageConnection,
   useTestStoragePath,
   useUpdateStorageConfig,
 } from '../hooks/use-storage'
 import {
+  type ConnectionTestResponse,
   type PathTestResponse,
   type StorageConfig,
   type StorageStatus,
 } from '../types'
 import { formatBytes } from '../utils/format'
-
-function createStorageFormSchema(t?: TFunction) {
-  const m = {
-    mediaDirectory: t
-      ? t('validation.mediaDirectoryRequired')
-      : '请输入有效的媒体存储路径',
-    daysMin: t ? t('validation.daysMin') : '保留天数至少为 1 天',
-    daysMax365: t ? t('validation.daysMax365') : '保留天数最多为 365 天',
-    daysMax730: t ? t('validation.daysMax730') : '保留天数最多为 730 天',
-    hoursMin: t ? t('validation.hoursMin') : '保留小时至少为 1 小时',
-    hoursMax168: t ? t('validation.hoursMax168') : '保留小时最多为 168 小时',
-    highMin: t ? t('validation.highMin') : '高水位至少为 50%',
-    highMax: t ? t('validation.highMax') : '高水位最多为 95%',
-    lowMin: t ? t('validation.lowMin') : '低水位至少为 40%',
-    lowMax: t ? t('validation.lowMax') : '低水位最多为 85%',
-    emergencyMin: t ? t('validation.emergencyMin') : '紧急熔断阈值至少为 90%',
-    emergencyMax: t ? t('validation.emergencyMax') : '紧急熔断阈值最多为 99%',
-    reserveMin: t ? t('validation.reserveMin') : '紧急保留空间至少为 100 MB',
-    reserveMax: t ? t('validation.reserveMax') : '紧急保留空间最多为 102400 MB',
-    lowBelowHigh: t
-      ? t('validation.lowBelowHigh')
-      : '低水位休眠线必须严格小于高水位清理线',
-    emergencyAboveHigh: t
-      ? t('validation.emergencyAboveHigh')
-      : '紧急熔断停录阈值不能低于高水位清理线',
-  }
-
-  return z
-    .object({
-      mediaDirectory: z.string().trim().min(1, m.mediaDirectory),
-      recordingsRetentionDays: z
-        .number()
-        .int()
-        .min(1, m.daysMin)
-        .max(365, m.daysMax365),
-      snapshotsRetentionDays: z
-        .number()
-        .int()
-        .min(1, m.daysMin)
-        .max(730, m.daysMax730),
-      exportsRetentionHours: z
-        .number()
-        .int()
-        .min(1, m.hoursMin)
-        .max(168, m.hoursMax168),
-      highWatermarkPercent: z
-        .number()
-        .int()
-        .min(50, m.highMin)
-        .max(95, m.highMax),
-      lowWatermarkPercent: z.number().int().min(40, m.lowMin).max(85, m.lowMax),
-      emergencyStopPercent: z
-        .number()
-        .int()
-        .min(90, m.emergencyMin)
-        .max(99, m.emergencyMax),
-      emergencyStopMinMb: z
-        .number()
-        .int()
-        .min(100, m.reserveMin)
-        .max(102400, m.reserveMax),
-    })
-    .refine((data) => data.lowWatermarkPercent < data.highWatermarkPercent, {
-      message: m.lowBelowHigh,
-      path: ['lowWatermarkPercent'],
-    })
-    .refine((data) => data.emergencyStopPercent >= data.highWatermarkPercent, {
-      message: m.emergencyAboveHigh,
-      path: ['emergencyStopPercent'],
-    })
-}
-
-type StorageFormValues = z.infer<ReturnType<typeof createStorageFormSchema>>
+import { S3BackendFields } from './s3-backend-fields'
+import {
+  configToFormValues,
+  createStorageFormSchema,
+  formValuesToUpdatePayload,
+  type StorageFormValues,
+} from './storage-form-schema'
 
 interface StorageConfigFormProps {
   initialConfig: StorageConfig
@@ -133,30 +69,45 @@ export function StorageConfigForm({
   const { t } = useTranslation('storage')
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [testResult, setTestResult] = useState<PathTestResponse | null>(null)
+  const [connectionResult, setConnectionResult] =
+    useState<ConnectionTestResponse | null>(null)
 
   const updateMutation = useUpdateStorageConfig()
   const testMutation = useTestStoragePath({ suppressGlobalToast: true })
+  const connectionMutation = useTestStorageConnection({
+    suppressGlobalToast: true,
+  })
 
   const schema = useMemo(() => createStorageFormSchema(t), [t])
 
   const form = useForm<StorageFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      mediaDirectory: initialConfig.mediaDirectory,
-      recordingsRetentionDays: initialConfig.recordingsRetentionDays,
-      snapshotsRetentionDays: initialConfig.snapshotsRetentionDays,
-      exportsRetentionHours: initialConfig.exportsRetentionHours,
-      highWatermarkPercent: initialConfig.highWatermarkPercent,
-      lowWatermarkPercent: initialConfig.lowWatermarkPercent,
-      emergencyStopPercent: initialConfig.emergencyStopPercent,
-      emergencyStopMinMb: initialConfig.emergencyStopMinMb,
-    },
+    defaultValues: configToFormValues(initialConfig),
   })
 
+  useEffect(() => {
+    form.reset(configToFormValues(initialConfig))
+  }, [form, initialConfig])
+
+  const currentBackend = useWatch({
+    control: form.control,
+    name: 'backend',
+  })
   const currentPath = useWatch({
     control: form.control,
     name: 'mediaDirectory',
   })
+
+  const handleApplyPreset = (preset: 'minio' | 'cloud') => {
+    if (preset === 'minio') {
+      form.setValue('s3.usePathStyle', true, { shouldDirty: true })
+      form.setValue('s3.useTls', false, { shouldDirty: true })
+    } else {
+      form.setValue('s3.usePathStyle', false, { shouldDirty: true })
+      form.setValue('s3.useTls', true, { shouldDirty: true })
+    }
+    setConnectionResult(null)
+  }
 
   const handleTestPath = async () => {
     if (!currentPath) {
@@ -199,9 +150,70 @@ export function StorageConfigForm({
     }
   }
 
+  const handleTestConnection = async () => {
+    const valid = await form.trigger([
+      's3.endpoint',
+      's3.bucket',
+      's3.accessKeyId',
+    ])
+    if (!valid) {
+      return
+    }
+    const s3 = form.getValues('s3')
+    const probePromise = connectionMutation
+      .mutateAsync({
+        backend: 's3',
+        s3: {
+          endpoint: s3.endpoint,
+          region: s3.region,
+          bucket: s3.bucket,
+          prefix: s3.prefix,
+          usePathStyle: s3.usePathStyle,
+          useTls: s3.useTls,
+          insecureSkipVerify: s3.insecureSkipVerify,
+          accessKeyId: s3.accessKeyId,
+          secretAccessKey: s3.secretAccessKey.trim() || undefined,
+          hasSecretAccessKey: s3.hasSecretAccessKey,
+          quotaGb: s3.quotaGb,
+        },
+      })
+      .then((res) => {
+        setConnectionResult(res)
+        if (res.writable) {
+          return t('s3.conn_success', {
+            defaultValue: 'S3 / MinIO 连通性与写入探测通过！',
+          })
+        }
+        throw new Error(
+          res.errorReason ||
+            t('s3.conn_failed', {
+              defaultValue: '无法连接目标桶或写入探测失败',
+            })
+        )
+      })
+
+    try {
+      await toast.promise(probePromise, {
+        loading: t('s3.testing_connection', {
+          defaultValue: '正在探测 S3 桶连通性与写入权限...',
+        }),
+        success: (msg) => msg,
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('s3.conn_failed', {
+                defaultValue: '无法连接目标桶或写入探测失败',
+              }),
+      })
+    } catch {
+      // toast.promise 已统一反馈
+    }
+  }
+
   const onSubmit = async (values: StorageFormValues) => {
     try {
-      await updateMutation.mutateAsync(values)
+      const payload = formValuesToUpdatePayload(values, initialConfig)
+      await updateMutation.mutateAsync(payload)
       toast.success(
         t('form.save_success', { defaultValue: '存储策略配置已保存并生效！' })
       )
@@ -223,134 +235,227 @@ export function StorageConfigForm({
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
-            {/* Core Settings: Media Directory */}
-            <div className='space-y-3'>
-              <FormField
-                control={form.control}
-                name='mediaDirectory'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className='font-medium'>
-                      {t('form.media_directory', {
-                        defaultValue: '媒体根目录绝对路径',
+            {/* Backend Provider Switcher */}
+            <FormField
+              control={form.control}
+              name='backend'
+              render={({ field }) => (
+                <FormItem className='space-y-2'>
+                  <FormLabel className='font-medium'>
+                    {t('backend.label', { defaultValue: '存储后端驱动' })}
+                  </FormLabel>
+                  <FormControl>
+                    <div
+                      role='radiogroup'
+                      aria-label={t('backend.label', {
+                        defaultValue: '存储后端驱动',
                       })}
-                    </FormLabel>
-                    <div className='flex gap-2'>
-                      <FormControl>
-                        <Input
-                          placeholder={t('form.mediaDirectoryPlaceholder')}
-                          className='font-mono text-sm'
-                          {...field}
-                          onChange={(e) => {
-                            field.onChange(e)
-                            setTestResult(null)
-                          }}
-                        />
-                      </FormControl>
-                      <Button
+                      className='grid grid-cols-1 gap-3 sm:grid-cols-2'
+                    >
+                      <button
                         type='button'
-                        variant='secondary'
-                        onClick={handleTestPath}
-                        disabled={testMutation.isPending}
-                        className='shrink-0 gap-1.5'
-                      >
-                        {testMutation.isPending ? (
-                          <Loader2 className='size-3.5 animate-spin' />
-                        ) : (
-                          <FolderSearch className='size-3.5' />
+                        role='radio'
+                        aria-checked={field.value === 'local'}
+                        onClick={() => {
+                          field.onChange('local')
+                          setConnectionResult(null)
+                        }}
+                        className={cn(
+                          'flex items-start gap-3 rounded-lg border p-3.5 text-left transition-colors',
+                          field.value === 'local'
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border/60 hover:bg-muted/40'
                         )}
-                        {t('form.btn_test_path', { defaultValue: '检测路径' })}
-                      </Button>
-                    </div>
-                    <FormDescription>
-                      {t('form.media_directory_desc', {
-                        defaultValue:
-                          '录像、抓拍与临时导出文件的落盘根路径。若修改路径，新文件立即写入新目录，旧目录历史视频仍可点播并优先淘汰。',
-                      })}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+                      >
+                        <HardDrive className='mt-0.5 size-4 shrink-0 text-primary' />
+                        <div className='space-y-0.5'>
+                          <div className='text-sm font-medium'>
+                            {t('backend.local_title', {
+                              defaultValue: '本地文件系统 (LocalFS)',
+                            })}
+                          </div>
+                          <p className='text-xs text-muted-foreground'>
+                            {t('backend.local_desc')}
+                          </p>
+                        </div>
+                      </button>
 
-              {/* Path Test Result Feedback Banner */}
-              {testResult && (
-                <div
-                  className={cn(
-                    'space-y-1.5 rounded-lg border p-3 text-xs',
-                    statusLevelClass(
-                      testResult.writable ? 'active' : 'destructive'
-                    )
-                  )}
-                >
-                  <div className='flex items-center justify-between'>
-                    <div className='flex items-center gap-1.5 font-semibold'>
-                      {testResult.writable ? (
-                        <>
-                          <CheckCircle2 className='size-4' />
-                          <span>
-                            {t('form.path_valid', {
-                              defaultValue: '目录合法且读写正常',
+                      <button
+                        type='button'
+                        role='radio'
+                        aria-checked={field.value === 's3'}
+                        onClick={() => {
+                          field.onChange('s3')
+                          setTestResult(null)
+                        }}
+                        className={cn(
+                          'flex items-start gap-3 rounded-lg border p-3.5 text-left transition-colors',
+                          field.value === 's3'
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border/60 hover:bg-muted/40'
+                        )}
+                      >
+                        <Cloud className='mt-0.5 size-4 shrink-0 text-primary' />
+                        <div className='space-y-0.5'>
+                          <div className='text-sm font-medium'>
+                            {t('backend.s3_title', {
+                              defaultValue: 'MinIO / 云对象存储 (S3)',
                             })}
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <AlertCircle className='size-4' />
-                          <span>
-                            {t('form.path_invalid', {
-                              defaultValue: '路径检测未通过',
-                            })}
-                          </span>
-                        </>
-                      )}
+                          </div>
+                          <p className='text-xs text-muted-foreground'>
+                            {t('backend.s3_desc')}
+                          </p>
+                        </div>
+                      </button>
                     </div>
-                    <div className='flex items-center gap-2'>
-                      {testResult.isExternal ? (
-                        <Badge
-                          variant='outline'
-                          className='border-primary/20 bg-primary/10 text-primary'
-                        >
-                          {t('overview.dedicated_mount', {
-                            defaultValue: '独立外挂盘',
-                          })}
-                        </Badge>
-                      ) : (
-                        <Badge
-                          variant='outline'
-                          className='border-amber-500/30 text-amber-500'
-                        >
-                          {t('overview.root_fs', {
-                            defaultValue: '系统根分区',
-                          })}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                  {testResult.writable ? (
-                    <div className='flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground dark:text-emerald-300/80'>
-                      <span>
-                        {t('overview.mountPoint', { defaultValue: '挂载点' })}:{' '}
-                        <strong>{testResult.mountPoint}</strong> (
-                        {testResult.fsType})
-                      </span>
-                      <span>
-                        {t('overview.total', { defaultValue: '总容量' })}:{' '}
-                        <strong>{formatBytes(testResult.totalBytes)}</strong>
-                      </span>
-                      <span>
-                        {t('overview.free', { defaultValue: '可用' })}:{' '}
-                        <strong>{formatBytes(testResult.freeBytes)}</strong>
-                      </span>
-                    </div>
-                  ) : (
-                    <p className='font-mono text-xs'>
-                      {testResult.errorReason}
-                    </p>
-                  )}
-                </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
               )}
-            </div>
+            />
+
+            {/* LocalFS Path Settings */}
+            {currentBackend === 'local' ? (
+              <div className='space-y-3'>
+                <FormField
+                  control={form.control}
+                  name='mediaDirectory'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className='font-medium'>
+                        {t('form.media_directory', {
+                          defaultValue: '媒体根目录绝对路径',
+                        })}
+                      </FormLabel>
+                      <div className='flex gap-2'>
+                        <FormControl>
+                          <Input
+                            placeholder={t('form.mediaDirectoryPlaceholder')}
+                            className='font-mono text-sm'
+                            {...field}
+                            onChange={(e) => {
+                              field.onChange(e)
+                              setTestResult(null)
+                            }}
+                          />
+                        </FormControl>
+                        <Button
+                          type='button'
+                          variant='secondary'
+                          onClick={handleTestPath}
+                          disabled={testMutation.isPending}
+                          className='shrink-0 gap-1.5'
+                        >
+                          {testMutation.isPending ? (
+                            <Loader2 className='size-3.5 animate-spin' />
+                          ) : (
+                            <FolderSearch className='size-3.5' />
+                          )}
+                          {t('form.btn_test_path', {
+                            defaultValue: '检测路径',
+                          })}
+                        </Button>
+                      </div>
+                      <FormDescription>
+                        {t('form.media_directory_desc', {
+                          defaultValue:
+                            '录像、抓拍与临时导出文件的落盘根路径。若修改路径，新文件立即写入新目录，旧目录历史视频仍可点播并优先淘汰。',
+                        })}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Path Test Result Feedback Banner */}
+                {testResult && (
+                  <div
+                    className={cn(
+                      'space-y-1.5 rounded-lg border p-3 text-xs',
+                      statusLevelClass(
+                        testResult.writable ? 'active' : 'destructive'
+                      )
+                    )}
+                  >
+                    <div className='flex items-center justify-between'>
+                      <div className='flex items-center gap-1.5 font-semibold'>
+                        {testResult.writable ? (
+                          <>
+                            <CheckCircle2 className='size-4' />
+                            <span>
+                              {t('form.path_valid', {
+                                defaultValue: '目录合法且读写正常',
+                              })}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className='size-4' />
+                            <span>
+                              {t('form.path_invalid', {
+                                defaultValue: '路径检测未通过',
+                              })}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <div className='flex items-center gap-2'>
+                        {testResult.isExternal ? (
+                          <Badge
+                            variant='outline'
+                            className='border-primary/20 bg-primary/10 text-primary'
+                          >
+                            {t('overview.dedicated_mount', {
+                              defaultValue: '独立外挂盘',
+                            })}
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant='outline'
+                            className='border-amber-500/30 text-amber-500'
+                          >
+                            {t('overview.root_fs', {
+                              defaultValue: '系统根分区',
+                            })}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    {testResult.writable ? (
+                      <div className='flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground dark:text-emerald-300/80'>
+                        <span>
+                          {t('overview.mountPoint', { defaultValue: '挂载点' })}
+                          : <strong>{testResult.mountPoint}</strong> (
+                          {testResult.fsType})
+                        </span>
+                        <span>
+                          {t('overview.total', { defaultValue: '总容量' })}:{' '}
+                          <strong>{formatBytes(testResult.totalBytes)}</strong>
+                        </span>
+                        <span>
+                          {t('overview.free', { defaultValue: '可用' })}:{' '}
+                          <strong>{formatBytes(testResult.freeBytes)}</strong>
+                        </span>
+                      </div>
+                    ) : (
+                      <p className='font-mono text-xs'>
+                        {testResult.errorReason}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <S3BackendFields
+                control={form.control}
+                hasSavedSecret={initialConfig.s3?.hasSecretAccessKey ?? false}
+                isTestingConnection={connectionMutation.isPending}
+                connectionResult={connectionResult}
+                onApplyPreset={handleApplyPreset}
+                onTestConnection={() => void handleTestConnection()}
+                onClearConnectionResult={() => setConnectionResult(null)}
+              />
+            )}
 
             {/* Core Settings: Retention Policies */}
             <div className='flex flex-col gap-4 sm:flex-row sm:items-start'>
@@ -610,8 +715,9 @@ export function StorageConfigForm({
                 variant='outline'
                 size='sm'
                 onClick={() => {
-                  form.reset()
+                  form.reset(configToFormValues(initialConfig))
                   setTestResult(null)
+                  setConnectionResult(null)
                 }}
                 disabled={updateMutation.isPending}
                 className='gap-1.5'

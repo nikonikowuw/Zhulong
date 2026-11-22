@@ -15,15 +15,17 @@ type EventClip struct {
 	ID       string `gorm:"primaryKey;column:id"`
 	CameraID string `gorm:"column:camera_id;not null"`
 	// Path is relative to the media root: recordings/{camera}/{YYYY-MM-DD}/evt-{id}.mp4.
-	Path       string     `gorm:"column:path;not null"`
-	Codec      string     `gorm:"column:codec;not null"`
-	Status     ClipStatus `gorm:"column:status;not null"`
-	Partial    bool       `gorm:"column:partial;not null"`
-	StartedAt  time.Time  `gorm:"column:started_at;not null"`
-	EndedAt    *time.Time `gorm:"column:ended_at"`
-	DurationMS int64      `gorm:"column:duration_ms;not null"`
-	SizeBytes  int64      `gorm:"column:size_bytes;not null"`
-	CreatedAt  time.Time  `gorm:"column:created_at;not null"`
+	Path           string       `gorm:"column:path;not null"`
+	Codec          string       `gorm:"column:codec;not null"`
+	Status         ClipStatus   `gorm:"column:status;not null"`
+	Partial        bool         `gorm:"column:partial;not null"`
+	StorageBackend string       `gorm:"column:storage_backend;not null;default:'local'"`
+	UploadStatus   UploadStatus `gorm:"column:upload_status;not null;default:'local'"`
+	StartedAt      time.Time    `gorm:"column:started_at;not null"`
+	EndedAt        *time.Time   `gorm:"column:ended_at"`
+	DurationMS     int64        `gorm:"column:duration_ms;not null"`
+	SizeBytes      int64        `gorm:"column:size_bytes;not null"`
+	CreatedAt      time.Time    `gorm:"column:created_at;not null"`
 }
 
 // TableName overrides the default table name.
@@ -73,9 +75,67 @@ func (s *Store) CreateClip(ctx context.Context, clip *EventClip) error {
 	if clip.StartedAt.IsZero() {
 		clip.StartedAt = now
 	}
+	if clip.StorageBackend == "" {
+		clip.StorageBackend = "local"
+	}
+	if clip.UploadStatus == "" {
+		if clip.StorageBackend == "local" {
+			clip.UploadStatus = UploadStatusLocal
+		} else {
+			clip.UploadStatus = UploadStatusPending
+		}
+	}
 	clip.StartedAt = clip.StartedAt.UTC()
 	clip.CreatedAt = clip.CreatedAt.UTC()
 	return gorm.G[EventClip](db).Create(ctx, clip)
+}
+
+// SetUploadStatus updates storage_backend and upload_status for a finished clip.
+func (s *Store) SetUploadStatus(
+	ctx context.Context,
+	id string,
+	storageBackend string,
+	status UploadStatus,
+) error {
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	res := db.WithContext(ctx).Model(&EventClip{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"storage_backend": storageBackend,
+			"upload_status":   status,
+		})
+	return res.Error
+}
+
+// PendingUploadClips lists completed/truncated remote clips awaiting upload recovery.
+func (s *Store) PendingUploadClips(ctx context.Context, limit int) ([]EventClip, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = defaultCleanupBatch
+	}
+	rows, err := gorm.G[EventClip](db).
+		Where(
+			"storage_backend <> ? AND status IN ? AND upload_status IN ?",
+			"local",
+			[]ClipStatus{ClipStatusCompleted, ClipStatusTruncated},
+			[]UploadStatus{UploadStatusPending, UploadStatusFailed},
+		).
+		Order("started_at ASC, id ASC").
+		Limit(limit).
+		Find(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = []EventClip{}
+	}
+	return rows, nil
 }
 
 // GetClip returns a clip by ID, or (nil, nil) when missing.

@@ -372,11 +372,21 @@ func (h *Handler) GetFaceImage(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			h.logger.Debug("close face image reader", zap.Error(closeErr))
+		}
+	}()
 
 	// ServeContent owns the stat result and the Range handling: reopening the path the
 	// service just resolved would reintroduce the traversal window it closed.
-	http.ServeContent(c.Writer, c.Request, info.Name(), info.ModTime(), file)
+	http.ServeContent(
+		c.Writer,
+		c.Request,
+		info.Name,
+		info.ModifiedAt,
+		file,
+	)
 }
 
 // DeleteFace godoc

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"go.uber.org/zap"
@@ -382,7 +381,7 @@ func (s *Service) reextractOneFace(ctx context.Context, target FaceReextractTarg
 }
 
 func (s *Service) readStoredFaceImage(imagePath string) ([]byte, *faceProcessError) {
-	rel, err := s.faceStorageName(imagePath)
+	key, err := s.faceObjectKey(imagePath)
 	if err != nil {
 		code := apperr.CodeOf(err)
 		if code == "IMAGE_NOT_FOUND" {
@@ -391,33 +390,25 @@ func (s *Service) readStoredFaceImage(imagePath string) ([]byte, *faceProcessErr
 		return nil, &faceProcessError{code: "INVALID_IMAGE_PATH", message: "登记照路径无效"}
 	}
 
-	root, err := os.OpenRoot(s.facesDir)
+	rc, _, err := s.fileStore.Open(context.Background(), key)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		mapped := mapFaceOpenError(err)
+		switch apperr.CodeOf(mapped) {
+		case "IMAGE_NOT_FOUND":
 			return nil, &faceProcessError{code: "IMAGE_NOT_FOUND", message: "磁盘上未找到人脸图片文件"}
+		case "INVALID_IMAGE_PATH":
+			return nil, &faceProcessError{code: "INVALID_IMAGE_PATH", message: "登记照路径无效"}
+		default:
+			return nil, &faceProcessError{code: "FILE_READ_FAILED", message: "读取人脸图片文件失败"}
 		}
-		return nil, &faceProcessError{code: "STORAGE_ERROR", message: "打开人脸存储目录失败"}
 	}
-	defer root.Close()
-
-	file, err := root.Open(rel)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, &faceProcessError{code: "IMAGE_NOT_FOUND", message: "磁盘上未找到人脸图片文件"}
+	defer func() {
+		if closeErr := rc.Close(); closeErr != nil {
+			// Best-effort close on read-only image stream.
 		}
-		return nil, &faceProcessError{code: "INVALID_IMAGE_PATH", message: "登记照路径无效"}
-	}
-	defer file.Close()
+	}()
 
-	info, err := file.Stat()
-	if err != nil {
-		return nil, &faceProcessError{code: "FILE_READ_FAILED", message: "读取人脸图片文件失败"}
-	}
-	if info.IsDir() {
-		return nil, &faceProcessError{code: "IMAGE_NOT_FOUND", message: "磁盘上未找到人脸图片文件"}
-	}
-
-	imgBytes, err := io.ReadAll(io.LimitReader(file, MaxFaceImageBytes+1))
+	imgBytes, err := io.ReadAll(io.LimitReader(rc, MaxFaceImageBytes+1))
 	if err != nil {
 		return nil, &faceProcessError{code: "FILE_READ_FAILED", message: "读取人脸图片文件失败"}
 	}

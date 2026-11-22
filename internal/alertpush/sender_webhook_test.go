@@ -1,22 +1,23 @@
 package alertpush
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 )
 
@@ -32,27 +33,27 @@ type fakeMediaService struct {
 	files map[string][]byte
 }
 
+type nopReadSeekCloser struct {
+	*bytes.Reader
+}
+
+func (n nopReadSeekCloser) Close() error { return nil }
+
 func (m *fakeMediaService) OpenContent(
 	_ context.Context,
 	relPath string,
-) (*os.File, fs.FileInfo, error) {
+) (io.ReadSeekCloser, filestore.ObjectInfo, error) {
 	data, ok := m.files[relPath]
 	if !ok {
-		return nil, nil, os.ErrNotExist
+		return nil, filestore.ObjectInfo{}, os.ErrNotExist
 	}
-	tmp := filepath.Join(os.TempDir(), filepath.Base(relPath))
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return nil, nil, err
+	info := filestore.ObjectInfo{
+		Key:        relPath,
+		Name:       path.Base(relPath),
+		SizeBytes:  int64(len(data)),
+		ModifiedAt: time.Now().UTC(),
 	}
-	f, err := os.Open(tmp)
-	if err != nil {
-		return nil, nil, err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return nil, nil, errors.Join(err, f.Close())
-	}
-	return f, info, nil
+	return nopReadSeekCloser{bytes.NewReader(data)}, info, nil
 }
 
 func TestWebhookSenderURLMode(t *testing.T) {

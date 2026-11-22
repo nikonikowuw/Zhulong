@@ -65,6 +65,8 @@
     "storage.manual_cleanup": "手動清理儲存",
     "storage.auto_cleanup": "自動清理儲存",
     "storage.test_path": "儲存路徑測試",
+    "storage.test_connection": "儲存連通性測試",
+    "storage.migrate_remote": "歷史媒體資產遷移至 S3",
     "storage.emergency_stop": "儲存緊急停止",
     "storage.emergency_resume": "儲存恢復運行",
     "time.update_config": "更新時間設定",

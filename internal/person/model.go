@@ -69,10 +69,11 @@ type Face struct {
 	// business key, and sharing the name made the two identifiers
 	// indistinguishable. The owning person is also implied by the enclosing
 	// resource path, which is why the API exposes it only as ownerRowId.
-	PersonRowID   string    `gorm:"column:person_id;not null;index" json:"-"`
-	ImagePath     string    `gorm:"column:image_path;not null;default:''" json:"-"`
-	FeatureVector []byte    `gorm:"column:feature_vector;not null" json:"-"`
-	CreatedAt     time.Time `gorm:"column:created_at;not null" json:"-"`
+	PersonRowID    string    `gorm:"column:person_id;not null;index" json:"-"`
+	ImagePath      string    `gorm:"column:image_path;not null;default:''" json:"-"`
+	StorageBackend string    `gorm:"column:storage_backend;not null;default:'local'" json:"-"`
+	FeatureVector  []byte    `gorm:"column:feature_vector;not null" json:"-"`
+	CreatedAt      time.Time `gorm:"column:created_at;not null" json:"-"`
 }
 
 // TableName sets the table name for Face.

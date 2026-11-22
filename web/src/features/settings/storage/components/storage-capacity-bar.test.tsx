@@ -169,4 +169,30 @@ describe('StorageCapacityBar', () => {
       expect(badge.className).not.toContain('bg-destructive text-white')
     }
   )
+
+  it('renders S3 backend remote health and spool telemetry when backend is s3', async () => {
+    const s3Status: StorageStatus = {
+      ...mockStatus,
+      backend: 's3',
+      remoteHealthy: false,
+      remoteError: 'dial tcp 127.0.0.1:9000: connect: connection refused',
+      spoolDirectory: 'data/spool',
+      spoolUsedBytes: 1024 * 1024,
+      spoolFreeBytes: 10 * 1024 * 1024,
+    }
+    const { getByText } = await render(
+      <StorageCapacityBar status={s3Status} isLoading={false} />
+    )
+
+    await expect.element(getByText('S3 / MinIO 对象存储')).toBeInTheDocument()
+    await expect.element(getByText('远端存储异常')).toBeInTheDocument()
+    await expect
+      .element(
+        getByText('dial tcp 127.0.0.1:9000: connect: connection refused')
+      )
+      .toBeInTheDocument()
+    await expect
+      .element(getByText(/本地 Spool 缓冲 \(data\/spool\)/))
+      .toBeInTheDocument()
+  })
 })

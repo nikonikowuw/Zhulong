@@ -56,6 +56,8 @@ export const AUDIT_ACTION_KEYS = [
   'storage.manual_cleanup',
   'storage.auto_cleanup',
   'storage.test_path',
+  'storage.test_connection',
+  'storage.migrate_remote',
   'storage.emergency_stop',
   'storage.emergency_resume',
   // 系统标识

@@ -2438,3 +2438,115 @@ func TestMigration000035_AlertDestinationCapabilitiesSymmetry(t *testing.T) {
 		)
 	}
 }
+
+// TestMigration000039_EventClipsStorageStateSymmetry pins migration 39:
+// existing event_clips/recognitions/captures/alarms/person_faces/canvas_maps rows
+// receive storage_backend='local' (and upload_status='local' on event_clips),
+// and down/up steps round-trip cleanly without losing existing rows.
+func TestMigration000039_EventClipsStorageStateSymmetry(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "migration_symmetry_39.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := db.Close(); closeErr != nil && !errors.Is(closeErr, sql.ErrConnDone) {
+			t.Errorf("db.Close: %v", closeErr)
+		}
+	})
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("sqlite3 instance: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("iofs driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
+	if err != nil {
+		t.Fatalf("migrator: %v", err)
+	}
+	t.Cleanup(func() {
+		srcErr, dbErr := migrator.Close()
+		if srcErr != nil {
+			t.Errorf("migrator source close: %v", srcErr)
+		}
+		if dbErr != nil {
+			t.Errorf("migrator db close: %v", dbErr)
+		}
+	})
+
+	if err := migrator.Migrate(38); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(38): %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO event_clips (id, camera_id, path, codec, status, partial, started_at, duration_ms, size_bytes)
+		VALUES ('clip_1', 'cam_1', 'recordings/cam_1/2026-11-22/evt-clip_1.mp4', 'h264', 'completed', 0, CURRENT_TIMESTAMP, 1000, 1234)
+	`); err != nil {
+		t.Fatalf("insert legacy clip: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO canvas_maps (id, name, image_path, width, height)
+		VALUES ('map_1', 'Lobby', 'map_1.png', 1920, 1080)
+	`); err != nil {
+		t.Fatalf("insert legacy map: %v", err)
+	}
+
+	if err := migrator.Migrate(39); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(39): %v", err)
+	}
+
+	var backend, uploadStatus string
+	if err := db.QueryRow(
+		`SELECT storage_backend, upload_status FROM event_clips WHERE id = 'clip_1'`,
+	).Scan(&backend, &uploadStatus); err != nil {
+		t.Fatalf("select clip after 39: %v", err)
+	}
+	if backend != "local" || uploadStatus != "local" {
+		t.Fatalf("clip defaults = (%q, %q), want (local, local)", backend, uploadStatus)
+	}
+
+	var mapBackend string
+	if err := db.QueryRow(
+		`SELECT storage_backend FROM canvas_maps WHERE id = 'map_1'`,
+	).Scan(&mapBackend); err != nil {
+		t.Fatalf("select map after 39: %v", err)
+	}
+	if mapBackend != "local" {
+		t.Fatalf("map backend = %q, want local", mapBackend)
+	}
+
+	// Verify CHECK constraint rejects invalid upload_status.
+	if _, err := db.Exec(`
+		INSERT INTO event_clips (id, camera_id, path, codec, status, partial, started_at, duration_ms, size_bytes, upload_status)
+		VALUES ('clip_bad', 'cam_1', 'recordings/cam_1/2026-11-22/evt-clip_bad.mp4', 'h264', 'completed', 0, CURRENT_TIMESTAMP, 1000, 1234, 'bogus')
+	`); err == nil {
+		t.Fatal("expected CHECK constraint to reject invalid upload_status")
+	}
+
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("rollback 39: %v", err)
+	}
+	if err := db.QueryRow(`SELECT storage_backend FROM event_clips WHERE id = 'clip_1'`).Scan(&backend); err == nil {
+		t.Fatal("expected storage_backend to be dropped on rollback 39")
+	}
+
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("re-apply 39: %v", err)
+	}
+	if err := db.QueryRow(
+		`SELECT storage_backend, upload_status FROM event_clips WHERE id = 'clip_1'`,
+	).Scan(&backend, &uploadStatus); err != nil {
+		t.Fatalf("select clip after re-Up(39): %v", err)
+	}
+	if backend != "local" || uploadStatus != "local" {
+		t.Fatalf("after re-Up(39): (%q, %q), want (local, local)", backend, uploadStatus)
+	}
+}

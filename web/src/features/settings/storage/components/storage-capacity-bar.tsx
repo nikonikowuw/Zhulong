@@ -6,6 +6,7 @@ import {
   AlertCircle,
   RefreshCw,
   FolderLock,
+  Cloud,
   type LucideIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -78,6 +79,9 @@ export function StorageCapacityBar({
   const exportsBytes = status?.breakdown.exportsBytes ?? 0
   const other = status?.breakdown.otherBytes ?? 0
 
+  const isRemoteS3 = status?.backend === 's3'
+  const remoteHealthy = status?.remoteHealthy ?? true
+
   const percentages = useMemo(() => {
     if (capacityTotal <= 0)
       return { recordings: 0, snapshots: 0, exports: 0, other: 0 }
@@ -110,13 +114,51 @@ export function StorageCapacityBar({
       <CardHeader className='pb-3'>
         <div className='flex flex-wrap items-center justify-between gap-2'>
           <div className='flex items-center gap-2'>
-            <HardDrive className='size-5 text-muted-foreground' />
+            {isRemoteS3 ? (
+              <Cloud className='size-5 text-muted-foreground' />
+            ) : (
+              <HardDrive className='size-5 text-muted-foreground' />
+            )}
             <CardTitle className='text-base font-semibold'>
               {t('overview.title', { defaultValue: '存储容量与健康大盘' })}
             </CardTitle>
             {renderStatusBadge(status?.status)}
           </div>
           <div className='flex flex-wrap items-center gap-2 text-xs'>
+            {isRemoteS3 && (
+              <>
+                <Badge variant='outline' className='gap-1'>
+                  <Cloud className='size-3' />
+                  <span>
+                    {t('overview.backend_s3', {
+                      defaultValue: 'S3 / MinIO 对象存储',
+                    })}
+                  </span>
+                </Badge>
+                <Badge
+                  variant='outline'
+                  className={cn(
+                    'gap-1',
+                    statusLevelClass(remoteHealthy ? 'active' : 'destructive')
+                  )}
+                >
+                  {remoteHealthy ? (
+                    <CheckCircle2 className='size-3' />
+                  ) : (
+                    <AlertCircle className='size-3' />
+                  )}
+                  <span>
+                    {remoteHealthy
+                      ? t('overview.remote_healthy', {
+                          defaultValue: '远端连接正常',
+                        })
+                      : t('overview.remote_unhealthy', {
+                          defaultValue: '远端存储异常',
+                        })}
+                  </span>
+                </Badge>
+              </>
+            )}
             {status?.isExternal ? (
               <Badge variant='outline' className='bg-primary/5 text-primary'>
                 {t('overview.dedicated_mount', {
@@ -129,8 +171,11 @@ export function StorageCapacityBar({
               </Badge>
             )}
             <Badge
-              variant={status?.canWrite ? 'outline' : 'destructive'}
-              className='gap-1'
+              variant='outline'
+              className={cn(
+                'gap-1',
+                status?.canWrite ? undefined : statusLevelClass('destructive')
+              )}
             >
               {status?.canWrite ? (
                 <span>
@@ -150,6 +195,19 @@ export function StorageCapacityBar({
       </CardHeader>
 
       <CardContent className='space-y-4'>
+        {isRemoteS3 && !remoteHealthy && status?.remoteError && (
+          <div
+            role='alert'
+            className={cn(
+              'flex items-center gap-2 rounded-md border px-3 py-2 text-xs',
+              statusLevelClass('destructive')
+            )}
+          >
+            <AlertCircle className='size-4 shrink-0' />
+            <span className='font-mono'>{status.remoteError}</span>
+          </div>
+        )}
+
         {/* Metric Overview Figures */}
         <div className='grid grid-cols-2 gap-4 sm:grid-cols-4'>
           <div className='space-y-0.5'>
@@ -287,6 +345,17 @@ export function StorageCapacityBar({
               </span>
             )}
           </div>
+
+          {isRemoteS3 && status?.spoolDirectory && (
+            <p className='pt-1 font-mono text-xs text-muted-foreground'>
+              {t('overview.spool_usage', {
+                dir: status.spoolDirectory,
+                used: formatBytes(status.spoolUsedBytes ?? 0),
+                free: formatBytes(status.spoolFreeBytes ?? 0),
+                defaultValue: `本地 Spool 缓冲 (${status.spoolDirectory}): 已用 ${formatBytes(status.spoolUsedBytes ?? 0)} · 可用 ${formatBytes(status.spoolFreeBytes ?? 0)}`,
+              })}
+            </p>
+          )}
         </div>
       </CardContent>
     </Card>

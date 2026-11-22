@@ -103,6 +103,28 @@ type ClipFileChecker interface {
 	ClipFileExists(ctx context.Context, relativePath string) (bool, error)
 }
 
+// UploadStatus tracks asynchronous spool upload progress for remote backends.
+type UploadStatus string
+
+const (
+	UploadStatusLocal    UploadStatus = "local"
+	UploadStatusPending  UploadStatus = "pending"
+	UploadStatusUploaded UploadStatus = "uploaded"
+	UploadStatusFailed   UploadStatus = "failed"
+)
+
+// StorageTarget describes where new clips are recorded before optional remote upload.
+type StorageTarget struct {
+	Backend  string
+	MediaDir string
+	SpoolDir string
+}
+
+// StorageTargetProvider resolves the active storage backend and directories.
+type StorageTargetProvider interface {
+	RecordingTarget(ctx context.Context) (StorageTarget, error)
+}
+
 // ClipPolicy is the task-independent part of a clip policy needed to trigger.
 type ClipPolicy struct {
 	// PostSeconds is the post-event duration (1–60).

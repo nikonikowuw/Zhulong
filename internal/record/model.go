@@ -44,10 +44,11 @@ type Recognition struct {
 	AttributesJSON   string  `gorm:"column:attributes_json;not null;default:'{}'"`
 	FeatureVector    []byte  `gorm:"column:feature_vector"`
 	// ClipID / ClipOffsetMS 关联事件录像片段（event_clips，ON DELETE SET NULL）；NULL = 无片段。
-	ClipID       *string   `gorm:"column:clip_id"`
-	ClipOffsetMS *int64    `gorm:"column:clip_offset_ms"`
-	CapturedAt   time.Time `gorm:"column:captured_at;not null"`
-	CreatedAt    time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
+	ClipID         *string   `gorm:"column:clip_id"`
+	ClipOffsetMS   *int64    `gorm:"column:clip_offset_ms"`
+	StorageBackend string    `gorm:"column:storage_backend;not null;default:'local'"`
+	CapturedAt     time.Time `gorm:"column:captured_at;not null"`
+	CreatedAt      time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
 }
 
 func (Recognition) TableName() string {
@@ -69,6 +70,7 @@ type Alarm struct {
 	CropPath         string    `gorm:"column:crop_path;not null;default:''"`
 	ExtraJSON        string    `gorm:"column:extra_json;not null;default:'{}'"`
 	PTS              int64     `gorm:"column:pts;not null"`
+	StorageBackend   string    `gorm:"column:storage_backend;not null;default:'local'"`
 	CapturedAt       time.Time `gorm:"column:captured_at;not null"`
 	CreatedAt        time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
 	// 同 Recognition.ClipID。
@@ -99,6 +101,7 @@ type Capture struct {
 	ImagePath        string    `gorm:"column:image_path;not null;default:''"`
 	AttributesJSON   string    `gorm:"column:attributes_json;not null;default:'{}'"`
 	PTS              int64     `gorm:"column:pts;not null"`
+	StorageBackend   string    `gorm:"column:storage_backend;not null;default:'local'"`
 	CapturedAt       time.Time `gorm:"column:captured_at;not null"`
 	CreatedAt        time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
 }

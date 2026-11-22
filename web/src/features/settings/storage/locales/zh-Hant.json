@@ -1,7 +1,7 @@
 {
   "page": {
     "title": "儲存與生命週期",
-    "desc": "配置邊緣媒體儲存掛載路徑、statfs 水位感知監控、外掛碟掉線防穿透保護以及雙水位回差自動清理策略。"
+    "desc": "配置邊緣媒體儲存後端（本地檔案系統 LocalFS、MinIO 或 S3 相容雲端物件儲存）、本地 Spool 緩衝碟以及雙水位回差自動清理策略。"
   },
   "overview": {
     "title": "儲存容量與健康大盤",
@@ -13,7 +13,12 @@
     "root_fs": "系統根分割區",
     "write_ok": "允許寫碟",
     "write_blocked": "禁止寫入",
-    "refreshing": "遙測重新整理中..."
+    "refreshing": "遙測重新整理中...",
+    "backend_local": "LocalFS 本地碟",
+    "backend_s3": "S3 / MinIO 物件儲存",
+    "remote_healthy": "遠端連線正常",
+    "remote_unhealthy": "遠端儲存異常",
+    "spool_usage": "本地 Spool 緩衝 ({{dir}}): 已用 {{used}} · 可用 {{free}}"
   },
   "status": {
     "healthy": "運作正常",
@@ -29,6 +34,13 @@
     "exports": "臨時匯出",
     "other": "其它佔用"
   },
+  "backend": {
+    "label": "儲存後端驅動",
+    "local_title": "本地檔案系統 (LocalFS)",
+    "local_desc": "直接寫入本地磁碟或外掛儲存掛載目錄，適合單機離線邊緣場景。",
+    "s3_title": "MinIO / 雲端物件儲存 (S3)",
+    "s3_desc": "將事件錄影、AI 抓拍、底庫人臉與點位底圖統一託管至 MinIO、AWS S3、阿里雲 OSS 或騰訊雲 COS。"
+  },
   "form": {
     "title": "媒體儲存路徑與保留策略配置",
     "media_directory": "媒體根目錄絕對路徑",
@@ -42,7 +54,7 @@
     "path_invalid": "路徑檢測未通過",
     "recordings_days": "視訊錄影保留天數",
     "recordings_days_desc": "常規錄影最大留存（預設 15 天）",
-    "snapshots_days": "AI抓拍保留天数",
+    "snapshots_days": "AI抓拍保留天數",
     "snapshots_days_desc": "AI 抓拍最大留存（預設 90 天）；空間不足時會提前回收未鎖定抓拍，告警/鎖定圖除外",
     "exports_hours": "臨時匯出保留小時",
     "exports_hours_desc": "匯出剪輯保留生存期（預設 48 小時）",
@@ -50,6 +62,65 @@
     "btn_save": "儲存配置",
     "save_success": "儲存策略配置已儲存並生效！",
     "mediaDirectoryPlaceholder": "媒體根目錄絕對路徑，例如 /mnt/storage/media 或 data/media"
+  },
+  "s3": {
+    "section_title": "物件儲存連線參數與存取投遞方式",
+    "preset_minio": "MinIO 常用預設",
+    "preset_cloud": "公有雲 OSS/S3 預設",
+    "endpoint": "服務 Endpoint 位址",
+    "endpoint_placeholder": "例如 http://127.0.0.1:9000 或 https://oss-cn-hangzhou.aliyuncs.com",
+    "region": "區域 (Region)",
+    "region_placeholder": "例如 us-east-1 或 cn-hangzhou",
+    "bucket": "儲存貯體名稱 (Bucket)",
+    "bucket_placeholder": "例如 zhulong-media",
+    "prefix": "物件鍵前綴（可選）",
+    "prefix_placeholder": "例如 edge-node-01",
+    "access_key_id": "Access Key ID",
+    "secret_access_key": "Secret Access Key",
+    "secret_saved_placeholder": "已儲存加密金鑰 — 留空則保持原金鑰不變",
+    "secret_new_placeholder": "輸入 S3 / MinIO 存取金鑰 Secret",
+    "secret_saved_hint": "服務端已加密儲存存取金鑰；若無需更換金鑰，留空即可。",
+    "use_path_style": "使用 Path-Style 定址",
+    "use_path_style_desc": "自建 MinIO 等內網物件服務通常需要開啟此項。",
+    "use_tls": "啟用 TLS (HTTPS)",
+    "use_tls_desc": "依據 Endpoint 的 http:// 或 https:// 協定自動判定。",
+    "insecure_skip_verify": "略過 TLS 憑證驗證",
+    "insecure_skip_verify_desc": "僅限內網自簽憑證測試場景啟用。",
+    "delivery_mode": "媒體投遞模式",
+    "delivery_proxy": "宿主代理轉發（推薦，免 CORS 配置）",
+    "delivery_proxy_desc": "沿用目前 Cookie/簽章驗證，由 Zhulong 宿主直接串流代理轉發並支援進度條 Range 請求。",
+    "delivery_redirect": "302 預簽章直連重新導向",
+    "delivery_redirect_desc": "回傳短時效預簽章直連網址，減輕宿主頻寬壓力；需確保瀏覽器可連線 S3 Endpoint、協定一致並設定儲存貯體 CORS。",
+    "local_fallback": "本地歷史兜底回退讀取",
+    "local_fallback_desc": "啟用後，若 S3 尚未找到舊物件，自動回退讀取原本地媒體目錄中的歷史檔案。",
+    "spool_directory": "本地 Spool 暫存目錄",
+    "spool_directory_desc": "事件錄影在本地封裝完成後再非同步上傳 S3 之前的臨時緩衝路徑。",
+    "spool_max_mb": "本地 Spool 容量上限 (MB)",
+    "quota_gb": "遠端儲存貯體配額上限 (GB)",
+    "quota_gb_desc": "填 0 表示僅依保留天數 TTL 淘汰；大於 0 時同步限制遠端索引總用量。",
+    "btn_test_connection": "測試連通性",
+    "testing_connection": "正在探測 S3 貯體連通性與寫入權限...",
+    "conn_valid": "物件儲存連通且具備讀寫權限",
+    "conn_invalid": "物件儲存連通性檢測失敗",
+    "conn_success": "S3 / MinIO 連通性與寫入探測通過！",
+    "conn_failed": "無法連線目標貯體或寫入探測失敗"
+  },
+  "migration": {
+    "title": "本地歷史資產遷移至 S3",
+    "desc": "將歷史保存在本地目錄中的抓拍圖、事件錄影、人臉底庫與空間底圖安全拷貝至目前啟用的 S3 儲存貯體並更新索引歸屬。",
+    "delete_local": "遷移驗證成功後刪除本地來源檔案",
+    "delete_local_desc": "建議初次遷移保持關閉，保留本地兜底副本。",
+    "btn_start": "開始歷史資產遷移",
+    "started": "後台歷史資產遷移任務已送出。",
+    "running": "遷移執行中",
+    "status_pending": "排隊中",
+    "status_extracting": "準備中",
+    "status_processing": "遷移中",
+    "status_completed": "已完成",
+    "status_failed": "已失敗",
+    "status_cancelled": "已取消",
+    "summary": "已處理 {{processed}}/{{total}} · 成功 {{succeeded}} · 失敗 {{failed}}",
+    "current_file": "目前處理物件: {{file}}"
   },
   "advanced": {
     "title": "高級雙水位與緊急熔斷策略",
@@ -81,6 +152,15 @@
   },
   "validation": {
     "mediaDirectoryRequired": "請輸入有效的媒體儲存路徑",
+    "endpointRequired": "請輸入 S3 / MinIO Endpoint 位址",
+    "endpointInvalid": "Endpoint 必須為 host[:port] 或 http(s)://host[:port]，不能攜帶路徑或查詢字串",
+    "bucketRequired": "請輸入儲存貯體名稱",
+    "accessKeyRequired": "請輸入 Access Key ID",
+    "secretKeyRequired": "首次啟用 S3 必須輸入 Secret Access Key",
+    "spoolDirectoryRequired": "請輸入本地 Spool 暫存目錄",
+    "spoolMaxMin": "Spool 容量上限至少為 128 MB",
+    "spoolMaxMax": "Spool 容量上限最多為 1048576 MB",
+    "quotaMin": "遠端儲存貯體配額不能為負數",
     "daysMin": "保留天數至少為 1 天",
     "daysMax365": "保留天數最多為 365 天",
     "daysMax730": "保留天數最多為 730 天",

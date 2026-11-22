@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/audit"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"go.uber.org/zap"
 )
 
@@ -33,6 +34,8 @@ const (
 	// for zero-progress cycles.
 	autoCleanupAuditInterval     = 5 * time.Minute
 	autoCleanupIdleAuditInterval = time.Hour
+	// remotePruneInterval throttles periodic SQLite-indexed TTL/quota checks in S3 mode.
+	remotePruneInterval = 5 * time.Minute
 	// tickTimeout bounds one status refresh inside the background loop.
 	tickTimeout = 10 * time.Second
 )
@@ -58,6 +61,9 @@ type ServiceDeps struct {
 	Inspector PathInspector
 	Gate      *EmergencyGate
 	Cleaner   *CleanerEngine
+	Cipher    SecretCipher
+	S3Probe   func(ctx context.Context, cfg filestore.S3Config) error
+	S3Health  func(ctx context.Context, cfg filestore.S3Config) (filestore.HealthStatus, error)
 	Logger    *zap.Logger
 }
 
@@ -65,19 +71,32 @@ type ServiceDeps struct {
 type Service struct {
 	mu        sync.RWMutex
 	refreshMu sync.Mutex
+	migrateMu sync.Mutex
 	logger    *zap.Logger
 	repo      Repository
 	inspector PathInspector
 	gate      *EmergencyGate
 	cleaner   *CleanerEngine
 	auditor   *audit.Service
+	cipher    SecretCipher
+	s3Probe   func(context.Context, filestore.S3Config) error
+	s3Health  func(context.Context, filestore.S3Config) (filestore.HealthStatus, error)
 
-	activeMediaDir   string
-	expectedDeviceID uint64
-	lastStatus       *StorageStatus
-	lastBreakdown    StorageUsageBreakdown
-	lastBreakdownAt  time.Time
-	afterPrune       func(context.Context, []string)
+	activeMediaDir        string
+	expectedDeviceID      uint64
+	activeSpoolDir        string
+	expectedSpoolDeviceID uint64
+	lastStatus            *StorageStatus
+	lastBreakdown         StorageUsageBreakdown
+	lastBreakdownAt       time.Time
+	lastRemotePruneAt     time.Time
+	afterPrune            func(context.Context, []string)
+	onConfigChanged       func(context.Context, *StorageConfig)
+	remoteStore           filestore.Store
+	remoteProvider        RemotePruneProvider
+	onRemoteClipsDeleted  RemoteClipReconciler
+	asyncJobs             AsyncJobService
+	migrationSource       MigrationSource
 
 	backoffMu            sync.Mutex
 	nextAutoPrune        time.Time
@@ -116,7 +135,16 @@ func NewService(deps ServiceDeps) *Service {
 
 	repo := deps.Repo
 	if repo == nil {
-		repo = NewRepository(nil, logger)
+		repo = NewRepositoryWithCipher(nil, deps.Cipher, logger)
+	}
+
+	s3Probe := deps.S3Probe
+	if s3Probe == nil {
+		s3Probe = defaultS3Probe
+	}
+	s3Health := deps.S3Health
+	if s3Health == nil {
+		s3Health = defaultS3Health
 	}
 
 	s := &Service{
@@ -125,6 +153,9 @@ func NewService(deps ServiceDeps) *Service {
 		inspector: inspector,
 		gate:      gate,
 		cleaner:   cleaner,
+		cipher:    deps.Cipher,
+		s3Probe:   s3Probe,
+		s3Health:  s3Health,
 		stopCh:    make(chan struct{}),
 		drained:   make(chan struct{}),
 	}
@@ -198,6 +229,138 @@ func (s *Service) SetEvidenceGuard(guard EvidenceGuard) {
 	s.cleaner.SetEvidenceGuard(guard)
 }
 
+// SetConfigChangeListener registers a callback fired after storage configuration
+// updates persist successfully (used by filestore.Manager for hot backend switching).
+func (s *Service) SetConfigChangeListener(fn func(context.Context, *StorageConfig)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.onConfigChanged = fn
+	s.mu.Unlock()
+}
+
+// SetRemoteStore configures the filestore.Store used by SQLite-indexed remote cleanup.
+func (s *Service) SetRemoteStore(store filestore.Store) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.remoteStore = store
+	s.mu.Unlock()
+}
+
+// SetRemotePruneProvider configures the SQLite candidate source for remote cleanup.
+func (s *Service) SetRemotePruneProvider(provider RemotePruneProvider) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.remoteProvider = provider
+	s.mu.Unlock()
+}
+
+// SetRemoteClipReconciler registers a callback to delete or reconcile SQLite
+// event_clips rows after their remote objects are removed.
+func (s *Service) SetRemoteClipReconciler(fn RemoteClipReconciler) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.onRemoteClipsDeleted = fn
+	s.mu.Unlock()
+}
+
+// SyncStore loads the stored configuration and notifies the config-change listener
+// so runtime stores switch onto S3 once camera encryption keys unlock.
+func (s *Service) SyncStore(ctx context.Context) error {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	cfg, err := s.repo.GetConfig(ctx)
+	if err != nil {
+		return databaseFailure(fmt.Errorf("load storage config for sync: %w", err))
+	}
+	s.notifyConfigChanged(ctx, cfg)
+	return nil
+}
+
+func (s *Service) currentRemoteStore() filestore.Store {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.remoteStore
+}
+
+func (s *Service) currentRemoteProvider() RemotePruneProvider {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.remoteProvider
+}
+
+func (s *Service) notifyRemoteClipsDeleted(ctx context.Context, clipIDs []string) {
+	if len(clipIDs) == 0 {
+		return
+	}
+	s.mu.RLock()
+	fn := s.onRemoteClipsDeleted
+	s.mu.RUnlock()
+	if fn == nil {
+		return
+	}
+	if err := fn(ctx, clipIDs); err != nil {
+		s.logger.Warn("reconcile remote clip rows after storage cleanup failed", zap.Error(err))
+	}
+}
+
+func (s *Service) notifyConfigChanged(ctx context.Context, cfg *StorageConfig) {
+	s.mu.RLock()
+	fn := s.onConfigChanged
+	s.mu.RUnlock()
+	if fn != nil && cfg != nil {
+		fn(ctx, cfg)
+	}
+}
+
+// HasExistingEncryptedData reports whether storage config stores encrypted S3 credentials.
+func (s *Service) HasExistingEncryptedData(ctx context.Context) (bool, error) {
+	if s == nil || s.repo == nil {
+		return false, nil
+	}
+	aware, ok := s.repo.(SecretAwareRepository)
+	if !ok {
+		return false, nil
+	}
+	return aware.HasExistingEncryptedData(ctx)
+}
+
+// GetDecryptedS3Config returns the decrypted active S3 driver configuration.
+func (s *Service) GetDecryptedS3Config(ctx context.Context) (*filestore.S3Config, error) {
+	if s == nil || s.repo == nil {
+		return nil, ErrS3SecretRequired
+	}
+	aware, ok := s.repo.(SecretAwareRepository)
+	if !ok {
+		return nil, ErrS3SecretRequired
+	}
+	return aware.GetDecryptedS3Config(ctx)
+}
+
+func defaultS3Probe(ctx context.Context, cfg filestore.S3Config) error {
+	driver, err := filestore.NewS3Driver(cfg)
+	if err != nil {
+		return err
+	}
+	return driver.ProbeWritable(ctx)
+}
+
+func defaultS3Health(ctx context.Context, cfg filestore.S3Config) (filestore.HealthStatus, error) {
+	driver, err := filestore.NewS3Driver(cfg)
+	if err != nil {
+		return filestore.HealthStatus{Backend: filestore.BackendS3, Message: err.Error()}, nil
+	}
+	return driver.Health(ctx)
+}
+
 // auditLog returns the configured auditor, if any. Auditors are installed at
 // wiring time, so this is only for honest locking of the field rather than for
 // racing writers.
@@ -245,7 +408,10 @@ func (s *Service) Start(ctx context.Context) error {
 
 	s.mu.Lock()
 	s.activeMediaDir = cfg.MediaDirectory
+	s.activeSpoolDir = cfg.SpoolDirectory
 	s.mu.Unlock()
+
+	s.notifyConfigChanged(ctx, cfg)
 
 	// Initial probe and status refresh
 	status, err := s.RefreshStatus(ctx)
@@ -322,6 +488,11 @@ func (s *Service) tick() {
 		return
 	}
 
+	if status.Backend == BackendS3 {
+		s.tickRemote(status)
+		return
+	}
+
 	switch status.Status {
 	case StatusWarning, StatusEmergencyStopped:
 	case StatusCleaning:
@@ -350,6 +521,36 @@ func (s *Service) tick() {
 		trigger = PruneTriggerEmergency
 	}
 
+	s.startAsyncAutoPrune(status.MediaDirectory, trigger)
+}
+
+func (s *Service) tickRemote(status *StorageStatus) {
+	if s.cleaner.IsCleaning() || !status.RemoteHealthy || s.currentRemoteStore() == nil || s.currentRemoteProvider() == nil {
+		return
+	}
+
+	s.backoffMu.Lock()
+	shouldSkip := time.Now().Before(s.nextAutoPrune)
+	s.backoffMu.Unlock()
+	if shouldSkip {
+		return
+	}
+
+	s.mu.RLock()
+	lastRun := s.lastRemotePruneAt
+	s.mu.RUnlock()
+	if !lastRun.IsZero() && time.Since(lastRun) < remotePruneInterval {
+		return
+	}
+
+	trigger := PruneTriggerWatermark
+	if status.Status == StatusEmergencyStopped {
+		trigger = PruneTriggerEmergency
+	}
+	s.startAsyncAutoPrune(status.MediaDirectory, trigger)
+}
+
+func (s *Service) startAsyncAutoPrune(mediaDir string, trigger PruneTrigger) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -364,10 +565,10 @@ func (s *Service) tick() {
 			return
 		}
 
-		summary, err := s.cleaner.RunPrune(
+		summary, err := s.runPruneCycle(
 			pruneCtx,
-			status.MediaDirectory,
 			cfg,
+			mediaDir,
 			trigger,
 		)
 		if err != nil {
@@ -377,12 +578,6 @@ func (s *Service) tick() {
 			s.recordAutoCleanupFailure()
 			return
 		}
-
-		// The DB cascade must not be canceled by a 5-minute prune timeout. The
-		// IDs are already durable in the record outbox before deletion is tried.
-		callbackCtx, callbackCancel := context.WithTimeout(context.WithoutCancel(pruneCtx), pruneCallbackTimeout)
-		s.notifyAfterPrune(callbackCtx, summary.DeletedSnapshotIDs)
-		callbackCancel()
 
 		// RefreshStatus must not inherit a prune context that may be canceled
 		// right after a long cleanup; otherwise the gate can stay latched until
@@ -396,6 +591,54 @@ func (s *Service) tick() {
 		s.recordAutoCleanupResult(summary)
 		s.writeAutoCleanupAudit(summary)
 	}()
+}
+
+func (s *Service) runPruneCycle(
+	ctx context.Context,
+	cfg *StorageConfig,
+	mediaDir string,
+	trigger PruneTrigger,
+) (*CleanupSummary, error) {
+	if cfg != nil && cfg.Backend == BackendS3 {
+		summary, deletedClipIDs, err := s.cleaner.RunRemotePrune(
+			ctx,
+			RemotePruneRequest{
+				Config:   cfg,
+				Trigger:  trigger,
+				Store:    s.currentRemoteStore(),
+				Provider: s.currentRemoteProvider(),
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		s.lastRemotePruneAt = time.Now()
+		s.mu.Unlock()
+
+		callbackCtx, callbackCancel := context.WithTimeout(context.WithoutCancel(ctx), pruneCallbackTimeout)
+		s.notifyRemoteClipsDeleted(callbackCtx, deletedClipIDs)
+		s.notifyAfterPrune(callbackCtx, summary.DeletedSnapshotIDs)
+		callbackCancel()
+		return summary, nil
+	}
+
+	summary, err := s.cleaner.RunPrune(
+		ctx,
+		mediaDir,
+		cfg,
+		trigger,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// The DB cascade must not be canceled by a 5-minute prune timeout. The
+	// IDs are already durable in the record outbox before deletion is tried.
+	callbackCtx, callbackCancel := context.WithTimeout(context.WithoutCancel(ctx), pruneCallbackTimeout)
+	s.notifyAfterPrune(callbackCtx, summary.DeletedSnapshotIDs)
+	callbackCancel()
+	return summary, nil
 }
 
 func (s *Service) resetAutoPruneBackoff() {

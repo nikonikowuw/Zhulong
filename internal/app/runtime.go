@@ -101,6 +101,18 @@ type storageLifecycle interface {
 	Stop(context.Context) error
 }
 
+type fileStoreLifecycle interface {
+	Close() error
+}
+
+type remoteStoreSyncer interface {
+	SyncStore(context.Context) error
+}
+
+type pendingUploadRecoverer interface {
+	RecoverPendingUploads(context.Context) error
+}
+
 type algorithmLifecycle interface {
 	Start(context.Context) error
 	Stop(context.Context) error
@@ -157,6 +169,7 @@ type lifecycleRuntime struct {
 	systemTime  systemTimeLifecycle
 	systemInfo  systemInfoLifecycle
 	storage     storageLifecycle
+	fileStore   fileStoreLifecycle
 	algorithm   algorithmLifecycle
 	person      personLifecycle
 	asyncJobs   asyncJobLifecycle
@@ -192,6 +205,7 @@ type lifecycleRuntime struct {
 	systemTimeReady     bool
 	systemInfoReady     bool
 	storageReady        bool
+	fileStoreReady      bool
 	algorithmReady      bool
 	personReady         bool
 	asyncJobsReady      bool
@@ -222,6 +236,7 @@ type runtimeParams struct {
 	SystemTime  systemTimeLifecycle  `optional:"true"`
 	SystemInfo  systemInfoLifecycle  `optional:"true"`
 	Storage     storageLifecycle     `optional:"true"`
+	FileStore   fileStoreLifecycle   `optional:"true"`
 	Algorithm   algorithmLifecycle   `optional:"true"`
 	Person      personLifecycle      `optional:"true"`
 	AsyncJobs   asyncJobLifecycle    `optional:"true"`
@@ -257,6 +272,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		systemTime:  p.SystemTime,
 		systemInfo:  p.SystemInfo,
 		storage:     p.Storage,
+		fileStore:   p.FileStore,
 		algorithm:   p.Algorithm,
 		person:      p.Person,
 		asyncJobs:   p.AsyncJobs,
@@ -350,6 +366,10 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.systemInfoReady = true
 	}
 
+	if r.fileStore != nil {
+		r.fileStoreReady = true
+	}
+
 	if r.storage != nil {
 		// Registered before Start so a first probe that already finds the disk full
 		// still reaches the logger.
@@ -440,6 +460,15 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	if r.camera != nil {
 		if err := r.camera.InitCipher(ctx); err != nil {
 			return r.failStart(fmt.Errorf("initialize camera cipher: %w", err), r.rollback(ctx)...)
+		}
+		if syncer, ok := r.storage.(remoteStoreSyncer); ok {
+			if err := syncer.SyncStore(ctx); err != nil {
+				r.degradedStart("storage_remote", err)
+			} else if rec, ok := r.recording.(pendingUploadRecoverer); ok {
+				if recErr := rec.RecoverPendingUploads(ctx); recErr != nil {
+					r.degradedStart("recording_recovery", recErr)
+				}
+			}
 		}
 		if err := r.camera.Start(ctx); err != nil {
 			return r.failStart(fmt.Errorf("start camera scheduler: %w", err), r.rollback(ctx)...)
@@ -553,6 +582,7 @@ func (r *lifecycleRuntime) stopSequence() []func(context.Context) error {
 		r.closeRecordAndSnapshot,
 		r.closeRecording,
 		r.closeStorage,
+		r.closeFileStore,
 		r.closeSystemInfo,
 		r.closeSystemTime,
 		r.closeNetwork,
@@ -738,6 +768,19 @@ func (r *lifecycleRuntime) closeStorage(ctx context.Context) error {
 	if r.storage != nil {
 		if err := r.storage.Stop(ctx); err != nil {
 			return fmt.Errorf("stop storage service: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeFileStore(context.Context) error {
+	if !r.fileStoreReady {
+		return nil
+	}
+	r.fileStoreReady = false
+	if r.fileStore != nil {
+		if err := r.fileStore.Close(); err != nil {
+			return fmt.Errorf("close filestore manager: %w", err)
 		}
 	}
 	return nil

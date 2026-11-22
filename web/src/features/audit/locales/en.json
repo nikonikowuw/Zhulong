@@ -65,6 +65,8 @@
     "storage.manual_cleanup": "Manual Storage Cleanup",
     "storage.auto_cleanup": "Automatic Storage Cleanup",
     "storage.test_path": "Storage Path Test",
+    "storage.test_connection": "Storage Connection Test",
+    "storage.migrate_remote": "Migrate Media Assets to S3",
     "storage.emergency_stop": "Storage Emergency Stop",
     "storage.emergency_resume": "Storage Emergency Resume",
     "time.update_config": "Update Time Config",
