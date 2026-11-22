@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Playwright browser tests, ESLint, Prettier, and frontend-check gates"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "Verify React 19 patterns and keyboard isolation"}
