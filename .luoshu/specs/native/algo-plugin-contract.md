@@ -1,0 +1,734 @@
+# 算法插件系统契约与 SDK 规范 (Algorithm Plugin Architecture)
+
+> 纯 C ABI 隔离、现代 C++17 SDK 门面、公共算法运行库 HAL 与通用 Runner。
+
+---
+
+## 1. 架构原则与边界约束
+
+1. **一包一进程 (One Package, One Process)**：每个算法包运行在独立的 Native Runner 子进程中，故障隔离，崩溃不拖垮主媒体与 Go 服务。
+2. **纯 C ABI 物理隔离**：插件动态库必须导出纯 C ABI（`zhulong_plugin_api_v1`），禁止跨 `.so` 边界暴露 C++ class、虚表、STL 或厂商专有 SDK 上下文。
+3. **C++17 Header-only SDK 门面**：第三方开发者统一引入 `zhulong/algo.hpp`，通过 RAII、智能指针与操作符链式调用编写现代 C++17 算法，避免手动管理底层句柄。
+4. **两层硬件抽象层 (HAL)**：公共运行库 `libzhulong_algo_runtime.so` 封装 `IInferenceBackend` 与 `IVisionBackend`，屏蔽不同加速器（RKNN、CANN、TensorRT、CPU）的差异。
+5. **三层资源解耦**：
+   - **Model Group**：全局只读模型权重，多线程共享；
+   - **Worker Context**：线程绑定的执行会话与工作区内存，多线程并发互不干扰；
+   - **Task State**：单路摄像机时序状态（跟踪器、平滑器），通过 task ID 独立存取。
+
+---
+
+## 2. 纯 C ABI 规范 (`native/sdk/include/zhulong/plugin.h`)
+
+所有插件通过导出的 `zhulong_plugin_get_api` 填充 `zhulong_plugin_api_v1`。v1 API 布局包含 `struct_size`、`api_version`、插件元信息和模型/Worker/Task/process/result-release 回调。
+支持四种结果载荷形态：
+
+1. **检测**：`ZHULONG_RESULT_TYPE_DETECTION` (1) + `zhulong_bbox[]`（`box[4]` 严格归一化 `[x1, y1, x2, y2] ∈ [0.0, 1.0]`，总尺寸 88 字节，8 字节自然对齐）；
+2. **分类**：`ZHULONG_RESULT_TYPE_CLASSIFICATION` (2) + `zhulong_classification_item[]`；
+3. **结构化人体/人脸**：`ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` (3) + `zhulong_person_item[]`（支持 1:N 嵌套人脸 `zhulong_face_item` 与 Top-K 候选人 `zhulong_face_candidate`）。
+   - **人体属性扩展 (SDK 1.4.0)**：`zhulong_person_item` 由 40 字节尾随扩展为 56 字节，新增 `attribute_count`、保留位 `reserved_`（必须为 0）与 `const zhulong_person_attribute* attributes`；属性项 40 字节（`char name[32]` + `float score` + 保留位），同一人体内标签唯一且按 `score` 降序。无属性时 `attribute_count = 0`、`attributes = NULL`。旧实现按 40 字节前缀读取仍然成立；宿主只消费 JSON，`persons[]` 新增可选 `attributes` 对象，未知键被忽略。
+   - **人脸属性扩展 (SDK 1.5.0)**：`zhulong_face_item` 由 280 字节尾随扩展为 296 字节，新增 `attribute_count`、保留位 `attribute_reserved_`（必须为 0）与 `const zhulong_person_attribute* attributes`（内嵌指针，指向同一 Arena）。人脸属性与人体属性**共用同一元素类型**（40 字节），`name` 语义由标签命名区分（人体：`Hat`/`LongSleeve`…；人脸：性别 `Male`/`Female` + 年龄段 `Age0-18`/`Age18-30`/`Age30-45`/`Age45-60`/`Age60+`，年龄段 score 固定 1.0）。无属性时 `attribute_count = 0`、`attributes = NULL`。
+   - **Append-only 纪律**：该扩展只允许尾随追加，禁止重排既有字段或改变语义；尺寸断言在 `algo.hpp` 与 `plugin_c_abi_test.c` 同一次构建内校验。
+   - **方案 B 底库对账契约**：`zhulong_face_candidate` 包含 `char face_id[ZHULONG_FACE_ID_MAX_LEN]`（200 字节，8 字节整除自然对齐），精确记录候选人对应的单张登记照唯一标识；`zhulong_face_item` 包含 `char matched_face_id[ZHULONG_FACE_ID_MAX_LEN]`（v1.5 起 296 字节，8 字节整除自然对齐；280 字节为人脸属性扩展前的尺寸），记录 Top-1 胜出底照 ID，支持宿主直接进行 1:1 双图（抓拍人脸 vs 底库登记照）核验。
+4. **结构化机动车/车牌**：`ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE` (4) + `zhulong_vehicle_item[]`（支持 1:N 嵌套车牌 `zhulong_plate_item`，车辆结构体 88 字节，车牌结构体 72 字节，均满足 8 字节整除自然对齐；支持纯车牌退化语义：仅检测车牌时 `track_id=0`，`vehicle_box=plate_box`，`vehicle_score` 填**车牌检测**置信度（与 `plate.score` 的字符识别置信度语义不同，严禁互换），`plate_count=1`）。
+5. **场景结构化 (SCENE_STRUCTURE)**：`ZHULONG_RESULT_TYPE_SCENE_STRUCTURE` (5) + `zhulong_scene_structure`（v1.5 起 48 字节，8 字节对齐，含 `persons[]`、`faces[]` 扁平双数组、`const float* face_features` 特征池指针与 `const zhulong_person_attribute* face_attributes` 属性池指针）。
+   - **流式人脸特征回传 (SDK 1.3.0)**：`zhulong_face_structure_item`（v1.5 起 304 字节，8 字节自然对齐）包含 `feature_offset`（特征在浮点池中的首浮点索引）与 `feature_dim`（特征维度，最大 512）。所有特征浮点数据连续打包在单块 Arena 尾部，由 `face_features` 索引。
+   - **人脸属性池 (SDK 1.5.0)**：`zhulong_face_structure_item` 新增 `attribute_count` / `attribute_offset`（属性在 `scene->face_attributes` 池中的首元素索引）。这里**必须用「池 + 下标」而不是内嵌指针**：人脸是连续数组，元素尺寸一旦增长，内嵌指针方案会让池基址依赖 `attribute_count` 的取值，旧实现算出的基址会落到未知字节。改用下标后 `zhulong_scene_structure` 的池基址恒定，旧实现按 32 字节前缀 + 288 字节步长遍历仍然成立。`attribute_offset + attribute_count <= face_attribute_total` 由插件保证，解析方仍应校验。
+   - **IPC 64KB 预算保护**：Runner 序列化输出 Base64 编码的小端 IEEE-754 `float32`（`"feature_b64"`，512 维为 2732 字符）。当单帧多人脸导致 JSON 载荷可能突破 IPC 64 KB（`65536` 字节）上限时，按 `quality` 降序优先保留高质人脸特征，超额人脸安全省略 `"feature_b64"`，元数据与检测框永不丢弃。
+   - **特征只随 v2 场景结构回传**：`zhulong_face_item`（type 3 的 296 字节紧凑结构）没有特征槽位，因此 `ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` 载荷**不带** `feature_b64`。包需要回传特征时必须走 SCENE_STRUCTURE v2；宿主侧对此无感（缺失即 `FeatureVector = nil`）。
+
+全系统（通用目标检测、人体/人脸结构化、IPC 消息、Go 宿主领域模型与前端渲染）统一采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 严格归一化两点坐标，全面废弃 `(x, y, w, h)` 语义。
+结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类与结构化能力保持 v1 函数表布局稳定（数据层多态）。
+`zhulong_frame_view` 包含 `int32_t dma_buf_fd` 字段（硬件 DMA-BUF 句柄，有效时 `>= 0`；POSIX SHM 虚拟内存降级时为 `-1`），利用原 4 字节自然填充缝隙安置，严格维持 8 字节自然对齐与 88 字节总尺寸不变。C++ SDK `zhulong::Image` 提供 `int dma_buf_fd() const noexcept` 便捷访问器。
+结构化结果采用**单块连续 Arena 内存打包（Contiguous Arena Packing）**，所有嵌套子指针指向 Arena 内部偏移，`result->internal_token` 指向首地址，`result_release` 通过单次 `std::free` 彻底释放整棵树，杜绝内存碎片与嵌套泄漏。
+结构化坐标严格归一化到 `[0.0, 1.0]`，关键点（5 点）同样严格归一化。
+
+### 结构化双模型协同与空间几何挂载规范
+结构化插件支持内部多模型协同（如 SCRFD Person 2.5G 全身检测 + SCRFD 500M 人脸检测 + FaceLiVTv2-L 512 维特征提取）：
+1. **真实人体框保障**：优先使用人体检测模型预测出的真实全身框作为 `body_box`（禁止通过人脸宽高比外推“脑补”人体框，以防背身/低头/遮挡时整个人体漏检）；
+2. **空间挂载准则 (Spatial Association)**：
+   - 人脸中心落入人体框上半身（$y \le y_{top} + 0.45 \cdot h$）且人脸在人体内的交并覆盖比 $\text{IoF} \ge 0.50$ 时，该人脸挂载进对应人体的 `faces` 列表；
+3. **真实检测的结构化语义**：
+   - **背身/无正脸人体**：模型检出的真实全身框可以生成 `faces` 为空的 `zhulong_person_item`，供宿主生成人员抓拍记录与周界报警；
+     ⚠️ 该行为只在默认配置下成立：包配置 `filter_unmatched=true` 时，**没有挂载任何已匹配
+     人脸的人体也必须一并裁掉**（并重排 `faces[].person_index`），否则「陌生人不产生结果与
+     抓拍」只是半句话 —— 人脸被过滤了、人体还在。
+   - **近景特写人脸**：真实检出但未匹配人体框的人脸，可以生成 `body_box = face_box` 的 `zhulong_person_item`，保证人脸比对结果不丢失。
+     ⚠️ 退化项必须**可识别**：`track_id = 0` 且 `body_box` **逐位等于** `faces[0].box`（不得外扩），
+     `body_score` 填**该人脸的质量分**——它描述的是「这个框里那张脸有多可信」，不是人体检出置信度。
+     **禁止填 `1.0f`**：那会让真实体项与退化项无法区分，宿主的抓拍记录只能显示一个假的 100%。
+     `zhulong_person_item` 没有「无人体」取值（v1.4 起为 56 字节，新增的属性扩展段不改变这一点），因此别名是唯一表达方式；
+     要真正表达「有脸无人」需要 ABI v2 的平级对象模型（行业对标 NVIDIA DeepStream `NvDsObjectMeta.parent` 与 GA/T 1400.3 `SubRelatedID`：`persons[]` 与 `faces[]` 扁平双数组 + `person_index` 引用索引），不要在 v1 上塞布尔字段。
+   - 人体/人脸会话缺失、预处理失败或输出形状不合法时返回空结果；不得由亮度、固定分数或外推坐标合成检测结果。
+
+交付形态是**包根可执行文件**（`<manifest.id>`，静态链接运行时），宿主不装载任何算法产物，因此没有「导出表白名单」这回事：门禁反过来断言**包可执行文件不得导出任何插件 C ABI 符号**。
+
+```bash
+native/tests/check_plugin_symbols.py --entry <包根可执行文件>
+# 断言：nm -D --defined-only 里没有 `zhulong_*`，也没有 `zhulong_plugin_get_api`
+```
+
+口径：PIE 上 `nm -D --defined-only` 必然列出约 15 条弱符号化的 libstdc++ 模板实例与 libc COPY 重定位；断言只针对插件契约面（`zhulong_*`），否则只会逼人上 version script 掩盖真问题。
+
+`packages/*/scripts/build_package.py` 在暂存入口后立即跑这条门禁。包内骨架若需要「单次能力」（如底库登记的特征提取），走 `--extract-feature` 子命令 + 弱符号（见 §5.4），**不**重新导出 C ABI 给宿主。
+
+### 异常防爆门守则
+
+导出入口和 API callbacks 必须以 `try { ... } catch (...)` 阻止 C++ 异常穿越动态库边界；失败返回 `ZHULONG_PLUGIN_ERR_INTERNAL`，并在失败时将输出句柄/result 初始化为空。
+
+⚠️ 这道门只挡**算法类**抛出的异常。骨架自己的代码（结果 JSON 序列化、数组增长、路径拼接）在 OOM 上同样会抛，那类异常由**线程边界**收口并翻译成有退出码的受控失败——见 [§5.2.1 单路 Worker 异常边界](#521-单路-worker-异常边界退出码-9)。
+
+### 运行库 HAL 的 vtable 属于内部 ABI（禁止增删虚函数）
+
+> 交付形态已是「包根可执行文件 + 静态链接运行时」，`plugin.so ↔ libZhulongAlgoRuntime.so` 的版本偏斜彻底消失。下面的约束保留为**同一次构建内**的纪律（运行库与算法类必须一致地编译），历史事故保留作理由。
+
+`IInferenceBackend` / `IVisionBackend` 的虚表曾在 `plugin.so ↔ libZhulongAlgoRuntime.so` 边界上，而算法包是**独立交付、独立升级**的制品：宿主换代运行库时，旧插件 `.so` 仍会被装载。因此：
+
+- 严禁在这两个接口上增删或重排虚函数。历史实测（dlopen 时代）：在 `IInferenceBackend` 上新增一个虚函数后，已编译的旧 face 插件在新的运行库上把 `forward` 调用打到偏移后的槽位，直接段错误（验包报 `signal: segmentation fault`）。
+- 诊断类能力（如推理后端标识）一律做成 `runtime_factory.hpp` 的自由函数（`default_inference_backend_name()`），不走虚表。
+- 新增 HAL 能力优先走「新增自由函数 + 新接口继承旧接口」，并把兼容性验证纳入 `ZhulongAlgoVerifyCli` / 安装准入。
+
+### 黑盒验包的样本帧契约
+
+`<包根可执行文件> --verify --sample <path>` 必须真的把样本图喂进模型，否则准入只是一次 ABI 冒烟：
+
+- 包内骨架**不链接任何图像解码器**（它不属于推理链路）：它原生解码 netpbm（`P6`/`P5`）。
+- 包内约定文件是 `sample.jpg/png`，解码责任在调用侧：Go 验包门禁（`internal/algorithm`）用标准库解码后以 PPM 交给包入口，并以**包目录**为 CWD 启动它（复现部署布局：可执行文件与 `models/` 同级）。
+- 报告必须携带 `sample_decoded`：`false` 表示包入口回退到合成帧，此时准入**只**证明了 ABI 生命周期；验包门禁会把它记为告警，不得静默当作通过。
+- 最终 JSON 报告格式（尾部追加 `cost_ms` 与完整的结构化 `result`，保持向下兼容）：
+  ```json
+  {"status":"passed","sample":"/tmp/test.ppm","sample_decoded":true,"width":1920,"height":1080,"result_type":1,"count":1,"cost_ms":28,"result":{"stream_id":0,"pts":1000,"cost_ms":28,"task_type":"detection","detections":[{"box":[0.1,0.2,0.3,0.4],"label":"helmet","score":0.95}],"classifications":[],"persons":[],"vehicles":[]}}
+  ```
+  该结果支持宿主「单图试跑（Trial Inference）」提取单帧检出与结构化目标。
+- 算法包自身的准确率与逻辑回归由包内 `tests/`（`make unit-test` 与 `dev_infer --check`）承担，并通过根 `make pkg-test`（经 SDK 前缀独立构建运行，已纳入 `make check`）自动门禁；`native/tests/` 不再直编算法包源码或依赖具体算法权重。见 [§5.5 测试归属](#55-测试归属包内独立测试)。
+
+---
+
+## 3. 现代 C++17 SDK 门面 (`native/sdk/include/zhulong/algo.hpp`)
+
+### 3.0 公共头布局（算法包只能看到 `native/sdk/include`）
+
+| 头文件 | 角色 |
+| :--- | :--- |
+| `zhulong/plugin.h` | 纯 C ABI（结构体、状态码、函数指针表） |
+| `zhulong/algo.hpp` | 现代 C++17 门面（`Session` / `Image` / `Model` / 结果类型 / ops） |
+| `zhulong/runtime/{runtime_factory,vision_backend,tensor,gallery_registry,inference_backend}.hpp` | 运行库 HAL 与张量：算法实现直接使用（后端工厂、视觉前处理、`Tensor`、底库快照） |
+| `zhulong/runtime/yuv_sampling.hpp` | YUV→RGB 采样数学（唯一实现，见 §2 的 letterbox 契约） |
+| `zhulong/platform/dmabuf_allocator.hpp` | DMA-BUF 分配与 CPU 缓存同步（`DmaBuffer` / `ScopedCpuSync`），板端零拷贝前处理用 |
+| `zhulong/algo_main.hpp` | 包可执行文件骨架：`ZHULONG_ALGO_MAIN(...)` + `sdk::Options` |
+
+- **铁律**：算法包 target 的 `target_include_directories` 里**只允许** `sdk/include`（加上包自身目录）；`native/src` 是宿主实现目录，任何包代码 `#include <algorithm/...>`、`<platform/...>`、`<common/...>` 都算外溢。
+- 收口的唯一方向是「把它移进 SDK」或「改走公开 API」，绝不靠给包 target 加 `-I native/src` 糊过去——第三方拿不到 `native/src`，加一次就等于让阶段 7 的干净容器构建必挂。
+- 实现细节头（`cpu_inference_backend.hpp`、`cpu_vision_backend.hpp`、`letterbox_geometry.hpp`、`rknn_*`、`onnx_*`）**不**进 SDK。
+- `Tensor::data<T>()` 硬校验 `dtype()`：T 与元素类型不符抛 `std::invalid_argument`，需要字节视图时用 `raw_data()`。
+
+算法类实现 `init(config_json)`、`create_session(worker_id)`，再按任务类型提供对应推理方法：
+
+```cpp
+class MyDetector {
+public:
+    zhulong_status_t init(const std::string& config_json);
+    zhulong::Session create_session(uint32_t worker_id);
+    std::vector<zhulong::Detection> detect(zhulong::Session&, const zhulong::Image&,
+                                           zhulong::TaskContext&);
+};
+ZHULONG_REGISTER_DETECTOR_PLUGIN(MyDetector, "MyDetector", "1.0.0")
+
+class MyClassifier {
+public:
+    zhulong_status_t init(const std::string& config_json);
+    zhulong::Session create_session(uint32_t worker_id);
+    std::vector<zhulong::Classification> classify(zhulong::Session&, const zhulong::Image&,
+                                                  zhulong::TaskContext&);
+};
+ZHULONG_REGISTER_CLASSIFIER_PLUGIN(MyClassifier, "MyClassifier", "1.0.0")
+
+class MyPersonStructurePlugin {
+public:
+    zhulong_status_t init(const std::string& config_json);
+    zhulong::Session create_session(uint32_t worker_id);
+    std::vector<zhulong::PersonItem> detect_persons(zhulong::Session&, const zhulong::Image&,
+                                                   zhulong::TaskContext&);
+};
+ZHULONG_REGISTER_PERSON_STRUCTURE_PLUGIN(MyPersonStructurePlugin, "MyPersonStructure", "1.0.0")
+
+class MyVehicleStructurePlugin {
+public:
+    zhulong_status_t init(const std::string& config_json);
+    zhulong::Session create_session(uint32_t worker_id);
+    std::vector<zhulong::VehicleItem> detect_vehicles(zhulong::Session&, const zhulong::Image&,
+                                                     zhulong::TaskContext&);
+};
+ZHULONG_REGISTER_VEHICLE_STRUCTURE_PLUGIN(MyVehicleStructurePlugin, "MyVehicleStructure", "1.0.0")
+```
+
+Detector 宏调用 `detect()` 并序列化 bbox；Classifier 宏调用 `classify()` 并序列化 classification item；PersonStructure 宏调用 `detect_persons()` 并将多级嵌套树打包为单块连续 Arena 内存。三者共享 opaque handle lifecycle 和 exception boundary，但使用各自的 result type 与 payload。
+
+### 3.1 多模型级联与 Session 协同机制 (Multi-Model Session Pairing)
+
+当算法包需要组合多个模型（如「人脸检测 det_500m + 特征提取 facelivtv2-l」双模型流水线）时：
+
+- 插件内部持有多个 `zhulong::Model` 实例（如 `det_model_` 与 `rec_model_`）；
+- `zhulong::Session` 暴露 `uint32_t worker_id() const noexcept` 访问器；
+- 在 `create_session(worker_id)` 中为各模型分别创建对应 `worker_id` 的会话，由插件容器维护映射（如 `rec_sessions_[worker_id]`）；
+- 主入口返回检测会话作为主句柄；在 `detect_persons` 推理热路径中通过 `session.worker_id()` 索引对应的级联识别会话，保障多 Worker 并发安全；
+- 仿射对齐推荐采用单阶段直写模式（如 `Aligner::crop_and_align_direct` 基于 Umeyama 逆矩阵直接将原帧采样写入特征输入 Tensor），消除中间裁剪过渡堆内存分配。
+
+---
+
+## 4. CPU 图像预处理与固定尺寸 Tensor 合同
+
+`CpuVisionBackend` 仅支持 packed `RGB24` / `BGR24` 输入和目标格式，输出 Tensor 为 HWC、3 通道、`UINT8`。`resize` 的内部运行时签名为：
+
+```cpp
+zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride,
+                        zhulong_pixel_format_t src_format, uint8_t* dst, int dst_stride,
+                        int dst_w, int dst_h, zhulong_pixel_format_t dst_format);
+```
+
+- `zhulong_frame_view.strides[0] == 0` 表示 packed 紧密排列；正 stride 必须至少为 `width * 3`；负值或不足行宽返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
+- **多平面 stride 的紧凑默认值**：某平面 `strides[i] == 0` 时由该平面的自然行宽推导，**不是**一律取 `width`。`YUV420P` 的 U/V 平面取 `ceil(width / 2)`；`NV12` 的交错 UV 平面取 `2 * ceil(width / 2)` —— 奇数宽下后者比 `width` 大 1，按 `width` 回落会把合法的紧凑帧误判成 stride 不足。
+- **负 stride 一律拒绝**，不回落成紧凑布局：负 stride 的语义是底朝上的缓冲区，静默当 top-down 读会产出上下翻转的图像且无错误码，是「图能出来、精度莫名下降」的典型来源。CPU 与 RGA 后端必须给出一致的拒绝。
+- **`letterbox` 是 in-out + out 参数的混合体，失败路径不得改写任何出参**：所有入参校验（含 YUV 平面布局与 stride）必须在写 `dst`、回填 `scale`/`pad_left`/`pad_top` 之前完成；几何回填放在成功返回前的最后一步。否则调用方会拿到「新张量 + 已回填几何 + 错误码」的半成品状态。
+- `LetterboxParams::target_width` / `target_height` 必须由调用方显式给正数（结构体已自带 640 默认值）。后端**不得**再把 `<= 0` 兜成 640：那会让实际张量尺寸与调用方读到的 `target_*` 不一致。
+- **YUV 输入**：`letterbox` 接受 `YUV420P` 与 `NV12`，目标格式仍限 `RGB24`/`BGR24`。亮度与色度均按像素中心坐标双线性采样（越界 clamp 到边缘），再经 ITU-R BT.601 有限范围系数转 RGB。`RGBA32`、`UNKNOWN` 及其他未实现格式返回 `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED`，且不得读取源像素；`YUV420P`/`NV12` 缺少必需平面则返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
+- ⚠️ **YUV 采样数学只有一份实现**：`native/sdk/include/zhulong/runtime/yuv_sampling.hpp`（`sample_plane_bilinear` / `sample_nv12_uv_bilinear` / `yuv_to_rgb`；随 SDK 分发，因为车牌识别插件的裁剪采样在生产路径上就要用它）。CPU 视觉后端与车牌识别插件的裁剪采样都必须复用它，不得各自复制一份 —— 两份实现一旦在 UV 索引或 clamp 边界上漂移，同一码流在「喂模型」与「裁给识别器」两条路径上会出现颜色差异，真机只表现为「识别率莫名变低」。
+- RGB/BGR 目标顺序不一致时必须交换 R/B 通道。缩放采用像素中心坐标、双线性插值和边界 clamp；Letterbox 补边值为 114，缩放直接写到最终 Tensor ROI，不分配 `resized_temp`。
+- 空默认 Tensor 的 `element_count()` 为 0；非空 shape 中任一维度 `<= 0` 抛出 `std::invalid_argument`；元素数或字节数乘法溢出抛出 `std::length_error`。动态 shape 分配不在当前 API 支持范围内。
+
+### `TaskContext`：任务身份与参数的唯一入口
+
+推理方法（`detect` / `classify` / `detect_persons` / `detect_vehicles`）的第三个参数
+`zhulong::TaskContext&` 是任务身份与参数的**唯一**入口：
+
+| 字段 | 语义 | 当前状态 |
+| :--- | :--- | :--- |
+| `task_id` | 该路流的任务身份（骨架按「一路 broker 一个 Worker」创建，取 `stream_id`） | 已生效 |
+| `params.json`（`TaskConfig`） | 宿主下发的**配置原文**（`task_algorithms.config_json`） | 已生效，见 §「两层配置通道」 |
+| `regions.json` / `regions.revision` | 宿主统一区域原文及 worker 生命周期内修订号 | SDK 1.2.0；完整快照、只读借用 |
+| `input_view.rect` / `input_view.known` | 当前帧实际像素对齐裁剪窗口，全幅坐标 | SDK 1.2.0；旧宿主为 unknown |
+
+铁律：
+
+- 算法侧**只读**：不得修改、不得保存该引用（只在本次调用期间有效），需要跨帧保留的自己拷贝。
+- 不得把 `task_id` 当作跟踪 ID 或数据库主键——它标识的是「宿主给这路流开的任务」。
+- 骨架**不解析** `params.json`：字段语义属于各算法自己的 `config.schema.json`。加一个配置字段
+  只改算法与 schema，不改 SDK。
+- 新增字段必须先改 `TaskConfig` 再改骨架的 `drain_control_messages(TaskContext&, ...)`
+  （帧边界挂视图），不能在 `process` 里直接读 socket。
+
+### 两层配置通道（一包一份 vs 一路流一份）
+
+一个包进程 = 一个 `ModelGroup`（`init` 只调一次）+ N 个 worker/task（一路 `--broker` 一个）。
+配置按粒度分两条通道，**不可互换**：
+
+| 层 | 粒度 | 通道 | 载体 |
+| :--- | :--- | :--- | :--- |
+| 进程级（模型路径、检测分辨率、检测/NMS 阈值） | 一包一份 | argv `--config <inline json>` | `sdk::Options::config_json` → `Plugin::init(config_json)` |
+| 任务级（比对阈值、Top-K、区域掩码） | 一路流一份 | IPC `MSG_TASK_CONFIG`（14） | 骨架搬运进 `TaskContext::params.json` |
+
+- `--config` **只接受 inline JSON**，不接受文件路径：argv 是运维复原「这个进程跑的是哪套配置」的
+  唯一依据（见 `algo.hpp` 的 `Options` 注释）。凭据类内容不得进 argv（`/proc/<pid>/cmdline` 同机可读）。
+- `MSG_TASK_CONFIG` 的负载 = `TaskConfigMsg`（68 字节头：`config_json_len` + `algorithm_id[64]`）+
+  UTF-8 JSON 原文。**`algorithm_id` 过滤是硬要求**：`FrameBroker::broadcast_message` 会打到该流上
+  所有算法包，不比对就会让车牌包收到人脸的阈值。
+- **Broker 必须按消息类型与 algorithm_id 缓存该报文并在握手后重放**：宿主推送时包可能还没连上，或崩溃重启后重连。
+  漏掉重放的故障形态是「跑几天后突然回默认值」。
+- **重放缓存只覆盖任务级配置，不覆盖底库**：`FrameBroker::broadcast_message` 只缓存
+  `MSG_TASK_CONFIG` / `MSG_TASK_REGIONS`；底库分片是纯 JSON、Broker 不解载荷，所以晚连上的 runner
+  永远收不到快照。底库的可靠性靠**投递回执 + 有界重试**（见 §7.3），不是靠 Broker 缓存。
+  反例（2026-11 现场事故）：冷启动 sync 用 100ms 固定延迟猜连接时刻，广播落在「runner 还在加载
+  RKNN 模型、0 个订阅者」的窗口里，`broadcast_ai_message` 仍返回 `Zhulong_OK`，宿主照打
+  `cold-start gallery sync broadcast completed`，底库永久为空 —— 表现是「某天起所有人 similarity=0」。
+- 缺省语义：未下发 = 空视图 = 算法用自己的默认值；越界值回落默认而不是报错（宿主与包分开交付，
+  版本偏斜真实存在）。
+
+### 检测输入分辨率：静态形状钉死 + fail fast
+
+`set_input_size` 带校验并返回 `bool`（人脸粒度 32、人体粒度 128）：
+
+- **不整除即拒绝**：布局不符时解码只会返回空结果、没有错误码，这就是一次静默零检出。
+- **静态形状档位（rk3568）只接受该档位权重的自带尺寸**：`.rknn` 是静态图，RKNN 后端按
+  `element_count` 校验，尺寸不符时 `forward` 直接失败。这个尺寸**由各包的权重定义，不是档位常量**：
+  - `face_recognition/rk3568`：人脸权重支持 640×640 与 640×384，人体权重是 `static_shape [1,3,640,640]`
+    → `PersonDetector` 只接受 640×640；
+  - `crowd_gathering/rk3568`：权重在转换时钉成 `[1,3,384,640]`（16:9 CCTV 档位，见该包
+    `rk3568/CONVERSION.md`）→ `PersonDetector` 只接受 640×384，`config.schema.json` 里不暴露
+    `detect_input_*`，改分辨率 = 重新转换权重。
+- 因此同一包的两档位**默认流分辨率可能不同**（face：onnx 640×384 / rk3568 640×640；crowd：两边
+  都是 640×384）。`src/pipeline/*.cpp` 在 drift 白名单里（按 target 允许不同），**漂移检查看不到
+  这处语义差异** —— 改默认值时必须两边一起看。
+  共享头文件里的分叉由 SDK 的 `INTERFACE_COMPILE_DEFINITIONS`（`ZHULONG_INFERENCE_RKNN` /
+  `_ONNX`）表达，与 `TARGET_MODEL_EXT` 用同一组定义，不按架构宏猜。
+
+### 校验矩阵与错误码
+
+| 条件 | 结果 |
+| --- | --- |
+| 输入为 RGB24/BGR24 且 stride 为 0 或至少 `width * 3`，目标为 RGB24/BGR24 | 成功 |
+| 输入为 YUV420P / NV12，所需平面齐全、stride 合法，目标为 RGB24/BGR24 | 成功 |
+| 输入/目标格式包含尚未实现的格式（RGBA32 / UNKNOWN 等） | `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED` |
+| 空像素指针、非正图像尺寸、负 stride、stride 小于行字节数 | `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT` |
+| `target_width` / `target_height` 非正，或尺寸导致行偏移/字节数溢出 | `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT` |
+| `Tensor` 分配失败（构造抛出 `bad_alloc` / `length_error`） | `ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY`（就地转换，不得冒泡到 C ABI 的 `catch (...)`） |
+| 非空 Tensor shape 含零/负维度 | 抛出 `std::invalid_argument` |
+| Tensor 元素数/字节数无法由 `size_t` 表示 | 抛出 `std::length_error` |
+
+---
+
+## 4. 算法包工程架构：Stage 垂直切片规范 (Stage-based Architecture Guidelines)
+
+多模型级联（如车牌检测+字符识别、人脸检测+特征提取）或包含复杂领域后处理的算法包，必须遵循 Stage 垂直切片架构，**严禁按水平技术层（`preprocess/`、`infer/`、`postprocess/`）组织源码**。
+
+### 4.1 目录分层与职责契约
+
+| 目录 | 职责范围 | 依赖与可见性边界 | 典型文件 |
+| :--- | :--- | :--- | :--- |
+| `src/common/` | 跨 Stage 共享基础类型、常量映射表、字典、色彩枚举 | 仅允许依赖标准库与 SDK 公开头，严禁依赖任何具体 Stage | `plate_charset.hpp` |
+| `src/<stage>/` (如 `detection/`, `recognition/`) | 独立模型/算法阶段：封装该 Stage 的专用前处理、模型推理与结果解码/后处理 | 仅暴露清晰的入参/出参函数或类；内聚管理专有会话与前处理缓冲 | `plate_detector.{hpp,cpp}`, `plate_recognizer.{hpp,cpp}` |
+| `src/format/` (或规则层) | 纯领域规则与结构合法性校验（CPU 轻量逻辑，无模型依赖） | 无硬件与模型推理依赖，接受 Stage 输出并返回校验断言/修正值 | `plate_format.{hpp,cpp}` |
+| `src/pipeline/` | 算法插件主类（实现 SDK 契约接口）：负责资源生命周期、多阶段时序编排与结果聚合 | 聚合所有 Stage；负责向 Worker 分配 Session，将 Stage 结果转换为 SDK 结构化类型 | `plate_recognition.{hpp,cpp}` |
+| `src/main.cpp` | 二进制交付入口：使用 `ZHULONG_ALGO_MAIN` 绑定插件类与 SDK 适配器 | 不包含任何算法业务逻辑，仅做类型装配 | `main.cpp` |
+
+### 4.2 级联模型生命周期与 Session 资源模型
+
+多模型流水线必须严格遵守 SDK 的两层生命周期：
+1. **全局 Model 资源（只读，多线程共享）**：
+   - 模型在 `Plugin::init(config_json)` 阶段通过 `zhulong::Model::load(...)` 一次性完成装载；
+   - 包含主检测模型与次级识别模型，其句柄由 Pipeline 插件类或各 Stage 统一持有；
+2. **线程绑定 Session 资源（并发隔离）**：
+   - `Plugin::create_session(worker_id)` 时，必须为每个阶段创建对应的推理会话；
+   - 返回给宿主 SDK 的 `zhulong::Session` 通常代表主检测器会话；
+   - **级联会话防降级保护**：若流水线中任一子阶段（如识别会话）创建失败，`create_session` **必须立即中止并返回非法 session**，严禁静默容错导致 Worker 运行在“半死状态”；
+   - 识别或二次推理会话按 `worker_id` 存储在 Pipeline 内部的互斥安全容器中，在 `detect_vehicles` 期间按当前 Worker 身份提取使用。
+
+### 4.3 跨 Stage 数据流契约与零拷贝原则
+
+1. **强类型 Stage 出入参**：
+   - 阶段之间避免传递裸指针或弱语义 `void*`；
+   - 检测 Stage 输出结构化 `std::vector<DetectionBox>`（包含归一化 `box[4]`、`score` 与关键点）；
+   - 识别 Stage 接收原始图像 `zhulong::Image` 与检测到的目标区域（或由硬件前处理生成的 ROI Tensor），输出具体识别文本及置信度；
+2. **前处理与采样一致性**：
+   - 裁剪与透视变换采样必须统一复用 SDK 权威工具（如 `yuv_sampling.hpp`），禁止在不同 Stage 中自行发明私有插值算法；
+   - 必须防范负 stride、零尺寸越界与 NaN 浮点计算。
+
+---
+
+## 5. 包根可执行文件的 CLI 与退出码
+
+包**就是**它自己的可执行文件（`<manifest.id>`，静态链接运行时）。宿主不再提供通用 runner，也不再 `dlopen` 任何东西；下面两种调用形态都由 `native/sdk/src/algo_main.cpp` 的骨架实现：
+
+```bash
+# 安装期黑盒验包（宿主 verifier 调用，cwd = 包目录）
+./<manifest.id> --verify --sample <test_image.ppm>
+
+# 运行期：连 broker 长驻消费（宿主 supervisor 调用）
+./<manifest.id> --broker <socket_path> [--broker <socket_path_2> ...] [--name <client_name>] [--algorithm-id <id>] [--max-frames <N>]
+```
+
+输出严格 JSON 行。所有字符串字段均转义；退出码 `0` 表示模型加载、Worker 创建、Task 打开、单次推理与内存释放全部符合规范。
+
+#### 5.0.1 资源路径的锚点是**可执行文件目录**，不是 CWD
+
+包内的模型/权重路径解析必须以 `/proc/self/exe`（无 procfs 平台退回 `dladdr`）所在目录为第一顺位，
+env 覆盖与「开发期源码树候选」只能排在后面。原因不是洁癖：
+
+- `--verify` 由 `internal/algorithm` 以**包目录**为 CWD 启动（`cmd.Dir = filepath.Dir(entryPath)`），
+  而运行期 `--broker` 由 `internal/algorunner` 启动，**从不设置 `cmd.Dir`** —— 子进程继承宿主的 CWD；
+- 于是「只按 CWD 找 `models/`」的包会得到最难查的故障形态：验包绿、装机后 `Model::load` 失败、
+  退出码 `2`、宿主把它当启动失败进 CRASH_LOOP，而包里明明有模型。
+
+同一条边界上还有两处只按 CWD 会静默失败的地方：包的 `.env` 路径与 `sample.jpg`。参照实现见
+`packages/face_recognition/onnx/src/pipeline/face_recognition.cpp` 的 `executable_directory()`。
+
+#### 5.0.2 包内诊断必须走 `zhulongLog` 记录，裸 stderr 文本会被丢弃
+
+宿主 `internal/algorunner/runner_log.go` 只认三类行：骨架协议事件（`status`/`stage`/`step`）、
+`{"zhulongLog":true,"level":...,"module":...,"message":...}` 原生日志、以及**被丢弃**的其它文本（只留
+`line_bytes`）。因此 `fprintf(stderr, "...")` 在运维看到的宿主日志里等于没写。包侧需要留痕时按
+`packages/crowd_gathering/onnx/src/common/runner_log.hpp` 的形状输出单行 JSON：`module` 只允许
+`[A-Za-z0-9_.-]`，`level` 必须是 debug/info/warn/error，否则会被判 `runner native log rejected`。
+
+### 5.1 运行期命令契约：`--broker` 参数语义
+
+- **`--broker` 的语义为字面 socket 路径**：客户端直接执行 `connect(path)`，不做目录派生。支持重复传入多个 `--broker` 参数以订阅多路相机流。
+- **Native Engine 作为 Broker 宿主**：当流具有 `ConsumerAI` 消费者时，Native `Engine` 自动实例化并启动 `ipc::FrameBroker`，生成的 socket 路径为 `<base_dir>/zhulong_broker_<stream_id>.sock`。
+- **`ZHULONG_FRAME_BROKER_SOCK` 环境变量**：仅在 Native 端作为 `base_dir` 读取（默认 `/tmp`），Go 侧不再读取该变量。
+- **路径解析与传递**：Go 侧通过 C ABI `Zhulong_stream_get_broker_path`（Go 封装为 `Stream.BrokerPath(ctx)`）获取各相机流的实际 socket 路径，并经 `BrokerSubscriptionResolver` 组装为 `--broker <socket_path>` 列表传给包进程。
+- **包进程从 socket 路径反解 stream_id**：按 `<base_dir>/zhulong_broker_<stream_id>.sock` 从**字面 `--broker` 路径**反解 stream_id 并用作 `task_id`（`parse_stream_id_from_socket`）。因此 `--broker` 传入的路径必须遵循宿主的派生规则。
+- **`--algorithm-id <id>`**：声明本包实例所属的算法 ID；该值随每次推理结果写入载荷的 `algorithm_id` 字段（见 §9.2）。未传入时为空字符串。
+- **`--max-frames <N>`**：联调/自测用，消费 N 帧后正常退出（`<0` 不限）。宿主生产路径不传。
+
+### 5.2 退出码表
+
+| 退出码 | 含义 | 出处 |
+| :---: | :--- | :--- |
+| `0` | 正常退出 | `algo_main.cpp` |
+| `1` | 客户端名称超长（超过 32 字节）/ 骨架内部错误 | `algo_main.cpp` |
+| `2` | `model_create` 失败 | `algo_main.cpp` |
+| `3` | `worker_create` 失败 | `algo_main.cpp` |
+| `4` | `task_open` 失败 | `algo_main.cpp` |
+| `5` | **broker 连接失败 / 无法从 `--broker` 路径反解 stream_id / 未提供 `--broker`**；`--extract-feature` 下表示能力缺失（`UNSUPPORTED`）或模型不可用（`MODEL_UNAVAILABLE`）或帧头截断 | `algo_main.cpp` |
+| `6` | 握手请求发送失败 | `algo_main.cpp` |
+| `7` | 握手应答接收失败或类型不符 | `algo_main.cpp` |
+| `8` | 共享内存只读映射失败 | `algo_main.cpp` |
+| `9` | **单路 Worker 未捕获异常**（见 §5.2.1） | `worker_guard.hpp` |
+| `10` | **单路 Worker 无进展，被包内看门狗终止**（见 §5.2.2） | `stall_watch.hpp` |
+
+⚠️ 多路 `--broker` 下，任一路连接失败即整体失败，退出码严格保持为 `5`；任一路失败会置位 `stop_all` 终止已连接各路，不存在部分成功中间态。
+
+### 5.2.1 单路 Worker 异常边界（退出码 `9`）
+
+线程体内的未捕获异常由 `run_worker_guarded`（`sdk/src/internal/worker_guard.hpp`）在**线程边界**转换为受控失败：输出 `stage=worker_exception` 记录（含 `index`）、置 `stop_all`、退出码 `9`。
+
+- **为什么需要**：`PluginApi::process` 的 try-catch 只覆盖**算法类**。骨架自己的代码同样会抛——`serialize_inference_result` 每帧构造 `ostringstream`、结果数组增长、socket 路径拼接，在 OOM 上都有真实失败路径。异常一旦逃出线程函数就是 `std::terminate` → SIGABRT(134)：没有 stage 记录、退出码没有语义，宿主只能记一句 "runner exited unexpectedly"。
+- **`std::set_terminate` 兜底**（`install_terminate_guard`）覆盖边界之外的剩余路径（`std::thread` 构造抛 `system_error`、`noexcept` 边界、未来疏漏），复用同一个退出码与同一条 stage 记录。⚠️ handler 里只允许一次不分配的 `::write`：调 `write_runner_error_line` 会在 OOM 上二次抛（嵌套 terminate → abort），且要拿 `g_stderr_write_mutex`（terminate 时该锁可能正被本线程持有 → 死锁）。
+- **状态位先于日志**：`on_error` 里先 `compare_exchange` 退出码、再 `stop_all.store`、最后才构造诊断字符串——日志构造本身可能再抛，而状态位必须准确。
+- **故障域语义不变**：仍是「一路失败整包退出」（D6）。区别只在**可诊断、可退避、可熔断**。不要把它改成「该路静默退出、其它路继续」：那会让宿主以为全路都在跑，比一次受控重启更糟。
+- **诊断**：每个 Worker 线程在入口设内核线程名 `algo-w<idx>`（`set_worker_thread_name`），`ps -L` / gdb / perf 可直接区分是哪一路。
+- **跨语言约束**：`kExitWorkerCrashed` 必须等于 Go 侧 `algoipc.RunnerExitWorkerCrashed`（`internal/algorithm/ipc_contract_test.go` 的 `TestRunnerExitCodeMatchesNativeSkeleton` 钉住）；`worker_exception` 必须留在 `internal/algorunner/runner_log.go` 的 `validRunnerStage` allowlist 里，否则该记录会被判为 "runner protocol record rejected"，真实事件被吞掉。
+
+### 5.2.2 单路 Worker 无进展看门狗（退出码 `10`）
+
+卡在 `process()` 里的 Worker 既**不读任何标志位**，也**不会发 `MSG_FRAME_ACK`**。因此没有任何协作式手段能回收它 —— 「停 ACK 让 broker 驱逐租约」这种事做不到，ACK 正是那个卡住的线程发的。C++ 也没有线程抢占（`pthread_cancel` 在持锁 / 未展开栈的 native 代码上是灾难）。
+
+所以看门狗只做两件事：让卡死**可见**，并让整包**受控退出**、由宿主按既有退避 / CRASH_LOOP / 回滚链路重启。
+
+- **判据只有一条**：「已收到帧、尚未 ACK」的这段时间（`StallTracker::ProcessingScope`）。⚠️ 不要用「距上次 ACK 多久」——相机断流时 Worker 会长期空转在 500ms `recv` 超时循环里，那不是卡死，用错判据会把断流相机全部误杀。
+- **阈值**：默认 60000ms，经 `ZHULONG_WORKER_STALL_TIMEOUT_MS` 覆盖（宿主 `.env` / `ExtraEnv` 是既有通道，argv 契约不变）；显式 `0` 或负数关闭，**非法值回退默认值而不是关闭**（拼错不该静默丢掉保护）。
+- **退出路径**：栈上 `snprintf` + 一次不分配的 `::write` + `std::_Exit(10)`。⚠️ 不能用日志通道：`_Exit` 会丢掉异步 writer 队列，而卡死时 `g_stderr_write_mutex` 很可能正被卡住那个线程持有。
+- **采样间隔**：`max(50, min(timeout/4, 1000))` ms，判定误差 ≤1s。
+- **停机延迟**：正常停包时 watchdog 最多再睡一个采样间隔（≤1s）才被 join；宿主 `StopAlgorithm` 的超时是 3s，有余量。
+- **`std::thread` 构造失败**（线程资源耗尽）：只打 `stall_watchdog_unavailable` 告警降级，**不**把整个包打死。
+- **跨语言约束**：同 §5.2.1；`kExitWorkerStalled` ↔ `algoipc.RunnerExitWorkerStalled` 由同一个契约测试钉住，`worker_stalled` 同样必须在 `validRunnerStage` 里。
+- **回归门禁**：`ZhulongStallWatchTests`（判据与阈值解析）+ `ZhulongFrameBrokerTests::test_stall_watchdog_terminates_stuck_worker`（真进程：断言退出码 10、stderr 含 `worker_stalled`、且不被 5s 假推理拖成 0）。
+
+### 5.3 FrameBroker 宿主与帧发布通路
+
+- 原生 `Engine` 托管 `FrameBroker` 与 `FramePublisher` 线程，当 `ConsumerAI` 挂载时拉起、卸载时销毁；
+- 解码后的帧在 Native 侧由 `FramePublisher` 线程基于 `max(sample_fps)` 进行发布侧节流并推入共享内存；
+- 零像素数据进入 Go GC 内存，Go 仅负责控制流与 socket 路径装配。
+- ⚠️ **创建必须持有与宿主清扫共享的目录锁**：`FrameBroker::start` 一开始就 `BrokerResourceLock::acquire({base_dir, "/dev/shm"})`（`src/algorithm/ipc/broker_resource_lock.{hpp,cpp}`），并**阻塞持有到 shm 初始化与 socket `bind`/`listen` 全部完成**后才能释放。原因：`shm_open` 在 `mmap` 之前、`bind` 在 `listen` 之前都会把资源发布到文件系统中，而宿主启动清扫（Go `internal/algorunner`）只能依据 `/proc` 判断“无人使用”，这两个窗口里的新资源会被当成废弃文件删掉。
+  - 锁集合必须按 `(device, inode)` **去重 + 升序排序**，与 Go 侧 `resource_lock_linux.go` 完全一致；别名路径（symlink / bind mount / `base_dir == /dev/shm`）不得变成两把锁或交叉加锁死锁。
+  - 创建侧阻塞（不可跳过同步），清扫侧非阻塞（锁忙即整体跳过）。取锁失败必须通过既有 `error_msg` 返回失败，**不得**在无锁状态下继续创建。
+  - 回归门禁：`ZhulongFrameBrokerTests::test_frame_broker_start_waits_for_resource_lock`（持有 `/dev/shm` 锁时断言 200ms 内既无 socket 也无 `start` 返回，释放后才成功）。
+
+### 5.4 `--extract-feature`：可选能力，走弱符号而不是重新导出 C ABI
+
+底库登记需要「一张照片 → 一个 512 维特征」，宿主不装载包，所以这部分也用**子命令 + 标准输入输出**：
+
+```bash
+./<manifest.id> --extract-feature            # stdin: 帧流；stdout: 每帧一行 JSON
+```
+
+- 帧 = 28 字节头（`"ZLFE"` magic、`request_id`、`w`/`h`/`stride`/`format`/`payload_len`，全部小端）+ 裸像元；
+- 能力用**弱符号**接入：骨架 `extern "C" __attribute__((weak)) zhulong_face_extract_feature(...)`，
+  包内定义即解析，未定义则如实返回 `UNSUPPORTED`（exit 5）。它**不是**构建错误，`abi.json`
+  的 `capabilities.extract_feature` 标为 `optional`；
+- ⚠️ 定义必须来自包内**直接编译**的源文件：ld 不会为满足弱未定义引用去抽取静态归档成员，
+  搬进 `.a` 会让能力静默消失；
+- 帧级错误（`NO_FACE_DETECTED` / `INVALID_INPUT` / `MULTIPLE_FACES`）**不退出进程**——一张坏图
+  不该毁掉热进程；只有「能力缺失」（`UNSUPPORTED` / `MODEL_UNAVAILABLE`）与流截断才退 5；
+- ⚠️ **`MULTIPLE_FACES`（帧级裁决）与 `MODEL_UNAVAILABLE`（进程级能力）不可混用**：包把
+  「不支持的像素格式」当作能力缺失回 `NOT_SUPPORTED`，骨架就会退 5 杀掉热进程，一张坏图
+  毁掉整条登记链路。输入的格式/stride/尺寸问题一律是 `INVALID_ARGUMENT`。
+- 单张登记照里检出**多于一张**可用人脸时必须回 `MULTIPLE_FACES`（状态码
+  `ZHULONG_PLUGIN_ERR_AMBIGUOUS`），**禁止**盲选最高分脸：写进底库的错人从特征向量上
+  看不出来，只能靠人工复核输入图；
+- `request_id` 必须回显，宿主侧会校验：错配等于把别人的特征写进底库。
+
+宿主侧实现与进程生命周期（并发 1、崩溃单帧重试 1 次、超时杀进程组、空闲回收、入口指纹失效）
+见 [CGO 契约 §6](./cgo-contract.md)。
+
+### 5.5 测试归属：包内独立测试（与 `native/tests/` 彻底解耦）
+
+算法包是**独立交付物**：第三方只拿到「SDK 前缀 + 包目录」。因此 `native/CMakeLists.txt` 与
+`native/tests/` **不得**直编任何算法包源码、不得 `#include` 包内私有头文件、也不得存放具体算法包的模型回归测试；原生侧只测引擎、SDK、Runtime、IPC、硬件后端与 C ABI。
+
+算法包自身的测试全部留在 `packages/<id>/<target>/tests/`，通过 `ZhulongAlgoSDK` 前缀独立构建与运行：
+
+| 类型 | 放哪 | 驱动方式 | 判据 |
+| :--- | :--- | :--- | :--- |
+| **包内纯逻辑自测** | `packages/<id>/<target>/tests/` | 包内 `make unit-test`（并入 `make test`） | 不加载模型、不需要会话与外部依赖；纯几何/后处理/比对/协议数学 |
+| **包内模型回归自测** | `packages/<id>/<target>/tests/dev_infer.cpp --check` | 包内 `make test`；根 `make pkg-test`（经 `make sdk-install` 触发，已纳入 `make check`）；`make sdk-clean-check` 干净容器覆盖 | 加载包内 `models/` 与 `sample.jpg`，输出结构化校验、特征/质量分基线与结果图 |
+
+- 包内测试不得依赖 `stb` 之外的额外第三方库，也不得 `#include` 仓库内路径（只有 `sdk/include`
+  与包自身目录可 include）。
+- ⚠️ 包内测试不要用 `assert()` 作为唯一判据：宿主与 CI 的 `RelWithDebInfo` 会定义 `NDEBUG` 把断言
+  整段编译掉。包内的做法是显式检查 + 非零退出码，失败时打印具体用例名。
+- **多 target 包必须过漂移检查**：`packages/<id>/<a>/` 与 `<id>/<b>/` 是两份自包含副本，同一处逻辑修复
+  容易只落到一侧。`make pkg-drift-check`（`native/scripts/check_package_drift.py`）比较各档位的
+  `src/**`、`tests/**`，只允许脚本里显式登记的差异；未登记的差异即门禁失败。已进 `make check`。
+
+---
+
+## 6. 跨进程 FrameBroker 与共享内存租赁契约 (FrameBroker & SHM Leasing)
+
+### 6.1 内存拓扑与安全隔离
+
+- 主进程作为生产者独占创建 POSIX 共享内存（`/zhulong_shm_<stream_id>`，带固定 8~16 个 4MB 槽位），并将解码帧写入空闲槽位；
+- 各算法包进程以只读权限（`PROT_READ`）映射共享内存，物理防止算法进程篡改原始画面；
+- 主进程与各包进程之间通过点对点 Unix Domain Socket 交换定长二进制 IPC 控制包（`MSG_HANDSHAKE`, `MSG_FRAME_DISPATCH`, `MSG_FRAME_ACK`）。
+
+### 6.2 租约生命周期与代次保护 (Generation)
+
+- 每个槽位（Slot）维护单调递增的 64 位代次（`generation`）与活跃租赁集合（`active_leases`）；
+- 槽位状态机严格遵循：`FREE` ➔ `WRITING` ➔ `LEASED` ➔ `FREE`；
+- **防 ABA 悬挂确认**：客户端归还租约时必须回传对应帧的 `generation`；若代次不匹配（如槽位已超时被驱逐复用），Broker 静默丢弃旧 ACK，绝不影响当前正在进行的租约。
+
+### 6.3 慢算法丢帧背压与崩溃自愈
+
+- **慢消费者隔离 (Drop Latest)**：Broker 跟踪各客户端在途处理帧数（`in_flight_count`，上限默认为 2）。当达到上限时，Broker 直接对该客户端丢弃最新帧，绝不阻塞主视频流或其他高速算法包；
+- **槽位容量不足必须显式失败（严禁静默发旧帧）**：`publish_frame` 在写入前必须完成**统一的容量前置门禁**（`frame_payload_bytes(frame) <= slot_size`）。容量不足时走 `fail_publish()` 统一回滚：归还全部目标客户端的 `in_flight_count` / `delivered_frames`、递增其 `dropped_frames`、槽位置回 `FREE` 并清空 `active_leases`、`total_dropped_` 递增、返回 `false`。
+  ⚠️ **严禁**在容量不足时仍下发 `MSG_FRAME_DISPATCH` —— 那会让客户端收到「新 `frame_id` / 新 `pts` + **上一帧画面**」，且无任何错误信号（录像数据污染、前端幽灵框）。
+  ⚠️ 门禁必须在**任何 `memcpy` 之前**完成，杜绝部分写入。零拷贝帧（`frame.dma_fd >= 0`）不占槽位、不拷贝，不受此门禁约束。
+- **子进程崩溃自愈**：当检测到客户端 Socket 断开或收到 `POLLHUP` 时，Broker 立即扫描并回收该客户端在所有槽位上的未归还租约，槽位引用清零后自动恢复为 `FREE`，彻底杜绝槽位死锁与泄漏。
+- **丢帧必须可观测（否则「背压隔离」等于「静默失效」）**：每客户端的 `in_flight` / `delivered_frames` / `dropped_frames` 经
+  `Zhulong_stream_get_broker_clients`（`engine.h`）导出，宿主对外经
+  `GET /api/v1/cameras/{id}/ai-stats` 暴露。
+  - 契约刻意**不**复用 `Zhulong_stream_get_broker_path` 的「容量不足报 `BUFFER_TOO_SMALL`」模式：客户端集合是动态的，
+    两次查询之间会变。改为「写入不超过 `capacity` 条 + `out_count` 回填**真实总数**」，调用方一次调用即可判断是否截断。
+  - `capacity == 0` 时允许 `out_clients == NULL`（只查数量）；其余 `capacity > 0 && NULL` 组合一律 `ERR_INVALID_ARGUMENT`，不做静默空操作。
+  - 流不存在／该流没有 AI 消费者时返回 `ERR_NOT_FOUND`，**不**返回「0 个客户端」——那会让「流没起来」和「没有算法订阅」无法区分。
+  - `clients_snapshot()` 按 `client_id` 升序输出：`clients_` 是 `unordered_map`，不排序会让同一份状态两次查询顺序不同，
+    做差分或按索引对比的调用方会得到假的变化。
+  - 两层锁顺序为 `control` → broker `mutex_`，与 `broadcast_ai_message` 一致；Go 侧在锁外调用原生接口（见 `StreamHub.AIStreamBrokerStats`），
+    避免一次统计查询阻塞所有相机的流操作。
+- **畸形 ACK 不得蚕食配额**：`handle_ack` 必须**先校验 `slot_index` 越界再修改任何状态**。若先扣 `in_flight_count` 再校验，畸形 ACK 会「只扣不还」，使该客户端配额被永久蚕食并静默停止收帧。
+
+### 6.4 IPC 协议自然对齐与 Socket 鲁棒性规约
+
+- **严格 8 字节自然对齐**：IPC 二进制包中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`、`capture_time_ms`）必须排布在 8 字节自然对齐偏移上；`FrameDispatchMsg` 包含 `int64_t capture_time_ms`（帧物理采样绝对 UTC 毫秒时间戳），当前总尺寸 **184 字节**（168 字节运动字段前缀 + 16 字节实际输入窗口），编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，杜绝嵌入式体系下非对齐访问与时钟时序漂移。
+- **追加字段只能落在尾部（前缀兼容铁律）**：`has_motion` / `motion_box_count` / `motion_boxes[4]` 追加在原 96 字节布局**之后**，前 96 字节一个字节都不许动，由 `static_assert(LEGACY_FRAME_DISPATCH_SIZE == offsetof(FrameDispatchMsg, has_motion))` 钉死。原因是宿主与算法包**分开交付**（`make sdk-dist`），版本偏斜两个方向都会真实发生：
+  - 旧宿主（96 字节报文）+ 新 Runner：Runner 必须按遗留前缀解析，运动字段取默认值（`has_motion = 1`）退化为**全帧推理**。⚠️ 绝不可改回 `payload.size() >= sizeof(FrameDispatchMsg)` 的长度门禁 —— 那会让新 Runner 一条报文都不认，既不推理也不发 `MSG_FRAME_ACK`，静默退化成「每 `lease_timeout` 只收 2 帧」。解码统一走 `sdk/src/internal/motion_gate.hpp` 的 `gate::decode_frame_dispatch`。
+  - 新宿主 + 旧 Runner：旧 Runner 忽略多出的 72 字节，照常推理，只是不享受运动门禁。
+- **四态 Socket 状态机与半包熔断**：流读取使用四态机制（`SUCCESS`、`IDLE_TIMEOUT`、`CLOSED`、`DESYNC_ERROR`）。半包超时或错位直接置为 `DESYNC_ERROR` 并主动断开连接。
+- **发送超时隔离与最大 Payload 门禁**：服务端套接字配置 50ms `SO_SNDTIMEO` 发送超时；IPC 消息在**发送侧与接收侧双向**强制执行 `MAX_IPC_PAYLOAD_SIZE = 64KB` 尺寸检查（`UnixSocketServer::send_msg_with_fd` / `UnixSocketClient::send_msg_with_fd` 超限直接返回 `false`，杜绝 `static_cast<uint32_t>` 对超范围 `size_t` 的静默截断），并有线程级 `try ... catch` 异常防爆门。两侧常量与 Go 侧 `MaxIpcPayloadSize` 保持一致。
+- ⚠️ **`write_all` 的 EAGAIN 必须有界等待（防控制面挂死）**：在阻塞 socket + `SO_SNDTIMEO(50ms)` 下，`EAGAIN` 语义是「**本次发送超时**」而非「稍后重试」。`write_all` 必须走 `poll(POLLOUT, timeout)` 有界等待，**绝不可 `continue` 自旋**。
+  调用链：`write_all` ← `write_msg_with_fd` ← `UnixSocketServer::send_msg_with_fd` ← `FrameBroker::publish_frame`（FramePublisher 线程）与 `FrameBroker::broadcast_message` ← `Engine::broadcast_ai_message`（**持 `Engine::control` 锁**）。无界自旋会把「对端不读」升级为「整个引擎控制面挂死，`stop()` 也拿不到锁」。有界化后最坏降级为 50ms 后返回 `false` 并走既有租约清算路径。
+- **在途配额原子回滚**：槽位写入异常、容量不足或 Socket 发送失败时，原子回退预分配的 `in_flight_count`、`delivered_frames`，并记入 `dropped_frames`。
+### 6.5 DMA-BUF 硬件零拷贝与 SCM_RIGHTS 传输契约
+
+- **跨进程句柄透传**：在支持 DMA-BUF 的边缘平台（如 RK3568），宿主 `FrameBroker` 在槽位分配时通过 `DmaBufAllocator` 预分配物理连续内存（CMA/System Heap）。通过 Unix Domain Socket 发送 `MSG_FRAME_DISPATCH` 时，利用 `SCM_RIGHTS` 辅助数据（`sendmsg`/`recvmsg`）将底层 DMA-BUF 引用文件描述符安全复制到 Runner 进程。
+- ⚠️ **`FrameDispatchMsg.reserved_fd` 恒为 `-1`**：fd 号是**进程本地句柄**，跨进程传值无意义且危险 —— 宿主的 fd 号在 Runner 进程中可能指向任意无关资源，一旦被当作 DMA-BUF 执行 `mmap` + `DMA_BUF_IOCTL_SYNC`，轻则静默退化，重则**把无关内存当图像喂给插件**。该字段仅作 8 字节对齐占位，其偏移必须保持不变（它是前缀兼容 96 字节的一部分）。
+  真实 DMA-BUF 句柄**只经 `SCM_RIGHTS` 传递**；接收端**只认本地副本 fd**（`const int active_dma_fd = received_fd;`），**严禁**回退读取 `reserved_fd`。
+- **FD 接收与安全闭环**：
+  - Runner 进程利用 `recvmsg` 提取 `SCM_RIGHTS` fd，并自动标记 `FD_CLOEXEC`（`recv_msg_with_fd`）；
+  - 提取的 fd 赋值入 `zhulong_frame_view.dma_buf_fd` 暴露给插件；
+  - ⚠️ **严禁句柄泄漏**：Runner 进程在完成单帧推理并发出 `MSG_FRAME_ACK` 后，**必须立刻 close 接收到的局部复制 fd**。FrameBroker 端负责物理 slot 的持有与释放，两侧生命周期解耦。
+- **CPU Cache 同步守则**：DMA-BUF 在 CPU 软件访问前必须执行 `DMA_BUF_IOCTL_SYNC` 带 `DMA_BUF_SYNC_START`；硬件外设（RGA/NPU）读取前执行 `DMA_BUF_SYNC_END` 刷写脏缓存行，确保外设读取到最新像素。
+- **透明优雅降级**：非 Linux 环境或无 `/dev/dma_heap` 支持时，`dma_buf_fd` 恒为 `-1`，系统透明降级至纯 POSIX 共享内存与 CPU 软处理，上层无感。
+
+---
+
+### 6.6 帧运动门禁契约 (Motion Gate)
+
+- **事实提供者唯一**：运动检测只在宿主的 `FramePublisher` 内做，每流每帧一次（`src/pipeline/motion_detector.cpp`），结果随同一帧的 `MSG_FRAME_DISPATCH` 广播。算法包不重复计算，也不得自行拿原帧做门禁。
+- **短路判据只有一条**：`has_motion == 0` 才允许跳过 `api.process()`；其他任何取值（含未来新增值、遗留报文默认值）一律放行。实现固定在 `sdk/src/internal/motion_gate.hpp` 的 `gate::should_skip_inference`，并由 `native/tests/motion_gate_test.cpp` 钉住 — 漏检代价远高于一次多余推理。
+- **短路必须归还租约**：跳过推理仍要释放 DMA 映射、`close` SCM_RIGHTS 副本并发 `MSG_FRAME_ACK`，`in_flight_count` 必须正常回落。⚠️ 跳过路径**不得**先做 `mmap` / `DMA_BUF_IOCTL_SYNC`：静止帧连系统调用都不该发生（省算力不能只省 NPU）。
+- **消失信标**：跳过的帧若上一帧有目标，必须补发一次空结果并把 `last_had_targets` 归零，否则上游永远看不到目标消失。
+- **hold-off 属于检测器，不属于门禁**：运动停止后检测器继续放行 `MOTION_HOLD_FRAMES` 帧（`box_count = 0`，调用方按全帧处理），覆盖「人/车站住不动 ≠ 目标消失」。⚠️ 不要在门禁里加时间去抖，那会让判据依赖 Runner 本地时钟。
+- **ROI 预门禁尚未实现（已知缺口，不得在文档里声称已实现）**：广播报文里的 `motion_boxes` 目前**没有消费者**；ROI/MASK 仍由宿主侧 `internal/region.Filter` 在结果回来之后生效。Runner 侧「运动框与 ROI 无交集则短路」需要一条区域配置下发通道（`task_open` 只传 `task_id`，不带区域配置），属于独立特性。
+
+### 6.7 AI 分析视图（任务级裁剪）对算法包的可见语义
+
+宿主可以在发布前把整帧裁剪成**任务级分析视图**再投递。对算法包而言，这**不是**新协议，也**不需要**任何改动：
+
+- **帧视图就是分析视图**：`zhulong_frame_view.width/height/strides/planes` 已经是裁剪后的紧打包画面。
+  插件必须始终以 `image.width()/height()` 为像素阈值、归一化比例与 landmark 换算基准，
+  **绝不得**假设它与相机分辨率/宽高比一致，也不得缓存首帧尺寸后复用。
+- **`capture_time_ms` 原样回传**：它是宿主视图边界时钟的唯一依据（帧是在哪个窗口下采集的）。
+  SDK 已把 dispatch 的值写进结果 payload；插件自定义输出路径也必须保留该字段。
+  宿主用「结果时间戳 vs 引擎 `effective_since_ms`」区分旧/新窗口，缺字段会导致逆映射退回全幅。
+- **归一化坐标仍在视图内**：检测框/关键点按 0..1 相对于**收到的画面**表达，宿主负责逆映射回全幅。
+  插件不要自行换算到相机坐标（它拿不到全幅尺寸）。
+- **运动门禁语义随视图变化**：`has_motion` / `motion_boxes` 现在只描述**窗口内**的运动；
+  「窗口外有运动」不会再让整帧放行——这是预期行为，不是门禁失效。
+- **零拷贝的分叉**：窗口激活时宿主**不会**直通全幅 DMA-BUF fd，而是物化到槽位后按紧打包布局下发；
+  插件侧 `dma_buf_fd` 契约不变（仍是可选优化），但不要再假设 fd 的尺寸等于相机分辨率。
+
+---
+
+## 7. 元数据约束、底库同步与共享注册表
+
+> 算法包物理目录结构、打包格式与完整 `manifest.json` 规则参见 [算法包开发与交付规范](../backend/algorithm-guidelines.md)。
+
+### 7.1 IPC 握手与安装路径安全边界
+
+1. **`id` / `version` 路径安全**：作为物理路径拼装参数，必须满足白名单正则 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`，严禁包含 `../` 逃逸路径。
+2. **`name` 握手定长缓冲上限**：`name` 会作为 `--name` 传给 runner 并拷入 `HandshakeReq.client_name[32]`。必须满足非空且 **UTF-8 字节长度 ≤ 32**，超过时拒绝验包，防止 `strncpy` 静默截断造成多算法命名碰撞。
+
+### 7.2 底库热更新载荷字段名映射
+
+Go 侧与 Runner 进程之间 IPC 载荷统一使用 `features` 字段，表示可变 $D$ 维 `float32` 特征向量（人脸模型通常为 512 维）。人员领域模型与 IPC 载荷统一对齐为 `features`，消除了早期的 `feature_vector` 命名漂移。
+
+### 7.3 底库热更新链路规范
+
+| 维度 | 规范与实现 |
+| :--- | :--- |
+| **触发时机** | 人员/人脸 CRUD 成功后（增量，`BroadcastUpsert` / `BroadcastDelete`）；runner 每次拉起成功后（全量，`Supervisor.triggerGallerySyncAsync`）。全量路径覆盖初始启动、`RestartAlgorithm`、`rollbackToOld` 与崩溃重启 `respawn()` —— **不要**只在某一条 spawn 路径上触发 |
+| **传输通道** | 复用 `FrameBroker` 点对点 Unix Domain Socket 连接，经 `Engine::broadcast_ai_message` 下行广播 |
+| **消息类型** | `MSG_GALLERY_SYNC` (10)、`MSG_GALLERY_UPSERT` (11)、`MSG_GALLERY_DELETE` (12)、`MSG_GALLERY_ACK` (13) |
+| **ACK 语义** | 全量 `MSG_GALLERY_SYNC` 组装完成后 runner 回复 `MSG_GALLERY_ACK`，增量同步不回复。**Go 宿主目前不消费该消息**：可靠送达的判据是 `Zhulong_engine_broadcast_ai_message` 的投递计数，`MSG_GALLERY_ACK` 只在 runner 侧用于自校验 |
+| **单条上限与分片** | 单条上限 64KB。Go 侧按**实测字节数**切分（`shardBudget = 90% × MaxIpcPayloadSize`，512 维 float32 约 6.3KB/条、每片约 9 条，不要再按固定「10 项/片」估算），Runner 维持 5 秒组装窗口，收齐后原子应用并清空旧底库；超时或乱序显式报错 |
+| **投递回执与重试** | `Zhulong_engine_broadcast_ai_message(..., size_t *out_delivered)` 回报实际收到的 runner 连接数：`stream=0` 取各流**最小值**（部分流没人连即视为未送达），0 = 报文被静默丢弃。`GalleryBroadcaster.BroadcastSync` 返回所有分片的最小投递数，**任一分片为 0 立即判失败**（缺一片则 runner 的组装窗口永远无法 `is_complete()`）。`Supervisor.pushGalleryUntilDelivered` 每 500ms 重试、上限 60 次（≈30s 窗口，覆盖 RK3568 实测 ~1.5s 冷启动），每次尝试**重新取快照并换新 `sync_id`**：陈旧快照会覆盖期间的新登记，复用 id 会撞进上一轮 5 秒组装窗口。同一时刻**只允许一条重试阶梯**（`gallerySyncMu`）：两条阶梯交错会把不同 `sync_id` 的分片混进同一个 runner，而它在 id 变化时重置组装上下文 —— 快照永远收不齐，但两边都看到非零写入数以为自己送达了 |
+| **分片聚合幂等与范围门禁** | 聚合逻辑统一走 `accumulate_sync_shard(ctx, shard)`（`gallery_parser.hpp`），必须同时满足：① `shard_index ∈ [0, shard_total)`，越界/负值分片直接丢弃且**不改变 `ctx` 任何状态**；② 同一 `shard_index` 重复到达时**跳过 items 累加**。⚠️ `received_shards.insert()` 幂等但 `collected_items.push_back()` 不是 —— 只靠 `insert` 会让 `is_complete()` 判定不变而 `collected_items` 重复膨胀，最终经 `gallery_index.reset()` **永久污染底库** |
+| **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**，未绑定时为空串，严禁混用内部行 ID |
+| **宿主侧回转身份** | 载荷 `person_id` 只用于展示与对账，**绝不写入 `recognitions.person_id` 外键列**。回顾落库时一律经 `matched_face_id → person_faces.id → person_faces.person_id`（内部主键）解析，并把载荷里的业务键原值快照到 `recognitions.person_external_id`。详见 [数据库规约 · 对外业务键与内部主键分列](../backend/database-guidelines.md)。反例：直接把载荷值写进外键列，会让业务键 ≠ 内部主键的人员每次命中都 `FOREIGN KEY constraint failed`，整批识别记录静默丢失 |
+| **本地索引** | Runner 进程内通过 `GalleryIndex` 维护 `face_id -> FaceTemplate` 映射，写操作受互斥锁保护，推理读取通过 `snapshot()` 获取不可变只读视图 |
+
+### 7.4 底库注册表 (`GalleryRegistry`)：进程内单例，**不是**跨镜像共享
+
+`zhulong::runtime::GalleryRegistry` 是维护人脸底库模板快照的线程安全单例。
+
+⚠️ **单例的作用域是链接产物，不是进程名。** 交付形态下公共算法运行库以 `.a` **静态链接**进
+算法包可执行文件（`libZhulongAlgoRuntime.so` 仅作为迁移基线与 native 测试载体存在，
+宿主已不再 `dlopen` 任何算法 `.so`）。因此：
+
+- 每个链接了该静态库的可执行文件各自拿到**独立一份**注册表；两个镜像不会因为「在同一个进程里」就共享。
+- 跨进程的底库一致性由 Go 侧广播 `MSG_GALLERY_SYNC` 分片实现（见 7.3），**不是**靠这个单例。
+  不得假设 Runner 与任何其他组件「天然看到同一份底库」。
+
+访问契约：
+
+- **单一数据源**：底库内容与只读快照只存在于注册表内部。Runner 侧的 `GalleryIndex` 是纯转发门面，**不得**再维护第二份 `faces_` / `snapshot_`（两份状态一旦在异常路径上分叉就无法判定哪份是对的，且每次写要多付一份全量深拷贝）。
+- **读写隔离**：写操作（`reset` / `upsert` / `remove` / `clear`）在写锁保护下更新底库并原子重构快照指针。
+- **快照顺序确定**：快照按 `face_id` 升序输出，与 `unordered_map` 的迭代顺序解耦；按索引缓存或做 A/B 对比的下游不得依赖插入顺序。
+- **热路径借用**：`detect_persons` 里通过 `snapshot()` 取只读 `shared_ptr`，零锁争用；
+- **1:N 特征比对**：计算检出人脸 512 维特征与快照条目的余弦相似度（点积），Top-1 相似度 $\ge \text{threshold}$ 时判定命中并装填 `person_id`。
+
+---
+
+## 8. 异构硬件加速后端 (RKNN / RGA)
+
+公共运行库 `libzhulong_algo_runtime.so` 针对异构硬件（如 Rockchip RK3568）提供了编译期可选的 RKNN 推理加速与 RGA 视觉前处理硬件加速。详细的编译配置、依赖隔离、真机实测踩坑规约（如 RKNN 2.3.2 下 `MEM_SIZE` 陷阱、权重共享与 RGA 防 DMA 越界挂死规则）详见独立规范：
+
+👉 [原生硬件加速后端规范 (Hardware Backends: RKNN & RGA)](./hardware-backends.md)
+
+---
+
+## 9. 推理结果跨进程上报契约 (Inference Result Egress Contract)
+
+打通算法推理结果由 **Runner 子进程 ➔ FrameBroker (UDS) ➔ ZhulongEngine (C ABI) ➔ Go 宿主 ➔ 业务消费** 的完整回路。
+
+### 9.1 传输拓扑与通道复用
+
+- **通道复用**：Runner 通过与 FrameBroker 已建立的 Unix Domain Socket 发送 `MSG_RESULT = 7` 消息，复用既有连接与握手流程。
+- **全双工时序**：Broker 负责向 Runner 派发帧（`MSG_FRAME_DISPATCH`）；Runner 推理完成后先上报 `MSG_RESULT`，随后发送 `MSG_FRAME_ACK`。
+
+### 9.2 载荷格式与坐标契约
+
+- 载荷采用自描述 JSON 字符串编码，包含 `stream_id`、`pts`、`capture_time_ms`（帧抓拍绝对物理毫秒时间戳）、`cost_ms`、`algorithm_id`、`task_type` 以及多态结果数组（`detections`、`classifications`、`persons`）。
+- **`algorithm_id` 结果归属**：标识该推理结果归属的算法（由 runner 的 `--algorithm-id` 参数透传）。宿主解析时优先采用载荷内的值；载荷缺省（`null`/`""`）时回退到宿主自身传入的算法参数。
+- **人脸识别方案 B 扩展字段**：当检出人脸并命中底库时，根层或人脸子项如实携带 `matched_face_id`（Top-1 胜出人脸底照 ID）及 `candidates[].face_id`，为宿主落盘 `gallery_image_path` 与持久化提供唯一确凿的底照证据溯源。
+- **坐标恒定归一化**：所有检测框与人体/人脸位置恒定采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 浮点数，与前端/Go 领域模型严格对齐。
+
+### 9.3 状态机过滤规则（防洪峰策略）
+
+Runner 维持两态机进行自适应节流，避免连续空画面产生无效 IPC 与 CGO 开销：
+
+1. **连续空目标帧完全静默**：若当前帧与上一帧检出目标数均为 0，不产生任何 IPC 消息；
+2. **目标消失退出信标（Exit Beacon）**：从「检出目标数 > 0」转为「检出目标数 == 0」的第一帧，发送一帧目标列表为空的信标结果，通知前端清空滞留画框（杜绝 250ms 幽灵框）；
+3. **有目标帧实时上报**：检出目标数 > 0 时，每帧如实上报。
+
+### 9.4 内存所有权与生命周期
+
+- **Native 侧生命周期**：
+
+  ```cpp
+  rc = api.process(task, &view, &result);
+  if (result) {
+      if (should_send) {
+          std::string payload = serialize_result(result);
+          send_ipc_message(MSG_RESULT, payload);
+      }
+      api.result_release(result); // 严禁持有 result 指针跨越到异步队列，严防 use-after-free
+  }
+  ```
+
+- **CGO 边界契约**：
+  - C ABI 回调 `Zhulong_ai_result_callback` 传递只读借用指针：`const char *json_payload, size_t payload_len`；
+  - Go 侧在回调同步执行期间完成深拷贝（`C.GoBytes`），回调返回后 Native 内存失效；
+  - 回调令牌使用 `cgo.Handle` 传递安全整数，严禁向 Native 传递 Go 指针。
+
+### 9.5 慢消费背压与丢弃策略
+
+- **丢最旧（Drop Oldest）**：Go 侧 `AIResultSubscription` 采用固定容量环形队列（默认容量 32）。
+- 当队列满且慢消费者未及时取走时：丢弃最旧一帧、原子递增 `DroppedResults` 计数、新帧推入队列，绝不阻塞 Native 引擎与 FrameBroker 回调线程。
+
+### 9.6 端到端测试读取 `MSG_RESULT` 的时序与所有权
+
+守护 §9.2 的 `algorithm_id` 契约需跑跨进程用例（`native/tests/frame_broker_test.cpp` 的 `test_runner_result_algorithm_id_e2e`）：`fork` + `execl` 拉起真实 runner 并传 `--algorithm-id`，经 `broker.set_on_result` 捕获载荷后断言字段存在。两条硬约束：
+
+1. ⚠️ **`waitpid` 返回不代表回调已执行**：`MSG_RESULT` 由 `client_read_loop` 这个 **detach 的读线程**（`unix_socket.cpp`）回调上报，与子进程退出是两条独立路径。必须**有界轮询**等待标志位置位（与既有 `test_frame_broker_result_egress` 一致），绝不裸断言。
+2. ⚠️ **先 `broker.stop()` 再读捕获缓冲区**：该用例推送多帧（3 帧 → 最多 3 次回调），而非原子的捕获变量（如 `std::string`）会被后台读线程反复写入。`UnixSocketServer::stop()` 会 `while (active_workers_ > 0)` 等待所有读线程退出，因此把 `stop()` 提到读取之前才能消除数据竞争。
+
+```cpp
+for (int i = 0; i < 50; ++i) {
+    if (received.load()) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+assert(received.load());
+broker.stop();  // 等读线程退出后，再读非原子的 captured payload
+assert(received_payload.find("\"algorithm_id\":\"e2e_algo\"") != std::string::npos);
+```
+
+⚠️ **`assert` 生效的前提**：本测试文件全篇用 `assert`，依赖 `native/CMakeLists.txt` 的 `ASSERT_TEST_TARGETS` 对 `ZhulongFrameBrokerTests` 显式 `-UNDEBUG`。新增断言型测试目标必须一并加入该列表，否则 NDEBUG 下断言会被静默编译掉，测试变成空跑。
+
+⚠️ **stream_id 与 socket 名不得与既有用例重名**：socket 路径由 stream_id 派生（`zhulong_broker_<stream_id>.sock`），`main()` 内串行执行。新增用例前先全文件 grep 已用编号（当前已占用 1001-1008/1010/1011/999/2001/2002/2007/3001-3003/9002）。
+
+
+## 绊线配置与区域读取（SDK 1.2.0）
+
+### 1. 范围与触发
+
+任务算法配置绊线后，宿主在现有任务参数播种时机（启动/任务变更触发重启）下发完整区域快照。SDK只提供配置与坐标转换，不实现跟踪、越线判断、计数或告警。现有任务变更仍可能重启包，不承诺无重启热更新。
+
+### 2. 签名与线格式
+
+- Go `TaskRegionProvider.TaskRegionsFor(ctx, algorithmID) (map[uint64]string, error)`。
+- `MSG_TASK_REGIONS=15`，复用 `TaskConfigMsg` 的68字节头，尾部是 `task_algorithms.region_config_json` UTF-8原文。
+- SDK `TaskContext::regions` 为 `TaskRegions{std::string_view json, uint64_t revision}`。
+- SDK `TaskContext::input_view` 为 `InputView{std::array<float,4> rect, bool known}`，提供 `to_input(x,y)`、`to_full_frame(x,y)`。
+- `FrameDispatchMsg::input_view[4]` 从offset168开始，总长184；前96/168字节保持兼容。
+
+### 3. 契约
+
+- 区域JSON新增 `tripwires:[{id,name,points:[[x0,y0],[x1,y1]],direction}]`，所有坐标是原始全幅归一化坐标。
+- `direction` 为 `a_to_b`、`b_to_a`、`both`。屏幕坐标中 `(p1-p0) × (target-p0)` 为负是A侧、正是B侧、零在线上；端点顺序不得自动重排。
+- `MSG_TASK_CONFIG=14` 和 `params.json` 原文不变，禁止混入宿主保留字段。
+- Broker按流、消息类型、算法ID保存最新报文（最多256项），新连接握手后重放。旧包忽略15号消息；使用新字段的包必须以SDK1.2.0重建。
+- SDK worker拥有区域字符串，推理前挂借用视图；算法不得保留引用，跨帧内容必须拷贝。
+- 第一次收到快照revision从0变1，内容不变不递增，清空也递增；revision仅在当前worker生命周期有意义。
+- 实际窗口随帧携带，来自像素对齐后的view，而非数据库请求值。旧96/168字节宿主的 `input_view.known=false`；不得假设它一定是全幅。168字节报文仍保留完整运动门禁字段。
+- 坐标变换不clamp：裁剪外端点可能映射到[0,1]外。算法应自行决定裁剪外绊线策略；配置或窗口变化时重置相关历史状态。
+
+### 4. 校验与错误矩阵
+
+| 输入 | 行为 |
+| --- | --- |
+| 无tripwires、空数组 | 兼容旧数据；清空发送完整 `{}` 快照 |
+| 超过8条、重复ID、非法方向、短线 | Go服务返回 `INVALID_REGION_CONFIG`，不保存 |
+| ID不满足 `[A-Za-z0-9_-]{1,64}`、空名称或名称超过64 Unicode字符 | 拒绝保存 |
+| 端点不是两个二维有限[0,1]坐标、线长小于 `.01-1e-9` | 前后端拒绝 |
+| IPC算法ID不匹配、长度不符、超64KiB | SDK忽略，不替换现有快照 |
+| 首次未下发 | `regions.json.empty()`，revision为0 |
+
+### 5. 正常、基础与错误场景
+
+正常：画水平线，A为上方、B为下方，配置A→B；算法从regions解析线，并用实际input_view转换坐标。
+基础：旧任务仅有ROI/MASK；参数原文与过滤行为保持原样。
+错误：把全幅绊线直接与裁剪图中的检测框比较，或仅缓存最后一个算法的配置，会分别导致空间错误和重连丢配置。
+
+### 6. 必需测试
+
+- `internal/region/tripwire_test.go`：校验、重复ID、边界与解析。
+- 前端区域数据与绊线画布浏览器测试：稳定ID、方向、绘制、删除、撤销、只读。
+- `internal/algorunner/taskconfig_test.go`：区域单独下发、参数原文、清空。
+- `native/tests/frame_broker_test.cpp`：多算法重放、清空重放、真实SDK子进程读取与实际窗口元数据。
+- `native/tests/motion_gate_test.cpp`：区域隔离、revision、坐标变换与旧168字节门禁兼容。
+
+### 7. 错误与正确示例
+
+错误：把 `tripwires` 塞入 `params.json` 并要求所有算法schema接受；或者用CROP请求值当作本帧实际窗口。
+
+正确：插件独立读取 `ctx.regions.json`，以 `ctx.regions.revision` 缓存解析结果；确认 `ctx.input_view.known` 后用 `ctx.input_view.to_input(x,y)` 转换端点。需同时观测窗口变化，不能只看区域revision。

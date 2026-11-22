@@ -1,0 +1,93 @@
+# Host Runtime Contract
+
+> Executable contract for the current no-hardware Go/CGO/C++ host lifecycle.
+
+## Scenario: Build, Start, Serve, and Stop the Embedded Host
+
+### 1. Scope / Trigger
+
+- Trigger: changing CLI flags, host startup order, health/API envelopes, SQLite migrations, Vite embed output, or the C ABI lifecycle bridge.
+- Scope: the current Go host only. It validates packaging and resource lifecycle, not camera business APIs, Go media subscriptions, inference, accelerator SDKs, or target-board support. Native-only RTSP capture is covered by the [ingestion contract](../native/ingestion-contract.md); the Go host still calls lifecycle APIs only.
+
+### 2. Signatures
+
+- Configuration: `config.toml` 配置 `http.address` (默认 `127.0.0.1:8000`), `http.tls_mode` (`off` 默认纯明文 / `auto` 自动自签 / `manual` 手动指定), `http.cert_file` / `http.key_file`, `data.directory` (默认 `./data`), 和 `logging` 段（`level`/`format`/`output`/`sampling`/`rotation`）。当 `tls_mode = "auto"` 时，使用纯 Go 标准库动态生成包含局域网网卡 IP 与 localhost 的 SAN 自签证书并落盘缓存，通过 `tls.NewListener` 挂载安全监听。
+- CLI Flags: `Zhulong --reset-network` 紧急救援模式，在不启动主 Web 服务的情况下执行硬件主网口重置（`eth0` 强制重置为 `192.168.1.168/24` 维护 IP，其余物理网卡恢复 DHCP）并以状态码 0 退出。
+- Network Watchdog Lifecycle: 在 `lifecycleRuntime.Start` 中触发网络开机自检；若发现磁盘残留未确认的 `network_transaction.json`，无条件自动回滚至上一版本已知安全网络，防现场异常掉电变砖。
+- System Time & Clock Lifecycle: 在 `lifecycleRuntime.Start` 中触发时钟自检与自愈；若内核时钟早于 `2026-01-01` 且硬件 RTC 有效，自动从板载 RTC 同步并拉齐系统时钟，加载持久化时区并启动后台 SNTP 协程；`lifecycleRuntime.Stop` 优雅注销 Worker。
+- Health: `GET /api/v1/health`; ready data is `{ "status": "ready", "components": { "database": "ready", "engine": "ready" } }`.
+- Database: `database.New(dataDirectory string, logger *zap.Logger) *Store`, then `(*Store).OpenAndMigrate(ctx) error`, `Ready() bool`, and `Close() error`.
+- Go native wrapper: `engine.New() *Engine`, `Start() error`, `Stop() error`, `Ready() bool`, and idempotent `Close() error`.
+- C ABI: `Zhulong_engine_create(Zhulong_engine_h*)`, `Zhulong_engine_start(Zhulong_engine_h)`, `Zhulong_engine_stop(Zhulong_engine_h)`, and `Zhulong_engine_destroy(Zhulong_engine_h)`; statuses are fixed-width `int32_t` values.
+- Build: explicitly prepare fixed FFmpeg sources with `make native-deps` (or import a local archive), then use `make check`, `make build`, and `make smoke`; `make api-docs` regenerates Swaggo output. Go commands using `internal/engine` go through `native/scripts/build.py go ...` to select isolated static dependencies and content-addressed Engine link inputs; bare Go commands do not supply them.
+
+### 3. Contracts
+
+- Every API JSON response includes `code`, `message`, and `data`. Success uses `code: "OK"`; errors use `data: null`. Only HTTP 422 field validation errors may add localized `details`.
+- `GET /api/v1/health` returns HTTP 200 only after both database migrations and native startup complete; otherwise it returns HTTP 503 with the standard error envelope.
+- `/api/*` and `/swagger/*` are reserved. Unknown API routes, unsupported API methods, and the disabled Swagger UI paths return an HTTP 404 JSON envelope and must not fall back to SPA HTML. `/` and extensionless client routes serve the embedded SPA.
+- SQLite stores `<data-dir>/zhulong.db`; DSN settings are `_busy_timeout=5000`, `_foreign_keys=on`, `_journal_mode=WAL`. GORM uses one open/idle connection. Schema changes are embedded, versioned `internal/database/migrations/*.sql`; never use GORM `AutoMigrate`.
+- `lifecycleRuntime.Start` 先准备日志、打开数据库并执行迁移，再按领域顺序启动 Audit、Network、SystemTime、Storage、Person、Snapshot、Record、Native 日志回调、Native Engine、Camera 与 Algorithm，最后绑定 TCP listener 并启动 HTTP Serve；关键步骤失败时清理已获取资源，可选域失败则记入降级清单继续启动。`lifecycleRuntime.Stop` 先排空 HTTP，再按依赖顺序停止 Camera、Algorithm、Record/Snapshot、Storage 等服务，最后关闭 Native 与 SQLite 并同步日志；`Stop` 与启动回滚共用同一份 `stopSequence()`。具体顺序以 [依赖注入与生命周期规范](./dependency-injection.md) 和运行时测试为准。
+- Vite outputs to `internal/webui/dist` and clears that directory. A tracked `.keep` preserves the embed target before the first build, and the build plugin recreates it after Vite clears the output. Root `make build` builds frontend and native dependencies before the Go binary.
+- The C++ side allocates and frees the opaque engine handle. Go owns only the handle value and serializes access; the current bridge passes no Go pointer to C. Every exported C ABI function isolates C++ exceptions; status-returning functions map failures to fixed codes, while destroy remains void.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+| --- | --- |
+| SQLite open or migration fails | Host startup fails; native startup and HTTP bind do not occur; opened DB resources close. |
+| Native start fails | Host startup fails; database closes; HTTP does not bind. |
+| TCP bind fails after DB/native start | Host startup fails; native and DB close; logger syncs. |
+| An optional domain (Network/SystemTime/Storage/Person/Record/Algorithm) fails to start | Startup continues; the subsystem is named in a `host started with degraded subsystems` warning and still stopped on shutdown. |
+| An optional domain is enabled by configuration but not actually running (e.g. GB28181 `enabled=true` with no ingress, bind failure, or invalid stored config) | Its own runtime state reports `error` plus a stable detail code. Never report `running` from a merely valid configuration: the field is what field engineers use to decide whether to look at the device or at the host. |
+| Health requested before dependencies are ready | HTTP 503, `SERVICE_UNAVAILABLE`, `data: null`. |
+| Unknown `/api/*` route or method | HTTP 404, `ROUTE_NOT_FOUND`, `data: null`; never HTML. |
+| Unhandled internal error | HTTP 500, safe localized message, `data: null`; cause is logged server-side only. |
+| Field validation failure | HTTP 422; include only localized `{field, code, message}` details and never echo rejected values. |
+
+### 5. Good / Base / Bad Cases
+
+- Good: run `make check && make smoke`; the smoke test starts the built binary with a temporary data directory and verifies health, embedded SPA routing, favicon, API 404 isolation, disabled Swagger routes, and graceful SIGTERM shutdown.
+- Base: closing a not-started engine or an already closed database is idempotent and does not release resources twice.
+- Bad: start HTTP before migrations, return raw SQLite/CGO errors in JSON, pass Go pointers to the current C ABI, or claim lifecycle readiness proves an active media stream, inference, or target-board compatibility.
+
+### 6. Tests Required
+
+- `internal/database`: assert embedded migration success, failed migration cleanup, and readiness/close behavior.
+- `internal/engine` and `native/tests`: assert serialized/idempotent lifecycle, status handling, and that the public header compiles and links from C.
+- `internal/app`: assert Fx graph validity, health and SPA/API routing, migration failure blocking HTTP, listener failure rollback, and request drain before native/DB close.
+- `internal/httputil`: assert exact success/error envelope keys, `data: null`, localized 422 details, and internal-error redaction.
+- `web`: assert loading/error/retry/ready UI, persisted language/theme behavior, and document language after locale changes.
+- Root: `make check` 通过前端 lint、真实无头浏览器测试、生产构建、Native CTest、API 文档生成、Go vet、race 测试和 Go/native 桥接测试；前端类型检查包含在 `build` 的 `tsc -b` 中。`format:check`、`knip` 与依赖安全审计可单独运行，但不属于当前 `make check` 的通过条件；安全审计结果必须单独记录，不得宣称已通过。`make smoke` 验证构建产物的宿主端到端行为。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+// Starting HTTP before migrations can expose an unusable or inconsistent store.
+listener, err := net.Listen("tcp", config.HTTPAddress)
+if err != nil {
+    return err
+}
+if err := database.OpenAndMigrate(ctx); err != nil {
+    return err
+}
+```
+
+#### Correct
+
+```go
+if err := database.OpenAndMigrate(ctx); err != nil {
+    return err
+}
+if err := native.Start(); err != nil {
+    return errors.Join(err, database.Close())
+}
+listener, err := net.Listen("tcp", config.HTTPAddress)
+if err != nil {
+    return errors.Join(err, native.Close(), database.Close())
+}
+```
+
+The production implementation centralizes this ordering and rollback in `internal/app/lifecycleRuntime`; do not duplicate startup logic in handlers or constructors.

@@ -1,0 +1,318 @@
+# React 前端编码铁律与开发指南
+
+> 基于 `satnaing/shadcn-admin` 的前端编码原则、状态流转契约、表格/表单规范与流媒体 UX 指南。
+
+---
+
+## 1. 前端编码原则
+
+1. **纯函数组件与 React 19 Hooks**：严禁使用 Class 类组件；充分利用 React 19 原生机制与稳定 Hooks。
+2. **单一职责与按需拆分**：组件必须专注于单一 UI 职责。当出现独立分区（如复杂配置表单块、多态详情抽屉）时按需拆分子组件，杜绝单个文件超 300 行的生硬单体。
+3. **渲染与逻辑彻底分离**：组件只负责声明式 UI 渲染；数据请求、数据拼装与复杂衍生计算必须抽取至自定义 Hook。
+4. **插槽组合优先于布尔配置**：优先使用 Radix/shadcn 的组件组合模式（如 `<Dialog><DialogTrigger /><DialogContent /></Dialog>`）或 Slot Props，避免在一个组件上堆砌 10 个布尔 Prop。
+5. **TanStack Query 独占服务端状态**：API 数据 100% 由 `@tanstack/react-query` 管理缓存与失效，**严禁将查询数据同步复制进 Zustand 或 Context**；Zustand（如 `auth-store`）仅在跨页面持久化纯客户端状态（如 Token、用户信息）时极度克制地使用。
+6. **TanStack Router 强类型文件路由**：
+   - 新增页面必须在 `src/routes/` 建立对应文件由插件自动注册；
+   - 路由跳转必须使用 `<Link to="..." />` 或 `useNavigate()` 实现类型安全跳转；
+   - 页面 URL 参数必须使用 `validateSearch` 配合 Zod Schema 严格校验并提供默认兜底。
+7. **数据表格与 URL 状态深度同步**：
+   - 所有后台数据列表必须使用 `@tanstack/react-table` 配合 `@/hooks/use-table-url-state`；
+   - 当前页码（`page`）、分页大小（`pageSize`）、排序（`sort`）与检索关键词（`search`/`filter`）必须同步至 URL Search Params，保证页面刷新、前进后退及链接分享时状态不丢失。
+8. **表单与弹窗统一交互契约**：
+   - 表单强制统一使用 `react-hook-form` + `@hookform/resolvers/zod` + `@/components/ui/form`，统一错误提示与焦点捕获，严禁手写繁琐的 `useState` 表单；
+   - 对话框与抽屉的状态统一使用 `@/hooks/use-dialog-state`，避免组件间层层透传冗余的 `isOpen / setIsOpen`。
+9. **状态就近与渲染派生**：衍生数据直接在渲染期间计算，**严禁使用 `useEffect` 监听源数据并调用 `setState`**。
+10. **严格零 `any`**：TypeScript Strict 开启；ESLint 拦截所有显式 `any`；外部不可信网络输入统一标记为 `unknown` 并通过 Zod Schema 强类型解析。
+11. **列表 Key 必须业务全局唯一**：循环渲染必须使用后端全局唯一业务 ID（如 `key={camera.id}`），**严禁使用数组索引 `index` 作为 key**。
+12. **异步交互必须处理三态**：API 交互必须完备处理并展示：**Loading（骨架屏/加载指示）**、**Error（错误提示与重试机制）** 与 **Empty（空数据引导/清除筛选引导）**。
+13. **严禁私造样式轮子，100% 遵从 shadcn-admin 设计语言**：所有基础 UI 组件必须优先选用 `@/components/ui/*`（按钮、弹窗、表单、徽章、下拉菜单等），严禁自行手写 HTML 基础标签拼凑组件；视觉配色严格采用 Tailwind OKLCH 语义设计变量，状态徽标强制使用标准 Dot-Indicator Outline 范式并成对具备完备的暗色模式（`dark:`）适配。
+
+---
+
+## 2. 表格与表单落地模式 (Table & Form Patterns)
+
+### 2.1 表格 URL 状态驱动范式
+
+```typescript
+// features/camera/components/CameraTable.tsx
+import { useTableUrlState } from '@/hooks/use-table-url-state'
+import {
+  getCoreRowModel,
+  useReactTable,
+  type ColumnDef,
+} from '@tanstack/react-table'
+
+export function CameraTable({ data, totalCount }: CameraTableProps) {
+  // 分页与筛选双向绑定到 URL
+  const { page, pageSize, search, setPage, setPageSize, setSearch } =
+    useTableUrlState({
+      defaultPage: 1,
+      defaultPageSize: 10,
+    })
+
+  const table = useReactTable({
+    data,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+    manualPagination: true,
+    pageCount: Math.ceil(totalCount / pageSize),
+  })
+
+  // 渲染 @/components/data-table/ 下的通用 toolbar 与 pagination
+  return (
+    <div className='space-y-4'>
+      <DataTableToolbar table={table} search={search} onSearch={setSearch} />
+      <div className='rounded-md border border-border'>
+        <Table>{/* 表格内容 */}</Table>
+      </div>
+      <DataTablePagination
+        table={table}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+      />
+    </div>
+  )
+}
+```
+
+### 2.2 表格 Sticky 列与 Hover 透明穿透避坑规范
+
+在数据密集型表格中，右侧操作列通常需要固定悬浮（`sticky inset-e-0`）。当表格出现横向滚动时，必须严格遵守以下规则避免**线框与透明穿透 Bug**：
+1. **严禁在悬停时直接覆写背景色**：在 Tailwind 中，若使用 `bg-card group-hover:bg-muted/50`，hover 时的带半透明色类会直接覆盖冲掉底层的纯实色 `bg-card`，导致横向滑入底部的文字或组件穿透可见。
+2. **严禁硬编码垂直竖线**：非必要不要添加 `border-s`，避免打破 `shadcn-admin` 自然平滑的整体排版。
+3. **双层伪元素无缝悬浮最佳实践**：底层始终保持 100% 实心 `bg-card` 遮挡滚动物，上层通过绝对定位透明伪元素淡入高亮，并挂载 `before:pointer-events-none` 保证按钮点击事件穿透：
+
+```tsx
+meta: {
+  className: cn(
+    'sticky inset-e-0 z-10 w-12 text-end',
+    'bg-card relative',
+    'before:pointer-events-none before:absolute before:inset-0 before:bg-muted/50 before:opacity-0 before:transition-opacity',
+    'group-hover:before:opacity-100 group-data-[state=selected]:before:bg-muted group-data-[state=selected]:before:opacity-100'
+  ),
+}
+```
+
+### 2.3 表单与 Zod 校验范式
+
+```typescript
+// features/camera/components/CameraCreateDialog.tsx
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+
+const cameraFormSchema = z.object({
+  name: z.string().min(1, '请输入摄像机名称').max(64),
+  rtspUrl: z.string().url('请输入合法的 RTSP/HTTP 流地址'),
+})
+
+type CameraFormValues = z.infer<typeof cameraFormSchema>
+
+export function CameraCreateForm({ onSubmit, isPending }: Props) {
+  const form = useForm<CameraFormValues>({
+    resolver: zodResolver(cameraFormSchema),
+    defaultValues: { name: '', rtspUrl: '' },
+  })
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-4'>
+        <FormField
+          control={form.control}
+          name='name'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>摄像机名称</FormLabel>
+              <FormControl>
+                <Input placeholder='例如：东大门枪机' {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <Button type='submit' disabled={isPending} className='w-full'>
+          {isPending ? '保存中...' : '确认添加'}
+        </Button>
+      </form>
+    </Form>
+  )
+}
+```
+
+### 2.4 Radix 控件受控绑定与 React 19 最佳实践
+
+1. **Radix `<Select>` 受控绑定必须使用 `value`**：
+   在 `react-hook-form` 中，`<Select onValueChange={field.onChange} value={field.value}>` 必须使用 `value` 属性；严禁使用 `defaultValue={field.value}`。`defaultValue` 为非受控属性，当 `form.reset(...)` 或切换列表不同编辑项时，下拉触发器显示的文本无法更新。
+2. **表单监听推荐 `useWatch` 规避 Compiler 警告**：
+   在 React 19 / React Compiler 环境下，避免直接在组件体内调用 `form.watch(...)`，统一使用 `useWatch({ control: form.control, name: '...' })` 确保响应式粒度精确且不触发 ESLint 兼容性警告。
+
+### 2.5 工业级表单错误反馈与通知规范 (Industrial Error Feedback & Toast Patterns)
+
+1. **四级反馈分级铁律**：
+   - **字段级（Field-level）**：后端 422 校验失败（带 `details: [{ field, code, message }]`）强制映射到 React Hook Form 对应字段下方，光标自动聚焦，**严禁使用全局 Toast 遮挡表单**；
+   - **模态留存级（Modal-retained）**：409 CAS 冲突或探针失败时模态框必须保持打开，保留用户草稿，并在弹窗顶部渲染警告 Banner（带重试/刷新入口）；
+   - **状态变形通知（Morphing Toast）**：异步长耗时任务（如主动诊断、人脸特征提取、批量操作）统一使用 `toast.promise` 原地变形（Loading 旋转态 → Success/Error），杜绝手工叠弹窗；
+   - **全局兜底级（Global Fallback）**：401 会话失效重定向、500/断网全局弱感知提示（通过 `handleServerError` 注入消息 ID 实现自动去重）。
+2. **表单错误自适应处理范式 (`handleFormError`)**：
+   表单提交遭遇异常时，使用 `@/lib/form-error` 统一处理：
+   ```typescript
+   import { handleFormError } from '@/lib/form-error'
+
+   try {
+     await updateMutation.mutateAsync(payload)
+     toast.success(t('toast.success'))
+     setOpen(null)
+   } catch (err: unknown) {
+     handleFormError(form, err, {
+       fieldMap: { 'mainStream.rtspUrl': 'mainRtspUrl' },
+       onConflict: (_err, message) => setConflictError(message),
+       onUnhandled: (message) => setGenericError(message),
+     })
+   }
+   ```
+3. **全局 Toast 抑制契约 (`suppressGlobalToast`)**：
+   当组件自行为长任务绑定了 `toast.promise` 或批量聚合进度提示时，在 mutation 定义中显式声明 `meta: { suppressGlobalToast: true }`，防止全局 `MutationCache` 触发双重弹窗。
+
+
+---
+
+## 3. 实时视频监控与播放器工业级 UX (Live Surveillance & Media UX)
+
+1. **WebCodecs 帧呈现契约（PTS 排期 + 显存释放）**：
+   - 解码帧必须先进 `PresentationScheduler`（`features/live/services/presentation-scheduler.ts`）按 `frame.timestamp` 排期，
+     **严禁「拿到帧就在下一个 rAF 上画」**：到达时刻由网络与解码抖动决定，直接上屏等于把抖动原样透传成可见顿挫，
+     且两帧落进同一刷新区间时会在无提示的情况下丢帧 —— 外部表现是「帧率统计正常但画面一直轻微卡」；
+   - 同一拍内到期的多帧只画最新一帧；其余帧（过期、超队列上限、时间轴重锚）必须在抛弃前显式
+     `frame.close()` 释放底层 GPU 显存纹理，一个都不得泄漏；
+   - 目标延迟是**显式取舍**（默认 100ms ≈ 2.5 帧 @25fps）：调大更平滑、调小更实时，不得隐式改成 0；
+   - 队列必须按**时间深度**裁顶（默认 500ms），不得只按帧数：起播时服务端会补发整个 GOP（可达一两秒内容），
+     只按帧数裁顶会让队列永久保持着满窗陈旧帧 —— 画面不抖了，但恒定落后实时一整个队列的时间。
+     **这个值绝不许贴着 `targetLatencyMs` 配**：RTSP over TCP 天然成簇到达（一簇 3~10 帧 = 120~400ms），
+     曾配成 250ms，正常成簇就被判为超深、稳态每秒丢好几帧，比它本要修的抖动更糟；
+     500ms（12 帧 @25fps）既覆盖正常成簇，又能在起播时把一两秒的 GOP 补发裁掉；
+   - 源流时间轴跳到墙钟前面（服务端整段丢帧后等 IDR、相机重连）时调度器必须重锚时钟，
+     绝不允许让画面静默冻结整段时间；
+   - 解码侧判定「跟不上」必须用**持续**超阈值（≥1s），不得用「连续 N 帧超阈值」的瞬时突发：
+     重同步的代价是丢弃到下一个 IDR，相机 GOP 通常 1~4 秒，每次误判都会放大成秒级冻结；
+   - 避免在每帧 `onFrame` 回调中触发高频 React `setState`，仅在分辨率变更、编码格式切换或异常中断时派发状态。
+2. **起播与稳态观测必须可归因（Preview Telemetry）**：
+   - 起播慢与「一直在顿」都只能在现场复现，默认必须打点；两者统一走
+     `features/live/services/render-telemetry.ts`，
+     **不得**在渲染循环的 effect 内各自持有定时器与闭包计数器（历史上正是这样把 health 定时器误当冷启动定时器一起 clear，
+     导致 `[Zhulong][StreamHealth]` 在健康链路上永远不产出）；
+   - 冷启动只交一次卷：`cold_start_render`（出画）与 `cold_start_render_stalled`（超时兜底）二选一；
+     各段耗时以「首个数据包进入解码器」为原点，缺失的观测点必须是 `null`，严禁把「没到」报成 0ms；
+   - 稳态健康行只在**首次解码输出之后**才开始计窗口，否则冷启动的等待会被算进帧率；
+   - 总闸：`window.__ZHULONG_PREVIEW_TRACE__ = false` 可整体关闭两类日志，不设置视为开启。
+3. **「等待首帧」等中间态不得遮蔽终态**：
+   - `connected` 远早于首帧（服务端要先建 RTSP、等 IDR），因此可以用等待遮罩代替黑屏；
+     但任何**只在能解码时才可能消失**的遮罩（如等待首帧）必须先判断解码能力，
+     否则在非安全上下文下会把「切换至 HTTPS」引导永久盖住 —— 用户既看不到原因也点不到出路。
+4. **全局快捷键防误触守卫**：
+   - 监控中心快捷键（如 `1` / `4` / `9` 分屏矩阵切换、`Esc` 退出全屏、`Space` 轮巡暂停）必须判定 `document.activeElement`；
+   - 当用户处于 `input`, `textarea`, `select` 等聚焦输入状态，或处于弹窗打开态时，必须静默屏蔽全局快捷键。
+5. **列表客户端筛选与双态空提示**：
+   - 必须明确区分两类空状态：
+     - **资产空状态（Initial Empty）**：系统尚未添加任何设备，展示插画与「添加第一台设备」主行动点；
+     - **筛选空状态（Filter Empty）**：当前搜索关键词无匹配项，展示「未找到匹配项」并提供「重置筛选」按钮。
+6. **AI 视觉与感知叠加层渲染铁律 (AI Perception Overlay)**：
+   - **坐标恒定归一化**：所有检测框与关键点坐标均假定为 $[0.0, 1.0]$，绘制时必须根据宿主 Canvas 实际物理分辨率自适应放大，严禁硬编码像素坐标；
+   - **零 React 重渲染**：视频叠加层绘制必须依托 `requestAnimationFrame` 或原生 Canvas 2D 循环，通过 mutable `ref`（如 `facesRef`）承载高频目标数据，严禁逐帧调用 `setState`；
+   - **自动防残留消退**：感知事件流设置合理的 TTL（如 350ms），当无新事件到达时立即清理 Canvas 绘图上下文，避免画面静止或目标离开视线时残留幽灵框；
+   - **抓拍流防抖节流**：全局实时识别流（Recognition Feed）需引入防抖冷却机制（如同一人 3s 冷却），避免同一目标在同一摄像头前触发无意义刷屏。
+
+7. **按需音频与音画同步 (On-demand Audio & A/V Sync)**：
+
+   音频**不走预览 WS**，走独立按需通道（`/cameras/:id/streams/:role/audio/ws`，ZLA1 20 字节头 + 裸负载）。
+   预览 WS 只多一条一次性**文本**能力帧（`stream_info`）；二进制帧与 `wire-parser` 逐字节不变。
+   实现位于 `features/live/services/{audio-channel,g711-decoder,aac-decoder,audio-frame-decoder,live-audio-player}.ts`
+   与 `hooks/use-live-audio.ts`。
+
+   - **音画同步只有一条时钟**：音频的 `due` 与视频逐字同式，
+     `dueMs = clock.wallMs + (ptsUs - clock.ptsUs) / 1000 + clock.targetLatencyMs`，
+     时钟来自 `PresentationScheduler.clockSnapshot()`，经 `useWebCodecsRenderLoop().getPresentationClock()` 取得。
+     **严禁**音频另建时钟或加偏移常数 —— 两条时钟各自的抖动量无法用常数修正，任何一次重锚都会变成可闻的音画错位；
+   - **`pts_us` 必须以 int64 解析**：`DataView.getBigInt64` 后 `Number()`。
+     用 `getUint32` 只取低 32 位会在 71.6 分钟后静默回绕，表现为「音频时钟突然跳回起点」，且不会有任何报错；
+   - **解码帧必须显式释放**：`AudioData.copyTo()` 之后立即 `audioData.close()`，与 `VideoFrame.close()` 同理，
+     不关会持续占用音频缓冲；
+   - **不要每包新建 `AudioBufferSourceNode`**：8 kHz / 20 ms = 50 个节点/秒，节点创建与排期抖动直接变成咔哒声，
+     且主线程被 React 渲染占住就整段断音。统一用一个 `AudioWorklet` + 环形缓冲，主线程只做投递（约 50 次/秒）；
+   - **AudioWorklet 的加载形态**（Vite 8 下只有一种可用写法，已在真实无头 Chromium 验证）：
+     `?raw` 导入 `.js` 源文本 → `new Blob([src], {type:'text/javascript'})` → `URL.createObjectURL` → `addModule()` → `finally revoke`。
+     ❌ `new URL('./x-worklet.ts', import.meta.url)` 会被 Vite **原样复制 .ts 文件**；
+     ❌ `?worker&inline` 产出 `data:video/mp2t`，两者都被 `addModule` 以 `AbortError` 拒绝。
+     worklet 源**必须是 `.js`**（中间无编译步骤，写 TS 会运行时语法错误）；
+   - **严禁 `await ctx.resume()`**：无用户手势时该 Promise **既不 resolve 也不 reject**，`await` 它会永久挂起。
+     用 `ctx.state` / `statechange` 观察即可；`addModule()` 在 `suspended` 状态下本就可用；
+   - **`ctx.currentTime` 在 `suspended` 时不推进**（恒为 0）：投递侧必须自己维护一条只增不减的**帧游标**
+     （`max(currentTime 推算值, 游标)`，重锚时作废），否则解禁到 `resume()` 生效之间的窗口里连投数包会全部落在同一帧，
+     后包覆盖前包起点 —— 表现为起播瞬间的咔哒声与丢音，且只在真机上出现；
+   - **「还不知道」与「确定没有」必须是两种 UI 状态**：能力帧在建连后几帧才到，
+     把 `streamInfo == null` 归成「该路无音频」会让正常相机在首帧期间弹出一条设备故障。
+     三态：`audioChecking`（未收到能力帧）/ `noAudio`（`present=false`）/ `audioUnsupported`（解码器降级）；
+   - **降级一律静默**：无音轨、codec 不认识、ASC 缺失、`isConfigSupported()` 为 false、非安全上下文、
+     AudioWorklet 不可用 —— 全部退化为无声视频 + 文案，不黑屏、不进报错循环；
+   - **服务端关闭码决定是否重连**：`4404`（无音频）禁止重连；`4001/4002/4003/4500` 退避重连（100ms→1s）。
+     把所有断开都当网络问题会变成报错循环；
+   - **默认全静音 + 按需建连**：`AudioContext` 只在首次解禁手势里创建，不点喇叭就不建 WS、不建上下文。
+     单 tab 最多一路出声（`cells[].isMuted` 是唯一真相源），同一 stream key 的多个格子也只算一路。
+   - **音画同步是跳模块观测量，必须留有出口**：`createLiveAudioPlayer({ onScheduled })` 在**每帧真正入环**时
+     报告 `{ptsUs, startDueMs, nowMs, reanchored}`。被丢弃/暂存的帧不报告 —— 它们不会出声，
+     报出来只会让「应当听到的时刻」里混进不存在的样本。测量方（`sync-measure.test.ts`、现场诊断）
+     把音频入环时刻与视频绘制时刻拼起来才能算偏差，任何一侧都拿不到全貌；
+   - **WebCodecs 的 `prefer-hardware` 不是「硬件优先、软件兜底」而是硬条件**：无硬件解码器的环境
+     （无头 Chromium、纯软件桌面、部分 WebView）会让解码器进入错误回调
+     `Unsupported configuration. Check isConfigSupported() prior to calling configure()`。
+     ⚠️ 它是**异步**错误：`configure()` 不抛异常，`try/catch` 抳不住；必须在错误回调里降级到
+     `no-preference` 并重建，否则会「用同一份配置反复重建解码器」而无任何报错循环上限。
+     预览宁可软件解码，也不能因为「没有硬件」而黑屏。
+
+
+---
+
+## 4. 控制台架构与流式大视口规范 (Console Architecture)
+
+1. **统一采用 `AuthenticatedLayout` 框架**：
+   - 页面结构为：**`SidebarProvider` + `AppSidebar` + `SidebarInset` + `Header` + `Main`**；
+   - 侧边栏支持默认记忆展开/折叠状态（通过 `getCookie('sidebar_state')` 持久化），并在移动端自动降级为响应式抽屉。
+2. **全宽流式工作区 (`@container/content`)**：
+   - 工作区宽度应占满水平视口，禁止使用限定 1200px 最大宽度的营销页居中容器；
+   - 为监控矩阵与设备拓扑保留完整的视口高度（支持 `has-data-[layout=fixed]:h-svh` 满高视口排布）。
+3. **快捷命令搜寻集成 (Command Menu)**：
+   - 全局保留 `Ctrl+K`（或 `Cmd+K`）调起 `CommandMenu`，支持快速跳转至指定功能模块与摄像机频道。
+4. **设置子页面弹性视口适配 (`ContentSection`)**：
+   - 设置分区组件默认保持 `lg:max-w-xl` 单栏表单排版，对于卡片矩阵（如多网卡看板、存储挂载看板）可显式指定 `className='max-w-5xl'` 展开为宽幅响应式网格。
+
+---
+
+## 5. 跨特性深链接与参数联动契约 (Cross-Feature Deep Linking)
+
+在工作台（如「以图搜图」）与具体业务模块（「抓拍记录」、「时空轨迹」、「人员底库」）之间进行跨路由跳转时，遵循以下深链接契约：
+
+1. **唯一业务标识传递**：
+   - 跨模块跳转人员对象时，统一传递内部人员 ID（`personId`），避免因同名或模糊名称导致目标定位失准。
+2. **目标路由的深链接消费规范**：
+   - **抓拍记录 (`/records`)**：
+     通过 Search 参数传入 `{ tab: 'recognitions', personId }`，确保进入页面时切换到「人脸比对」标签页且列表已自动按此人员过滤。
+     `personId` 是内部 ID，只用于深链；工具栏不得把它渲染成可编辑输入框，而是解析出姓名后显示为可关闭的筛选 chip（档案已删除时退回兜底文案）。
+     用户自己输入的人员检索一律走 `search` 参数（姓名或工号快照的模糊匹配），不要求用户知道内部 ID。
+   - **时空轨迹 (`/spatial`)**：
+     通过 Search 参数传入 `{ targetType: 'person', personId }`。当默认地图与人员底库缓存就绪后，页面必须自动以「今天」（`today`）为默认时间跨度发起一次轨迹检索，减少用户二次点击。
+   - **人员底库 (`/persons`)**：
+     通过 Search 参数传入 `{ personId }`。页面挂载后自动从后端获取该人员详情并弹出面容管理抽屉/弹窗（`faces` 弹窗）；用户关闭弹窗后，必须调用 `navigate` 清理该 URL 参数，防止用户刷新页面后反复自动弹窗。
+3. **参数清理与历史记录管理**：
+   - 驱动一次性弹窗打开的 Search 参数在弹窗关闭时必须通过 `navigate({ search: (prev) => ... })` 移除该参数，保持干净的分享 URL。
+

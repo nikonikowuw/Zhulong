@@ -1,0 +1,691 @@
+# 原生推理与硬件加速后端规范 (Hardware & Inference Backends: RKNN, ONNX & RGA)
+
+> 异构芯片（Rockchip NPU/RGA）与通用跨平台推理引擎（ONNX Runtime）编译期接入、链接隔离、运行时对齐约束与硬核避坑规约。
+
+---
+
+## 1. 编译期后端配置与正交开关
+
+硬件加速后端由公共运行库 `libzhulong_algo_runtime.so` 实现，在**编译期**通过 CMake cache 变量静态绑定，不引入运行期 `dlopen` 分流：
+
+| 变量 | 取值 | 说明 |
+| :--- | :--- | :--- |
+| `ZHULONG_INFERENCE_BACKEND` | `onnx` \| `rknn` \| `test_stub` | 推理后端选择（`test_stub` 仅测试夹具，产物不可交付） |
+| `ZHULONG_VISION_BACKEND` | `cpu`（默认）\| `rga` | 视觉前处理后端选择 |
+| `ZHULONG_RKNN_ROOT` | 路径 | 仅 `rknn` 需要；须含 `include/rknn_api.h` 与 `lib/librknnrt.so` |
+| `ZHULONG_ONNX_ROOT` | 路径 | 仅 `onnx` 需要；官方布局 `include/onnxruntime_cxx_api.h` + `lib/libonnxruntime.so`；macOS Homebrew 布局 `include/onnxruntime/` + `libonnxruntime*.dylib` 自动识别 |
+| `ZHULONG_ONNX_INCLUDE_DIR` / `ZHULONG_ONNX_LIBRARY` | 路径 | `build.py` 规范化后传给 CMake 的真实头目录与库文件；手工调用 CMake 时可省略（从 `ZHULONG_ONNX_ROOT` 推导） |
+| `ZHULONG_RGA_ROOT` | 路径 | 仅 `rga` 需要；须含 `include/rga/im2d.h` 与 `lib/librga.so` |
+
+- **编译防御**：`rknn` 缺 `ZHULONG_RKNN_ROOT`、`onnx` 缺 `ZHULONG_ONNX_ROOT` 或 `rga` 缺 `ZHULONG_RGA_ROOT` 时，CMake 触发 `FATAL_ERROR`（fail closed）。
+- **正交性**：两个开关完全解耦，支持任意组合（如「RKNN 推理 + CPU 前处理」、「RKNN 推理 + RGA 前处理」等）。
+- **目标产物归属**：后端实现直接编译进 `libzhulong_algo_runtime.so`。宿主二进制 `Zhulong` 仅静态链接 `libZhulongEngine.a`，**严禁向宿主引入任何厂商 SDK 动态库依赖**。
+- **产品后端只有 `onnx` / `rknn`，无默认值**：`ZHULONG_INFERENCE_BACKEND` 未显式指定时 CMake 直接 `FATAL_ERROR`；`runtime_factory` 的 `#else` 分支是 `#error`。交叉 profile 必须声明 `inference_backend`，Host 缺省 `onnx`（ORT 前缀缺失时报可操作错误：macOS 用 `brew install onnxruntime`，Linux 用官方 tarball 或 `ZHULONG_ONNX_ROOT`）。`make native-deps` 只提供 FFmpeg，**不**安装 ONNX Runtime。
+- **Profile 分流**：`native/profiles/rk3568-stub.json`（`test_stub` 夹具后端，服务板端 mock/broker 回归）与 `rk3568-rknn.json` / `rk3568-rknn-rga.json`（`rknn` 推理后端）。夹具 profile 的产物**不可交付**，`pack_package.py` 遇到 `runtime: test_stub` 拒绝出包。
+- **测试桩不属于产品面**：桩实现位于 `native/tests/fixtures/stub_inference_backend.cpp`，只在 `test_stub` 构建里被编译进运行时；产品构建与 SDK 分发物中不得出现（`ar t` 可验）。`StubInferenceBackend::load_model` 只接受 `test_stub:` 前缀的显式夹具标记，任何真实模型路径一律返回 `nullptr`，插件 `init` 硬失败、Runner 以 `model_create` 失败退出。
+  - 诊断：Runner 在 `plugin_model_create_failed` 日志里附带 `backend=<onnx|rknn|test_stub>`（来自 `zhulong::default_inference_backend_name()` 自由函数，**不得**做成 HAL 虚函数）。
+  - 推论：夹具构建的运行时**不能**服务任何真实算法包。要在开发机跑真实算法，必须 `make INFERENCE_BACKEND=onnx check`；不允许"编译成功但不可推理"的产物进入安装或分发链路。
+- **RKNN 模型闭环**：目标为 ARM/RKNN 时算法包只解析 `.rknn`，不探测 `.onnx` 或 `.weights`。检测器、特征提取器和 OCR 遇到缺失会话、预处理失败或无效输出必须返回空/错误结果，禁止基于亮度生成框、固定特征、固定车牌文本或固定置信度。
+- **板端模型边界**：`face_recognition/rk3568` 已提供 RKNN 模型；当前 `plate_recognition` 只有 CPU ONNX 模型，没有 RKNN 包，因此 RKNN 运行时不得加载其 ONNX 资产，也不得以模拟结果替代。
+
+### 1.1 后端的运行期入口与优先级（环境变量是统一开关）
+
+每次 `native/scripts/build.py` 调用都会重新 configure CMake，而 CMake 缓存里的 `ZHULONG_INFERENCE_BACKEND` 会被无参 configure **静默重置回 `cpu`**。因此一次性的 `build.py --inference-backend onnx build` 会被随后的任何 `make dev` / `make build` / `make check` 改回 `cpu` 并重链出桩后端。
+
+`build.py` 的实际解析顺序（`vision_backend` 同理，对应 `ZHULONG_VISION_BACKEND`）：
+
+| 优先级 | 来源 | 说明 |
+| :--- | :--- | :--- |
+| 1 | `--inference-backend <v>`（CLI） | 写入 profile 字典，覆盖同名字段；仅对当次调用生效 |
+| 2 | profile JSON 的 `inference_backend` | 交叉 profile 的声明值（如 `rk3568-rknn.json` → `rknn`）**优先于环境变量** |
+| 3 | `ZHULONG_INFERENCE_BACKEND` 环境变量 | 仅在 profile 未声明该键时生效；Air（`.air.toml` 的 build cmd 独立调用 build.py）由此继承 |
+| 4 | `onnx`（仅 Host） | Host 兜底；交叉 profile 未声明则报错，不存在静默兜底 |
+
+- 实现为 `value = p.get(key) or os.environ.get(env_key)`，Host 再兜底 `onnx`；取值必须落在白名单 `onnx|rknn|test_stub` 内，否则 `ValueError`（fail closed）。
+- `Makefile` 暴露 `INFERENCE_BACKEND` 并将其 `export` 为 `ZHULONG_INFERENCE_BACKEND`，使 `make` 与 Air 看到同一选择：`make INFERENCE_BACKEND=onnx check`。由于 profile 优先级更高，该变量实际作用于未声明后端的 profile（Host），交叉构建仍沿用 profile 内的声明。
+- ⚠️ **不要无条件注入 `--inference-backend cpu`**：CLI 优先级最高，那会覆盖交叉 profile 的 `rknn` 选择。留空即「沿用 profile」。
+
+---
+
+## 2. Rockchip RKNN 推理后端契约 (NPU)
+
+*硬件基线：RK3568（Debian 11 arm64 / 内核 5.10.226 / `librknnrt.so` 2.3.2 / RKNPU 驱动 0.9.8）。*
+
+### 2.1 依赖隔离与符号管理
+
+1. **头文件绝对隔离**：`rknn_api.h` 仅允许在 `native/src/backends/rknn/` 内包含，严禁外溢至公开 SDK 头文件。
+2. **正确链接目标**：
+   - 必须动态链接 `librknnrt.so`（SONAME 即 `librknnrt.so`）。
+   - ⚠️ **严禁链接陈旧的 `librknn_api.so`**（板端历史残留 1.5.2 版本，会导致运行期符号缺失）。
+3. **RPATH 与链接选项**：
+   - 必须显式添加 `-Wl,-rpath-link,<rknn>/lib` 供 GNU ld 解析传递依赖符号；
+   - 必须清空产物 `BUILD_RPATH`（`set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")`），杜绝开发机绝对路径烧入 `.so`。
+
+### 2.2 ⚠️ `RKNN_QUERY_MEM_SIZE` 破坏上下文规避（2.3.2 缺陷）
+
+- **故障现象**：执行过 `RKNN_QUERY_MEM_SIZE` 的 `rknn_context`，后续执行 `rknn_dup_context` 时必定发生 **SIGSEGV** 崩溃在 `librknnrt.so` 内部。
+- **强制规避契约**：**主 root 上下文严禁调用 `RKNN_QUERY_MEM_SIZE`**。若需获取内存大小用于审计/遥测，必须通过独立临时上下文查询后立即销毁：
+
+```cpp
+rknn_context probe = 0;
+if (rknn_init(&probe, path, 0, 0, nullptr) == RKNN_SUCC) {
+    rknn_query(probe, RKNN_QUERY_MEM_SIZE, &asset->mem_size, sizeof(asset->mem_size));
+    rknn_destroy(probe);
+}
+```
+
+### 2.3 权重共享与会话派生 (`rknn_dup_context`)
+
+- **实测收益**：RK3568 真机验证，同一模型 4 个 Worker 会话，1 次 `rknn_init` + 4 次 `rknn_dup_context` 相比 4 次独立 init，常驻内存增量从 50.4MB 骤降至 14.3MB（**节省约 3.5× 物理内存**）。
+- **串行化派生**：`rknn_dup_context` 的派生调用必须受互斥锁（`dup_mutex`）保护，不可并发调用。
+- **生命周期所有权**：
+  - `RknnModelAsset` 持有根上下文与 `dup_mutex`，进程内多 Worker 共享；
+  - `RknnSessionContext` 持有派生上下文与所属 ModelAsset 的 `shared_ptr`，确保根上下文晚于所有 Worker 会话销毁。
+  - 创建过程失败时必须严格回滚资源，杜绝 double-destroy。
+
+### 2.4 错误码映射表 (14 码覆盖)
+
+| RKNN 状态码 | 统一映射状态 | 语义说明 |
+| :--- | :--- | :--- |
+| `RKNN_SUCC` (0) | `ZHULONG_STATUS_OK` | 成功 |
+| `PARAM_INVALID`, `MODEL_INVALID`, `CTX_INVALID`, `INPUT_INVALID`, `OUTPUT_INVALID` | `ZHULONG_STATUS_INVALID_ARGUMENT` | 参数或模型格式非法 |
+| `DEVICE_UNAVAILABLE`, `DEVICE_UNMATCH`, `TARGET_PLATFORM_UNMATCH`, `INCOMPATIBLE_*` | `ZHULONG_STATUS_NOT_SUPPORTED` | 运行环境或平台不匹配（非代码缺陷） |
+| `MALLOC_FAIL` | `ZHULONG_STATUS_OUT_OF_MEMORY` | 内存不足 |
+| `TIMEOUT` | `ZHULONG_STATUS_TIMEOUT` | 超时 |
+| `FAIL` 及其他未知码 | `ZHULONG_STATUS_INTERNAL` | 底层内部错误 |
+
+### 2.5 数据传输与并发约束
+
+1. **输入缓冲要求 Packed**：`rknn_input` 无 stride 字段，传入内存必须紧凑排布。输入校验按元素总数 `inputs[i].element_count() == attr.n_elems` 比对，适配 UINT8 图像到 FP16 模型的内部自动转换。
+2. **输出 Float32 预分配直写 (`is_prealloc = 1`)**：设置 `want_float = 1` 与 `is_prealloc = 1`，预分配 `Tensor` 并挂载 `raw_data()`，避免后端额外拷贝；这不证明 Runtime 内部无分配，也不代表 NPU 原生 float32 执行。分配前校验 `n_elems * sizeof(float) <= UINT32_MAX`；输出后校验 `rknn_outputs[i].size == tensor.byte_size()`。
+3. **输出资源释放 Guard**：`rknn_outputs_release` 必须由 RAII guard 管理；当 `is_prealloc = 1` 时只释放底层句柄，不释放外部 Tensor 缓冲区。
+4. **单核 NPU 特性**：RK3568 为单核 NPU，增加 Worker 数仅能重叠前后处理时间，不能提升纯 NPU 推理并行度；严禁开启未经充分验证的 `RKNN_FLAG_ASYNC_MASK`。
+5. **C++ 资源规范 (Rule of 5)**：`RknnModelAsset` 与 `RknnSessionContext` 显式禁用拷贝构造函数与拷贝赋值运算符，杜绝底层 `rknn_context` 双重释放。
+6. **SDK 窄化门禁**：输入的每个维度与 `byte_size()` 必须在转换为 `uint32_t` **之前**验证；超出 `UINT32_MAX` 返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`，不调用 shape/注册/输入/运行 API。即使元素数匹配，FLOAT32 的字节倍率仍可能越界。
+
+### 2.6 动态 shape 与失败元数据（会话级事务）
+
+- shape 切换时用 `rknn_set_input_shapes`，随后同时查询 `RKNN_QUERY_CURRENT_INPUT_ATTR` 与 `RKNN_QUERY_CURRENT_OUTPUT_ATTR`。`current_input_attrs/current_output_attrs/current_input_shapes` 归 Worker 会话所有，**不修改共享 `RknnModelAsset`**。当模型输入定义为 4 维且 `dims[0] == 1` 时，若上游传入 3 维单帧张量（如 `[H, W, C]`），后端在调用 `rknn_set_input_shapes` 与校验 DMA/fmt 时自动规范化补齐 batch 维度为 1，杜绝底层报 `dims = [H, W, C]` 维度不足错误。
+- 调用 shape API 前将 `shapes_set = false`；成功切换后立即释放旧 DMA 注册，再查询候选属性。只有输入、输出属性全部合法才提交候选并置 `shapes_set = true`。查询失败后请求旧 shape，也必须重新配置，不能命中已失效的旧缓存。
+- SDK 返回 `RKNN_SUCC` 不代表属性合法：rank 必须在 `1..RKNN_MAX_DIMS`，每个维度、`n_elems`、`size` 非零，维度乘积无 uint32 溢出且等于 `n_elems`。非法属性返回 `ZHULONG_PLUGIN_ERR_INTERNAL`，**不得**把查询返回的 0 再映射为 `OK`。
+- 任一 `forward` 失败（包括空会话）清空 `outputs`；不得运行使用部分刷新/加载期尺寸的 DMA 绑定。
+
+---
+
+## 3. Rockchip RGA 视觉前处理后端契约 (2D Rasterizer)
+
+*硬件基线：RK3568（Debian 11 bullseye arm64 / 内核 5.10.226 / RGA 驱动 v1.3.4 / `librga.so.2.1.0` API `v1.10.1_[10]`）。*
+
+### 3.1 运行期硬件探测与对齐门禁
+
+RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码对齐参数**：
+
+- **行跨度对齐 (`byte_stride_align`)**：优先从 `/sys/kernel/debug/rkrga/hardware` 读取（RK3568 实测为 **4** 字节）。在 debugfs 不可读的无特权容器环境下安全回退至平台基准对齐值（4 字节），杜绝静默瘫痪退化。
+- **ROI 偏移对齐 (`offset_align`)**：在测试缓冲调用 `imcheck_t` 动态探测（RK3568 实测为 **2** 像素）。
+- **设备权限约束**：`/dev/rga` 设备节点属组为 `root:video`。启动探针必须使用 `open("/dev/rga", O_RDWR | O_CLOEXEC)` 校验读写权限，运行 Runner 的系统用户**必须加入 `video` 组**。
+
+### 3.2 格式能力矩阵与颜色转换语义
+
+| 输入格式 | RGA 硬件加速 | CPU 回退行为 | 约束与内存布局 |
+| :--- | :---: | :---: | :--- |
+| `RGB24` / `BGR24` | ✅ | ✅ | 紧凑排布或满足 4 字节行对齐；目标输出为 HWC UINT8 |
+| `RGBA32` | ✅ | ❌ | 单平面 4 字节/像素，硬件完成 CSC 提取与缩放 |
+| `NV12` | ✅ | ❌ | **仅支持连续内存**；实际垂直步长通过 `(p1 - p0) / y_stride` 动态推导并传给 `hstride`（支持紧凑及 MPP 16 行对齐帧）；非连续内存返回 `NOT_SUPPORTED` |
+| `YUV420P` | ✅ | ❌ | **仅支持连续内存**（plane1/plane2 紧密相连并与推导的 hstride 匹配）；非连续内存返回 `NOT_SUPPORTED` |
+| `UNKNOWN` | ❌ | ❌ | 显式返回 `ZHULONG_STATUS_NOT_SUPPORTED` |
+
+- **色彩空间转换**：硬件 CSC 采用 **Limited-range BT.601** 标准公式（YUV 16-235 映射至 RGB 0-255）。
+
+### 3.3 防挂死契约与两阶段裁剪 (Anti-Hang Rules)
+
+1. ⚠️ **严禁对目标缓冲区做指针偏移（防 DMA OOB 越界死锁）**：
+   - **致命陷阱**：在 Letterbox 计算中，若将目标 ROI 指针（`dst_buf + roi_offset`）直接传给 `wrapbuffer_virtualaddr`，驱动会基于该偏移指针按完整 `wstride × hstride` 计算 DMA 地址，导致访问越出 Tensor 物理边界，引发 RGA 硬件陷入 D 状态死锁并导致板端看门狗复位！
+   - **正确做法**：目标缓冲恒定以全尺寸（`target_w × target_h`）包装为 `dst_buffer`，指针本身不偏移；偏移量完全通过 `improcess` 的 `drect`（`pad_left, pad_top, unpad_w, unpad_h`）传递。
+2. ⚠️ **强依赖 `imcheck_t` 预校验**：每次调用 `improcess` 前必须使用 `imcheck_t` 预校验 `srect` 与 `drect` 合法性，失败直接在软件层拦截并回退 CPU。
+3. **两阶段裁剪对齐适配 (`crop_scale`)**：当裁剪 ROI 坐标不满足 2 像素对齐时，采用**参数向外扩取整**适配，杜绝原地内存搬运。
+4. **滤波差异验收容差**：RGA 硬件双线性插值与 CPU 浮点中心双线性滤波核函数不同，下采样（如 1080P → 640x640）单像素极值差可达 119。测试断言采用 `worst <= 128` 判定一致性。
+5. **热路径 Tensor 原地复用**：`try_rga_letterbox` 传入容量充足且形状匹配的 CPU Tensor 时原地复用内存，禁止每帧重新执行 `dst = Tensor(...)` 堆分配。
+   - ⚠️ 「什么算可复用」只有一份实现：`src/algorithm/runtime/letterbox_target.hpp` 的
+     `prepare_letterbox_target()`，CPU 与 RGA 后端**必须**共用。两份实现意味着同一调用在
+     RGA 与 CPU 下得到不同的缓冲区所有权语义。
+6. ⚠️ **先预校验、再动调用方的缓冲区**：`imcheck_t` 通过之前不得执行 O(N) 的补边 `memset`
+   （见第 2 条的两阶段 `check` / `run` 拆分）。预先 memset 会让「注定回退 CPU」的帧白付
+   一次全图写入，并在失败后给调用方留下半成品。需要重建/重绑的目标由局部候选暂存，
+   只有硬件成功或 CPU 回退成功后才提交 Tensor 元数据与几何；已匹配的热路径目标仍原地复用，不复制像素。
+7. ⚠️ **`target_width/height <= 0` 必须与 CPU 同口径拒绝**：`LetterboxParams` 自带 640 默认值，
+   后端**不得**再兜一次——那会产出 640×640 张量却不回写 `target_*`，让后处理按 0 反算坐标
+   （静默错结果，板端整机测试也看不见）。
+8. **降级必须可观测**：运行库刻意不链接 `ZhulongLog`（见 `native/CMakeLists.txt`），因此
+   RGA 后端以 `last_error()`（`zhulong_status_t`，原子）暴露「最近一次 RGA 尝试为何失败」，
+   与 `fallback_count()`（降级次数）互补。`map_rga_status()` 是唯一映射口径，不得只在测试里用。
+   `letterbox/resize/crop_scale` 的 RGA 成功均复位为 `OK`；CPU 回退成功保留 RGA 失败原因。
+   头/设备/偏移探测失败记录 `NOT_SUPPORTED`（头检查错误按映射表）；debugfs 行对齐兜底的事实在首次 RGA 成功之前仍可见。
+9. **DMA 补边 CPU 同步**：`imcheck_t` 通过后，对目标借用 fd 用 `platform::ScopedFdSync(fd, kDmaSyncWrite)`：
+   `START | WRITE → memset → finish() (END | WRITE) 成功 → improcess(IM_SYNC)`。
+   `IM_SYNC` 只代表硬件任务同步，不替代 CPU cache 写回。START/END 失败返回
+   `ZHULONG_PLUGIN_ERR_INVALID_STATE`，**不下发硬件、不在同一缓冲上继续 CPU 回退**。
+   CPU letterbox 回退也须包住 DMA 源 READ 与 DMA 目标 WRITE，END 全部成功才提交结果。
+   fd 由调用方拥有，守卫不 close；`EINTR/EAGAIN` 最多重试 50 次（EAGAIN 每次退避 100µs）。
+   **END 失败可能留下已写的脏像素**；元数据未提交不等于字节回滚，调用方必须停止消费并恢复/丢弃该缓冲。
+
+---
+
+### 3.4 宿主侧窗口物化（AI 分析视图）
+
+- **默认 CPU 行拷贝**（`src/nodes/preprocess/window_crop.cpp`）：按平面逐行 `memcpy` 到紧打包布局
+  （`stride = align_up(w, 64)`），NV12 的 UV 紧跟在 Y 之后。1080p 半宽半高约 0.8 MB/帧，
+  目标帧率下 CPU 开销可接受；**RGA 同格式拷贝是可选第二刀**，不是正确性前提。
+- **源可能是 dmabuf**：先用 `platform::ScopedFdSync(fd, kDmaSyncRead)` 包住整个读取窗口；
+  目标是 DMA 槽位时再对目标 fd 加 `kDmaSyncWrite`。两者都是 **借用的 fd**，绝不 close。
+- **绝不假设平面连续**：优先用 `host_planes[]` + `plane_strides[]`；只有 `host_ptr` 时才按
+  `y_plane_size()` 定位 NV12 的 UV，`vstride > height` 必须按 `stride * vstride` 算偏移。
+- **失败必须整体失败**：几何越界、格式不支持、目标容量不足、回调失败一律让 `publish_frame` 走
+  `fail_publish`，绝不发出半张帧。
+- 与算法侧 `crop_scale` 的区别：宿主窗口**不做硬件对齐外扩**，几何完全由归一化矩形 + 解码帧尺寸决定；
+  算法侧的前处理仍按自己的 stride 规则处理收到的紧打包画面。
+
+---
+
+## 4. 全链路 DMA-BUF 硬件零拷贝流转契约 (Zero-Copy Pipeline)
+
+*覆盖链路：解码 ➔ FrameBroker ➔ SCM_RIGHTS ➔ RGA 视觉前处理 ➔ RKNPU2 零拷贝绑定。*
+
+### 4.1 底层物理分配器 (`DmaBufAllocator`)
+
+- **分配优先级探测与多 BSP 动态扫描**：
+  1. `/dev/dma_heap/` 动态遍历扫描：优先自适应匹配名称含 `cma` 的物理连续堆（如 `cma`、`rk-dma-heap-cma`、`linux,cma`），满足硬件硬性物理连续要求；
+  2. 系统散布堆：次选匹配名称含 `system`、`sys` 或 `uncached` 的系统级 DMA-Heap 节点；
+  3. `/dev/dri/card0` (DRM Dumb Buffer)：通过 DRM ioctl 创建并导出 DMA-BUF（`DRM_IOCTL_PRIME_HANDLE_TO_FD`）。
+     - ⚠️ **KMS 限制与二维化步长**：Dumb Buffer 仅允许在主节点 `/dev/dri/card*` 创建，严禁在渲染节点 `/dev/dri/renderD*` 创建（内核会拒绝并返回 `EACCES`）；为突破硬件 `max_width` 几何尺寸限制并支持 1080p/4K 大分辨率，分配时统一固定宽度为 4096 像素并折算高度，映射实际内核返回的 `create_req.size`；
+     - ⚠️ **FD 独立所有权**：关联 DRM Dumb 时由 `DmaBuffer` 内部通过 `::dup(drm_fd)` 持有独立文件描述符并于析构时自主关闭，杜绝依赖外部单例共享描述符产生的 UAF 与误伤复用描述符隐患；
+  4. 宿主测试环境/非 Linux 平台自动回退为不可用（`is_supported() == false`）。
+- **FrameBroker 双轨分发与零拷贝穿透**：
+  - 当上游硬件帧具备有效 `HardwareFrame::dma_fd >= 0` 时，`publish_frame` 直接分发该文件描述符，**完全杜绝任何 CPU `std::memcpy` 与 Cache 刷新**；
+  - 当为 CPU 软解帧时（`dma_fd < 0`），写入 POSIX 共享内存池（`shm_pool_`）以兼容标准 SHM 客户端；若硬件环境激活了 `dma_slots_`，则同步写入 DMA-BUF 槽位并由 `ScopedCpuSync` RAII 守卫刷出 Cache，供下游加速插件直绑。
+  - ⚠️ **槽位池是 `slot_count × slot_size` 一次性申请的（默认 8 × 4MB = 32MB）**，要的是物理连续的 CMA。
+    实测 RK3568 的 `CmaTotal` 只有 **16MB** 且长期被占满，`DMA_HEAP_IOCTL_ALLOC` 直接 `ENOMEM`，
+    于是零拷贝槽位池建不起来、退回纯共享内存路径（每帧多一次拷贝）。这是**允许的降级**，
+    但**不允许静默**：`FrameBroker::start` 现在会打 WARN（含需求尺寸 + `DmaBufAllocator::last_error()`），
+    否则板端排查会误以为自己在零拷贝路径上。要真开零拷贝，先调小 `broker_options` 的
+    `slot_count`/`slot_size`，或改板端 DTS 的 CMA 分区。
+  - 不靠日志的诊断三件套：`/proc/interrupts` 里 `rkvdec` 计数是否增长（硬解）、
+    `/sys/kernel/debug/rkrga/load` 是否出现包进程条目（RGA 真在跑）、
+    `/sys/kernel/debug/rknpu/load` 是否非零（NPU 真在算）。三者全静默而 `--verify` 仍能出结果，
+    说明整条链路都退化成 CPU 了。
+- **CPU Cache 同步括号与 RAII 守卫 (ScopedCpuSync)**：
+  - CPU 读写前：调用 `sync_start(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 触发 `DMA_BUF_IOCTL_SYNC`；
+  - 硬件外设介入前：调用 `sync_end(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 刷回 Cache Line；
+  - 推荐优先使用 `ScopedCpuSync` RAII 守卫管理生命周期，杜绝异常退出或提前返回遗漏 Cache 写回；
+  - 针对 `EAGAIN` / `EINTR` 提供带 100 微秒自旋退避和 50 次重试上限的防护机制，杜绝 100% CPU 紧凑死循环。
+
+### 4.2 RGA 硬件加速与 `wrapbuffer_fd`
+
+- 当输入源帧具备有效 `dma_buf_fd >= 0` 时，RGA 视觉后端优先调用 `wrapbuffer_fd`：
+  ```cpp
+  rga_buffer_t src_buf = wrapbuffer_fd(src.dma_buf_fd, src.width, src.height, rga_fmt, src.strides[0], hstride);
+  ```
+- 目标输出 `Tensor` 同理支持通过 `tensor.dma_buf_fd()` 直接进行 `wrapbuffer_fd`。
+- **混合模式保护**：当 `dma_buf_fd < 0` 时，透明安全回退至已有的 `wrapbuffer_virtualaddr` 虚拟地址通路。
+
+### 4.3 RKNPU2 DMA 张量注册与绑定 (`rknn_create_mem_from_fd`)
+
+- **作用域与签名**：仅修改私有后端，不改公开 C ABI 或 HAL 虚表。
+  `RknnInferenceBackend::forward(SessionContext*, const std::vector<Tensor>&, std::vector<Tensor>&)`
+  仍返回 `zhulong_status_t`。Tensor 是 packed 视图，**没有独立的物理 stride/容量描述**。
+- **全量 DMA 门禁**：单次输入必须全 DMA 或全 Host，混合返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
+  切回 Host 时释放会话 DMA 注册；普通 Host 仍走 `rknn_inputs_set`，不会因模型原生 padding 而拒绝 packed Host 输入。
+- **布局与容量契约**：DMA 的 rank/dims 必须与会话当前输入属性逐维一致，fmt 只能为 NCHW/NHWC；
+  `size_with_stride == size > 0`，`w_stride` 为 0（厂商头定义为逻辑宽度）或逻辑宽度，
+  `h_stride` 为 0 或逻辑高度；非 4D 只接受两者为 0。任何不能表达的 padding/native layout 先拒绝，
+  不能只比较元素数或 `attr.size`。导入的 `byte_size()` 还必须覆盖 `size_with_stride` 且不超过 `UINT32_MAX`。
+- **转换契约**：Host 与 DMA 均设置 `pass_through = 0`，保留 Runtime 按 type/fmt 转换的行为。
+  **错误**：`io_attr.pass_through = (io_attr.type == attr.type)`；
+  **正确**：先验证布局/容量，再 `io_attr.pass_through = 0`。
+  dtype 相等不证明 native layout、转换侧归一化或量化可跳过。此路径不承诺端到端零拷贝；
+  模型转换配置/实际量化类型仍需模型证据与板端数值回归确认。
+- **注册缓存与绑定缓存分开**：fd/va/size 相同可复用 `rknn_tensor_mem`，但 dtype 不同必须重新
+  `rknn_set_io_mem`，**不重复注册同一内存**。注册变化先创建候选 `RknnTensorMemPtr`，只有绑定成功
+  才提交内存凭据/dtype；失败回收新注册，保留旧凭据。shape 切换则按 §2.6 清空注册。
+  注册句柄由会话释放，外部 DMA fd 与映射由调用方拥有；会话析构先释放注册，再销毁 context。
+
+| 情况（Good/Base/Bad） | 返回 | 必须断言的边界 |
+| --- | --- | --- |
+| packed 当前 shape、容量足够（Good） | `OK` | `pass_through=0`；绑定当前属性，不读加载期属性 |
+| 普通 Host + 带 padding 的模型（Base） | `OK` | 仍走 `rknn_inputs_set` 转换 |
+| DMA shape/layout/stride 无法证明 packed（Bad） | `NOT_SUPPORTED` | 不调用 import/bind/run |
+| packed DMA 字节数不足 / 超 uint32（Bad） | `INVALID_ARGUMENT` | 不窄化、不导入、不运行 |
+| 当前属性查询成功但元数据非法（Bad） | `INTERNAL` | 清空输出，shape 缓存失效，重试旧 shape 也重新配置 |
+| 实际 SDK 查询/绑定失败 | 按错误映射 | 不提交缓存；候选注册被释放 |
+
+**必需回归**：`native/tests/rknn_backend_contract_test.cpp`（真实后端 + 宿主 API stub）覆盖
+stride>width、缺失 stride-aware 容量、同元素数不同 dims、dtype 失效/失败重试、动态大→小→大与双 Worker 隔离、
+非法输入/输出属性、`UINT32_MAX` 及匹配 shape 的字节倍率越界、输出 float32 容量越界与资源释放。
+这些测试只证明参数与控制流，不替代真实 Runtime、驱动与模型布局/精度验收。
+
+---
+
+## 5. Rockchip MPP 硬件视频解码后端契约 (VPU)
+
+*硬件基线：RK3568（Debian 11 bullseye arm64 / 内核 5.10.226 / `librockchip_mpp.so.1` 1.5.0-1 / VPU 驱动 `/dev/mpp_service`）。*
+
+### 5.1 动态加载与跨平台编译隔离
+
+- **杜绝编译期链接**：宿主引擎二进制 `libZhulongEngine.a` 及测试套件**严禁静态或动态链接 `librockchip_mpp.so`**。在非 RK 硬件（macOS、x86_64 Linux CI 开发机）上编译时，必须零链接错误且无需安装 MPP 库文件。
+- **动态符号加载 (`MppLoader`)**：
+  - 采用单例懒加载模式，运行时优先探测内核字符设备 `/dev/mpp_service` 是否存在且具备读写权限；
+  - 探测成功后通过 `dlopen` 按顺序探测 `librockchip_mpp.so.1` 和 `librockchip_mpp.so`，并通过 `dlsym` 绑定核心 API 函数表（`mpp_create`, `mpp_init`, `mpp_destroy`, `mpp_packet_*`, `mpp_frame_*`, `mpp_buffer_*` 等）；
+  - 若任一关键符号缺失或 `dlopen` 失败，`MppLoader::is_supported()` 返回 `false`，解码工厂透明回退至 `FFmpegDecodeNode` 软解。
+  - ⚠️ **装载器永不析构、库句柄永不 `dlclose`**：`HardwareFrame::release_fn` 持有 `MppLoader*`，
+    而帧可能比任何静态析构活得更久（停机顺序变更、成员帧晚释放）。`instance()` 因此用
+    「静态存储 + placement-new + `~MppLoader() = delete`」：既避免 unload 后调用，
+    又不产生堆分配（`new` 长寿单例会被 LSan 报泄漏）。符号探测失败时也不 `dlclose`，
+    只清空函数表——半卸载的库会让已缓存的指针全部悬空。
+
+### 5.2 状态机配置与防死锁时序
+
+1. ⚠️ **Parser 命令字前置配置契约 (Need to setup before init)**：
+   - Rockchip MPP 内部的流切分器与快速解析模式**必须在 `mpp_init` 调用前配置完成**：
+     ```cpp
+     uint32_t split_mode = 1;
+     mpi->control(ctx, MPP_DEC_SET_PARSER_SPLIT_MODE, &split_mode);
+     uint32_t fast_mode = 1;
+     mpi->control(ctx, MPP_DEC_SET_PARSER_FAST_MODE, &fast_mode);
+     mpp_init(ctx, MPP_CTX_DEC, coding);
+     ```
+   - 若在 `mpp_init` 后调用，切分器无法生效，导致单包输入时无法识别 Access Unit 边界并产生首帧滞留。
+2. **两阶段非阻塞拉取与 `info_change` 处理**：
+   - 解码器配置超时为 0（`MPP_SET_INPUT_TIMEOUT` 与 `MPP_SET_OUTPUT_TIMEOUT` 为 0）；
+   - 当 `mpp_frame_get_info_change(frame)` 为真时，读取实际画面尺寸与步长，创建或复用外部缓冲组 `buf_group`，并立即下发 `MPP_DEC_SET_EXT_BUF_GROUP` 与 `MPP_DEC_SET_INFO_CHANGE_READY`；
+   - ⚠️ `info_change` 帧不包含图像有效载荷，**必须立即调用 `mpp_frame_deinit(&frame)` 销毁**，严禁将其当作有效画面送出。
+3. **即时回放与快速输出**：
+   - 启用 `MPP_DEC_SET_ENABLE_FAST_PLAY` 与 `MPP_DEC_SET_IMMEDIATE_OUT`，确保首个 IDR 关键帧无需积攒后续 P 帧即可立即解算输出。
+
+### 5.3 底层 DMA-BUF 提取与 RAII 租借生命周期
+
+1. **独立文件描述符所有权 (`dup`)**：
+   - 从 `mpp_frame_get_buffer(frame)` 提取底层 `MppBuffer`；
+   - 驱动返回的 `mpp_buffer_get_fd(buf)` 在 MPP 内部受生命周期管理。为避免下游异步消费与解码器内部复用产生竞态，必须通过 `int owned_fd = ::dup(raw_fd)` 获取独立文件描述符回填至 `HardwareFrame::dma_fd`。
+2. ⚠️ **帧池防死锁关键时序 (Ref Increment & Immediate Deinit)**：
+   - 取得 `MppBuffer` 后，必须调用 `mpp_buffer_inc_ref(buf)` 显式增加底层物理缓冲区的引用计数，**并校验其返回值**；失败时立刻 `close(dup_fd)` 并返回错误，禁止继续装配（否则 `release_fn` 的 `mpp_buffer_put` 会造成净减引用）；
+   - 紧接着**立即调用 `mpp_frame_deinit(&frame)` 释放外层 `MppFrame` 描述符容器**！若持有 `MppFrame` 直至下游消费完毕，MPP 内部的固定槽位（通常为 16~24 槽位）将在几帧后耗尽，导致硬件解码器永久挂起陷入死锁；
+   - 将 `mpp_buffer_put(buf)` 绑定在 `HardwareFrame::release_fn` RAII 析构闭包中，并由 `close(owned_fd)` 释放独立描述符。当下游算法或 `FrameBroker` 消费完毕时，自动归还底层 VPU 缓冲池。
+
+3. ⚠️ **外部缓冲组生命周期必须与解码器实例解耦**：
+   - `mpp_buffer_group_clear/put` 只能在**该组的全部 buffer 已归还**后调用（见 `mpp_buffer.h` 的 normal flow：`inc_ref → put → put → group_put`）。
+   - 解码器可能在 `HardwareFrame` 仍在途时被销毁（停机）或重新配置（分辨率切换触发 `info_change`）。因此缓冲组由 `MppDecodeNode::BufferGroup`（引用计数持有者）管理，`release_fn` 捕获其 `shared_ptr` 保活；解码器析构 / `info_change` 只解除本地引用。
+   - 在解码器析构或重建时就地 `mpp_buffer_group_clear/put`，会让在途帧持有的 `MppBuffer` 指向已释放的缓冲组，后续 `mpp_buffer_put` 即 use-after-free（板端表现为偶发段错误或 VPU 挂死）。`native/tests/decoder_test.cpp` 用例 10.3 是该场景的板端回归。
+
+4. **硬件步长对齐与格式保真**：
+   - 导出的像素格式必须**读取真实帧格式**（`mpp_frame_get_fmt`）校验：仅 `MPP_FMT_YUV420SP`（NV12 8bit）可通过并标记为 `FRAME_FORMAT_NV12`；
+   - ⚠️ 10bit（`MPP_FMT_YUV420SP_10BIT`）等未支持格式必须**丢弃该帧并告警一次**（`mpp_unsupported_frame_format fmt=%u`），**严禁**一律硬编码 `FRAME_FORMAT_NV12` —— 否则下游 RGA/RKNN 会按 8bit 解析造成静默错帧；
+   - 水平步长 `hor_stride` 遵循 16 字节对齐，垂直步长 `ver_stride` 遵循 16 行对齐；
+   - `HardwareFrame` 的 `stride` 与 `vstride` 严格填入实际物理跨度，确保下游 RGA 与 RKNN 能够以真实的物理行宽进行零拷贝直绑与 Letterbox 转换。
+
+5. **失败诊断（stream_id 与告警纪律）**：
+   - `MppDecodeNode` 构造函数必须接收 `stream_id` 并用于原生日志关联；
+   - `mpi->control()` 的返回值必须校验：`MPP_DEC_SET_PARSER_SPLIT_MODE` 失败即判定初始化失败（会导致首帧滞留），其余纯性能开关（`FAST_MODE` / `FAST_PLAY` / `IMMEDIATE_OUT` / 超时）失败仅告警；
+   - 日志只输出稳定 token + 数值上下文（`mpp_control_failed what=%s cmd=0x%08x ret=%d`），不得回写自由文本。
+- ⚠️ **extradata 入队失败按严重性分级，但不因此 fail closed**：Annex-B 码流的首个 IDR 自带
+  SPS/PPS，MPP 切分器（`PARSER_SPLIT_MODE`）会从码流重新取到参数集，所以初始化不抛错；
+  但背压/超时（`MPP_ERR_BUFFER_FULL` / `MPP_ERR_TIMEOUT`）记 `mpp_extradata_put_backpressure` WARN，
+  其余错误记 `mpp_extradata_put_failed` **ERROR** —— 否则「硬解整条流解不出图」会被一条 WARN 淹没。
+
+---
+
+## 6. ONNX Runtime 推理后端契约 (Cross-Platform Inference)
+
+*运行时基线：`libonnxruntime.so` (1.16+ / 1.21)，通过 `ZHULONG_INFERENCE_BACKEND=onnx` 与 `ZHULONG_ONNX_ROOT` 编译期激活。*
+
+### 6.1 依赖隔离与符号管理
+
+1. **头文件绝对隔离**：
+   - `<onnxruntime_cxx_api.h>` 与 `<onnxruntime_c_api.h>` 仅允许在 `native/src/backends/onnx/` 内部实现及对应白盒测试中包含，严禁外溢至 `native/sdk/include/`、`native/include/` 或 `native/src/algorithm/runtime/` 公共头文件。
+   - ⚠️ **`<onnxruntime_cxx_api.h>` 静态初始化器避坑**：C++ 头文件中的 `Ort::Global<void>::api_` 会在每个包含它的编译单元生成对 `OrtGetApiBase` 的符号引用；因此 `onnx_error_map.hpp` 仅包含纯 C 头 `<onnxruntime_c_api.h>`，且 `OnnxModelAsset` / `OnnxSessionContext` 的构造与析构函数在 `onnx_inference_backend.cpp` 中类外定义（锚定 vtable 与 ORT C++ 释放调用）。
+2. **链接与 RPATH 卫生**：
+   - 仅 `ZhulongAlgoRuntime` 以 `PRIVATE` 方式链接 `${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so`，宿主 `libZhulongEngine.a` 绝不链接；
+   - 配置 `-Wl,-rpath-link,${ZHULONG_ONNX_ROOT}/lib` 与 `SKIP_BUILD_RPATH TRUE`、`BUILD_RPATH ""`，确保 `libZhulongAlgoRuntime.so` 不残留开发机绝对路径。
+3. **宿主不装载任何算法产物，推理能力只存在于包进程里**：
+   - 交付形态是「包 = 自带算法类的可执行文件 + 静态链接运行时」；宿主需要单次推理能力时（如离线人脸特征提取）启动该可执行文件并跟它说协议，见 [CGO 契约 §6](./cgo-contract.md)；
+   - 判据（必须为空）：`readelf -d build/targets/<name>/Zhulong | grep NEEDED` 不得出现 `libonnxruntime.so`；另外 `grep -n "dlopen\|dlsym" native/src/abi/engine.cpp` 也必须为空；
+   - 包缺失 / 入口不可执行 / 能力未实现时必须显式失败（`Zhulong_ERR_UNSUPPORTED` 或 `ALGO_ENTRY_INVALID`），严禁静默退化到模拟特征。
+
+### 6.2 资源模型、权重共享与并发约束
+
+1. **进程级共享 `Ort::Env`**：ORT 内部维护全局单例 `LoggingManager`，后端通过进程级静态 `std::shared_ptr<Ort::Env>` 复用环境实例，避免多次加载/卸载模型引发全局日志管理器状态冲突。
+2. **不可变资产与 Worker 会话隔离 (`Rule of 5`)**：
+   - `OnnxModelAsset` 持有 `std::shared_ptr<Ort::Env>`、`std::unique_ptr<Ort::Session>`（`Ort::Session::Run` 线程安全）及預解析的输入/输出 `TensorMeta` 与连续 `const char*` 名称数组；
+   - `OnnxSessionContext` 持有 `std::shared_ptr<OnnxModelAsset>` 强引用与 Worker 独占的 `Ort::RunOptions`，確保模型权重生命周期始终长于所有派生会话；
+   - 两者均显式 `= delete` 拷贝与移动构造/赋值（Rule of 5）。
+3. **边缘并发线程收敛**：`Ort::SessionOptions` 强制设置 `SetIntraOpNumThreads(1)`、`SetInterOpNumThreads(1)` 与 `ORT_ENABLE_ALL`，防止 ORT 内部线程池与宿主多 Worker 发生超额订阅（Oversubscription）。
+
+### 6.3 零拷贝张量桥接与异常防爆门
+
+1. **输入零拷贝包装**：通过 `Ort::Value::CreateTensor(memory_info, const_cast<void*>(in_tensor.raw_data()), in_tensor.byte_size(), shape_ptr, shape_len, onnx_type)` 直接挂载调用方 `zhulong::Tensor` 连续内存，禁止输入侧冗余 `memcpy`。
+2. **静态维度强校验与动态维度放行**：`forward` 前置校验输入数量、元素类型、维度阶数（Rank）；对模型中 `expected_dim > 0` 的静态维度严格校验相等，对 `<= 0`（如动态 Batch `-1`）的维度校验实参 `> 0`。
+3. **异常全拦截与错误码映射 (`map_onnx_error`)**：`load_model`、`create_session`、`forward` 内部全量捕获 `const Ort::Exception&`、`const std::bad_alloc&`、`const std::exception&` 与 `...`：
+   - `ORT_OK` ➔ `ZHULONG_PLUGIN_OK`
+   - `ORT_INVALID_ARGUMENT` / `ORT_NO_MODEL` / `ORT_INVALID_PROTOBUF` / `ORT_INVALID_GRAPH` ➔ `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`
+   - `ORT_NO_SUCHFILE` ➔ `ZHULONG_PLUGIN_ERR_NOT_FOUND`
+   - `ORT_MODEL_LOADED` ➔ `ZHULONG_PLUGIN_ERR_ALREADY_EXISTS`
+   - `ORT_NOT_IMPLEMENTED` / `ORT_EP_FAIL` ➔ `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED`
+   - `ORT_ENGINE_ERROR` / `ORT_RUNTIME_EXCEPTION` / `ORT_FAIL` 及未知码 ➔ `ZHULONG_PLUGIN_ERR_INTERNAL`
+   - `std::bad_alloc` ➔ `ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY`
+   - ⚠️ **加载阶段没有状态码通道**：`IInferenceBackend::load_model` 返回 `shared_ptr`（且不得为此改虚表，
+     那是 plugin.so／运行库的内部 ABI），运行库也不链接 `ZhulongLog`。因此每个失败出口必须经
+     `OnnxInferenceBackend::last_load_status()`（非虚、原子）留下映射后的状态：模型不存在
+     （`NOT_FOUND`）与 protobuf 损坏（`INVALID_ARGUMENT`）必须可区分，否则上面这张映射表
+     在加载路径上就是死代码。成功加载会把状态复位为 `OK`。
+   - basename/path 等可能分配的操作必须放在 `load_model` 的 try 内；`file_basename` 的 `bad_alloc`
+     也走 `fail_load(OUT_OF_MEMORY)`。独立 `onnx_load_oom_test.cpp` 通过一次分配故障验证不逃逸，不向产品添加注入开关。
+   - `forward` 的失败仍走返回值；深层的 `std::invalid_argument`（如张量 dtype 不匹配）归 `INTERNAL`。
+
+### 6.4 跨后端算法包模型适配与单测 Mock 委派
+
+1. **多格式输入布局解耦（Dual Layout）**：
+   - 算法插件（如 `FaceRecognitionPlugin`）通过检测模型输入张量的形状与数据类型（`[1, 3, H, W]` Float32 vs `[1, H, W, 3]` UInt8），动态自适应采用 NCHW 归一化 Float32 张量（ONNX SCRFD: `(x - 127.5f)/128.0f`；ArcFace/FaceLiVTv2: `(x - 127.5f)/127.5f`）或 NHWC 裸字节张量（RKNN），使上层应用与推理引擎布局约束完全解耦。
+   - 特征提取输出 512 维向量在插件内原地执行 L2 归一化（Unit Norm），确保后续 1:N 余弦相似度比对稳定对齐黄金基准。
+2. **测试夹具不经过产品后端**：
+   - `OnnxInferenceBackend` **不再**对 `mock.model` / `.weights` 做任何委派（该委派已删除）：产品后端只加载真实 ONNX 模型，非法/损毁文件走严格的格式校验与错误码映射。
+   - 需要桩推理的回归（Runner/Broker/协议）使用 `test_stub` 构建 + `test_stub:` 夹具标记；夹具目标不进入 SDK 分发物，也不参与任何包产物。
+
+---
+
+## 7. Rockchip VEPU JPEG 硬件编码后端契约（抓拍）
+
+*硬件基线：RK3568（Debian 11 arm64 / 内核 5.10.226 / `librockchip-mpp` 1.5.0-1 / `vepu@fdee0000`）。*
+
+### 7.1 三个硬件节点互不干扰（实测）
+
+| 节点 | 用途 | MJPEG ×20 | AVC ×20 |
+| --- | --- | --- | --- |
+| `fdee0000.vepu` | JPEG 硬编 | **+20 中断** | +0 |
+| `fdf40000.rkvenc` | H.264/H.265 硬编 | +0 | **+20 中断** |
+| `fded0000.jpegd` | JPEG 解码 | +0 | +0 |
+
+- **结论**：抓拍 JPEG 永远不会与将来的录像硬编抢硬件，**不需要仲裁**。唯一共享资源是 DDR 带宽与 IOMMU。
+- ⚠️ 不要把 `/proc/interrupts` 里的 `fdf40000.rkvenc` 当成 JPEG 编码的证据；JPEG 在 `fdee0000.vepu`（设备树节点名是 `vepu@fdee0000`，用 `grep vpu` 搜不到它）。
+
+### 7.2 尺寸与色彩契约（实测，⚠️ 禁止凭直觉加对齐/padding）
+
+| 输入尺寸 | 产物 SOF 尺寸 | 备注 |
+| --- | --- | --- |
+| 16×16 / 32×32 / 48×48 / 60×60 / 64×64 | 完全一致 | 无最小尺寸门槛（16×16 可用） |
+| **66×66** / 100×100 / 200×400 | 完全一致 | 非 16 对齐**无位移、无模糊、无 padding 伪影** |
+| 1920×1080 / **1922×1082** | 完全一致 | 非 16 对齐的 1080p 级同样精确 |
+| Y=16/128/235/255 | 解码 Y 原样返回 | **无 range 转换**，与软件后端行为一致 |
+
+- ⚠️ **不得为对齐而外扩/内缩 ROI**：VEPU 自己处理内部 stride 对齐，人为改框只会白白改变证据图内容。
+- 全幅矩形按 2 像素向内取整即可（色度下采样要求），与 `normalized_box_to_pixels` 的取整规则一致，保证两个后端产物几何相同。
+
+### 7.3 后端选择与分流阈值
+
+运行期开关 `ZHULONG_JPEG_BACKEND=cpu|mpp|auto`（默认 `auto`）。**未知取值 fail closed 到 `cpu`** 并记 ERROR，避免拼写错误静默打开硬件。
+
+实测（真实代码路径，`quality=85`，`CLOCK_PROCESS_CPUTIME_ID`）：
+
+| 尺寸 | 硬编 wall / cpu | 软编 wall / cpu | 胜者 |
+| --- | --- | --- | --- |
+| 64×64 | 0.92 / 0.69 ms | **0.38 / 0.38 ms** | 软编 2.4× |
+| 100×100 | 0.82 / 0.63 ms | **0.58 / 0.58 ms** | 软编 1.4× |
+| 128×128 | 0.87 / 0.64 ms | **0.64 / 0.64 ms** | 持平 |
+| 160×160 | 0.95 / **0.64 ms** | 0.84 / 0.84 ms | 硬编省 CPU |
+| 320×240 | **1.50 / 0.74 ms** | 2.12 / 2.11 ms | 硬编 1.4× |
+| 1920×1080 | **21.7 / 2.35 ms** | 53.0 / 52.98 ms | 硬编 **22.5× CPU** |
+
+- **分流规则**：`JpegBackend::prefer_hardware()` 以 `w*h > JpegBackend::min_pixels_for_hardware`（16384 / 128×128）为界。小图硬编的固定开销（上传拷贝 + ioctl ≈0.5ms）超过小面积 DCT，硬上只会拖慢 wall 并占住共享硬件。
+- 人脸脸框量级（≤128×128）落在软件侧；人体框、全幅走硬件。
+
+### 7.4 ⚠️ 强制启动自检（不可跳过）
+
+`MppJpegEncoder::self_test()` 用两张**仅亮度不同**（Y=16 vs 235）、色度同为 128 的 32×32 合成帧断言：
+
+1. 产物 SOI/EOI 完整；
+2. SOF 声明尺寸 = 请求尺寸；
+3. 两份 JPEG 字节**必须不同**。
+
+第 3 条拦的是「编码成功、产出合法 JPEG、但恒为纯灰图且不报错」——自研骨架在帧挂载序列不完整时真实复现过（`mpi_enc_test` 同库同硬件正常）。自检失败即 WARN 并回退软件，**不得为「先跑起来」跳过**。
+
+### 7.5 会话池与内存所有权
+
+- 会话按 **`(width, height, hor_stride, ver_stride)` 四元组**分桶（§7.6 的 stride 约束要求），上限 8，满载按 LRU 淘汰；**绝不是每帧 `mpp_init`**（那是几十毫秒级）。
+- 板端已验证：24 个不同尺寸连续编码（触发多轮淘汰与 `mpp_destroy`）不崩、不退化。
+- 所有权：会话/缓冲由 `MppJpegEncoder` 分配并释放；`MppFrame`/`MppPacket` 每次编码配平释放；JPEG 字节**拷贝**给调用方，packet 缓冲不外泄。
+- ⚠️ **会话必须自带 RAII 收尾**（`Session::~Session()` → `release()`），不能靠「每次都要记得调 `close_session`」：
+  初始化半途失败、LRU 淘汰、`sessions.emplace` 抛 `bad_alloc` 三条路径里漏一条就是 ctx/group/buffer 泄漏。
+  同理，`Impl::acquire()` **可以返回 `nullptr`**（建会话失败），所有调用方必须判空——`encode_dma` 曾在此直接解引用。
+- ⚠️ `encode_region` / `encode_dma_frame` / `self_test` 的公开契约是**绝不抛异常**：实现内部必须
+  把 `bad_alloc`（如 `out.assign`）接住并降级为「本帧失败 → 回退软件编码」，导入的 DMA-BUF 由栈上守卫配平。
+- ⚠️ **编码符号表与解码节点独立**：不得并入 `nodes/decode/mpp_loader`，否则一个缺失的 enc 符号会把硬件解码一并判为不支持。
+
+### 7.6 DMA-BUF 直通（已启用，**仅整帧**）
+
+`MppJpegEncoder::encode_dma_frame()`：把解码器产出的 fd 直接 `mpp_buffer_import(MPP_BUFFER_TYPE_EXT_DMA)`
+成 `MppBuffer` 交给 VEPU，**零 CPU 拷贝**。实测（1080p，`quality=85`）：
+
+| 路径 | wall | CPU | 备注 |
+| --- | --- | --- | --- |
+| 软编 (FFmpeg mjpeg) | 53.0 ms | 52.98 ms | 基线 |
+| 硬编 + CPU 上传 | 21.7 ms | 2.31 ms | §7.3 |
+| **硬编 + DMA-BUF 直通** | **20.3 ms** | **0.91 ms** | 相对软编 **58× CPU** |
+
+- ⚠️ **wall 的地板是 VEPU 本身**（1080p 约 20ms）。继续压 CPU 不会让单张变快，只降低对 A55 的占用与抢占。
+- ⚠️ **裁剪框不走直通**：MPP 编码器没有一致可靠的「源偏移」语义（UV 平面基址是否跟随 offset 未验证）。要做需 RGA crop → `mpp_buffer`，而裁剪图多是 ≤128×128（本来就走软编），收益与复杂度不成比例。
+- ⚠️ **stride 必须原样取自帧**（`frame.stride` / `frame.vstride`），**绝不可**用 `align16(width)` 顶替 —— 解码器可能给 2048 这类行跨度，顶替会让 VEPU 按错行宽读取、产出斜切图。会话池的 key 因此升级为 `(w, h, hor_stride, ver_stride)` 四元组。
+- ⚠️ **缓存一致性**：直通路径的写者也是硬件（解码器），CPU 侧无脏行，**不需要** `DMA_BUF_IOCTL_SYNC`。一旦引入「CPU 写完再硬编」（OSD、水印、马赛克），必须显式 end-write 同步，否则表现为**静默灰图**而不是报错。
+- **运行期自证（不可省略）**：首次直通会对**同一帧**分别走直通与上传路径并逐字节比对 —— 相等才启用，不等即 `ERROR` 并**永久停用**。这条把「dma_heap 测试缓冲」的验证升级成「真实解码器帧的 fd 语义」验证，而后者只能在真机上完成。另外连续失败 3 次也永久停用，防止「每帧先付 import 开销再回退」的隐性退化。
+
+### 7.7 MPP 手工镜像的 ABI 一致性护栏
+
+- `native/src/common/mpp/mpp_api_types.hpp` 是**手写镜像**（不引用厂商头，以便 x86/macOS 零依赖编译）；
+  `MppBufferInfo` 字段序、`MppApi` 函数表偏移、编码/格式/缓冲类型枚举、`MpiCmd` 命令字、错误码
+  都必须与 BSP 头逐项一致。
+- ⚠️ 漂移的表现不是编译失败，而是板端「偶发斜切图 / fd 传错位 / control 打到相邻命令」。
+  因此 `native/tests/mpp_abi_conformance_test.cpp` **同时**引入镜像与 `native/vendor/mpp/include/rockchip/`
+  的厂商头，用 `static_assert(sizeof / offsetof / 枚举值)` 把差异变成编译错误（不链接 `librockchip_mpp`，
+  主机与交叉构建都参与编译）。
+- 升级 BSP 时的正确顺序：先更新 `native/vendor/mpp/include/rockchip/`，编译该测试；断言失败即修镜像，
+  而不是反过来改断言。
+
+## 8. 华为昇腾 DVPP VDEC 解码后端契约（310P/310B）
+
+### 8.1 为什么是「编译期头文件 + 运行期 dlopen」（与 MPP 相反）
+
+MPP 敢手写 ABI 镜像，是因为 `native/vendor/mpp/include/rockchip/` vendored 了厂商头，并有
+`native/tests/mpp_abi_conformance_test.cpp` 用 `static_assert` 做护栏。Ascend **没有**可 vendored 的
+公开头，镜像错误的后果是板端静默错帧/段错误，而不是编译失败——所以这里反过来：
+
+- 编译期：`ZHULONG_ASCEND_ROOT` 指向含 `acl/acl.h` 与 `hi_dvpp.h` 的 CANN include 前缀，CMake 定义
+  `ZHULONG_HAVE_ASCEND=1`。结构体布局、字段名、常量全部由**真头文件**保证，猜错就是编译错误。
+- 运行期：22 个符号仍全部 dlopen（候选 `libacl_dvpp.so` / `libhi_dvpp.so` / `libascendcl.so` /
+  `libdvpp_utils.so`，再退 `RTLD_DEFAULT`）。任一符号缺失即整体 fail closed，**不做部分可用**。
+- 未设置 `ZHULONG_ASCEND_ROOT` 时该后端编译成桩：`ascend_vdec_compiled()` 为 false、
+  `create_vdec_channel()` 返回 nullptr，`backend = "ascend"` 直接 fail closed。
+- ⚠️ 因此**没有 CANN 的构建从不编译 `ascend_channel.cpp` 的 CANN 分支**。改动该文件后，必须在装了
+  CANN 的机器上至少 `make native-build` 一次，否则语法/字段错误会一直潜伏到板端。
+
+### 8.2 只用 `hi_mpi_vdec_*` 拉取式，不实现 `aclvdec*` 回调式
+
+| 维度 | `hi_mpi_vdec_*`（采用） | `aclvdec*`（不采用） |
+| --- | --- | --- |
+| 取帧 | `hi_mpi_vdec_get_frame` 主动拉 | 回调线程推 |
+| 与 `IDecodeNode` | send/receive 一一对应 | 需要跨线程队列桥接 |
+| PTS | `hi_vdec_stream.pts` 随包带 | 只能塞 `userData` |
+| 生命周期 | `release_frame` 显式归还 | 描述符 + 回调时序契约 |
+
+`hi_mpi_vdec_*` 属于 CANN 7.0+ 的统一媒体接口。310P1 常见的 6.x 上没有这批符号，此时
+`ascend_vdec_available()` 返回 false 并 fail closed——这是**预期**行为，不要为了兼容去补回调式分支。
+
+### 8.3 线程与 context 绑定
+
+- 进程级：`aclInit` → `aclrtSetDevice` → `hi_mpi_sys_init`，由 `Runtime` 引用计数管理；
+  `ACL_ERROR_REPEAT_INITIALIZE` 视为成功（同进程可能已有其它组件初始化过）。
+- 每通道：`aclrtCreateContext` → `aclrtSetCurrentContext` → `hi_mpi_vdec_create_chn` → `start_recv_stream`。
+- ⚠️ context 是**线程绑定**的：通道的创建、`send`、`get_frame`、`release` 必须在同一线程。当前由
+  `IDecodeNode` 的单线程 decode 循环保证；将来若改多线程，每个线程都要 `aclrtSetCurrentContext`。
+- 构造函数抛异常时析构不会执行，`CannVdecChannel` 用 try/catch 显式 `teardown()` 回滚；否则 ACL
+  引用计数永不归零，后续所有通道都建不起来。
+
+### 8.4 内存与所有权
+
+- 码流先 `aclrtMemcpy`(H2D) 到 `hi_mpi_dvpp_malloc` 的设备缓冲，再 `hi_mpi_vdec_send_stream`；输入
+  缓冲按需扩容并复用，最小 1 MiB。
+- 输出帧由驱动分配，`get_frame` 取出后**必须** `release_frame` 归还。通道缓冲数有限，漏归还的表现
+  是「解码逐渐停住」，不是报错。
+- `pending_` 以设备地址登记在途帧，`release(void*)` 精确归还；在途上限 64，超限立即归还并返回
+  `decode_again`——不阻塞、不增长。
+- 首期不做零拷贝：`receive_frame` 里 `aclrtMemcpy`(D2H) 到池化主机缓冲后**立刻**归还设备帧，
+  `HardwareFrame::dev_ptr` 留空。将来接 VPC/RGA 时再把 `dev_ptr` 交给下游。
+
+### 8.5 几何与对齐
+
+- 建通道用 `compute_vdec_geometry()`：`width_stride = align_up(max(width, 32), 16)`、
+  `height_stride = align_up(height, 2)`、`buffer_size = ws * hs * 3 / 2`。
+- ⚠️ 取帧后**以驱动实际产出为准**（`v_frame.width_stride[0]` / `height_stride[0]`）覆盖本地几何。
+  驱动可能选择更大的对齐粒度，用本地值算 UV 偏移会整体错位。
+- 输出固定 `HI_PIXEL_FORMAT_YUV_SEMIPLANAR_420`（NV12），与 `FRAME_FORMAT_NV12` 对应。
+
+### 8.6 错误与背压映射
+
+| 通道返回 | 节点返回 | 说明 |
+| --- | --- | --- |
+| `HI_ERR_VDEC_BUF_FULL` | `decode_again` | 上层 `drain_frames()` 后重发同一包（`stream.cpp` 已有该逻辑） |
+| `HI_ERR_VDEC_BUF_EMPTY` | `decode_again` | 暂时没有输出帧 |
+| 其它非 `HI_SUCCESS` | `decode_backend_failure` | 同时置 `healthy_ = false` |
+
+- `flush()` = 归还全部在途帧 → `stop_recv_stream` → `reset_chn` → `start_recv_stream`。它**同时是传输
+  错误的恢复路径**，因此不看 `healthy_`：只要通道还在就尝试救回来。
+- EOS：`send_packet(nullptr, 0, ...)` 触发 `send_eos()`；之后继续送包恒返 `AVERROR_EOF` 直到 `flush()`。
+- 取帧成功但 `virt_addr[0]` 为空属于驱动异常，按 `decode_backend_failure` 处理，**不能**当成「暂时没帧」，
+  否则调用方会空转。
+
+### 8.7 配置
+
+- `[decode] backend = "ascend"` 点名要求昇腾硬件解码。
+- `allow_software_fallback = false` 映射为 `DecoderBackend::hardware_auto`（任意硬件、禁止软解），
+  **不会**被改写成 `mpp_hw`——否则昇腾板会被误判成「用户点名要 MPP」。
+- 设备号由 `ZHULONG_ASCEND_DEVICE` 覆盖（默认 0）；多卡可见性仍由 `ASCEND_RT_VISIBLE_DEVICES` 决定。
+- 构建：`ZHULONG_ASCEND_ROOT=/usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/include`，
+  `native/scripts/build.py` 透传同名环境变量。
+
+### 8.8 ⚠️ 310P1 真机核对清单（无设备时不可跳过）
+
+1. `cat /usr/local/Ascend/ascend-toolkit/latest/version.cfg`：CANN ≥ 7.0 才有 `hi_mpi_vdec_*`。
+2. `nm -D .../lib64/libacl_dvpp.so | grep -E 'hi_mpi_vdec|hi_mpi_dvpp|hi_vdec_get'`：22 个符号是否齐全。
+3. `hi_vdec_chn_attr` / `hi_vdec_pic_info` / `hi_video_frame_info` 字段名与 `hi_pic_buf_attr` 的 6 字段
+   聚合顺序是否与头一致——不一致应在**编译期**报错，这是设计意图。
+4. `hi_mpi_vdec_get_frame` 的 `hi_vdec_stream*` 出参是否回填 `pts`；若恒为 0，需改为按送包顺序配对。
+5. 码流假设 Annex-B（RTSP 解复用产出）；上游若给 AVCC（长度前缀），必须先转换。
+6. `send_eos()` 传 `pic_info = nullptr` 是否被接受；若报参数错误，改为传一个占位 `hi_vdec_pic_info`。
+7. 连续跑 30 分钟以上，观察通道缓冲是否泄漏（`pending_` 恒不增长、解码不逐渐停住）。
+
+## 9. 验证命令
+
+```bash
+# 1. 检查头文件依赖隔离（仅允许在 native/src/backends/{rknn,onnx}/ 引用）
+grep -rn '#include.*rknn_api.h' native/src/ native/sdk/ native/include/
+grep -rn 'onnxruntime' native/src/ native/sdk/ native/include/
+
+# 2. 检查宿主与动态库依赖（宿主绝对不链接厂商 SDK，RPATH 为空）
+readelf -d build/native/cross-rk3568-rknn-rga/libZhulongAlgoRuntime.so | grep -E 'NEEDED|RUNPATH'
+readelf -d build/targets/rk3568-rknn-rga/Zhulong | grep NEEDED
+
+# 3. 运行 ONNX Runtime 后端单元测试与 ASan/UBSan 内存审计
+python3 native/scripts/build.py configure --inference-backend onnx
+cmake --build build/native/host --parallel 8 --target ZhulongOnnxTests
+ctest --test-dir build/native/host -R ZhulongOnnx -V
+
+python3 native/scripts/build.py configure --inference-backend onnx --sanitizer address
+cmake --build build/native/host-address --parallel 8 --target ZhulongOnnxTests ZhulongFaceRecognitionOnnxTests
+ctest --test-dir build/native/host-address -R "ZhulongOnnx|ZhulongFaceRecognitionOnnx" -V
+
+# 4. 运行本地默认 CPU 与 DMA-BUF / IPC SCM_RIGHTS 全量回归单元测试
+#    含 RKNN API stub + Linux RGA/UAPI stub（不链接厂商库），以及 ONNX basename OOM。
+python3 native/scripts/build.py test
+
+# 4.0 后端安全契约定向测试与 ASan/UBSan（先通过 wrapper configure/build）
+ctest --test-dir build/native/host -R 'Zhulong(RknnContract|RgaContract|OnnxLoadOom)' --output-on-failure
+python3 native/scripts/build.py --inference-backend onnx --sanitizer address configure
+cmake --build build/native/host-address --parallel 8 --target ZhulongRknnContractTests ZhulongRgaContractTests ZhulongOnnxLoadOomTests
+ctest --test-dir build/native/host-address -R 'Zhulong(RknnContract|RgaContract|OnnxLoadOom)' --output-on-failure
+
+# RGA 断言：失败→成功状态复位、预校验失败不提交 Tensor、WRITE START→padding→END→RGA、
+# START/END 失败不提交硬件/不继续 CPU 回退、CPU letterbox 回退 READ/WRITE 括号、借用 fd 不关闭。
+# RGA stub 使用 GNU/Linux 链接器 --wrap；交叉档位只编译真实板端测试，不构建/执行宿主 stub。
+
+# 4.1 ⚠️ Go 测试缓存不感知运行期 dlopen 的算法插件
+#     `libFaceRecognitionPlugin.so` 既不在 Go 构建输入里，也不进 CGO_LDFLAGS 的内容哈希，
+#     因此切换推理后端（cpu ↔ onnx）后 `go test` 会直接复用上一次的缓存结果（含 SKIP 结论）。
+#     验证真实推理链路时必须显式 -count=1：
+python3 native/scripts/build.py --inference-backend onnx go test -race -count=1 ./internal/engine
+
+# 5. 交叉构建并在 RK3568 板端验证硬件解码与全链路零拷贝
+python3 native/scripts/build.py --profile native/profiles/rk3568-rknn-rga.json build
+scp build/native/cross-rk3568-rknn-rga/ZhulongDecoderTests rk3568:/tmp/
+ssh rk3568 "/tmp/ZhulongDecoderTests"
+
+# 6. JPEG 硬编（VEPU）板端验证：自检 + 尺寸矩阵 + 会话池淘汰 + 后端分流
+python3 native/scripts/build.py --profile native/profiles/rk3568-stub.json build
+scp build/native/cross-rk3568-stub/ZhulongJpegEncoderTests rk3568:/tmp/
+ssh rk3568 "/tmp/ZhulongJpegEncoderTests"                      # 无环境变量 = auto，应报 mpp
+ssh rk3568 "ZHULONG_JPEG_BACKEND=cpu /tmp/ZhulongJpegEncoderTests"  # 强制软编对照组
+
+# 7. 算法包板端验收（rk3568 档位）：交叉只产前缀，**包在板上用自己的编译器构建**
+make board-check                                  # = native/scripts/board_check.sh
+make board-check BOARD_HOST=<ssh 主机别名>
+
+```
+
+第 7 条走两条路，它们证明的是**不同**的事，所以两条都要：
+
+| 路径 | 命令 | 证明什么 |
+| :--- | :--- | :--- |
+| 板端自建 | 同步前缀+包 → 板上 `make SDK_PREFIX=…` | SDK 前缀在真设备上可用（头/库/CMake 变量齐全）；第三方用自家 BSP 工具链走同一条路 |
+| 交叉出包 | `build_package.py --target rk3568 --toolchain … --rknn-root …` | **出货形态**真的能跑：归档 → 板上解包 → exec 包根入口 |
+
+宿主机交叉构建算法的三条关键参数（都通过包自己的 Makefile 透传，包工程不写死任何仓库路径）：
+
+```bash
+make -C packages/face_recognition/rk3568 \
+    SDK_PREFIX=<aarch64 前缀> \
+    TOOLCHAIN=build/native/cross-rk3568-rknn-rga/toolchain.cmake \
+    RKNN_ROOT=native/vendor/rknpu2 \
+    RGA_ROOT=native/vendor/rga        # 前缀的视觉后端是 rga 时必须给
+```
+
+- **工具链文件由 `native/scripts/build.py` 生成时就要写全**（编译器 + `CMAKE_*_FLAGS_INIT`），
+  因为包工程只能拿到这个文件，拿不到 build.py 的 `-D` 列表；
+- `-DZhulongAlgoSDK_DIR=<prefix>/lib/cmake/ZhulongAlgoSDK` 由包 Makefile 固定传入：
+  交叉工具链设了 `CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY`，`CMAKE_PREFIX_PATH` 会被
+  限制在 sysroot 内搜索，表现是「明明给了前缀却找不到包」；
+- `RKNN_ROOT` 在 SDK 配置里改成**先按显式路径**找 `librknnrt.so`，再退回 `find_library`：
+  同上，`FIND_ROOT_PATH_MODE_LIBRARY ONLY` 会让 `find_library` 看不见厂商 SDK 目录。
+- ⚠️ **SDK 前缀必须同时导出版本与视觉后端**：`VERSION` 里有 `backend=` 与 `vision=`，
+  `ZhulongAlgoSDKConfig.cmake` 里 `ZhulongAlgoSDK_VISION_BACKEND` 与 `ZhulongAlgoSDK_BACKEND` 并列。
+  漏掉视觉后端时，`vision_backend=rga` 的前缀会把 `rga_vision_backend.cpp.o` 拖进包入口，
+  却在链接期报一串 `undefined reference to imcheckHeader/improcess/wrapbuffer_virtualaddr_t`
+  —— 而包工程手里没有任何线索能猜到「缺的是视觉后端」。消费侧只能通过 `RGA_ROOT` 或
+  前缀自带的 `third_party/rga/lib` 补 `librga.so.2`。
+- ⚠️ **包 Makefile 的 cmake 配置必须对参数敏感**：只依赖 `CMakeLists.txt` 的 mtime，会让上一次的
+  `-DCMAKE_TOOLCHAIN_FILE` / `-DRGA_ROOT` 静默沿用，症状是「换了档位编出来的包还是旧后端」。
+  现在的做法是 `.configure-args` 指纹文件，参数变了才重跑 cmake。
+
+实测：交叉产物与板端自建产物对同一张脸给出**逐位相同**的 512 维向量
+（`head=[0.02589, -0.06186, 0.05486, 0.00463]`，`norm=1.000000`）—— 同源同权重，确定性推理。
+
+实测基线（RK3568 / Debian 11.11 / librknnrt 2.3.2）：`make test` 5 人 5 脸、`cost_ms ≈ 246`；
+`--verify` `sample_decoded=true, count=5`；`--extract-feature` 512 维 `norm=1.000000`；
+`nm -D` 里 `zhulong` 符号数 0；连续推理后 `/sys/kernel/debug/rknpu/load` 有非零读数（NPU 真在算）。
+
+⚠️ **跨平台特征不可混用**：同一张脸在不同档位的向量属于不同度量空间（权重不同）。底库登记用的
+`[person].extractor_algorithm` 必须与流式识别指向**同平台**的人脸包，否则永远匹配不上且无任何报错。
+
+### 8.9 昇腾 VDEC 的验证命令
+
+```bash
+# 宿主机状态机回归（假通道驱动，不需要 CANN 与真机）
+ctest --test-dir build/native/host -R ZhulongAscendDecode --output-on-failure
+
+# 有 CANN 的机器上启用真实分支；未设置时该后端编译成桩
+ZHULONG_ASCEND_ROOT=/usr/local/Ascend/ascend-toolkit/latest/$(uname -m)-linux/include \
+    python3 native/scripts/build.py build
+```

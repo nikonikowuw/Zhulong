@@ -1,0 +1,12 @@
+version: 1
+change_id: 2026-11-15-face-track-fusion-identity
+mode: full
+base_commit: 8c39ca452bea44fc8bd84419ecc5348297df2088
+created_at: 2026-11-22T05:50:40.537Z
+specs:
+  - architecture/architecture.md
+  - domains/algorithm-sdk-and-delivery.md
+  - domains/data-and-storage.md
+rules:
+  - native/native-link-and-abi
+new_specs: []

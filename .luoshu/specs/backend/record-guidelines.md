@@ -1,0 +1,81 @@
+# 感知记录与抓拍规范
+
+> 适用于 `internal/record` 的识别、告警、目标抓拍记录、证据图和保留清理；不负责连续视频录像。
+
+## 1. 数据流与职责
+
+```text
+Runner MSG_RESULT
+  → camera.StreamHub 解析与区域过滤
+  → record.Service 持久化 / 排队抓拍
+  → EventHub 广播同一份过滤后结果
+```
+
+- 区域过滤由 `internal/region.Config.Filter` 实现，并在 `StreamHub` 向持久化 consumer 和 EventHub fan-out 前执行。ROI 是 allowlist（未配置时全放行），MASK 命中优先拒绝；检测框、人体框、车辆框分别取底部中心判定，分类没有框、不参与过滤，人体内人脸和车辆内车牌不单独判定。
+- AI 流按相机共享，Hub 不得猜测结果属于哪个算法。Runner 应在结果载荷中提供 `algorithm_id`；缺失时保留为未知。
+- `record.Service` 负责把推理结果映射为识别、告警和目标抓拍记录，并按 cooldown 去重。相机流管理与区域策略属于 camera/region 域；文件清理属于 storage 域。
+- **目标跟踪与身份去重契约**：
+  - `track_id` 归**宿主独占**：由宿主关联器在 `(camera_id, algorithm_id, kind)` 命名空间内单点生成，语义为「仅进程运行期内可比、进程内单调自增」；算法包内部的跟踪 ID 不得经 IPC 载荷出口。载荷里的 `track_id` 仅用于 `IsFaceCloseup()` 退化判据，不进库、不参与去重键、不回写进模型载荷或事件载荷。
+  - **去重键格式**：统一使用 `trk:` 前缀区分身份键与回落键：
+    - 识别：已匹配人员用 `rec:{camera}:trk:{id}` 并与 `rec:{camera}:person:{person_id}` 组成两级抑制，未匹配陌生人用 `rec:{camera}:trk:{id}:unmatched`；通过原子 `AllowAllAndStamp` 判定——允许同一 `track_id` 在冷却期内完成一次 `unmatched → matched` 升级落库，且已匹配通过时原子顺带封锁 `:unmatched` 抑制倒退陌生人。
+    - 人体/近景抓拍：`cap:{camera}:person:trk:{id}`；无身份回落时近景用 `face:box`、人体用 `person:box`。
+    - 车辆抓拍：`cap:{camera}:vehicle:trk:{id}`；有车牌时与 `cap:{camera}:vehicle:plate:{plate_no}` 组成两级抑制，必须通过原子 `AllowAll` 判定。
+    - 通用检测：`cap:{camera}:{label}:trk:{id}`；无身份回落保持 `cap:{camera}:{label}`。
+    - 告警：保持动作语义粗键 `alarm:{camera}:{label}`。
+  - 匹配算法采用 IoU (≥ 0.2) 主判据 + 中心距与高度比兜底；`lastSeen` 命中更新强制单调防倒退；TTL 动态绑定 2 × CooldownWindow。
+
+参考实现与测试：`internal/camera/stream_hub.go`、`internal/region/filter.go`、`internal/camera/stream_hub_test.go`。
+
+## 2. 持久化与来源归属
+
+- schema 以 `internal/database/migrations/` 中的已应用迁移为准；禁止从本文件复制 SQL 来改 schema。
+- `algorithm_id` 缺失时写 SQL `NULL`，不要写空字符串。SQLite 外键对空字符串仍要求存在父行，空字符串会导致记录插入失败。
+- `algorithm_name` 与 `algorithm_version` 是写入时快照。算法卸载后，外键按 `ON DELETE SET NULL` 保留记录；读取时不得 join 已卸载的算法表来“补回”快照。
+- 新增记录使用推理时间戳转 UTC；时间戳缺失时才使用宿主当前 UTC 时间。
+- **人脸识别特征向量持久化与查询隔离**：
+  - `recognitions.feature_vector BLOB` 持久化流式人脸 512 维 L2 归一化 IEEE-754 小端 `float32` 向量（2048 字节），用于下游陌生人聚类与追溯。无论陌生人（`matched = false`）还是已知人员（`matched = true`）均写入特征向量。
+  - **列表查询隔离**：`ListRecognitions` 分页列表查询必须通过 GORM `.Omit("feature_vector")` 显式剔除大 BLOB 字段，避免加载 SQLite overflow page 拖慢分页索引扫描与引发内存抖动；单条详情或精确查询（`GetRecognitionByID`）完整读取 BLOB。
+  - **实时广播与 API 隔离**：Go 领域模型 `aitypes.FaceStructureItem.FeatureVector` 必须显式标记 `json:"-"`，严禁通过 WebSocket/SSE 实时预览向前端广播 2 KB 二进制特征，公网 API 响应模型（`RecognitionResponse`）保持无该字段。
+- **两条属性通道与 `@face` 改名契约**：
+  - 记录的 `attributes_json` 由两条**来源不同**的通道合并而成：人体属性（PPLCNet 人体属性模型，192×256 人体框，`AgeLess18/Age18-60/AgeOver60` 三档年龄 + 服饰 + 姿态）与人脸自身属性（InsightFace genderage，96×96 对齐人脸，性别 + 五档年龄）。
+  - 两条通道都可能在 `Female` 这类同名标签上各自给分，因此**不得覆盖、不得取最大值**：覆盖会静默丢掉一整条通道的证据，而且丢哪边取决于 Go 的 map 遍历顺序；取最大值会把「人体模型说 Female=0.54」和「人脸模型说 Male=0.98」这类互相矛盾的判断混成一个数。
+  - 同名键两条都保留，人脸通道改名为 `<标签>@face`。撞名可能不止一次（人脸通道自身就可能已带 `@face`，例如上游合并过一轮），改名必须**循环追加**到不撞为止（`Female@face@face`）；人脸键按字典序处理，保证键集合与映射都是纯函数、与 map 迭代顺序无关。
+  - `@face` 后缀是**对外数据契约**：它写进 `records.attributes_json`，前端与导出一律按它展示。改后缀等于改对外数据格式，必须同步 `internal/record/service_build.go` 的 `faceAttributeKeySuffix`、任务 design 与前端。
+  - 只有恰好一条通道有值时直接返回该 map（不复制、不改名），让最常见的情况保持原样；两条都空时返回 `nil`，序列化为 `{}`。
+- 记录批量写入失败时不得继续排入对应证据图任务，避免创建无数据库引用的孤儿图片。
+  `ProcessInferenceResult` 会把首个持久化错误连同层信息返回给调用方（StreamHub 按 camera_id 记一条 Warn），
+  抓拍落盘失败不上抛 —— 那是后台 worker 的事，与「这条结果是否被消费」无关。
+
+实现/迁移：`internal/record/service.go`、`internal/record/model.go`、`internal/database/migrations/000015_algorithm_delete_set_null.up.sql`、`000016_capture_algorithm_ref.up.sql`。算法卸载保留历史记录由 `internal/record/algorithm_uninstall_test.go` 覆盖。
+
+## 3. 证据图生命周期
+
+- 抓拍是记录的补充，不是记录写入的前置条件；图像生成和写盘在 `SnapshotStore` 后台 worker 执行，不阻塞推理结果消费路径。
+- **事件录像片段触发**：仅 `alarms` 与 `recognitions` 在持久化成功后同步调用可选 `ClipTrigger`（`captures` 永不触发）；识别事件按任务策略 `all | stranger | known` 过滤。触发失败仅记 `Warn`，不影响事件入库与分发；片段状态与清理生命周期由 `internal/recording` 负责。
+- 队列有界（当前容量 32），提交非阻塞；依赖缺失、队列满或存储写门关闭时允许丢弃抓拍任务。已接收任务在 `Stop` 时排空。需要观测丢弃时读取 `SnapshotStore.Dropped()`。感知层不设单帧人工截断（杜绝冷却饥饿），多目标瞬时并发直接由队列容量与 `Dropped()` 观测承接。
+- 每个任务执行时重新读取媒体根目录，并检查 storage 写门；路径存为媒体根内的相对路径（`snapshots/...`），媒体读取仍走 `internal/mediafile`，不能自行拼接绝对路径对外暴露。
+- C ABI 抓拍支持透传目标帧 `PTS` 时间戳，Native 侧两级历史优先精确匹配目标帧：先查 4 帧借用环（零拷贝），再查像素副本环（约 1.2 s / 24 MiB 的已发布帧，与解码池解耦）。目标帧滑出窗口时退回**PTS 最近**的帧（不是最新帧）并限频告警 + 计数 `snapshot_miss_count`——最新帧在时间上最远，会把旧帧的检测框画到新画面上。图像生成和写盘在 `SnapshotStore` 后台 worker 执行，不阻塞推理结果消费路径。
+- **证据图必须自证与检测结果同帧**：`snapshotJob` 携带结果里的 `capture_time_ms`（`InferenceResult.CaptureTimeMs`，首选身份键）与 `pts`（回退键），经 `engine.SnapshotOptions.CaptureTimeMs` 透传给 Native；Native 回报实际命中帧的身份（`SnapshotImage.Source`）。`SnapshotStore.verifySource` 在 worker 内比对：结果带 `capture_time_ms` 就比对它，否则比对 `pts`，两者都没有则跳过（无可断言的帧身份，不算错）。不一致或 `Source.Exact == false` 时递增 `SnapshotStore.Mismatched()` 并记一条 `snapshot frame does not match the inference result` 的 Warn —— **图仍然照常落盘**（有图比没图强），缺的是「这张图能不能当证据」的结论；`Mismatched()` 非零是判断要不要调大 Native 副本环预算的唯一现场依据。
+- 数据库记录先写入，之后才提交抓拍任务。因此路径字段可能在图像生成前已写入，非空路径不保证文件已存在。任务队列拒绝时，调用方会尝试清空对应记录路径；后台遇到写门关闭、媒体根解析失败、抓拍失败或零张图片写入时，也会尝试清空该记录的抓拍路径。**这些清理是尽力而为，可能异步失败；若一个任务部分写入成功，当前实现不会逐输出项清理未写入路径。**`SnapshotStore` 未注入（`Available() == false`）时，告警/识别/车辆抓拍三条分发路径都会先尝试清空记录路径再分发事件，不允许出现「服务不知道自己没有抓拍能力，却留下非空路径」的记录。调用方仍必须容忍媒体读取返回缺失。
+
+参考实现：`internal/record/service.go`、`internal/record/snapshot.go`、`internal/engine/engine.go`、`native/src/abi/engine.cpp`。测试：`internal/record/snapshot_test.go`。
+
+## 4. 文件与数据库行清理
+
+- storage 域负责按存储策略删除媒体文件；record 域不绕过 storage 清理器直接删除证据文件。
+- `RetentionPruner` 的 TTL 巡检只考虑超过配置保留期的 `recognitions` 与 `captures`。只有当一行引用的所有非空快照路径均确认不存在时才删除该行；任一文件仍存在则保留整行。文件检查出错时应中止本轮，不得按“文件不存在”处理。
+- **容量淘汰是 TTL 巡检的唯一例外**：storage 删除未过期快照后，app 层把已删除的基名 ID 写入 `pending_snapshot_deletes` outbox，再由 `RetentionPruner` 按主键批量删除 `captures` / `recognitions`。正常路径必须先落 pending 再删行；删除成功后才清 pending。失败/进程重启后由 `Start` 与每轮 `sweep` 重试。若 enqueue 本身失败（SQLite 短暂不可用），app 可退化为直接按主键删除并记录 error；直接删除仍失败时由 TTL 巡检兜底。禁止用「未过期全表扫描 + `os.Stat`」代替，因为记录先落库、图异步写盘，扫描会误删正在写的新抓拍。
+- `DeleteBySnapshotIDs` 只删 `captures` / `recognitions`，绝不删 `alarms`；`alarms` 是告警元数据，其图片由 storage 的 `.lock`/`EvidenceGuard` 保护。
+- **历史告警补锁**：升级时 `EnsureAlarmEvidenceLocks` 扫描 `alarms.image_path` / `crop_path`，对存在的图片幂等补写 `.lock`；storage 另以 `EvidenceGuard` 按 alarm ID 查询兜底，guard 出错时失败关闭（跳过删除）。
+- 告警行不由自动保留清理删除。高价值告警证据文件由 storage 使用保护标记防止自动淘汰；清理策略详见 [Storage 规范](./storage-guidelines.md)。
+- 清理器按批次执行并支持取消；没有有效保留策略或文件检查器时不删除记录。清理是幂等的，测试需覆盖文件先删、数据库行后删的顺序，以及 pending 失败/取消后重试。
+
+实现/测试：`internal/record/retention.go`、`internal/record/retention_test.go`、`internal/storage/cleaner.go`。
+
+## 5. 验证
+
+```bash
+python3 native/scripts/build.py go test -race ./internal/record ./internal/camera ./internal/region
+```
+
+涉及跨层生命周期、迁移或原生抓拍改动时，再按项目要求运行 `make check`；具体 Native / SQLite 验证边界以对应层规范为准。

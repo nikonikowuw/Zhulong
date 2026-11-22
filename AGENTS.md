@@ -6,7 +6,7 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 并经一套 C ABI 静态链接 C++17 原生引擎。交付模型（「方案 A」）是一个可执行文件，运行时零 Node.js 依赖。
 
 - 前置依赖与功能边界：`README.md`
-- 开发流程、任务与规范导航：`.trellis/workflow.md`、`.trellis/spec/index.md`
+- 开发流程、任务与规范导航：[洛书工作流](.luoshu/config.yaml)、[规格索引](.luoshu/specs/index.md)
 
 ## 命令
 
@@ -19,7 +19,7 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 - 跑单个测试：engine 相关走 wrapper，其余可以直接 `go`：
 
   ```bash
-  python3 native/scripts/build.py go test -race ./internal/camera -run TestCameraCreate
+  python3 native/scripts/build.py go test -race ./internal/camera -run '^TestCameraHandlerCreate_GeneratedULID$'
   go test -race ./internal/httputil -run TestSuccess
   cd web && pnpm test -- src/features/cameras/api/cameras-api.test.ts
   ```
@@ -45,7 +45,7 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 
 ## 架构边界速查
 
-只有下面这些是「写错就出事」的；完整拓扑与跨层契约看 `.trellis/spec/architecture.md` 与各层 spec。
+只有下面这些是「写错就出事」的；完整拓扑与跨层契约看 [洛书架构地图](.luoshu/specs/architecture.md)与各领域规格。
 
 **Go 宿主（`internal/app`，Uber Fx）**
 
@@ -63,7 +63,7 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
   按 `Accept-Language` 选本地化文案、且只在服务端记录 cause；code 与文案在 `internal/httputil/locale.go`。
 - 未匹配的 `/api/*` 与 `/swagger/*` 返回 JSON 错误信封，其余未匹配 GET/HEAD 回退到内嵌 SPA。
 - `internal/httpmiddleware` 必须与业务无关。
-- **不直接收发 GORM Model。** 请求/响应类型名按位置取后缀：`*Request` / `*Response`（顶层载荷）/ `*Info`（嵌套投影）/ `*Status`（状态载荷）；**类型名不用 `*DTO`**。详见 `.trellis/spec/backend/http-api-guidelines.md` §4「命名约定」。
+- **不直接收发 GORM Model。** 请求/响应类型名按位置取后缀：`*Request` / `*Response`（顶层载荷）/ `*Info`（嵌套投影）/ `*Status`（状态载荷）；**类型名不用 `*DTO`**。详见 [Go 宿主与 HTTP](.luoshu/specs/backend/http-api-guidelines.md)。
 
 **持久化**
 
@@ -85,8 +85,8 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 
 - 特性切片：`src/features/<feature>/{api,hooks,components,data,locales}`，从 `index.tsx` 出页面入口；
   `src/routes/**` 只做路径声明、鉴权守卫、参数校验。跨特性只走对方的 `index.tsx`。
-- `src/routeTree.gen.ts` 是生成物，不手改；`src/lib/api-client.ts` 注入 `Accept-Language` 并拆 Go 信封；
-  不可信输入用 Zod 解析而非断言类型。
+- `src/routeTree.gen.ts` 是生成物，不手改；`src/lib/api-client.ts` 注入 `Accept-Language` 并保留 Go 信封；
+  特性 API 解包并用 Zod 解析外部数据，而非断言类型。
 - `src/components/ui/**` 是改造过的 shadcn/ui fork：未合并本地改动前**不要** `shadcn add --overwrite`。
 - 端口三处统一为 `8000`：`app.DefaultConfig`、仓库内 `config.toml`、Vite 的 `/api` 代理。
   改端口必须同步 `internal/app/config.go` 与 `web/vite.config.ts`；网络重配的确认链接
@@ -103,26 +103,14 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 - 前端测试跑在**真实无头浏览器**里，不是 JSDOM —— 不要写只在 JSDOM 下成立的假设。
 - 业务路径无 `panic`；不用 `_ = fn()` 吞错；不把 `context.Context` 存进结构体字段；
   无全局可变业务状态（通过构造函数注入）。
-- 动手前读对应 spec：`.trellis/spec/backend/index.md` 与 `frontend/index.md` 各带
-  Pre-Development Checklist，ABI 看 `.trellis/spec/native/*`，跨层边界看 `.trellis/spec/architecture.md`。
+- 动手前从[规格索引](.luoshu/specs/index.md)阅读对应领域，按改动路径加载[规则](.luoshu/rules/)。
 
-<!-- TRELLIS:START -->
-## Trellis 指引
+## 洛书工作流
 
-本项目使用 Trellis 管理。项目工作所需的信息位于 `.trellis/`：
+- Explore：`luoshu context build --stage explore --path <拟改文件>` 查规格与触发规则，用 `luoshu changes list` 排查重复变更。
+- Propose：创建或选择洛书变更，挂载规格与规则，写明范围、任务依赖和静态验收契约，经评审后再实施。
+- Apply：先用 `luoshu changes validate <id>` 验证结构，然后按依赖顺序推进并逐项增量验证。
+- Verify：在独立上下文对照 `verify.md` 和 `base_commit` 的完整差异，仅写验证报告。产品完整检查仍走 `make check`；未验证通过的命令不登记为洛书自动门禁。
+- Archive：Verify 通过后，先评审需更新的规格与规则，再归档。多条变更并存时，显式指定 ID，不自动选择或启动规划条目。
 
-- `.trellis/workflow.md`：开发阶段、任务创建要求和技能路由
-- `.trellis/spec/`：按软件包和层级组织的开发规范（编写代码前请先阅读）
-- `.trellis/workspace/`：开发者日志和会话记录
-- `.trellis/tasks/`：进行中和已归档的任务
-
-如果当前平台提供 Trellis 命令（例如 `/trellis:finish-work`、`/trellis:continue`），优先使用这些命令，而不是手动操作。
-
-如果使用 Codex 或其他支持子代理的工具，项目中还可能提供专用辅助配置：
-
-- `.agents/skills/`：可复用的 Trellis 技能
-- `.codex/agents/`：可选的自定义子代理
-
-此区域由 Trellis 管理；后续运行 `trellis update` 时可能会覆盖其中的修改。区域外的内容会保留。
-
-<!-- TRELLIS:END -->
+旧 Trellis 规格、任务、草案和日志只保留供历史追溯，不是现行入口。迁移范围、例外和回滚见变更 `2026-11-22-replace-trellis-with-luoshu` 的迁移台账；归档后按同一变更 ID 查找。

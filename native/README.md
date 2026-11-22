@@ -8,7 +8,8 @@ consumption while strictly preserving 100% C ABI backward compatibility behind
 `include/Zhulong/engine.h`. It does **not** implement the Go camera/subscription API,
 recording, preview transport or audio playback; hardware acceleration lives behind
 compile-time profiles (`native/profiles/`, see
-`.trellis/spec/native/hardware-backends.md`). The Go host still uses only engine
+[Native media](../.luoshu/specs/native/index.md) and
+[Algorithm SDK and delivery](../.luoshu/specs/native/algo-plugin-contract.md)). The Go host still uses only engine
 lifecycle calls; health readiness does not imply a connected camera.
 
 ## Host builds

@@ -1,0 +1,36 @@
+version: 1
+
+context: |
+  - 【语言约定】变更文档（proposal/design/tasks/verify）与系统规格保持语言一致。
+  - 【变更命名】使用 YYYY-MM-DD-<slug> 作为变更目录名。
+
+rules:
+  proposal:
+    - 必须明确列出不在本次变更范围内的内容（Out of Scope）。
+  design:
+    - 技术方案需对齐 .luoshu/specs/ 与命中的 .luoshu/rules/ 工程约束。
+  tasks:
+    - '任务按自底向上依赖拓扑顺序排列，使用 (deps: none) 或 (deps: 1.1) 标注依赖，严禁前向依赖。'
+    - 每个任务应包含明确的增量验证方式。
+  verify:
+    - 在独立上下文对照 verify.md 与基于 base_commit 的 diff 逐项评审。
+    - 仅输出 verify-report.md，严禁修改业务源码或改写原 verify.md。
+
+operations:
+  propose:
+    require_no_duplicate_active_change: true
+  apply:
+    require_valid_topology: true
+    guidance:
+      - 按 tasks.md 拓扑顺序逐项实施并在每步后运行增量验证。
+  verify:
+    gates: []
+    checklist:
+      - 逐项核对 verify.md 验收标准，确认无遗漏、跳过或弱化断言。
+      - 检查基于 base_commit 的完整变更 diff 是否超出声明范围。
+      - 核对是否符合所有命中的 rules/ 工程规范与挂载 specs/。
+    require_clean_worktree_after: false
+  archive:
+    strategy: move
+    require_verify_pass: true
+    review_specs_and_rules: true

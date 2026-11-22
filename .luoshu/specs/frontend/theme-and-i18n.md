@@ -1,0 +1,207 @@
+# 主题排版与多语言国际化契约
+
+> 基于 Tailwind CSS v4 + OKLCH 语义色彩体系、多维 Context 驱动（Theme / Font / Direction）与三语国际化规范。
+
+---
+
+## 1. Tailwind CSS v4 + OKLCH 语义主题规范
+
+系统采用现代化 **OKLCH 颜色空间**，在 `src/styles/theme.css` 中定义底层 CSS 变量，并通过 Tailwind CSS v4 的 `@theme inline` 注册为设计令牌（Design Tokens）。
+
+### 1.1 语义 Token 矩阵
+
+| 语义变量 | CSS 变量名 | 用途说明 |
+| :--- | :--- | :--- |
+| **画布背景** | `--background`, `--foreground` | 页面最底层背景与主文字颜色 |
+| **卡片/容器** | `--card`, `--card-foreground` | 业务卡片、面板容器背景与内容文字 |
+| **弹出浮层** | `--popover`, `--popover-foreground` | 下拉菜单、气泡提示、浮窗容器 |
+| **品牌主色** | `--primary`, `--primary-foreground` | 核心行动点按钮、高亮选中标签 |
+| **次要色** | `--secondary`, `--secondary-foreground` | 次级按钮、轻量辅助块 |
+| **弱化状态** | `--muted`, `--muted-foreground` | 次要说明文字、禁用背景、分隔装饰 |
+| **交互高亮** | `--accent`, `--accent-foreground` | 列表项 Hover 悬停背景、活动态指示 |
+| **破坏/危险** | `--destructive` | 删除、销毁、紧急停机等危险警示 |
+| **边框与控件** | `--border`, `--input`, `--ring` | 控件边框、输入框线框、键盘 Focus 焦点环 |
+| **侧边栏专用** | `--sidebar`, `--sidebar-border`, 等 | 侧边栏框架独立色彩 Token |
+
+### 1.2 编写红线与规范
+
+1. **绝对禁止硬编码绝对颜色**：
+   - ❌ 严禁出现 `bg-[#ffffff]`, `text-[#000]`, `border-[#e5e7eb]` 等任意 HEX/RGB 写法；
+   - ✅ 统一使用语义工具类：`bg-background`, `text-foreground`, `bg-card`, `border-border`, `text-muted-foreground`。
+2. **深浅双色切换机制**：
+   - 通过 `ThemeProvider` 动态向 `<html>` 注入或移除 `.dark` 类；
+   - 由 CSS 规则 `@custom-variant dark (&:is(.dark *));` 自动匹配激活深色变量，组件内无需手动编写冗余的深浅条件分支。
+
+### 1.3 原汁原味 shadcn-admin 组件视觉规范 (严禁私造样式轮子)
+
+所有前端 UI 必须 100% 遵从 `satnaing/shadcn-admin` 官方视觉系统。严禁开发者或 AI 自行手拼基础组件或生造不合群的颜色样式。
+
+#### 1. 基础组件必须直接取自 `@/components/ui/*`
+- 严禁自行手写 HTML 基础元素加杂色拼凑 Badge、Button、Card、Modal、Switch 等控件；
+- 必须优先使用 `@/components/ui/` 中的标准组件及其原生 `variant` / `size`。
+
+#### 2. 状态徽章 (Status Badge) 统一标准范式：Dot-Indicator Outline 模式
+任何展示资源、设备、连接、任务状态的 Badge，**严禁使用粗暴的实心破坏色（如实心深红 `variant="destructive"`）与其他浅色半透明标签混排**，**严禁使用未适配暗色模式的裸 Tailwind 颜色（如 `text-emerald-600`、`border-emerald-500/30`）**。
+必须统一使用 **带微指示圆点的半透明微边框 Outline 徽章**：
+
+```tsx
+<Badge
+  variant='outline'
+  className={cn('gap-1.5 text-xs font-normal', badgeStatusStyle)}
+>
+  <span className={cn('inline-block h-1.5 w-1.5 rounded-full', dotColorStyle)} />
+  {label}
+</Badge>
+```
+
+#### 3. 经典四级状态语义调色板 (必须成对具备双模支持)
+
+| 语义级别 | 状态场景 | Badge 外框与底色类名 (必须含 dark:) | 内嵌指示圆点类名 |
+| :--- | :--- | :--- | :--- |
+| **活跃 / 就绪 / 正常** | Active, Online, Healthy, Synchronized | `border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200` | `bg-emerald-500` |
+| **进行中 / 警告 / 缺失** | Syncing, Review, Missing, Warning | `border-amber-200 bg-amber-100/30 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200` | `bg-amber-500`（同步中可加 `animate-pulse`） |
+| **失败 / 异常 / 破坏性** | Failed, Error, Suspended, Offline | `border-destructive/20 bg-destructive/10 text-destructive dark:border-destructive/40 dark:bg-destructive/20 dark:text-destructive` | `bg-destructive` |
+| **未激活 / 未同步 / 未知** | Inactive, Unsynced, Unknown | `border-neutral-300 bg-neutral-300/40 text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800/40` | `bg-muted-foreground/60` |
+
+**必须通过 `@/lib/status-palette` 取类名，禁止在业务组件内就地手写色串。** 本会话已修复多起因复制粘贴导致的「只加 `dark:text-*` 而漏掉 `dark:border-*` / `dark:bg-*`」漂移（§1.3.5 的 ❌ 形态）。模块提供三种渲染形态：
+
+| 形态 | 导出 | 用途 |
+| :--- | :--- | :--- |
+| 徽章 / 状态面板 | `STATUS_LEVEL_CLASS` | 四元组 border+bg+text，徽章与诊断/提示面板共用同一级别类名 |
+| 指示圆点 | `STATUS_DOT_CLASS` | Dot-Indicator Outline 模式的内嵌圆点 |
+| 独立状态文字 | `STATUS_TEXT_CLASS` | 数值高亮等无底色的状态文字（如 FPS、占用率） |
+
+映射到级别时使用**显式** `{ 状态值 → StatusLevel }`，未声明的状态串统一回落 `inactive`（`statusLevelClass(undefined)`）。
+
+```tsx
+import { statusLevelClass, statusDotClass } from '@/lib/status-palette'
+
+const HEALTH_LEVEL: Record<HealthStatus, StatusLevel> = {
+  online: 'active',
+  offline: 'destructive',
+  error: 'destructive',
+  unknown: 'inactive',
+}
+
+<Badge variant='outline' className={cn('gap-1.5', statusLevelClass(HEALTH_LEVEL[status]))}>
+  <span className={cn('h-1.5 w-1.5 rounded-full', statusDotClass(HEALTH_LEVEL[status]))} />
+  {t(labelKey)}
+</Badge>
+```
+
+#### 4. 面板与容器统一标准 (Panels & Cards)
+- 仪表盘与配置面板背景统一使用 `bg-muted/30` 或 `bg-card`，边框统一使用 `border border-border`，圆角使用 `rounded-lg` 或 `rounded-xl`；
+- 严禁手写 `bg-gray-100`, `bg-slate-50`, `border-gray-300` 等非语义类。
+
+#### 4.1 列表页骨架：照抄 `persons` / `cameras`，不要自行发明
+
+所有 CRUD 列表页必须与 `features/persons` 同构，禁止自造布局或私造控件：
+
+| 位置 | 规范 |
+| :--- | :--- |
+| 页面入口 | `Provider` 包住 `XxxContent`，弹窗状态（`open` / `currentRow`）由 Provider 持有，`<XxxDialogs />` 集中挂载 |
+| 标题行 | `flex flex-wrap items-end justify-between gap-2`；标题块加 `min-w-0 flex-1`（否则长文案会撑满整行、把按钮挤到第二行最左），描述加 `max-w-3xl` |
+| 主操作 | 独立 `XxxPrimaryButtons`：`Button variant='outline' size='sm' className='h-8'`（刷新）+ `Button size='sm' className='h-8'`（新建），图标用 `me-1 h-4 w-4` |
+| 表格 | `@tanstack/react-table` + `DataTableToolbar` / `DataTablePagination` / 列定义拆到 `*-columns.tsx`、单元格拆到 `*-columns-cells.tsx`；容器固定 `rounded-md border border-border bg-card` |
+| 行操作 | 右侧 `⋯` `DropdownMenu`，不用内联图标按钮 |
+| 视图切换 | 与 `persons` 一致：工具栏行右侧 `rounded-lg border border-border bg-muted/40 p-0.5` 里放 `h-7 px-2 text-xs` 的 `Button` |
+
+**空态铁律**：0 条有效数据时页面上不得残留任何业务卡片（含「未配置」占位卡片、统计看板、分页条）。分页条在 `getFilteredRowModel().rows.length === 0` 时不渲染，否则会出现 `Page 1 of 0`。空态统一放在表格 `TableCell` 内或 `rounded-xl border border-dashed` 容器里，并带一个主 CTA。
+
+**「有数据」的判据要按业务有效项，不是表行数**：例如分析任务只有带算法订阅（`task.algorithms.length > 0`）才算任务；后端可能落下空聚合行，不得据此渲染看板。
+
+#### 5. 错误与正确实现对比 (Wrong vs Correct)
+
+| 场景 | ❌ 严禁出现（私造轮子 / 视觉割裂） | ✅ 必须规范（shadcn-admin 原汁原味） |
+| :--- | :--- | :--- |
+| **正常状态标签** | `<Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30">`（无暗黑适配，暗色下极暗） | `<Badge variant="outline" className="border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200 gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500"/>已同步</Badge>` |
+| **失败状态标签** | `<Badge variant="destructive">同步失败</Badge>`（突兀实心深红，与同排浅色标签割裂） | `<Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive dark:border-destructive/40 dark:bg-destructive/20 dark:text-destructive gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-destructive"/>同步失败</Badge>` |
+| **面板容器背景** | `<div className="bg-gray-50 border-gray-200 dark:bg-gray-900">` | `<div className="bg-muted/30 border border-border rounded-lg">` |
+| **表单单选卡片** | 手写 `onClick` 切换状态与自定义 `div` 边框高亮 | 使用 Radix `<RadioGroup>`，外层 Label 声明 `[&:has([data-state=checked])>div]:border-primary [&:has([data-state=checked])>div]:bg-primary/5` |
+
+#### 6. 分类色板 (Category Palette)
+
+**适用场景**：表达「**这是哪一类**」而非「**现在什么状态**」的标签 —— 任务类型（目标检测 / 图像分类 / 结构化人脸）、解码后端（WebCodecs / MSE / WASM / Mock）、存储构成（录像 / 抓拍 / 导出 / 其它）等。
+
+**与状态色板的边界（硬性）**：
+
+1. **严禁占用状态色相**：分类色相不得使用 `teal`、`amber`、`destructive`、`neutral` —— 那四者是 §1.3.3 状态语义的专属色。分类标签若染成 teal 会被误读为「正常/就绪」，染成 amber 会被误读为「告警」。
+2. **分类徽章不带状态圆点**：`<span className="h-1.5 w-1.5 rounded-full" />` 是 §1.3.3 状态徽章的专属标记。分类徽章不得携带，以此在视觉上区分两类标签。
+3. **色相必须取自有序槽位表**，按顺序取用，不得跳号或自造色相：
+
+| 槽位 | 色相 | 徽章类名（必须成对具备双模） |
+| :--- | :--- | :--- |
+| 1 | `blue` | `border-blue-500/30 bg-blue-500/10 text-blue-600 dark:border-blue-500/40 dark:bg-blue-500/20 dark:text-blue-400` |
+| 2 | `violet` | `border-violet-500/30 bg-violet-500/10 text-violet-600 dark:border-violet-500/40 dark:bg-violet-500/20 dark:text-violet-400` |
+| 3 | `emerald` | `border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:border-emerald-500/40 dark:bg-emerald-500/20 dark:text-emerald-400` |
+| 4 | `fuchsia` | `border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-600 dark:border-fuchsia-500/40 dark:bg-fuchsia-500/20 dark:text-fuchsia-400` |
+| 5 | `cyan` | `border-cyan-500/30 bg-cyan-500/10 text-cyan-600 dark:border-cyan-500/40 dark:bg-cyan-500/20 dark:text-cyan-400` |
+
+> 任务级分析裁剪（`crop`）画布框、工具及明细徽章使用槽位 5 `cyan`（区别于 ROI/MASK 与状态色），对应三语文案（`toolCrop` / `cropHint` / `cropClear` / `cropClearHint` 等）统一维护于 `features/tasks/locales/{en,zh-Hans,zh-Hant}.json`。
+| 兜底 | 未分类 / 未知 | 复用 §1.3.3 未激活档：`border-neutral-300 bg-neutral-300/40 text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800/40` |
+
+4. **暗色必须成对升级**：亮色 `border/30 + bg/10 + text-600` → 暗色 `dark:border/40 + dark:bg/20 + dark:text-400`。只加 `dark:text-*` 而不同步提升 border/bg 透明度，会导致 10% 底色在深色背景上几乎不可见（§1.3.5 的 ❌ 范例即此症）。
+5. **图表与图例的实心渲染**：堆叠条分段、图例圆点等不透明场景使用 `bg-<hue>-500`（双模一致，不加深浅分支）；图例圆点必须与对应分段**同色**，否则图例失效。中性兜底分段用 `bg-muted-foreground/60`。
+6. **必须通过 `@/lib/category-palette` 取类名**，禁止在业务组件内就地手写色串。该模块以**查表（完整字面量）**形式提供类名 —— Tailwind CSS v4 采用静态提取，`border-${hue}-500/30` 这类模板拼接不会被扫描生成，会静默丢样式。
+7. **映射需显式**：`{ 分类值 → 槽位 }` 必须显式声明，不得依赖数组下标 —— 否则新增分类会重排既有分类的颜色。
+
+```tsx
+import { CATEGORY_BADGE_CLASS, type CategoryHue } from '@/lib/category-palette'
+
+const TASK_TYPE_HUE: Record<TaskType, CategoryHue> = {
+  detection: 'blue',
+  classification: 'violet',
+  person_structure: 'emerald',
+}
+
+<Badge variant='outline' className={cn('px-2 py-0.5 text-xs', CATEGORY_BADGE_CLASS[TASK_TYPE_HUE[type]])}>
+  {t(labelKey)}
+</Badge>
+```
+
+---
+
+## 2. 布局方向与 RTL 适配契约 (Direction & RTL)
+
+系统通过 `DirectionProvider`（位于 `src/context/direction-provider.tsx`）提供全站 **LTR（左至右）** 与 **RTL（右至左）** 双向支持。
+
+### ⚠️ RTL 编写铁律（逻辑属性优先）
+
+为了确保在阿拉伯语或从右至左语言环境下布局自然镜像翻转，**严禁使用物理方向工具类**，必须强制使用 Tailwind 逻辑属性类：
+
+| 物理属性 (❌ 严禁使用) | 逻辑属性 (✅ 必须使用) | 对应 CSS 效果 |
+| :--- | :--- | :--- |
+| `pl-*`, `pr-*` | `ps-*`, `pe-*` | `padding-inline-start`, `padding-inline-end` |
+| `ml-*`, `mr-*` | `ms-*`, `me-*` | `margin-inline-start`, `margin-inline-end` |
+| `left-*`, `right-*` | `start-*`, `end-*` | `inset-inline-start`, `inset-inline-end` |
+| `border-l-*`, `border-r-*` | `border-s-*`, `border-e-*` | `border-inline-start`, `border-inline-end` |
+| `text-left`, `text-right` | `text-start`, `text-end` | 文本沿排版起始/结束方向对齐 |
+
+---
+
+## 3. 完整三语国际化契约 (English, 简体中文, 繁体中文)
+
+系统必须完备支持三大官方语言：**`en`**、**`zh-Hans`**（简体中文）、**`zh-Hant`**（繁体中文）。
+
+1. **100% 文本国际化抽取**：
+   - 页面标题、表格表头、表单 Label、Placeholder、Zod 校验错误、Toast 通知、操作菜单及 ARIA 无障碍标签全部包裹 `t(...)`；
+   - 严禁在 JSX 中直接裸写中文或英文硬编码字符串。
+2. **用户自输入数据保留原样**：
+   - 相机自定义名称、IP、流地址、设备型号等用户输入内容原样呈现，仅对系统字段标签与状态做本地化。
+3. **后端错误直接展示 (后端驱动 i18n)**：
+   - 前端 Axios/Fetch 请求头必须携带当前语言 `Accept-Language: <lang>`；
+   - 后端返回统一信封格式 `{ code, message, data }`，前端直接展示后端返回的已本地化安全 `message`，严禁在前端硬编码映射后端业务错误码。
+4. **时间与时区本地化展示**：
+   - 接口传输统一采用 RFC3339Nano UTC 格式；
+   - 前端通过 `Intl.DateTimeFormat(locale, ...)` 格式化为当前语言与浏览器本地时区的文本展示。
+
+---
+
+## 4. 全矩阵质量验证自检
+
+前端交付前，必须在以下组合下进行样式与排版验证：
+
+- [ ] **Light 模式**：对比度合格，边框清晰，无文字断裂；
+- [ ] **Dark 模式**：夜间对比度符合 WCAG AA 级标准（4.5:1），弹出层背景层级清晰；
+- [ ] **RTL 镜像验证**：切换至 `rtl` 时，侧边栏、表单图标、面包屑、表格列按预期自然翻转；
+- [ ] **三语字符长度容忍**：英文长单词在按钮、导航项中不溢出、不破坏布局高度。

@@ -85,7 +85,7 @@ flowchart TB
 
 三层之间由**跨层防爆门契约**约束：CGO 只经 `engine.h` 交互且绝不传 Go 指针、
 C++ 异常绝不穿越 C ABI、包视图仅在同步回调期间有效。完整契约见
-[`.trellis/spec/architecture.md`](.trellis/spec/architecture.md)。
+[洛书架构地图](.luoshu/specs/architecture.md)。
 
 ## 快速开始
 
@@ -195,14 +195,14 @@ native/
   src/                C++17 引擎实现
   sdk/ profiles/ scripts/ tests/
 web/                  React 19 SPA（pnpm）
-.trellis/             开发规范、任务与工作流
+.luoshu/              现行规格、路径规则、开发变更与验证契约
+.trellis/             旧规格、任务与日志，仅供历史追溯
 ```
 
 ## 开发
 
-**规范先行。** 各类约定以 `.trellis/spec/` 为准（中文），按层组织；
-`backend/index.md` 与 `frontend/index.md` 各带一份 Pre-Development Checklist。
-动手写一个新包的代码前，先读对应规范。
+**规范先行。** 从[洛书规格索引](.luoshu/specs/index.md)进入对应领域，动手前用
+`luoshu context build --stage explore --path <拟改文件>` 查看命中规则。
 
 ```bash
 make check           # 完整门禁：前端 lint/type-check/test + native-test + api-docs + go-check
@@ -218,7 +218,8 @@ make native-test     # CTest 套件（无需摄像头/网络，使用合成 fixt
 - 改完 C++ 必须 `make native-build` —— Air 只监听 Go/TOML。
 - **媒体目录软链部署约束**：若在 `mediaDir` 下使用符号链接部署，**链接目标必须使用相对路径**（`os.Root` 会严格拒绝绝对路径目标的符号链接，即使绝对路径最终落在根内亦会被拦截并返回 `422 MEDIA_PATH_ESCAPE`）。
 
-工作用 Trellis 任务跟踪，详见 [`.trellis/workflow.md`](.trellis/workflow.md)（英文）。
+工作用洛书追踪：`luoshu changes list` 查看规划和在途变更，流程详见 [AGENTS.md](AGENTS.md#洛书工作流)。
+`make check` 仍是仓库完整检查，洛书自动门禁以[项目配置](.luoshu/config.yaml)为准。
 
 ## 路线图
 

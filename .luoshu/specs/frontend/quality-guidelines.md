@@ -1,0 +1,252 @@
+# React 前端质量门禁与测试规范
+
+> 基于 `satnaing/shadcn-admin` 的质量门禁命令、Vitest 浏览器测试体系、零 any 审计与 Go 二进制嵌入对接契约。
+
+---
+
+## 1. 质量检验基线与门禁命令
+
+在 `web/` 目录下，使用 `pnpm` 执行以下质量门禁指令：
+
+```bash
+pnpm lint            # ESLint 10 + TypeScript 静态分析 (含显式 any 拦截)
+pnpm format:check    # Prettier 代码格式检查 (确保符合统一代码风格)
+pnpm knip            # Knip 依赖、无用类型与无用导出/死代码分析
+pnpm build           # tsc -b 强类型编译 + Vite 生产打包
+pnpm test            # Vitest 浏览器无头模式测试 (--browser.headless via Playwright)
+```
+
+上面是可单独运行的 package scripts。仓库必过门禁由 `make frontend-check` 执行 `format:check`、`lint`、`test`、`build`（类型检查包含在 build）；`knip` 虽可单独运行，但不属于 `make check`。
+
+> **为什么 `format:check` 必须进闸**：`eslint` 不校验格式。漏掉这一闸时 `printWidth` 与
+> `importOrder`（`@trivago/prettier-plugin-sort-imports`）会长期漂移 —— 曾经一次性累计了 23 个
+> `prettier --check` 失败文件（`src/lib/logger.ts`、若干 `*_dialog.tsx`、`time-api.ts` 等），
+> 使得「格式全绿」变成一句无法验证的口径。
+
+> ⚠️ **格式化会暴露被单行 `eslint-disable-next-line` 掩盖的违规**：若某行超宽且一行里有多个受限调用
+> （如三元里同时出现 `console.error/warn/info`），prettier 拆行后 `next-line` 只能盖住第一行，
+> 其余调用会突然变成 lint error。多行语句请用块级 `/* eslint-disable X */ … /* eslint-enable X */`，
+> 它不受排版影响。
+
+### 1.1 与 `make frontend-check` 的对应关系
+
+仓库根 `Makefile` 的前端目标固定使用 **pnpm**（仓库只提供 `pnpm-lock.yaml`，`npm ci` 因缺
+`package-lock.json` 必然失败）。目标与上表的映射：
+
+| Makefile 目标 | 实际执行 | 说明 |
+| --- | --- | --- |
+| `make frontend-install` | `pnpm --dir web install --frozen-lockfile` | 先 `command -v pnpm` 显式探测，缺工具即失败（不静默跳过） |
+| `make frontend-build` | `pnpm --dir web run build` | 同上表的 `pnpm build` |
+| `make frontend-check` | `format:check` + `lint` + `test` + `build` | `type-check` **不是**独立 script：`build` 的 `tsc -b` 已含类型检查 |
+
+⚠️ **两条容易踩错的约束**：
+
+1. **`type-check` / `audit` 不是 `web/package.json` 的 script**。不要为了「对齐旧 Makefile」而新增空 script——
+   类型检查由 `build` 承担，`audit` 见下条。
+2. **`audit` 不在 `frontend-check` 内**。生产依赖存在既有安全债（`pnpm audit --prod` 曾报 52 项，
+   含 `axios` 的 critical），全量 `pnpm audit` 报 91 项。保留在门禁中会让整个前端检查永久变红，
+   从而掩盖 `lint`/`test`/`build` 的真实回归。安全审计作为独立议题跟踪，
+   **不得**把它当作「已通过」或「已接受」。
+
+⚠️ `pnpm` 的目录参数是 `--dir <DIR>`（或 `-C`），**不是** npm 的 `--prefix`。
+
+### 1.2 开发迭代与最终门禁
+
+`make frontend-check` 是全仓门禁，不会根据 Git 改动自动缩小检查范围。开发迭代中不要在每次修改后运行它或 `make check`；先对改动文件和受影响的测试运行定向检查：
+
+```bash
+cd web
+pnpm exec prettier --check src/features/<feature>/<file>.tsx
+pnpm exec eslint src/features/<feature>/<file>.tsx
+pnpm test -- src/features/<feature>/<file>.test.tsx
+```
+
+测试路径也可以指定一个受影响的目录，以覆盖同一特性内相关用例。共享组件、公共 API、路由或配置变更时，应扩大到受影响的特性/测试范围；仍不需要无条件跑全仓套件。Vitest 仍运行真实无头浏览器测试，不要为了提速改成 JSDOM。
+
+完整类型检查、生产构建和全量测试留到任务收尾阶段统一执行一次。`make check` 已包含
+`make frontend-check`，收尾时不要再单独重复运行 `make frontend-check`。未运行完整门禁时，应明确报告实际运行的定向检查和未覆盖的门禁，不得把它描述为全量通过。
+
+---
+
+## 2. 自动化测试规范 (Vitest + Playwright Browser Runner)
+
+脚手架采用 **真实无头浏览器驱动** 的现代化前端测试方案，彻底摆脱传统 JSDOM 对现代 CSS、真实渲染尺寸和复杂事件模拟失真的缺陷。
+
+### 2.1 测试文件命名与共置原则
+- 测试文件与被测目标**同目录共置**；
+- 组件交互测试命名为 `[component-name].test.tsx`；
+- 工具函数与 Hook 测试命名为 `[util-name].test.ts`；
+- 严禁在 `src/test/` 下维护脱节的中心化测试大目录。
+
+### 2.2 测试覆盖重点
+1. **通用 Hooks 与状态驱动**：如 `useTableUrlState` 的 URL search 参数读写、分页计算与更新触发；
+2. **表单验证与错误反馈**：测试基于 `react-hook-form` + `zod` 的必填项报错、非法格式拦截与提交数据形态；
+3. **关键弹窗交互流**：测试 `confirm-dialog` 的二次确认、取消动作及外部 `use-dialog-state` 响应；
+4. **表格与批量操作**：测试全选/反选、批量删除弹窗唤起与操作触发。
+
+### 2.3 断言 effect 产出的状态必须重试等待（`vi.waitFor`）
+
+⚠️ **症状**：`expect(onStateChange).toHaveBeenCalledWith('live')` 偶发失败且收到的是 `'loading'`；单文件跑必过，全量并行跑间歇失败（实测全量 1/6 失败、单文件 0/10）。
+
+**原因**：父级回调由子组件的 `useEffect([state])` 在**提交之后** flush，而驱动该状态的数据常来自 `act` 之外的路径（如 rAF 渲染循环里的 `onFrameDrawn`）。`await expect.element(...).toBeInTheDocument()` 只等到 DOM 出现，**不代表 effect 已 flush** —— 两者不在同一拍。
+
+```typescript
+// ❌ 同步断言：DOM 就位不等于 effect 已跑完
+await expect.element(screen.getByTestId('overlay-content')).toBeInTheDocument()
+expect(onStateChange).toHaveBeenCalledWith('live')
+
+// ✅ 重试等待，直到 effect 真正 flush
+await vi.waitFor(() => {
+  expect(onStateChange).toHaveBeenCalledWith('live')
+})
+```
+
+**边界**：初始挂载态（`no-camera` / `loading` / render 前就设好 `status` 的 `unavailable`）由 `render()` 的 `act` 包裹 flush，同步断言安全；**由 act 之外数据流驱动**的状态迁移必须重试等待。
+
+⚠️ **不得用测试等待掩盖产品缺陷**：若某状态本可由 props 在 render 期间同步派生，却回传给了 `useEffect`，那应改渲染派生而非给测试加等待 —— 此时 `vi.waitFor` 才是掩盖问题。
+
+### 2.4 Vitest 浏览器模式下的路由 Mock 与端口竞争避坑指南
+
+真实无头浏览器模式（`vitest run --browser.headless` via Playwright）采用 iframe 承载测试组件与执行环境，具有跨文件共享 Vite Transform 缓存与端口编排机制的物理特性。
+
+#### 1. `@tanstack/react-router` Mock 的精准隔离
+- **必须使用 `importOriginal`**：严禁无脑覆盖所有导出的空对象；若只需 mock 单一能力（如 `useNavigate` 或特定 `getRouteApi`），必须解构 `actual` 原生实现。
+- **`getRouteApi` 必须基于 routeId 守卫**：若全局粗暴 mock `getRouteApi: () => ({ ... })`，会导致其他页面（如 `Records`、`Tasks`、`Cameras`）取到被污染的空 search 对象，引发不可预知的组件白屏或全量测试用例崩溃：
+  ```typescript
+  // ✅ 正确做法：只劫持当前测试涉及的路由，其余路径透传给真实实现
+  vi.mock('@tanstack/react-router', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+    return {
+      ...actual,
+      getRouteApi: (id: string) => {
+        if (id === '/_authenticated/spatial/') {
+          return {
+            useSearch: () => mockSearch,
+            useNavigate: () => vi.fn(),
+          }
+        }
+        return actual.getRouteApi(id as never)
+      },
+    }
+  })
+  ```
+- **Mock `<Link>` 组件时必须完整透传 `{...props}`**：
+  Radix UI 的 `asChild`（如 `<DropdownMenuItem asChild><Link to="..." /></DropdownMenuItem>`）依赖 `Slot` 机制将 `role="menuitem"`、`tabindex` 等无障碍属性注入子元素。若在测试中将 Link 简写为 `({ to, children }) => <a href={to}>{children}</a>` 而漏掉了 `{...props}`，会导致生成的 `<a>` 标签丢失 `menuitem` 角色，引发 `getByRole('menuitem')` 查找超时失败。
+
+#### 2. 测试编排端口竞争与 Linux Socket TIME-WAIT
+- Vitest Browser 默认使用 `127.0.0.1:63315`。当测试被异常终止、或在短时间内连续反复启动完整套件时，内核中的 TCP 连接会进入长达 30~60 秒的 `TIME-WAIT` 状态。
+- 若此时 Vitest 重新启动，无法复用 `63315` 端口，会输出 `Port 63315 is in use, trying another one...` 并动态绑定到 `63316`；此举极易导致部分先期加载的浏览器 iframe 跨域失效或断开连接（`Received URL: unknown due to CORS` / `Cannot connect to the iframe`）。
+- **排障路径**：当出现偶发 CORS 或连接中断时，运行 `ss -tan | grep 63315` 确认是否处于 `TIME-WAIT`；等待端口彻底释放或确保后台无残留 `vitest.mjs` 僵死进程后再重跑测试。
+
+### 2.5 断言必须能真的失败：先破坏实现，再信任用例
+
+⚠️ **症状**：一组用例全绿，但把被测逻辑故意改错（交换两行、把 `>` 改成 `<`）后**仍然全绿**。
+
+**典型伪断言**：
+
+```typescript
+// ❌ 只验证「三个对象都调了 close」，顺序错了照样通过
+order.push(a.closed ? 'a' : '', b.closed ? 'b' : '', c.closed ? 'c' : '')
+```
+
+这类断言在**有序/互斥/顺序敏感**的逻辑上尤其多：清理顺序、互斥释放、焦点回收、连接接管。
+它们的共同特征是用「最终状态」代替「过程顺序」。
+
+**做法**：在 mock 的每个分支上向同一个记录器 `push` 名字，断言**完整序列**：
+
+```typescript
+const order: string[] = []
+// mock 里： close: () => { order.push('channel') }
+expect(order).toEqual(['channel', 'decoder', 'player'])
+```
+
+**自检方式**：写完顺序/互斥类断言后，**临时破坏实现跑一次**，确认用例失败，再还原。
+没失败过的断言等于没有断言 —— 这类问题不会在 CI 里变红，只会在现场变成偶发 bug。
+
+### 2.6 React 19：不得在 render 期间写 `ref.current`
+
+⚠️ **症状**：`eslint` 报 `Cannot access refs during render`（`react-hooks` 插件）；或并发渲染下行为诡异。
+
+```typescript
+// ❌ render 期间产生副作用：并发渲染下会写进一个不会提交的渲染
+const cbRef = useRef(callback)
+cbRef.current = callback
+
+// ✅ 用 effect 同步
+const cbRef = useRef(callback)
+useEffect(() => {
+  cbRef.current = callback
+}, [callback])
+```
+
+**何时不能用这个修法**：若某项值必须在**首次 effect 运行时**就已是正确值（而不是晚一个 tick），
+就不能靠「effect 同步 ref」补 ——— 应该把它放进依赖数组，或改用 `useCallback` 恒定引用。
+判断标准：依赖它的逻辑是否也跑在 effect 里、且两者先后顺序是否要紧。
+
+### 2.7 浏览器音视频 API 的可测边界
+
+真实无头 Chromium 里这几条行为**与直觉相反**，写测试时必须预先知道：
+
+| API | 实际行为 | 后果 |
+| :--- | :--- | :--- |
+| `ctx.resume()`（无用户手势） | Promise **既不 resolve 也不 reject** | `await` 它会直接吃满 `testTimeout`（默认 15s）把用例杀掉，报「timed out」而非「resume 失败」 |
+| `ctx.currentTime`（`suspended`） | 恒定 0，不推进 | 依赖它推算帧号的逻辑在解禁窗口内全挤在同一帧；**这类 bug 纯算术可测**，不要归入「仅真机验证」 |
+| `AudioWorklet.addModule` | 在 `suspended` 下即可成功 | 不需要先 resume 才能装配 |
+| `?worker&inline` 产出的 `data:video/mp2t` | 被 `addModule` 以 `AbortError` 拒绝 | 不能复用到 worklet |
+
+**单元测试时一律替身**：`vi.stubGlobal('AudioContext', FakeCtx)` / `vi.stubGlobal('AudioDecoder', FakeDecoder)`，
+并把 `now` 做成可注入参数（`options.now?: () => number`）而不是用 fake timers ——
+排期类逻辑全是纯算术，注入墙钟比操纵全局定时器确定得多。
+
+### 2.8 FormData 上传测试必须经过 Axios 的真实序列化
+
+`src/lib/api-client.ts` 默认设置 `Content-Type: application/json`。Axios 1.15.0 在
+`transformRequest` 阶段会把带这个头的 `FormData` 转成 JSON，文件字段变成 `{}`；后端
+`FormFile("image")` 因此报 `422 VALIDATION_FAILED` / `image REQUIRED`，即使前端已经选了文件。
+
+上传调用必须在 Axios 转换前覆盖默认头。当前浏览器适配器随后会移除该头，让浏览器按
+`FormData` 生成含 boundary 的实际请求头；**不要手工拼 boundary**。
+
+```typescript
+// ❌ 继承 JSON 默认头，文件内容在序列化时丢失
+apiClient.post('/persons/search-by-image', formData)
+
+// ✅ 在转换前覆盖默认头；浏览器负责实际 multipart 编码
+apiClient.post('/persons/search-by-image', formData, {
+  headers: { 'Content-Type': 'multipart/form-data' },
+})
+```
+
+**回归边界**：不能只 mock `apiClient.post` 再检查传入了 `FormData`——这会跳过默认头合并和
+序列化。仅替换 transport adapter，并在测试后恢复；断言 adapter 收到 `FormData`、正确的
+文件字段/文件名/MIME/实际字节、可选参数和上传进度回调。去掉上传头时用例必须失败。
+Adapter 测试不证明线上 boundary；要验证完整编码，应使用真实浏览器 XHR 与 HTTP 接收端。
+
+参考用例：`src/features/image-search/api/image-search-api.test.ts`。
+
+---
+
+## 3. 严格类型约束与零 any 审计
+
+1. **`@typescript-eslint/no-explicit-any: "error"`**：
+   - CI 与本地 `pnpm lint` 对任何显式 `any` 直接报错拦截，绝不放行；
+2. **外部不可信数据处理**：
+   - 所有来自 HTTP API、WebSocket 或 LocalStorage 的外部输入一律标注为 `unknown`；
+   - 必须通过 Zod Schema 进行运行时解析（`.parse()` 或 `.safeParse()`）转换成强类型对象后方可进入渲染树。
+
+---
+
+## 4. Vite 构建打包与 Go 二进制嵌入对接契约
+
+系统遵循**方案 A：单主程序交付模型**（Go 二进制文件内嵌前端全部静态产物）：
+
+1. **构建输出协同**：
+   - `web/vite.config.ts` 打包输出产物至 `web/dist`；
+   - Go 后端通过 `internal/webui/embed.go` 使用 `//go:embed all:dist` 进行静态资源嵌入；
+   - 根级构建管道（`Makefile` / CI）负责确保前端完成构建后将产物同步至 Go 嵌入目录（或建立直接对接），严禁在没有前端最新产物时进行发布构建。
+2. **SPA 路由回退保障**：
+   - 前端采用 TanStack Router 浏览器历史路由（HTML5 History API）；
+   - Go HTTP 静态文件服务器在面对非静态文件（非 `.js`, `.css`, `.png` 等）的 404 请求时，必须重写回退到 `index.html`，交由前端路由解析。
+3. **构建产物纯净化**：
+   - 打包产物严禁引用本地绝对路径；
+   - 生产环境构建时必须剥离调试 Devtools（`TanStackRouterDevtools`, `ReactQueryDevtools` 在生产构建中自动剔除）。

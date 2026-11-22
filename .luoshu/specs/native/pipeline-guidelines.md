@@ -1,0 +1,192 @@
+# 原生节点流水线设计规范 (Node Pipeline)
+
+> C++ 处理节点契约、有界队列背压、零拷贝传递与 5 步优雅停机时序。
+
+---
+
+## 1. 核心链路与节点职责
+
+当前已实现 `src/nodes/capture/rtsp_input.*` 视频采集、`src/nodes/decode/` 解码节点抽象与 FFmpeg 软解实现，以及 `src/pipeline/` 解耦后的流拓扑与有界队列流转。
+
+```txt
+Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC) ➔ Inference Node (NPU/GPU)
+         │                         │                          │                          │
+    [Packet 队列]             [Frame 队列]               [Tensor 队列]              [Result 事件]
+```
+
+- **按需激活解码会话 (`DecodeSession`)**：
+  - 仅在存在 `Zhulong_CONSUMER_AI` 接入时动态拉起独立的 `DecodeSession`；全 AI 消费者注销后将该会话优雅停止并置空，彻底解耦解码工作线程与流生命周期。
+  - **防止取消状态残留**：流生命周期内若经历“AI 接入 ➔ 注销 ➔ 再次接入”，每次均创建全新的 `DecodeSession`，其内部 `packet_queue_` 与 `frame_queue_` 拥有初始干净的非取消状态，杜绝已取消队列引发的 100% CPU 空转与产帧中断。
+- **原生 C++ 帧消费通道**：
+  - `Stream::acquire_frame(HardwareFrame::ConstPtr &out_frame, timeout)` 提供线程安全的原生帧借用通道，下游模块以只读共享所有权并发消费，由底层闭包安全保活。
+  - ⚠️ **无活跃会话时必须阻塞满 timeout 再返回 false**：会话熔断/取消后 `decode_session_` 仍非空，而已取消队列的 `pop` 会立即返回。若 `acquire_frame` 也立即返回，`FramePublisher` 这类轮询消费者会 100% CPU 空转直到 AI 消费者被释放。判据是 `DecodeSession::is_active()`。
+  - ⚠️ `BoundedQueue::pop` 取消后**不交出残余元素**，且出队元素先移入局部暂存、解锁后才赋给 `item`——调用方复用的旧句柄在队列锁外析构。
+- **新建流必须携带全局解码策略**：`Stream::start(policy)` 由 `Engine::acquire` 传入 `decode_policy_`。用默认值会把「仅 MPP、禁止软解回退」静默降级为 AUTO，绕过 fail-closed。
+- **FAILED 流不复用**：`Engine::acquire` 按 URL 查找时跳过 `status.state == FAILED` 的流（终态，拉流线程已退出）。否则只要另一消费者仍持有死流，Go 侧「acquire → 发现 FAILED → Close → 重试」会永远拿回同一条死流。
+  - ⚠️ **FAILED 流随最后一个消费者释放立即退役**（`detach_consumer_locked` 走 `stream_to_stop`），不等宽限期——它不可能再被复用，等宽限期只是白占连接与内存。
+  - ⚠️ **FAILED ⇒ 解码资源已释放**：熔断路径自带 `request_stop()`，`Stream::capture` 收尾也必须 `request_stop()`（在 `Stream::mutex` 外）取消解码会话。`Engine::decode_sessions_in_use_locked()` 依赖这一不变量，把「FAILED 且仍有 AI 消费者」的流从 `active_decode_sessions_` 中扣除，容量门控（`check_decode_capacity_locked`）与 `get_decode_stats` 都只看真实占用，一条死流不会让同 URL 重建撞上 `CAPACITY_EXCEEDED`。
+- **解码线程的 pts_us 映射随源时间轴不连续清空**：`QueuedPacket::discontinuity` 携带 `ZHULONG_PKT_FLAG_DISCONTINUITY`；被门控/拥塞丢弃的包上的标记经 `pending_discontinuity_` 转交下一个入队包。解码线程在**关键帧门控之前**清空「原始 PTS → pts_us」映射，否则相机重启后重复的原始 PTS 会错配到跳变前的 pts_us。
+- **单流确定性线程模型与双后端自适应路由**：
+  - 解码节点通过 `IDecodeNode::create` 统一抽象，提供 `DecoderBackend::automatic`、`DecoderBackend::ffmpeg_sw` 与 `DecoderBackend::mpp_hw` 三种分流策略。
+  - 在 `automatic` 模式下，系统动态探测硬件加速能力（`MppDecodeNode::is_supported()`），若支持且码流为 H.264/H.265 则自动启用 MPP 硬件解码并直出 DMA-BUF；环境不支持或解码异常时透明回退至 FFmpeg 软解。
+  - 解码器单实例单线程运行，并发由多流模型（多 stream）承载，杜绝底层多线程竞争与线程爆炸。
+  - 解码会话工作循环 (`DecodeSession::decode_loop`) 在待解包队列为空发生超时（idle timeout 50ms）时，主动执行 `drain_frames(dec)` 排空解码器内部已就绪帧，防止低帧率或测试单包场景下画面在底层 DPB 发生不必要滞留。
+- **零拷贝帧封装与异常安全守护**：
+  - 通过 `HardwareFrame` 封装解码输出，软解由 `release_fn` 闭包安全回收底层 `AVFrame` 引用，硬解由 `release_fn` 闭包调用 `mpp_buffer_put` 释放 VPU 缓冲区并关闭 `dup` 出的独立 `dma_fd`，由下游算法只读借用。
+  - 硬件解码从显存池提取 `mpp_buf` 并 `::dup` 出 `dma_fd` 后，装配期间必须由栈上 RAII Guard 全程看护，确保即使抛出 `std::bad_alloc` 亦能自动安全回退释放，杜绝内核句柄与物理显存泄漏。
+  - ⚠️ `mpp_buffer_inc_ref()` 的返回值**必须校验**：加引用失败时立即 `close(fd)` 并返回错误，不得进入装配流程 —— 否则 `release_fn` 中的 `mpp_buffer_put` 会造成净减引用与显存提前回收。
+  - ⚠️ 帧的底层资源（`AVFrame` / `MppBuffer` / `MppBufferGroup`）生命周期**必须与解码器实例解耦**：解码器可能在帧尚未归还时被销毁（停机）或重新配置（分辨率切换）。硬解的外部缓冲组由 `MppDecodeNode::BufferGroup` 引用计数持有，`release_fn` 必须捕获该持有者的 `shared_ptr` 保活；解码器析构/`info_change` 只解除本地引用，**严禁**就地 `mpp_buffer_group_clear/put`。
+- **解码节点返回码契约（单一值域）**：
+  - `send_packet()` 与 `receive_frame()` 共用 `decoder.hpp` 的具名常量：`decode_ok`(0)、`decode_again`(== `AVERROR(EAGAIN)`)、`decode_backend_failure`(== `AVERROR(EIO)`)，`send_packet` 另可透出 `AVERROR_EOF`。
+  - ⚠️ `receive_frame()` **不区分**「暂无输出」(EAGAIN) 与「drain 已排空」(EOF)：两者都返回 `decode_again`（FFmpeg 软解与 MPP 硬解在这一点上必须一致）。因此 `send_packet(nullptr, 0, ...)` 之后若要继续送包，调用方**必须先 `flush()`** 复位 draining 状态，否则底层 `send_packet` 会恒返 `AVERROR_EOF`。
+  - 硬件后端私有错误码（`MPP_ERR_BUFFER_FULL=-1012`、`MPP_NOK=-1` 等）**必须在后端内部归一化**为上述常量，严禁外溢 —— 否则与 AVERROR 值域语义混淆，调用方无法区分背压与损坏。
+  - ⚠️ 禁止再用魔法值 `1` 表达「暂无输出」；`IDecodeNode` 同时禁止拷贝与移动（副本会共享同一份解码器上下文导致重复释放）。
+  - 统一背压契约：后端在待解包缓冲满时统一返回 `decode_again`，驱动调用方排空已就绪帧后重发当前包；排空后二次仍背压即记 `decode_backpressure_drop` 告警，严禁静默吞包。
+  - 工厂 `IDecodeNode::create` 实现位于独立的 `nodes/decode/decoder_factory.cpp`，不寄生在任何具体后端实现里；初始化失败日志只输出稳定 token + 数值上下文（`codec=%d`），**不得**回写 `what()` 等自由文本。
+- **订阅通道逐订阅者异常隔离**：
+  - `Stream::dispatch` 的扇出循环必须对每个 `subscription->invoke()` 单独 `try/catch`。回调抛 C++ 异常是调用方违约（`engine.h` 明文禁止），**不得**中断同流其他订阅者的数据供给，**也不得**将流置为 `FAILED`。
+  - `Subscription::invoke` 在重抛前已恢复 `in_callback` 并置 `enabled=false`，故违约订阅者自动静默失效（后续 `invoke` 首行直接返回），无需从快照移除。
+  - ⚠️ 不得改为在 `Subscription::invoke` 内吞掉异常：`native/tests/capture_unit_test.cpp` 依赖其重抛语义来验证 `in_callback` TLS 恢复。
+- **订阅表变更必须事务化（先构建、后提交）**：
+  - `subscriptions` 与 `subscriber_snapshot_` 是一对不容错位的状态。`Engine::subscribe` / `unsubscribe` 必须先用 `Stream::make_subscriber_snapshot()` 把新快照**完整构建出来**（这一步允许因 `bad_alloc` 抛异常），再用 `subscriptions` 变更 + `shared_ptr` 移动赋值提交（两者都不抛）。
+  - 反序（先改 map 再重建快照）会留下半提交状态：订阅登记成功但快照未更新 → 该订阅永不被派发、且消费者 `release` 永远撞 `ERR_BUSY`；注销时快照未更新 → 已删订阅仍被派发，且异常使 `disable_and_drain()` 被跳过，回调永不停止。
+  - 由 `native/tests/decoder_test.cpp` 的 5.2 节守护。
+- **音频时间轴随视频纪元重锚**：
+  - `PreviewNormalizer` 跳变时把 `timestamp_shift_us_` 重置为**跳变时刻的绝对输出位置**（不是增量），源时钟从 0 重新起算。
+  - 因此 `AudioNormalizer` 在 `discontinuity_generation` 变化时必须重锚：`anchor ← 当前音频时间戳`、`base ← 音频到达时刻 − 视频跳变包到达时刻`（`Stream::video_epoch_arrival_us_`）。沿用旧锚点会把跳变前的时长再叠加一遍——只有视频 DTS 回退时，第 T 秒跳变音频就前跳 T。由 `audio_normalizer_test.cpp` 的 `TestVideoOnlyDiscontinuityNoDoubleCount` 守护。
+- **解码丢包与重同步可观测性**：
+  - `DecodeSession::counters()` 返回 `DecodeCounters` 快照（`decoder_unavailable_drops` / `keyframe_gate_drops` / `congestion_resyncs`），`Stream::callback_exception_count()` 返回被隔离的回调异常数。
+  - 全部为 `memory_order_relaxed` 原子自增，无锁、无同步依赖；仅供测试与运维观测，**不跨越 C ABI**（`engine.h` 无对应符号）。
+
+---
+
+## 2. 有界队列容量与背压自愈策略 (Bounded Queue)
+
+严禁无界队列，避免网络爆流或推理拥塞导致 OOM：
+
+| 传输路径 | 目标场景 | 容量上限 | 拥塞溢出策略 |
+| --- | --- | --- | --- |
+| **Capture ➔ Decode** | 原始压缩码流包 (H.264/H.265) | 30~60 包 | **关键帧自愈重同步 (Keyframe Resync)**：满载丢包后进入等待关键帧状态；新关键帧到达时自动清空残存损坏包队列并恢复解码 |
+| **Demux ➔ ClipRecorder (事件片段)** | 事件前后 GOP 环形缓冲 + 写线程 fMP4 | 默认 32 MiB 缓冲 / 16 MiB 写队列 | **绝不反压**：写队列满则在下一包截断活跃片段并标 `truncated`，保障拉流与 AI 推理不受阻 |
+| **Decode ➔ Inference (AI)** | 实时视觉检测分析 | **极小 (2~3 帧)** | **直接丢弃旧帧 (Drop Oldest)**：保障视觉分析始终针对最新画面 |
+
+### 关键帧自愈状态机 (Keyframe Resync)
+1. 压缩包队列满载时，丢弃无法入队的包并置位 `waiting_keyframe_ = true`；
+2. 在等待关键帧期间，所有新到达的 P/B 帧均被立即丢弃，避免损坏的参考帧喂入解码器造成花屏；
+3. 当收到完整关键帧（IDR）时，重置标志位并清空旧包队列（`packet_queue_.clear()`，仅清元素、不触碰取消标记），确保解码器从完整关键帧开始干净解算；
+4. 解码器遇到单包解码错误时，调用 `dec->flush()` 清空 DPB 状态。
+
+---
+
+## 3. 零拷贝与硬件帧契约 (HardwareFrame)
+
+统一硬件帧定义位于 `native/include/Zhulong/frame.hpp` (`zhulong::HardwareFrame`)：
+
+1. **不可变帧与多算法只读共享**：
+   - 节点间传递使用 `std::shared_ptr<const HardwareFrame>`（或 `HardwareFrame::ConstPtr`），解码后底层物理内存（`dma_fd`、`dev_ptr`、`host_ptr`）只读，下游 N 个算法并发只读借用，严禁就地修改原像素。
+2. **硬件级零拷贝与格式/时间戳保真**：
+   - 包含标准格式常量（`FRAME_FORMAT_YUV420P`、`FRAME_FORMAT_NV12` 等），与 Linux DRM / V4L2 FourCC 语义对齐；
+   - 软解节点兼容 Full Range `AV_PIX_FMT_YUVJ420P` 并统一对齐为 `FRAME_FORMAT_YUV420P`；
+   - ⚠️ **负 `linesize`（垂直翻转输出）必须整帧判为 `FRAME_FORMAT_UNKNOWN` 且不填任何平面指针**：
+     `HardwareFrame` 没有翻转语义，把 `stride` 归零会让下游按「紧凑、从上到下」读到错行，
+     属于静默错帧；软解因此在 `ffmpeg_negative_linesize` 告警一次后交给下游显式拒绝。
+   - 时间戳有效性契约：严格以 `(raw_pts != AV_NOPTS_VALUE)` 判定 `has_pts`，首帧 `pts = 0` 必须标定为有效 `has_pts = true`，上游缺失 PTS（`AV_NOPTS_VALUE`）置 `has_pts = false` 并回退 `pts = 0`，杜绝时间戳极小负数畸变与首帧丢时间戳；
+   - 严格包含 `stride` 与 `vstride`（垂直对齐步长），NV12 UV 平面偏移计算必须遵循 `y_plane_size() = stride * (vstride > 0 ? vstride : height)`，防止色度错位。
+3. **安全 Deleter 守护与生命周期解耦**：
+   - 帧对象 RAII 析构时触发 `release_fn` 归还底层解码器缓冲池；移动构造与移动赋值均正确转移所有权并置空原指针，防止 Double-Free；
+   - 队列淘汰（Drop Oldest）或取消/重置时，丢弃对象的析构必须在**队列互斥锁外**执行，防止触发外部闭包时形成潜在死锁；
+   - ⚠️ **防慢算法拖垮解码器准则**：各算法必须在**硬件预处理任务派发/完成后立即 drop 掉 `HardwareFrame` 引用**，严禁将原帧持有至 NPU 推理阶段，确保解码缓冲池在毫秒级内回归。
+
+---
+
+## 4. 无锁汇合与五步优雅停机时序 (Graceful Shutdown)
+
+为消除跨流锁争用与死锁，所有工作线程的 `join()` 必须遵循**无锁汇合原则（Lock-free Join）**：
+
+```txt
+1. 持锁提取待停止对象指针，并将其从流/引擎主结构中解绑移出
+   │
+2. 退出流与引擎全局互斥锁 (释放 Stream::mutex 与 Engine::control)
+   │
+3. 锁外发起停止信号 (request_stop()，唤醒并取消队列)
+   │
+4. 锁外汇合工作线程 (调用 worker_thread.join()，等待工作循环跳出)
+   │
+5. 锁外析构底层资源 (释放解码器与硬件上下文)
+```
+
+⚠️ **禁令**：
+- 严禁在持有 `Engine::control` 或 `Stream::mutex` 期间调用任何 `thread.join()`；
+- 严禁在工作线程尚未 `join()` 时销毁其正在访问的内存资源。
+- ⚠️ **熔断回调同样适用**：`DecodeSession` 的 `on_fatal_error` 在**解码线程**上回调 `Stream::on_decode_fatal_error`，后者若在 `Stream::mutex` 临界区内调 `request_stop()`（内部再取同一把 `std::mutex`），就是同线程二次加锁直接死锁，且随后的 `join()` 永远等不到解码线程退出。故障路径（VPU 不可用）恰好是最需要它能退出的时刻。由 `native/tests/decoder_test.cpp` 的 5.1 节守护。
+- ⚠️ **熔断错误码不得被拉流线程收尾覆盖**：`on_decode_fatal_error` 先写入 `FAILED + 具体故障码`，再 `request_stop()`；`Stream::capture` 收尾会拿到 `ERR_CANCELLED`。若收尾无条件重写 `status`，对外就变成 `FAILED + CANCELLED` —— 按 `engine.h` 的契约这正是「受控停机」，硬件故障从此静默。收尾只能在「尚未记录非取消类故障」时落盘。由 `native/tests/decoder_test.cpp` 的 5.1b 节守护。
+- ⚠️ **`noexcept` 线程入口必须自行收口异常**：`DecodeSession::decode_loop`、`FramePublisher::publish_loop`、`Engine::reap`、`Stream::capture` 都是 `noexcept` 的线程入口，而它们都会分配内存（缓冲池 `push_back`、broker 客户端快照与发送缓冲、过期流快照 `vector`）。任何逃出的异常都是 `std::terminate`，一次 `bad_alloc` 会带走整个宿主（含其他流与 Go 侧调用）。做法：入口 `try/catch` 包住工作体（`decode_loop_body` / `publish_once` / `reap_once`），异常翻译成受控失败或单帧丢弃并落稳定 token 日志；`ZL_LOG*` 自身是 `noexcept`，可以安全用于收口路径。
+- ⚠️ **`noexcept` 热路径不得用 `make_unique` 兜底**：`MotionDetector` 的 DMA-BUF 读取守卫用 `std::optional<ScopedFdSync>` 就地构造，而非 `unique_ptr` —— 后者在 OOM 时抛 `bad_alloc` 穿出 `noexcept`，把「读不到像素就 fail-open」变成进程崩溃。
+- ⚠️ **退役资源统一走 `RetiredResources`**：`release()` 与 `acquire()` 回滚共用 `Engine::detach_consumer_locked`，锁内只把 publisher/broker/会话/流摘进 `RetiredResources`，锁外 `finish()` 按 publisher → broker → 会话 → 流 的顺序停机。该对象必须声明在 control 锁守卫**之前**（析构兜底 `finish()` 含 join），且持有 Stream 的 `keepalive`——`DecodeSession` 熔断回调捕获的是 Stream 裸 `this`，会话汇合前 Stream 不得被 Reaper 析构。
+- ⚠️ **Broker 锁外启动**：`FrameBroker::start` 会阻塞获取与 Go 侧清扫互斥的目录锁并申请槽位内存，**不得**在 `Engine::control` 内执行。`acquire` 在锁外 `start_frame_broker`、锁内 `commit_frame_broker_locked`；同一流共用 shm 名与 socket 路径，故用 `brokers_pending` + `broker_settled` 保证同时只有一个启动者，`stop()` 必须广播 `broker_settled`。结果回调必须在 `start` **之前**登记（`set_on_result` 不加锁）。
+- ⚠️ **新 broker 必须等旧 broker 退役完毕**：旧实例的 `stop()` 会 `unlink` 同名 socket 并 `shm_unlink`；若同一流上新的 AI `acquire` 抢在它之前启动，新实例的资源会被旧实例删掉，runner 连接 `ENOENT`、整路 AI 静默停摆。因此 `detach_consumer_locked` 摘下 broker 时同时登记 `brokers_retiring`（`RetiredResources::retiring_owner/retiring_id`），`finish()` 停完 broker 后持 `control` 注销并广播 `broker_settled`；`claim_broker_start_locked` 必须同时等 `brokers_pending` **与** `brokers_retiring` 清空。不要改成给资源名加后缀——Go 侧清扫按 `zhulong_broker_` / `zhulong_shm_` 前缀解析流 ID。
+- ⚠️ **查找表读写分离（`registry_mutex`）**：`brokers`（`shared_ptr`）与 `publishers` 的写入必须**先持 `control` 再持 `registry_mutex`**；只读路径（`dispatch_ai_result`、`find_frame`、`set_publish_rate`、`get_broker_path`、`broker_client_stats`、`broadcast_ai_message`）只拿 `registry_mutex`，锁内只拷贝 `shared_ptr`，socket 写与回调都在**全部锁外**。`running` 因此是 `std::atomic<bool>`（写入仍只在持 `control` 时）。反例：旧实现 `broadcast_ai_message` 持 `control` 写 socket，一个慢 runner 会把全部流的 AI 结果派发与 acquire/release/status 一起卡住。
+- ⚠️ **`Engine::stop` 锁内只摘出**：`control` 内只把 `streams` 与 publisher/broker 池整体 `swap` 出来，`request_stop()`（取消队列 → 析构残余帧 → `release_fn`）在锁外进行；Reaper 必须先于流的二次 `join()` 汇合。`stop()` 由析构调用，只用 `std::map`（默认构造不分配）的 `swap`、AI 订阅逐个摘出排空，不构造会在 OOM 时抛出的临时 `vector`/`deque`（`FramePublisher::stop` 同理逐帧摘出历史帧）。
+- ⚠️ **`BoundedQueue` 析构不得调用 `cancel()`**：`cancel()` 托管残余元素用的 `std::deque` 默认构造会分配，析构函数隐式 `noexcept`。析构只置位取消并广播，残余元素随成员析构。`cancel()` 本身两阶段：先置位并广播（不抛），再 `swap` 移出残余元素。
+
+---
+
+## 5. AI 分析帧通道与 FramePublisher 契约
+
+1. **AI 消费不走 Subscribe 铁律**：
+   - `Zhulong_CONSUMER_PREVIEW` 走 Packet 订阅与回调通道；`Zhulong_CONSUMER_AI` 接入激活 `DecodeSession`，帧数据仅通过 `Stream::acquire_frame` 内部帧队列消费。
+   - `Stream::Subscribe` 严禁被 AI 消费者调用（硬校验 `kind == ConsumerPreview`）。
+2. **发布侧节流与共享内存投递**：
+   - 每路 AI 流由独占的 `FramePublisher` 线程拉取解码帧，并依据 `max(sample_fps)`（由 Go 经 C ABI `Zhulong_stream_set_publish_rate` 动态设置）执行发布侧节流；
+   - 未到发布周期的帧就地丢弃释放，杜绝无意义的共享内存拷贝与 socket 通知；
+   - 推送至 `FrameBroker` 后立即 reset `HardwareFrame` 句柄，杜绝慢算法跨进程反压卡死上游解码会话。
+   - ⚠️ **抓拍历史只收实际投递给客户端的帧**：`FramePublisher` 先通过 `broker_->has_ready_client_or_record_drop()` 做背压门控（所有客户端满载时记 drop 并跳过 `MotionDetector` 与发布，避免空转读取 DMA-BUF）；随后只在 `publish_frame(..., &receipt)` 返回 `true` 且 `receipt.delivered_clients > 0` 后入环。节流丢弃、下游满载跳过与发布失败均不进入抓拍历史。
+   - ⚠️ **抓拍历史是两级结构，借用环 4 帧 + 淘汰期按需物化副本环**：慢算法回传延迟经常超过 4 帧（RKNN 板端尤甚），因此除 4 帧借用环（`history_frames_`）外还有一层**像素副本环**（`SnapshotFrame`，时间窗 `snapshot_window=3000ms` + 帧数 12 + 字节 24 MiB，由 `SnapshotBufferPool` 复用堆缓冲避免反复 3 MiB 分配清零）。副本用 `WindowCrop::copy` 以 `packed_layout_for()` 的紧打包布局落到堆内存，`resolve_frame()` 命中时用 `release_fn` 延长字节生命周期包成临时 `HardwareFrame`（`dma_fd=-1`、`host_planes` 来自 `layout.offsets/strides`）。**绝不能靠加大借用环来扩历史**：720p 解码池只有 10 帧，多占的每个引用都会挤压 buffer group。
+   - ⚠️ **未命中必须回退到 PTS 最近的帧，不能回退最新帧**：最新帧在时间上离目标最远，会把旧帧的检测框画到新画面上（证据图框偏移的直接成因）。回退同时递增 `snapshot_miss_count` 并按 1 s 限频告警 `snapshot_pts_evicted`（含 requested/nearest/delta/持有区间），让「窗口够不够」可观测。
+   - ⚠️ **帧身份锚点是 `capture_time_ms`，不是 `pts`（ABI v8）**：`pts` 由源流给出，插件可以不回传（结果为 0），RTSP 重连还会重置时基（不同帧撞同一个 `pts`）。因此 `Zhulong_snapshot_request` 尾部新增 `target_capture_time_ms` 作为**首选身份键**：它由发布线程单调生成（见 §6 `capture_time_ms` 严格递增），随 broker 消息与结果 JSON 下发。匹配顺序固定为 `capture_time_ms` 精确 → `pts` 精确（借用环优先，保留硬件 JPEG 直通）→ 按给定键最近的回退帧。
+   - ⚠️ **抓拍必须自证「取到的是哪一帧」**：`Zhulong_snapshot_result_t` 记录实际命中帧的 `source_pts` / `source_capture_time_ms` / `source_exact`，由 `Zhulong_snapshot_source_pts` / `Zhulong_snapshot_source_capture_time_ms` / `Zhulong_snapshot_source_exact` 读取。`exact=false` 意味着请求的帧已滑出窗口，宿主**必须**据此拒绝把证据图与该次检测结果绑定（Go 侧见 `SnapshotStore.verifySource`）。没有这三个值，宿主只能假设成功，错位就会一路静默到界面上。
+   - ⚠️ **副本环在「借用环淘汰期」按需物化，绝不在发布瞬间无条件拷贝**：在非缓存 DMA-BUF（RK3568 MPP）上每帧无条件 `memcpy` 3 MiB 会吃掉单核 50%+ CPU。4 帧借用环满后淘汰队头时，先在 `latest_mutex_` 外查询 `broker_->is_frame_completed_cleanly(broker_frame_id)`，再在锁内复检 `result_seen`（同一 Unix socket 上 `MSG_RESULT` 经 `Engine::dispatch_ai_result` → `mark_result_frame` 严格早于 `MSG_FRAME_ACK`，构成 happens-before）：
+     - 若已干净 ACK 且无检测结果（静止跳过、推理无目标等），直接归还解码帧、**零像素拷贝**；
+     - 若仍在推理（未 ACK）、租约超时或已回传结果（`result_seen == true`），在 `latest_mutex_` 外物化副本后再在单次加锁内「压入副本环 + 弹出借用环」（零可见性空窗），并在锁外释放旧 `HardwareFrame` 与回收缓冲。
+   - ⚠️ **确认流程**：`find_frame(pts)` 等价于 `resolve_frame(pts, 0).frame`；新增调用方一律直接用 `resolve_frame(pts, capture_time_ms)` 取身份，不要自己拼 `SnapshotSource`。
+   - ⚠️ **发布失败是显式失败，不是静默丢帧**：`publish_frame` 返回 `false` 时必须已完整回滚（配额归还、槽位置 `FREE`、`total_dropped_` 递增），且**绝不**发出 `MSG_FRAME_DISPATCH`。订阅方不得假设「没收到通知 = 帧被节流丢弃」与「收到通知 = 槽位内容就是该帧」以外还有第三种状态。
+   - ⚠️ **慢消费者导致发送超时后走租约清算**：`write_all` 在 `SO_SNDTIMEO` 下 `EAGAIN` 必须 `poll(POLLOUT)` 有界等待（详见 [算法插件契约 §6.4](./algo-plugin-contract.md)）。超时返回 `false` 后由 `publish_frame` 清算该客户端租约，**绝不**无界自旋 —— 否则发布线程与持 `Engine::control` 锁的广播路径会一并挂死。
+3. **宿主生命周期绑定与资源隔离**：
+   - `FrameBroker` 与 `FramePublisher` 由 `Engine` 按需生命周期管理，当首个 `ConsumerAI` 接入时拉起，最后一个 `ConsumerAI` 注销时销毁；
+   - 停机时遵循第 4 节无锁汇合与五步优雅停机，先于工作线程 join 前完成停机与资源解绑。
+   - ⚠️ **停止顺序在每一条退出路径上都成立**：`FramePublisher` 持有 `FrameBroker` 的**裸指针**，因此任何路径（含 `ensure_frame_broker` 的 `brokers.emplace`/`publishers.emplace` 抛异常）都必须先 `publisher->stop()` 汇合发布线程，**再**让 broker 停机和析构。反序就是发布线程在已释放的 broker 上调 `is_running()`/`publish_frame()`。
+4. **AI 流保活由订阅者集合决定，不由「谁先 acquire」决定**：
+   - `Engine` 侧只认 `ConsumerAI` 计数（首个接入建 broker、最后一个注销销毁）；Go 侧另有一层**按算法包**的订阅者集合（`StreamHub` 的 `aiSubscribers`），用于回答「这一路 AI 流现在还该不该活着」。
+   - 解析路径与同步订阅必须是**同一次操作**（`BrokerSubscriptionResolver.SyncBrokerSubscriptions`）：只解析不登记，下一轮同步就会把该流回收；只登记不解析，则会留下无 broker 的孤儿流。
+   - ⚠️ **解析失败不得提交订阅变更**，也不得遗留已 acquire 的流：实现必须先完成全部路径解析，再进入提交阶段。
+   - ⚠️ **发布率跨包取 max**：一个 broker 只有一个发布率，因此该 stream 上的发布率是其**所有** enabled 分析任务 `max(sample_fps)`，而不是单个算法包内的 max。
+   - ⚠️ **运动检测是发布侧的一部分，不在算法包里做**：`FramePublisher` 内嵌一个 `MotionDetector`，对**已通过节流**的帧做 320×180 Y 平面网格差分，并把 `has_motion` / `motion_boxes` 一并放进 `publish_frame`。因为是每流一个 publisher，「每流每帧只算一次」由持有关系保证，与挂载了多少算法包无关。
+   - ⚠️ **检测失败必须 fail-open**：`MotionResult` 未被执行检测时默认 `has_motion = true`，`FrameMotionInfo` 默认同样放行；`detect()` 返回 `false`（格式不支持 / 像素拿不到）时直接把默认值发出去，**绝不**因为一次读取失败就把整条流的推理关掉。
+   - ⚠️ **首帧同样 fail-open**：`MotionDetector` 没有参考底图时（流启动、`reset()` 之后、换窗重置之后）返回 `has_motion = true, box_count = 0`，下游按全帧推理。判静会让「画面里已经站着人」的启动瞬间一直空转到心跳（`MOTION_HEARTBEAT_FRAMES`），改一次裁剪区域就盲几秒。
+   - ⚠️ **大面积突变同样 fail-open**：单帧变化占比超过 `max_active_ratio`（70%）时无法区分光照跳档/红外切换与近处大目标、小窗口内有人经过，因此返回 `has_motion = true, box_count = 0` 并以本帧重置底图（不设 hold）。判静会让持续的大面积运动在 hold 结束后盲到心跳。
+   - ⚠️ **DMA-BUF 帧要算上系统调用与非缓存访存代价**：MPP 硬解帧只填 `dma_fd` 且映射为 Normal-NC（非缓存），检测器每帧需要 `mmap` + `DMA_BUF_IOCTL_SYNC(START/END)` + `munmap`；逐字节步进读取非缓存内存会导致数百纳秒/字节的延迟放大，因此 `MotionDetector::sample_y_plane` 在 `from_dma` 路径上按行 `std::memcpy` 到栈缓冲（触发 NEON 宽突发读）后再在 L1 中下采样。写性能数字前先实测，不要把「检测本身零堆分配」讲成「整条路径零开销」。
+5. **跨层停机顺序**（Go 侧，硬约束）：
+   - `camera.Stop` → `algorithm.Stop` → `native.Close`。理由：AI 消费者与 StreamHub 先撤，runner 子进程再排空，最后才销毁 broker 宿主。
+   - 该顺序由 `internal/app/runtime_test.go` 的 `TestAIShutdownOrderPrecedesNativeClose` 守护；改坏顺序会让测试失败，而不是静默产生 use-after-free。
+6. **任务级分析视图（v6）**：
+   - `Stream::set_view(clear, rect)` 只登记归一化矩形；`view_snapshot(frame_w, frame_h)` 在**发布线程**
+     内按**解码帧尺寸**计算像素窗口（floor 起点 + ceil 终点 + 外向取偶），并同时推进 `capture_time_ms`。
+     两者必须在同一个 `Stream::mutex` 临界区里取，否则「窗口」与「时间戳」会来自两次不同的配置。
+   - **几何只认解码帧尺寸**：`codecpar` 的宽高在 1088 裁切/MPP 对齐/热切换时会与真实帧不一致；
+     用元数据算窗口会让 `y + h > frame.height`，`publish_frame` 每帧 fail，整路 AI 静默停摆。
+   - **零拷贝只在未窗口化时直通**：`view.active == true` 必须物化到槽位（紧打包），
+     **绝不**把全幅 fd 配上窗口尺寸下发。
+   - **边界时钟**：窗口切换推进 `effective_since_ms`（同毫秒内改窗 `+1`）。消费侧按
+     「结果的 `capture_time_ms` < since → 旧窗口」选择 E；`StreamHub` 只保留当前与上一代两代，
+     因此不要在窗口上做「隔两代才生效」的优化。
+   - ⚠️ **`capture_time_ms` 严格递增**（`max(now, last + 1)`）：它是 `FramePublisher::resolve_pts_us`
+     反查 pts_us 的唯一帧键。只做「不递减」时，解码器 drain 成批出帧会让同一毫秒的两帧共用一个值，
+     较新帧的 pts_us 被注入到较旧帧的结果里（预览叠框错位）。由 `decoder_test.cpp` 15.1 守护。
+   - **清除必须发生在释放流之前**：`ReleaseAIStreamSubscriber` 先 `SetView(NULL)` 再 `Close`，
+     否则流交回引擎池被无 crop 的相机复用时，会继承上一任窗口且完全静默。
+   - **`has_motion` 是窗口内语义**：运动检测器只采样窗口内部；窗口外运动不再触发整帧放行。
+
+7. **共享内存预算（板端实测）**：
+   - 每路 AI 流一份 broker 共享内存：`DEFAULT_SLOT_COUNT=8` × `DEFAULT_SLOT_SIZE=4MB` = **32MB/路**，且槽位在 `start` 时**一次性分配**（发布侧节流不改变静态预算）。
+   - ⚠️ RK3568 实测 `/dev/shm` 总容量仅 **976MB**，因此默认参数下约 **30 路** AI 流即打满。若需提高路数上限，应通过 `BrokerOptions` 调小 `slot_count`（`frame_queue_` 只有 3 帧，8 槽位偏保守）。
+   - 预算核算请按**最坏情况**（`slot_count` 全部在途）而非稳态估算。

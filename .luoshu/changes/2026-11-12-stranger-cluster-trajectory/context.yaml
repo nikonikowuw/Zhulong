@@ -1,0 +1,15 @@
+version: 1
+change_id: 2026-11-12-stranger-cluster-trajectory
+mode: full
+base_commit: 8c39ca452bea44fc8bd84419ecc5348297df2088
+created_at: 2026-11-22T05:50:40.440Z
+specs:
+  - architecture/architecture.md
+  - domains/data-and-storage.md
+  - domains/go-host-and-http.md
+  - domains/web-frontend.md
+rules:
+  - data/sqlite-persistence
+  - go-host/http-contract
+  - web/frontend-api-boundary
+new_specs: []

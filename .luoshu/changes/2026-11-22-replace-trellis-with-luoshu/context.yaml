@@ -1,0 +1,28 @@
+version: 1
+change_id: 2026-11-22-replace-trellis-with-luoshu
+mode: full
+base_commit: 8c39ca452bea44fc8bd84419ecc5348297df2088
+created_at: 2026-11-22T05:40:09.433Z
+specs:
+  - architecture/architecture.md
+rules:
+  - native/native-link-and-abi
+  - go-host/http-contract
+  - data/sqlite-persistence
+  - web/frontend-api-boundary
+new_specs:
+  - path: domains/go-host-and-http.md
+    rationale: 固化 Go 生命周期、HTTP 安全边界与运维 API 契约
+    approved: true
+  - path: domains/data-and-storage.md
+    rationale: 固化持久化、存储与业务数据的生命周期契约
+    approved: true
+  - path: domains/native-media.md
+    rationale: 固化采集、媒体流水线、C ABI 与原生资源所有权契约
+    approved: true
+  - path: domains/algorithm-sdk-and-delivery.md
+    rationale: 固化算法包、SDK、硬件后端与发布验证边界
+    approved: true
+  - path: domains/web-frontend.md
+    rationale: 固化 React 目录、路由、状态、主题、国际化与浏览器测试边界
+    approved: true
