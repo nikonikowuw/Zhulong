@@ -17,6 +17,7 @@ export interface ChannelTaskBudgetMeterProps {
   channelCurrentPoints?: number
   /** 全平台当前瞬时占用点数。 */
   projectedCurrentPoints?: number
+  className?: string
 }
 
 /** 顶部控制台的算力占用条：左侧本通道，右侧全平台预算。 */
@@ -27,6 +28,7 @@ export function ChannelTaskBudgetMeter({
   isOverBudget,
   channelCurrentPoints,
   projectedCurrentPoints,
+  className,
 }: ChannelTaskBudgetMeterProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
   const percent = Math.min(100, Math.round((projectedPoints / maxPoints) * 100))
@@ -38,8 +40,8 @@ export function ChannelTaskBudgetMeter({
       : 'active'
 
   return (
-    <div className='hidden flex-col gap-1 lg:flex'>
-      <div className='flex items-center justify-between font-mono text-xs'>
+    <div className={cn('flex w-full flex-col gap-1 lg:w-auto', className)}>
+      <div className='flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 font-mono text-xs'>
         <span className='text-muted-foreground'>
           {t('dialog.channelPointsPreview', '本通道算力')}:{' '}
           <strong className='text-foreground'>{channelPoints}</strong>
@@ -54,7 +56,7 @@ export function ChannelTaskBudgetMeter({
         </span>
         <span
           className={cn(
-            'ms-4 font-semibold',
+            'font-semibold lg:ms-4',
             isOverBudget
               ? 'font-bold text-destructive'
               : isWarning
@@ -73,7 +75,7 @@ export function ChannelTaskBudgetMeter({
           <span className='text-[11px] font-normal'>({percent}%)</span>
         </span>
       </div>
-      <div className='h-1.5 w-52 overflow-hidden rounded-full bg-muted'>
+      <div className='h-1.5 w-full overflow-hidden rounded-full bg-muted lg:w-52'>
         <div
           style={{ width: `${percent}%` }}
           className={cn(

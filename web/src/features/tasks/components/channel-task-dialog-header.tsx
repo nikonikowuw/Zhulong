@@ -78,14 +78,14 @@ export function ChannelTaskDialogHeader({
   const selectedCamera = cameras.find((item) => item.id === cameraId)
 
   return (
-    <DialogHeader className='border-b border-border bg-card px-6 py-3.5'>
-      <div className='flex items-center justify-between gap-4'>
-        <div className='flex items-center gap-3'>
+    <DialogHeader className='shrink-0 border-b border-border bg-card px-4 py-3 text-start sm:px-6 sm:py-3.5'>
+      <div className='flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5'>
+        <div className='flex min-w-0 items-center gap-3'>
           <div className='flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/60 text-muted-foreground'>
             <Sliders className='size-4' />
           </div>
-          <div className='flex flex-col gap-0.5'>
-            <div className='flex items-center gap-2'>
+          <div className='flex min-w-0 flex-col gap-0.5'>
+            <div className='flex flex-wrap items-center gap-2'>
               <DialogTitle className='text-sm font-semibold text-foreground'>
                 {t('dialog.title', '配置通道算法任务')}
               </DialogTitle>
@@ -117,7 +117,7 @@ export function ChannelTaskDialogHeader({
                 </Badge>
               )}
             </div>
-            <div className='flex items-center gap-2 text-xs text-muted-foreground'>
+            <div className='flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground'>
               <span className='font-semibold'>
                 {t('dialog.selectCamera', '目标摄像头')}:
               </span>
@@ -165,9 +165,10 @@ export function ChannelTaskDialogHeader({
           projectedCurrentPoints={budget.projectedCurrentPoints}
           maxPoints={MAX_COMPUTE_POINTS}
           isOverBudget={isOverBudget}
+          className='order-3 lg:order-none'
         />
 
-        <div className='flex items-center gap-3'>
+        <div className='flex flex-wrap items-center gap-2 sm:gap-3'>
           <div className='flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-1'>
             <Label
               htmlFor='channel-enabled-switch'

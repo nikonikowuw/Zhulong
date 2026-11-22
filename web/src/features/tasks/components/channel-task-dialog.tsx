@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -19,10 +19,21 @@ import {
   MAX_COMPUTE_POINTS,
 } from '../hooks/use-task-compute-budget'
 import { useDeleteTask } from '../hooks/use-tasks'
-import { ChannelTaskAlgoPanel } from './channel-task-algo-panel'
+import {
+  ChannelTaskAlgoPanel,
+  type ChannelTaskAlgoTab,
+} from './channel-task-algo-panel'
 import { ChannelTaskDialogFooter } from './channel-task-dialog-footer'
 import { ChannelTaskDialogHeader } from './channel-task-dialog-header'
 import { ChannelTaskRegionViewport } from './channel-task-region-viewport'
+
+const EDITABLE_TARGET_SELECTOR =
+  "input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='textbox'], [role='combobox'], [role='listbox'], [role='menu'], [role='slider'], [role='spinbutton']"
+
+function isEditableEventTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  return Boolean(target.closest(EDITABLE_TARGET_SELECTOR))
+}
 
 export interface ChannelTaskDialogProps {
   open: boolean
@@ -79,6 +90,7 @@ function ChannelTaskDialogContent({
   const [autoEnableDisabled, setAutoEnableDisabled] = useState(true)
   const [isPaused, setIsPaused] = useState(false)
   const [surfaceState, setSurfaceState] = useState<FrameSurfaceState>('loading')
+  const [activeTab, setActiveTab] = useState<ChannelTaskAlgoTab>('params')
 
   const syncMutation = useSyncChannelAlgorithms()
   const deleteMutation = useDeleteTask()
@@ -101,6 +113,69 @@ function ChannelTaskDialogContent({
   // 即使一个算法都没勾选也一样。保存仍要求至少一个算法（否则就是删任务）。
   const canEditCrop = Boolean(cameraId) && surfaceState === 'live'
   const hasCrop = regionEditor.crop !== null
+
+  const {
+    canUndo,
+    undo,
+    selected,
+    deleteRect,
+    tool: regionTool,
+    crop,
+    clearCrop,
+  } = regionEditor
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return
+      if (
+        isEditableEventTarget(event.target) ||
+        isEditableEventTarget(document.activeElement)
+      ) {
+        return
+      }
+
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === 'z'
+      ) {
+        if ((canEditRegion || canEditCrop) && canUndo) {
+          event.preventDefault()
+          undo()
+        }
+        return
+      }
+
+      if (
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        (event.key === 'Delete' || event.key === 'Backspace')
+      ) {
+        if (canEditRegion && selected !== null) {
+          event.preventDefault()
+          deleteRect(selected.category, selected.index)
+        } else if (canEditCrop && regionTool === 'crop' && crop !== null) {
+          event.preventDefault()
+          clearCrop()
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [
+    canEditRegion,
+    canEditCrop,
+    canUndo,
+    undo,
+    selected,
+    deleteRect,
+    regionTool,
+    crop,
+    clearCrop,
+  ])
 
   const otherCameraCompute = useMemo(() => {
     const items: SchedulableItem[] = []
@@ -219,6 +294,7 @@ function ChannelTaskDialogContent({
         )
       }
       selectActiveAlgo(issue.algoId)
+      setActiveTab('params')
       return
     }
 
@@ -327,7 +403,7 @@ function ChannelTaskDialogContent({
         onClose={onClose}
       />
 
-      <div className='flex min-h-0 flex-1 divide-x divide-border overflow-hidden bg-muted/20'>
+      <div className='flex min-h-0 flex-1 flex-col divide-y divide-border overflow-y-auto bg-muted/20 lg:flex-row lg:divide-x lg:divide-y-0 lg:overflow-hidden'>
         <ChannelTaskRegionViewport
           cameraId={cameraId || null}
           activeAlgoName={activeAlgoId ? algoMap.get(activeAlgoId)?.name : ''}
@@ -347,6 +423,8 @@ function ChannelTaskDialogContent({
           algorithms={algorithms}
           drafts={drafts}
           activeAlgoId={activeAlgoId}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
           onToggleAlgo={toggleAlgo}
           onSelectAlgo={selectActiveAlgo}
           onUpdateFps={updateFps}

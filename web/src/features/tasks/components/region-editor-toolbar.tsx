@@ -214,8 +214,8 @@ export function RegionEditorToolbar({
   }
 
   return (
-    <div className='flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-5 py-2'>
-      <div className='flex items-center rounded-lg border border-border bg-background p-0.5 shadow-xs'>
+    <div className='flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-3 py-2 sm:px-5'>
+      <div className='flex flex-wrap items-center rounded-lg border border-border bg-background p-0.5 shadow-xs'>
         <Button
           type='button'
           variant='ghost'
@@ -266,7 +266,7 @@ export function RegionEditorToolbar({
         </Button>
       </div>
 
-      <div className='flex items-center gap-2'>
+      <div className='flex flex-wrap items-center gap-2'>
         {!isStreamReady && (
           <Badge
             variant='outline'

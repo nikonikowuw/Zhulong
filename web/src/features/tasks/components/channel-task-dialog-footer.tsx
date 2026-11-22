@@ -20,7 +20,7 @@ export function ChannelTaskDialogFooter({
   const { t } = useTranslation('tasks')
 
   return (
-    <DialogFooter className='flex items-center justify-end gap-2 border-t border-border bg-card px-6 py-3'>
+    <DialogFooter className='flex shrink-0 items-center justify-end gap-2 border-t border-border bg-card px-6 py-3'>
       <Button
         type='button'
         variant='outline'

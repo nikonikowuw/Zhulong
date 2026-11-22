@@ -65,7 +65,7 @@ export function ChannelTaskRegionViewport({
   }
 
   return (
-    <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-zinc-950'>
+    <div className='flex w-full shrink-0 flex-col overflow-hidden bg-zinc-950 lg:h-auto lg:min-h-0 lg:min-w-0 lg:flex-1'>
       <RegionEditorToolbar
         tool={regionEditor.tool}
         counts={regionEditor.counts}
@@ -82,7 +82,7 @@ export function ChannelTaskRegionViewport({
         onTogglePause={onTogglePause}
       />
 
-      <div className='relative flex min-h-0 flex-1 items-stretch overflow-hidden bg-black select-none'>
+      <div className='relative flex h-[240px] items-stretch overflow-hidden bg-black select-none sm:h-[320px] lg:h-auto lg:min-h-0 lg:flex-1'>
         {cameraId ? (
           <CameraFrameSurface
             cameraId={cameraId}

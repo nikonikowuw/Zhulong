@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { AlertTriangle, CalendarClock, Layers, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
@@ -28,10 +28,14 @@ import { RegionRectList } from './region-rect-list'
 import { ScheduleGrid } from './schedule-grid'
 import { TripwireList } from './tripwire-list'
 
+export type ChannelTaskAlgoTab = 'params' | 'schedule'
+
 export interface ChannelTaskAlgoPanelProps {
   algorithms: Algorithm[]
   drafts: Record<string, AlgoDraftItem>
   activeAlgoId: string | null
+  activeTab?: ChannelTaskAlgoTab
+  onTabChange?: (tab: ChannelTaskAlgoTab) => void
   onToggleAlgo: (algoId: string, checked: boolean) => void
   onSelectAlgo: (algoId: string) => void
   onUpdateFps: (algoId: string, sampleFps: number) => void
@@ -47,6 +51,8 @@ export function ChannelTaskAlgoPanel({
   algorithms,
   drafts,
   activeAlgoId,
+  activeTab,
+  onTabChange,
   onToggleAlgo,
   onSelectAlgo,
   onUpdateFps,
@@ -57,6 +63,16 @@ export function ChannelTaskAlgoPanel({
   canEditRegion,
 }: ChannelTaskAlgoPanelProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
+  const [uncontrolledTab, setUncontrolledTab] =
+    useState<ChannelTaskAlgoTab>('params')
+  const resolvedTab = activeTab ?? uncontrolledTab
+  const handleTabChange = (next: string) => {
+    const tab: ChannelTaskAlgoTab = next === 'schedule' ? 'schedule' : 'params'
+    if (activeTab === undefined) {
+      setUncontrolledTab(tab)
+    }
+    onTabChange?.(tab)
+  }
 
   const activeAlgo = activeAlgoId
     ? (algorithms.find((algo) => algo.id === activeAlgoId) ?? null)
@@ -76,7 +92,7 @@ export function ChannelTaskAlgoPanel({
   const costPerFrame = activeAlgo?.computeCost ?? DEFAULT_COMPUTE_COST
 
   return (
-    <div className='flex w-[460px] shrink-0 flex-col gap-3.5 overflow-y-auto bg-muted/30 p-4 xl:w-[490px]'>
+    <div className='flex w-full shrink-0 flex-col gap-3.5 bg-muted/30 p-4 lg:w-[440px] lg:overflow-y-auto xl:w-[490px]'>
       {/* 算法调度矩阵 */}
       <div className='space-y-2.5 rounded-xl border border-border bg-card p-4 shadow-xs'>
         <div className='flex items-center justify-between'>
@@ -202,7 +218,11 @@ export function ChannelTaskAlgoPanel({
           )}
 
           {/* 深度配置选项卡：参数与区域 / 分时布防计划 */}
-          <Tabs defaultValue='params' className='flex flex-1 flex-col gap-3'>
+          <Tabs
+            value={resolvedTab}
+            onValueChange={handleTabChange}
+            className='flex flex-1 flex-col gap-3'
+          >
             <TabsList className='grid w-full grid-cols-2'>
               <TabsTrigger value='params' className='gap-1.5 text-xs'>
                 <Sliders className='size-3.5' />

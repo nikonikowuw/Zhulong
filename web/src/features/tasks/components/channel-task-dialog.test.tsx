@@ -448,4 +448,129 @@ describe('ChannelTaskDialog region editing', () => {
       .element(getByRole('button', { name: '冻结画面' }))
       .not.toBeDisabled()
   })
+
+  it('keeps budget meter visible and stacks layout vertically without horizontal overflow on narrow viewports', async () => {
+    const { getByText, getByTestId } = await renderDialog()
+
+    await expect.element(getByText(/本通道算力/)).toBeVisible()
+
+    const dialogEl = document.querySelector(
+      '[data-slot="dialog-content"]'
+    ) as HTMLElement
+    const frameEl = getByTestId('frame-surface').element()
+    const matrixHeading = getByText('算法调度矩阵').element()
+
+    const frameRect = frameEl.getBoundingClientRect()
+    const matrixRect = matrixHeading.getBoundingClientRect()
+
+    // chromium-default (414px < lg)：上下堆叠、画布保有高度且弹窗不横向溢出
+    expect(frameRect.height).toBeGreaterThanOrEqual(200)
+    expect(frameRect.bottom).toBeLessThanOrEqual(matrixRect.top + 4)
+    expect(dialogEl.scrollWidth).toBeLessThanOrEqual(dialogEl.clientWidth + 1)
+  })
+
+  it('switches back to the params tab when validation fails from the schedule tab', async () => {
+    const { getByRole, getByText } = await renderDialog({
+      allTasks: [buildTask({ configJson: '{"threshold":99}' })],
+    })
+
+    await getByRole('tab', { name: /分时布防计划/ }).click()
+    await expect.element(getByText('启用分时计划')).toBeVisible()
+
+    await getByRole('button', { name: '保存并下发调度' }).click()
+
+    expect(mockSyncMutate).not.toHaveBeenCalled()
+    await expect
+      .element(getByRole('textbox', { name: '置信度阈值' }))
+      .toHaveValue('99')
+  })
+
+  it('switches back to params tab and opens raw JSON mode when invalid JSON fails validation', async () => {
+    const { getByRole, getByText, getByPlaceholder } = await renderDialog({
+      algorithms: [
+        buildAlgorithm({ id: 'algo-face', name: '人脸识别' }),
+        buildAlgorithm({ id: 'algo-smoke', name: '烟雾检测' }),
+      ],
+      allTasks: [
+        buildTask({
+          algorithms: [
+            {
+              id: 'sub-1',
+              taskId: 'task-1',
+              algorithmId: 'algo-face',
+              enabled: true,
+              sampleFps: 5,
+              configJson: '{"threshold":0.5}',
+              regionConfigJson: '{}',
+              scheduleJson: '{}',
+              createdAt: '',
+              updatedAt: '',
+            },
+            {
+              id: 'sub-2',
+              taskId: 'task-1',
+              algorithmId: 'algo-smoke',
+              enabled: true,
+              sampleFps: 5,
+              configJson: '{ bad json',
+              regionConfigJson: '{}',
+              scheduleJson: '{}',
+              createdAt: '',
+              updatedAt: '',
+            },
+          ],
+        }),
+      ],
+    })
+
+    await getByRole('tab', { name: /分时布防计划/ }).click()
+    await getByRole('button', { name: '保存并下发调度' }).click()
+
+    expect(mockSyncMutate).not.toHaveBeenCalled()
+    await expect.element(getByText('语法错误')).toBeVisible()
+    await expect.element(getByPlaceholder('{}')).toHaveValue('{ bad json')
+  })
+
+  it('supports Delete and Ctrl+Z shortcuts for regions while ignoring inputs', async () => {
+    const { getByRole, getByText } = await renderDialog({
+      allTasks: [
+        buildTask({
+          regionConfigJson: '{"roi":[[0.1,0.1,0.5,0.5]],"mask":[]}',
+        }),
+      ],
+    })
+
+    // 选中右侧列表中的 ROI #1
+    await getByText('ROI #1').click()
+
+    // 焦点在输入框内时按 Backspace / Ctrl+Z 不应误删区域
+    const fpsInput = getByRole('textbox', { name: '采样帧率' })
+    await fpsInput.click()
+    await userEvent.keyboard('{Backspace}')
+    await expect.element(getByText('ROI #1')).toBeInTheDocument()
+
+    // 聚焦到非输入区域（列表项）后按 Delete 删除区域，再按 Ctrl+Z 撤销恢复
+    await getByText('ROI #1').click()
+    await userEvent.keyboard('{Delete}')
+    await expect.element(getByText('ROI #1')).not.toBeInTheDocument()
+
+    await userEvent.keyboard('{Control>}z{/Control}')
+    await expect.element(getByText('ROI #1')).toBeInTheDocument()
+  })
+
+  it('clears and undoes crop window via Delete and Ctrl+Z when crop tool is active', async () => {
+    const { getByRole } = await renderDialog({
+      allTasks: [buildTask({ crop: [0.1, 0.2, 0.6, 0.8] })],
+    })
+
+    const clearCropBtn = getByRole('button', { name: '清除裁剪' })
+    await expect.element(clearCropBtn).not.toBeDisabled()
+
+    await getByRole('button', { name: '裁剪窗口' }).click()
+    await userEvent.keyboard('{Delete}')
+    await expect.element(clearCropBtn).toBeDisabled()
+
+    await userEvent.keyboard('{Control>}z{/Control}')
+    await expect.element(clearCropBtn).not.toBeDisabled()
+  })
 })

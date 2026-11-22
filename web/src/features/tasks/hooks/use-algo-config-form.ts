@@ -54,7 +54,17 @@ export function useAlgoConfigForm({
     mode: 'onChange',
   })
 
-  const [mode, setMode] = useState<AlgoConfigMode>('form')
+  const [mode, setMode] = useState<AlgoConfigMode>(() =>
+    safeParseJson(value) === null ? 'json' : 'form'
+  )
+  const [syncedValue, setSyncedValue] = useState(value)
+  if (value !== syncedValue) {
+    setSyncedValue(value)
+    // 外部切换后若新草稿为非法 JSON（如校验报错定位或切相机），自动展示源码编辑器暴露错误。
+    if (safeParseJson(value) === null && mode !== 'json') {
+      setMode('json')
+    }
+  }
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<number | null>(null)
 
