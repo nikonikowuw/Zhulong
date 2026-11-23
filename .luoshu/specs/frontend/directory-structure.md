@@ -11,10 +11,11 @@ web/
   src/
     assets/                           # 品牌图标、自定义图标、SVG 与插画资产
     components/                       # 全局通用组件体系
-      data-table/                     # TanStack Table 表格构件 (toolbar, pagination, column-header, bulk-actions 等)
+      data-table/                     # TanStack Table 构件 (shell 四态表格壳, toolbar, pagination, column-header, bulk-actions)
       layout/                         # 控制台框架布局构件 (app-sidebar, header, main, nav-group, nav-user, top-nav 等)
         data/sidebar-data.ts          # 导航菜单与分组结构定义
       ui/                             # shadcn/ui 原子组件 (button, dialog, input, sheet, sidebar, table 等)
+      list-page.tsx                   # 列表页骨架 (标题行 + 描述 + 右侧操作, 统一 Header/Main 间距)
       confirm-dialog.tsx              # 通用操作二次确认模态窗
       password-input.tsx              # 密码显示/隐藏专用输入框
       command-menu.tsx                # 全局 Ctrl+K 快捷命令栏

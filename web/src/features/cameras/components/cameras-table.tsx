@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   type SortingState,
   type VisibilityState,
-  flexRender,
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
@@ -16,15 +15,8 @@ import { useTranslation } from 'react-i18next'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
+import { TableCell, TableRow } from '@/components/ui/table'
+import { DataTableShell, DataTableToolbar } from '@/components/data-table'
 import { type Camera } from '../data/schema'
 import { camerasColumns as columns } from './cameras-columns'
 import { CamerasDataTableBulkActions } from './cameras-data-table-bulk-actions'
@@ -39,8 +31,8 @@ interface CamerasTableProps {
   navigate: NavigateFn
 }
 
-const SKELETON_ROWS = Array.from({ length: 5 }, (_, index) => (
-  <TableRow key={`skeleton-${index}`}>
+const SKELETON_ROW = (
+  <TableRow>
     <TableCell className='w-12'>
       <Skeleton className='h-4 w-4' />
     </TableCell>
@@ -72,7 +64,7 @@ const SKELETON_ROWS = Array.from({ length: 5 }, (_, index) => (
       <Skeleton className='size-8 rounded-md' />
     </TableCell>
   </TableRow>
-))
+)
 
 export function CamerasTable({
   data,
@@ -182,129 +174,83 @@ export function CamerasTable({
 
   return (
     <div className='flex flex-1 flex-col gap-4'>
-      <DataTableToolbar
+      <DataTableShell
         table={table}
-        searchPlaceholder={t('table.searchPlaceholder')}
-        filters={filters}
-        columnLabels={columnLabels}
-      />
-
-      <div className='rounded-md border border-border bg-card'>
-        <Table className='border-separate border-spacing-0'>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead
-                    key={header.id}
-                    colSpan={header.colSpan}
-                    className={header.column.columnDef.meta?.className}
+        toolbar={
+          <DataTableToolbar
+            table={table}
+            searchPlaceholder={t('table.searchPlaceholder')}
+            filters={filters}
+            columnLabels={columnLabels}
+          />
+        }
+        totalRows={table.getFilteredRowModel().rows.length}
+        isLoading={isLoading}
+        isError={isError}
+        skeletonRows={5}
+        loadingRow={SKELETON_ROW}
+        errorState={
+          // 请求失败态
+          <TableRow>
+            <TableCell colSpan={columns.length} className='h-48 text-center'>
+              <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
+                <AlertCircle className='size-8' />
+                <span className='font-medium'>{t('table.loadError')}</span>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={onRetry}
+                  className='mt-2'
+                >
+                  <RefreshCw className='me-1 size-4' />
+                  {t('table.retry')}
+                </Button>
+              </div>
+            </TableCell>
+          </TableRow>
+        }
+        emptyState={
+          // 空数据态（区分无数据与筛选无匹配）
+          <TableRow>
+            <TableCell colSpan={columns.length} className='h-64 text-center'>
+              <div className='flex flex-col items-center justify-center gap-2'>
+                <div className='flex size-12 items-center justify-center rounded-full bg-muted'>
+                  <CameraIcon className='size-6 text-muted-foreground' />
+                </div>
+                <span className='text-base font-semibold text-foreground'>
+                  {isFiltered ? t('table.filterEmpty') : t('table.empty')}
+                </span>
+                <p className='max-w-sm text-sm text-muted-foreground'>
+                  {isFiltered
+                    ? t('table.filterEmptyDesc')
+                    : t('table.emptyDesc')}
+                </p>
+                {isFiltered ? (
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={() => {
+                      table.resetGlobalFilter()
+                      table.resetColumnFilters()
+                    }}
+                    className='mt-2'
                   >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              SKELETON_ROWS
-            ) : isError ? (
-              // 请求失败态
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-48 text-center'
-                >
-                  <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
-                    <AlertCircle className='size-8' />
-                    <span className='font-medium'>{t('table.loadError')}</span>
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      onClick={onRetry}
-                      className='mt-2'
-                    >
-                      <RefreshCw className='me-1 size-4' />
-                      {t('table.retry')}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.original.id}
-                  data-state={row.getIsSelected() && 'selected'}
-                  className='group'
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell
-                      key={cell.id}
-                      className={cell.column.columnDef.meta?.className}
-                    >
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              // 空数据态（区分无数据与筛选无匹配）
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-64 text-center'
-                >
-                  <div className='flex flex-col items-center justify-center gap-2'>
-                    <div className='flex size-12 items-center justify-center rounded-full bg-muted'>
-                      <CameraIcon className='size-6 text-muted-foreground' />
-                    </div>
-                    <span className='text-base font-semibold text-foreground'>
-                      {isFiltered ? t('table.filterEmpty') : t('table.empty')}
-                    </span>
-                    <p className='max-w-sm text-sm text-muted-foreground'>
-                      {isFiltered
-                        ? t('table.filterEmptyDesc')
-                        : t('table.emptyDesc')}
-                    </p>
-                    {isFiltered ? (
-                      <Button
-                        variant='outline'
-                        size='sm'
-                        onClick={() => {
-                          table.resetGlobalFilter()
-                          table.resetColumnFilters()
-                        }}
-                        className='mt-2'
-                      >
-                        {t('table.resetFilter')}
-                      </Button>
-                    ) : (
-                      <Button
-                        size='sm'
-                        onClick={() => setOpen('create')}
-                        className='mt-2'
-                      >
-                        {t('actions.create')}
-                      </Button>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      <DataTablePagination table={table} />
+                    {t('table.resetFilter')}
+                  </Button>
+                ) : (
+                  <Button
+                    size='sm'
+                    onClick={() => setOpen('create')}
+                    className='mt-2'
+                  >
+                    {t('actions.create')}
+                  </Button>
+                )}
+              </div>
+            </TableCell>
+          </TableRow>
+        }
+      />
 
       <CamerasDataTableBulkActions table={table} />
     </div>

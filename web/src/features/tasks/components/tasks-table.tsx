@@ -232,24 +232,23 @@ export function TasksTable({
   }, [pageCount, ensurePageInRange])
 
   return (
-    <div className='flex flex-1 flex-col gap-4'>
-      <TasksTableToolbar
-        table={table}
-        configuredCount={configuredGroups.length}
-        cameraOptions={cameraOptions}
-        algorithmOptions={algorithmOptions}
-        statusOptions={statusOptions}
-      />
-
-      <TasksTableDetail
-        table={table}
-        columnCount={columns.length}
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={onRetry}
-        isFiltered={isFiltered}
-        onOpenChannelConfig={handleOpenChannelConfig}
-      />
-    </div>
+    <TasksTableDetail
+      table={table}
+      columnCount={columns.length}
+      isLoading={isLoading}
+      isError={isError}
+      onRetry={onRetry}
+      isFiltered={isFiltered}
+      onOpenChannelConfig={handleOpenChannelConfig}
+      toolbar={
+        <TasksTableToolbar
+          table={table}
+          configuredCount={configuredGroups.length}
+          cameraOptions={cameraOptions}
+          algorithmOptions={algorithmOptions}
+          statusOptions={statusOptions}
+        />
+      }
+    />
   )
 }

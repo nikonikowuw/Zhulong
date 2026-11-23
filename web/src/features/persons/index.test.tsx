@@ -116,6 +116,11 @@ describe('Persons page integration', () => {
       </QueryClientProvider>
     )
 
+    // 标题行由 ListPage 统一渲染，页面入口不再自拼 h2/p 结构。
+    await expect
+      .element(getByRole('heading', { name: '人员管理' }))
+      .toBeInTheDocument()
+
     await expect
       .element(getByRole('heading', { name: /人脸底库管理 - Deep Link User/i }))
       .toBeInTheDocument()

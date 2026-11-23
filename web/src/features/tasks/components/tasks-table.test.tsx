@@ -135,6 +135,17 @@ describe('TasksTable', () => {
     vi.clearAllMocks()
   })
 
+  it('renders the shared list shell container and toolbar slots', async () => {
+    const { container } = await renderTable()
+
+    expect(
+      container.querySelector('[data-slot="data-table-container"]')
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-slot="data-table-toolbar"]')
+    ).not.toBeNull()
+  })
+
   it('renders table headers and row items correctly', async () => {
     const { getByText } = await renderTable()
 

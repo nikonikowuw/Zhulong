@@ -93,20 +93,47 @@ const HEALTH_LEVEL: Record<HealthStatus, StatusLevel> = {
 - 仪表盘与配置面板背景统一使用 `bg-muted/30` 或 `bg-card`，边框统一使用 `border border-border`，圆角使用 `rounded-lg` 或 `rounded-xl`；
 - 严禁手写 `bg-gray-100`, `bg-slate-50`, `border-gray-300` 等非语义类。
 
-#### 4.1 列表页骨架：照抄 `persons` / `cameras`，不要自行发明
+#### 4.1 列表页骨架：一律用 `ListPage` + `DataTableShell`，禁止自行拼装
 
-所有 CRUD 列表页必须与 `features/persons` 同构，禁止自造布局或私造控件：
+列表页骨架由两个共享组件承载，页面入口只填内容，不再自拼顶栏、标题行与表格容器：
 
-| 位置 | 规范 |
+| 组件 | 路径 | 负责 |
+| :--- | :--- | :--- |
+| `ListPage` | `web/src/components/list-page.tsx` | `Header` 与顶栏控件（`Search` / `LanguageSwitch` / `ThemeSwitch` / `ConfigDrawer` / `ProfileDropdown`）、`Main` 间距、标题行 `flex flex-wrap items-end justify-between gap-2`、标题块 `min-w-0 flex-1`、描述 `max-w-3xl`、右侧 `actions` 槽 |
+| `DataTableShell` | `web/src/components/data-table/shell.tsx` | 工具栏行 `DataTableToolbarRow`、容器 `rounded-md border border-border bg-card`、四态表体（`isLoading → isError → rows → emptyState`）、分页（`totalRows === 0` 时不渲染） |
+| `DataTableColumnHeader` | `web/src/components/data-table/column-header.tsx` | 表头：可排序走 ghost `Button`（`h-8 px-3`），不可排序走同盒模型 `div`，同表两列文字基线一致 |
+
+**槽位契约**
+
+| 槽位 | 传什么 |
 | :--- | :--- |
-| 页面入口 | `Provider` 包住 `XxxContent`，弹窗状态（`open` / `currentRow`）由 Provider 持有，`<XxxDialogs />` 集中挂载 |
-| 标题行 | `flex flex-wrap items-end justify-between gap-2`；标题块加 `min-w-0 flex-1`（否则长文案会撑满整行、把按钮挤到第二行最左），描述加 `max-w-3xl` |
-| 主操作 | 独立 `XxxPrimaryButtons`：`Button variant='outline' size='sm' className='h-8'`（刷新）+ `Button size='sm' className='h-8'`（新建），图标用 `me-1 h-4 w-4` |
-| 表格 | `@tanstack/react-table` + `DataTableToolbar` / `DataTablePagination` / 列定义拆到 `*-columns.tsx`、单元格拆到 `*-columns-cells.tsx`；容器固定 `rounded-md border border-border bg-card` |
-| 行操作 | 右侧 `⋯` `DropdownMenu`，不用内联图标按钮 |
-| 视图切换 | 与 `persons` 一致：工具栏行右侧 `rounded-lg border border-border bg-muted/40 p-0.5` 里放 `h-7 px-2 text-xs` 的 `Button` |
+| `ListPage.title` / `description` | 已 `t()` 的标题与一句话描述 |
+| `ListPage.actions` | 独立 `XxxPrimaryButtons`：刷新 `Button variant='outline' size='sm' className='h-8'`、新建 `Button size='sm' className='h-8'`，图标 `me-1 h-4 w-4` |
+| `DataTableShell.toolbar` | `DataTableToolbar`（搜索 + faceted filter）；自定义工具栏（如 `AuditToolbar`）直接放这里 |
+| `DataTableShell.toolbarActions` | 视图切换等附加控件；无则省略 |
+| `DataTableShell.totalRows` | 过滤后的总行数；服务端分页传接口 `total` |
+| `DataTableShell.loadingRow` / `skeletonRows` | 页面自有骨架行（按列宽定制）与行数；服务端分页传当前 `pageSize` |
+| `DataTableShell.renderRow` | 需要「主行 + 展开行」或整行可点时使用，返回含 1–2 个 `<TableRow>` 的 Fragment |
+| `DataTableShell.emptyState` / `errorState` | 必须是 `<TableRow>`，`colSpan` 用本页列数 |
 
-**空态铁律**：0 条有效数据时页面上不得残留任何业务卡片（含「未配置」占位卡片、统计看板、分页条）。分页条在 `getFilteredRowModel().rows.length === 0` 时不渲染，否则会出现 `Page 1 of 0`。空态统一放在表格 `TableCell` 内或 `rounded-xl border border-dashed` 容器里，并带一个主 CTA。
+**视图切换**：只有页面真的实现了 grid（画廊）分支时才传 `toolbarActions={<ViewModeSwitch … />}`；纯表格页不得为了「看起来一致」硬塞切换器（目前仅 persons 与 image-search 有 grid 分支）。
+
+**分页模型决定排序能力（硬性）**
+
+| 分页模型 | 判据 | 客户端排序 |
+| :--- | :--- | :--- |
+| 服务端分页 | `manualPagination: true` + 接口 `total`（如 persons、audit） | ❌ 禁止：只能排当前页，用户会误以为全量有序 |
+| 客户端分页 | 一次拉全量且上限 ≤ 128 条（如 cameras、algorithms、tasks） | ✅ 允许 |
+
+**例外清单（不得再扩大）**
+
+- `features/gb28181`：设置页（Tabs + 设备驾驶舱），容器可用 `rounded-xl`；
+- `features/records`：媒体工作台，由 `RecordsListShell` 承载表格/画廊双视图；
+- `features/image-search` / `live` / `spatial`：工作台，不是 CRUD 列表。
+
+**新增列表页验收**：入口不得 import `@/components/layout/header` 或 `@/components/layout/main`（ESLint 已在 persons / cameras / algorithms / audit / tasks 五个入口上强制）；表格测试必须断言 `[data-slot="data-table-container"]` 与 `[data-slot="data-table-toolbar"]` 存在。
+
+**空态铁律**：0 条有效数据时页面上不得残留任何业务卡片（含「未配置」占位卡片、统计看板、分页条）。分页条由 `DataTableShell` 在 `totalRows === 0` 时自动省略，页面不要再自行判断，否则会出现 `Page 1 of 0`。空态统一放在表格 `TableCell` 内或 `rounded-xl border border-dashed` 容器里，并带一个主 CTA。
 
 **「有数据」的判据要按业务有效项，不是表行数**：例如分析任务只有带算法订阅（`task.algorithms.length > 0`）才算任务；后端可能落下空聚合行，不得据此渲染看板。
 

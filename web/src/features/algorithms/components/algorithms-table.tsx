@@ -16,15 +16,8 @@ import { useTranslation } from 'react-i18next'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
+import { TableCell, TableRow } from '@/components/ui/table'
+import { DataTableShell, DataTableToolbar } from '@/components/data-table'
 import { type Algorithm } from '../data/schema'
 import { algorithmsColumns as columns } from './algorithms-columns'
 import { useAlgorithmsContext } from './algorithms-provider'
@@ -38,6 +31,39 @@ interface AlgorithmsTableProps {
   navigate: NavigateFn
   onOpenUpload?: () => void
 }
+
+/**
+ * 骨架行：宽度按各列真实内容给，避免加载态列宽跳动。
+ * 提到模块级是因为它与表格数据无关，每列一行即可由 shell 重复渲染。
+ */
+const SKELETON_ROW = (
+  <TableRow>
+    <TableCell className='w-12'>
+      <Skeleton className='h-4 w-4' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-4 w-32' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-5 w-20 rounded-full' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-4 w-28' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-8 w-24' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-6 w-16 rounded-full' />
+    </TableCell>
+    <TableCell>
+      <Skeleton className='h-5 w-8 rounded-full' />
+    </TableCell>
+    <TableCell className='sticky inset-e-0 z-20 w-28 bg-card text-end'>
+      <Skeleton className='ms-auto size-8 rounded-md' />
+    </TableCell>
+  </TableRow>
+)
 
 export function AlgorithmsTable({
   data,
@@ -141,205 +167,147 @@ export function AlgorithmsTable({
   }
 
   return (
-    <div className='flex flex-1 flex-col gap-4'>
-      <DataTableToolbar
-        table={table}
-        searchPlaceholder={t('searchPlaceholder', '搜索算法名称或标识...')}
-        filters={[
-          {
-            columnId: 'taskType',
-            title: t('thType', '任务形态'),
-            options: taskTypeOptions,
-          },
-          {
-            columnId: 'status',
-            title: t('thStatus', '运行状态'),
-            options: statusOptions,
-          },
-        ]}
-        columnLabels={{
-          name: t('thAlgorithm', '算法名称与标识'),
-          taskType: t('thType', '任务形态'),
-          platform: t('thPlatform', '目标平台'),
-          resources: t('thResources', '资源消耗'),
-          status: t('thStatus', '运行状态'),
-          enable: t('thEnable', '调度开关'),
-        }}
-      />
-
-      <div className='rounded-md border border-border bg-card'>
-        <Table className='border-separate border-spacing-0'>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead
-                    key={header.id}
-                    colSpan={header.colSpan}
-                    className={header.column.columnDef.meta?.className}
-                  >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              // 骨架屏加载态
-              Array.from({ length: 5 }).map((_, index) => (
-                <TableRow key={`skeleton-${index}`}>
-                  <TableCell className='w-12'>
-                    <Skeleton className='h-4 w-4' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-32' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-5 w-20 rounded-full' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-28' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-8 w-24' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-6 w-16 rounded-full' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-5 w-8 rounded-full' />
-                  </TableCell>
-                  <TableCell className='sticky inset-e-0 z-20 w-28 bg-card text-end'>
-                    <Skeleton className='ms-auto size-8 rounded-md' />
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : isError ? (
-              // 请求失败态
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-48 text-center'
-                >
-                  <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
-                    <AlertCircle className='size-8' />
-                    <span className='font-medium'>
-                      {t('fetchFailed', '获取算法包列表失败')}
-                    </span>
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      onClick={onRetry}
-                      className='mt-2'
-                    >
-                      <RefreshCw className='me-1 size-4' />
-                      {t('retry', '重试')}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.original.id}
-                  data-state={row.getIsSelected() ? 'selected' : undefined}
-                  className='group cursor-pointer transition-colors hover:bg-muted/50'
-                  onClick={(e) => {
-                    const target = e.target as HTMLElement | null
-                    if (
-                      target?.closest(
-                        'button, input, [role="checkbox"], [role="switch"], a, [data-prevent-row-click], [role="menuitem"], [role="menu"], [data-slot*="dropdown-menu"]'
-                      )
-                    ) {
-                      return
-                    }
-                    setCurrentRow(row.original)
-                    setOpen('detail')
+    <DataTableShell
+      table={table}
+      toolbar={
+        <DataTableToolbar
+          table={table}
+          searchPlaceholder={t('searchPlaceholder', '搜索算法名称或标识...')}
+          filters={[
+            {
+              columnId: 'taskType',
+              title: t('thType', '任务形态'),
+              options: taskTypeOptions,
+            },
+            {
+              columnId: 'status',
+              title: t('thStatus', '运行状态'),
+              options: statusOptions,
+            },
+          ]}
+          columnLabels={{
+            name: t('thAlgorithm', '算法名称与标识'),
+            taskType: t('thType', '任务形态'),
+            platform: t('thPlatform', '目标平台'),
+            resources: t('thResources', '资源消耗'),
+            status: t('thStatus', '运行状态'),
+            enable: t('thEnable', '调度开关'),
+          }}
+        />
+      }
+      totalRows={table.getFilteredRowModel().rows.length}
+      isLoading={isLoading}
+      isError={isError}
+      skeletonRows={5}
+      loadingRow={SKELETON_ROW}
+      errorState={
+        // 请求失败态
+        <TableRow>
+          <TableCell colSpan={columns.length} className='h-48 text-center'>
+            <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
+              <AlertCircle className='size-8' />
+              <span className='font-medium'>
+                {t('fetchFailed', '获取算法包列表失败')}
+              </span>
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={onRetry}
+                className='mt-2'
+              >
+                <RefreshCw className='me-1 size-4' />
+                {t('retry', '重试')}
+              </Button>
+            </div>
+          </TableCell>
+        </TableRow>
+      }
+      emptyState={
+        // 空数据态（区分全空 vs 筛选无结果）
+        <TableRow>
+          <TableCell colSpan={columns.length} className='h-64 text-center'>
+            {isFiltered ? (
+              <div className='flex flex-col items-center justify-center gap-2'>
+                <p className='text-sm text-muted-foreground'>
+                  {t('noMatchingAlgorithms', '没有找到符合条件的算法包')}
+                </p>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  onClick={() => {
+                    table.resetColumnFilters()
+                    table.resetGlobalFilter()
                   }}
                 >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell
-                      key={cell.id}
-                      className={cell.column.columnDef.meta?.className}
-                      data-prevent-row-click={
-                        cell.column.id === 'actions' ||
-                        cell.column.id === 'select' ||
-                        cell.column.id === 'enable'
-                          ? ''
-                          : undefined
-                      }
-                    >
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
+                  {t('clearFilter', '清空筛选条件')}
+                </Button>
+              </div>
             ) : (
-              // 空数据态（区分全空 vs 筛选无结果）
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-64 text-center'
+              <div className='flex flex-col items-center justify-center gap-3 p-8'>
+                <div className='rounded-full bg-primary/10 p-4 text-primary'>
+                  <Layers className='size-8' />
+                </div>
+                <div className='space-y-1'>
+                  <h3 className='text-base font-semibold text-foreground'>
+                    {t('emptyAlgorithmsTitle', '尚未安装任何算法包')}
+                  </h3>
+                  <p className='max-w-sm text-xs text-muted-foreground'>
+                    {t(
+                      'emptyAlgorithmsDesc',
+                      '支持目标检测、图像分类、人脸与结构化算法包。上传符合规范的 .tar.gz 或 .zip 归档即可快速启用。'
+                    )}
+                  </p>
+                </div>
+                <Button
+                  className='mt-2 gap-2'
+                  size='sm'
+                  onClick={handleOpenUpload}
                 >
-                  {isFiltered ? (
-                    <div className='flex flex-col items-center justify-center gap-2'>
-                      <p className='text-sm text-muted-foreground'>
-                        {t('noMatchingAlgorithms', '没有找到符合条件的算法包')}
-                      </p>
-                      <Button
-                        variant='ghost'
-                        size='sm'
-                        onClick={() => {
-                          table.resetColumnFilters()
-                          table.resetGlobalFilter()
-                        }}
-                      >
-                        {t('clearFilter', '清空筛选条件')}
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className='flex flex-col items-center justify-center gap-3 p-8'>
-                      <div className='rounded-full bg-primary/10 p-4 text-primary'>
-                        <Layers className='size-8' />
-                      </div>
-                      <div className='space-y-1'>
-                        <h3 className='text-base font-semibold text-foreground'>
-                          {t('emptyAlgorithmsTitle', '尚未安装任何算法包')}
-                        </h3>
-                        <p className='max-w-sm text-xs text-muted-foreground'>
-                          {t(
-                            'emptyAlgorithmsDesc',
-                            '支持目标检测、图像分类、人脸与结构化算法包。上传符合规范的 .tar.gz 或 .zip 归档即可快速启用。'
-                          )}
-                        </p>
-                      </div>
-                      <Button
-                        className='mt-2 gap-2'
-                        size='sm'
-                        onClick={handleOpenUpload}
-                      >
-                        <UploadCloud className='size-4' />
-                        {t('uploadFirstAlgorithm', '安装第一个算法包')}
-                      </Button>
-                    </div>
-                  )}
-                </TableCell>
-              </TableRow>
+                  <UploadCloud className='size-4' />
+                  {t('uploadFirstAlgorithm', '安装第一个算法包')}
+                </Button>
+              </div>
             )}
-          </TableBody>
-        </Table>
-      </div>
-
-      <DataTablePagination table={table} />
-    </div>
+          </TableCell>
+        </TableRow>
+      }
+      renderRow={(row) => (
+        // 整行可点开详情：shell 的默认行不带 onClick，也不带列的 data 标记，
+        // 所以这里走 renderRow 逃生口，保持交互与列对齐原样。
+        <TableRow
+          key={row.original.id}
+          data-state={row.getIsSelected() ? 'selected' : undefined}
+          className='group cursor-pointer transition-colors hover:bg-muted/50'
+          onClick={(e) => {
+            const target = e.target as HTMLElement | null
+            if (
+              target?.closest(
+                'button, input, [role="checkbox"], [role="switch"], a, [data-prevent-row-click], [role="menuitem"], [role="menu"], [data-slot*="dropdown-menu"]'
+              )
+            ) {
+              return
+            }
+            setCurrentRow(row.original)
+            setOpen('detail')
+          }}
+        >
+          {row.getVisibleCells().map((cell) => (
+            <TableCell
+              key={cell.id}
+              className={cell.column.columnDef.meta?.className}
+              data-prevent-row-click={
+                cell.column.id === 'actions' ||
+                cell.column.id === 'select' ||
+                cell.column.id === 'enable'
+                  ? ''
+                  : undefined
+              }
+            >
+              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+            </TableCell>
+          ))}
+        </TableRow>
+      )}
+    />
   )
 }

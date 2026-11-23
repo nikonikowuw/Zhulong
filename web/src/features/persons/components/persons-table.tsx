@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   type RowSelectionState,
   type VisibilityState,
-  flexRender,
   getCoreRowModel,
   getPaginationRowModel,
   useReactTable,
@@ -10,15 +9,13 @@ import {
 import { LayoutGrid, List } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
+import { TableCell, TableRow } from '@/components/ui/table'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
+  DataTablePagination,
+  DataTableShell,
+  DataTableToolbar,
+  DataTableToolbarRow,
+} from '@/components/data-table'
 import {
   ViewModeSwitch,
   type ViewModeOption,
@@ -38,9 +35,6 @@ const viewModeOptions = [
   { value: 'table', label: 'views.table', icon: List },
   { value: 'grid', label: 'views.grid', icon: LayoutGrid },
 ] as const satisfies ReadonlyArray<ViewModeOption<'table' | 'grid'>>
-
-/** 骨架屏行数。列数不再写死：列定义增长时硬编码的 5 个单元格会横向错位。 */
-const SKELETON_ROWS = 5
 
 const PERSONS_PAGINATION_CONFIG = {
   defaultPage: 1,
@@ -187,8 +181,26 @@ export function PersonsTable({
   )
 
   const visibleColumnCount = table.getVisibleLeafColumns().length
+  const pageSize = table.getState().pagination.pageSize
   const rows = table.getRowModel().rows
   const isEmpty = !isLoading && !isError && rows.length === 0
+
+  const toolbar = (
+    <DataTableToolbar
+      table={table}
+      searchPlaceholder={t('table.searchPlaceholder')}
+      filters={filters}
+      columnLabels={columnLabels}
+      debounceMs={300}
+    />
+  )
+  const toolbarActions = (
+    <ViewModeSwitch
+      value={viewMode}
+      onChange={handleViewModeChange}
+      options={viewModeSwitchOptions}
+    />
+  )
 
   const handleResetFilters = () => {
     table.resetGlobalFilter()
@@ -197,109 +209,57 @@ export function PersonsTable({
 
   return (
     <div className='flex flex-1 flex-col gap-4'>
-      <div className='flex flex-wrap items-center justify-between gap-2'>
-        <div className='flex-1'>
-          <DataTableToolbar
-            table={table}
-            searchPlaceholder={t('table.searchPlaceholder')}
-            filters={filters}
-            columnLabels={columnLabels}
-            debounceMs={300}
-          />
-        </div>
-        <ViewModeSwitch
-          value={viewMode}
-          onChange={handleViewModeChange}
-          options={viewModeSwitchOptions}
-        />
-      </div>
-
       {viewMode === 'table' ? (
-        <div className='rounded-md border border-border bg-card'>
-          <Table className='border-separate border-spacing-0'>
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHead
-                      key={header.id}
-                      colSpan={header.colSpan}
-                      className={header.column.columnDef.meta?.className}
-                    >
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
-                          )}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                Array.from({ length: SKELETON_ROWS }).map((_, index) => (
-                  <TableRow key={`skeleton-${index}`}>
-                    {table.getVisibleLeafColumns().map((column) => (
-                      <TableCell
-                        key={`skeleton-${index}-${column.id}`}
-                        className={column.columnDef.meta?.className}
-                      >
-                        <PersonCellSkeleton columnId={column.id} />
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : isError ? (
-                <PersonsTableErrorRow
-                  colSpan={visibleColumnCount}
-                  onRetry={onRetry}
-                />
-              ) : rows.length > 0 ? (
-                rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    data-state={row.getIsSelected() && 'selected'}
-                    className='group'
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell
-                        key={cell.id}
-                        className={cell.column.columnDef.meta?.className}
-                      >
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext()
-                        )}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <PersonsTableEmptyRow
-                  colSpan={visibleColumnCount}
-                  isFiltered={isFiltered}
-                  onResetFilters={handleResetFilters}
-                  onCreate={() => setOpen('create')}
-                />
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      ) : (
-        <PersonsGrid
+        <DataTableShell
           table={table}
+          toolbar={toolbar}
+          toolbarActions={toolbarActions}
+          totalRows={total}
           isLoading={isLoading}
           isError={isError}
-          onRetry={onRetry}
-          isFiltered={isFiltered}
-          onResetFilters={handleResetFilters}
+          skeletonRows={pageSize}
+          loadingRow={
+            <TableRow>
+              {table.getVisibleLeafColumns().map((column) => (
+                <TableCell
+                  key={column.id}
+                  className={column.columnDef.meta?.className}
+                >
+                  <PersonCellSkeleton columnId={column.id} />
+                </TableCell>
+              ))}
+            </TableRow>
+          }
+          errorState={
+            <PersonsTableErrorRow
+              colSpan={visibleColumnCount}
+              onRetry={onRetry}
+            />
+          }
+          emptyState={
+            <PersonsTableEmptyRow
+              colSpan={visibleColumnCount}
+              isFiltered={isFiltered}
+              onResetFilters={handleResetFilters}
+              onCreate={() => setOpen('create')}
+            />
+          }
         />
+      ) : (
+        <div className='flex flex-1 flex-col gap-4'>
+          <DataTableToolbarRow toolbar={toolbar} actions={toolbarActions} />
+          <PersonsGrid
+            table={table}
+            isLoading={isLoading}
+            isError={isError}
+            onRetry={onRetry}
+            isFiltered={isFiltered}
+            onResetFilters={handleResetFilters}
+          />
+          {/* 空态不渲染分页条：`Page 1 of 0` 是纯噪音。 */}
+          {!isEmpty && <DataTablePagination table={table} />}
+        </div>
       )}
-
-      {/* 空态不渲染分页条：`Page 1 of 0` / `Page 1 of 1` 都是纯噪音。 */}
-      {!isEmpty && <DataTablePagination table={table} />}
 
       <PersonsDataTableBulkActions table={table} />
     </div>
