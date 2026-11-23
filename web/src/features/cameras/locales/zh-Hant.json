@@ -56,6 +56,7 @@
   },
   "actions": {
     "create": "新增攝影機",
+    "discover": "發現設備",
     "refresh": "重新整理",
     "edit": "編輯配置",
     "diagnose": "一鍵診斷",
@@ -157,5 +158,19 @@
     "batchDeletePartial": "已刪除 {{success}} 台攝影機，{{failed}} 台失敗",
     "deleteFailed": "刪除攝影機失敗",
     "refreshLatestFailed": "重新整理攝影機最新配置失敗"
+  },
+  "discover": {
+    "title": "區域網路發現攝影機",
+    "description": "透過 ONVIF 協定自動探測區域網路內的網路攝影機，支援一鍵填入配置。",
+    "startScan": "開始掃描",
+    "scanning": "正在掃描區域網路...",
+    "scanComplete": "掃描完成，發現 {{count}} 台設備",
+    "noDevices": "未發現區域網路攝影機",
+    "noDevicesDesc": "請確認攝影機與 Zhulong 處於同一區域網路並已開啟 ONVIF 服務。",
+    "useDevice": "以此設備添加",
+    "ip": "IP 位址",
+    "manufacturer": "廠商",
+    "model": "型號",
+    "prefilledTip": "已從區域網路設備 {{ip}} 預填配置"
   }
 }

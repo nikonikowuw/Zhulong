@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/camera/discovery"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
@@ -20,13 +21,14 @@ const (
 // CameraService manages camera domain lifecycle, validation gates, credential encryption,
 // and state orchestration.
 type CameraService struct {
-	store     CameraStore
-	cipher    Cipher
-	prober    *ProbeService
-	registry  *StateRegistry
-	hub       *EventHub
-	scheduler *HealthScheduler
-	logger    *zap.Logger
+	store      CameraStore
+	cipher     Cipher
+	prober     *ProbeService
+	discoverer discovery.Discoverer
+	registry   *StateRegistry
+	hub        *EventHub
+	scheduler  *HealthScheduler
+	logger     *zap.Logger
 }
 
 type buildStreamsParams struct {
@@ -60,14 +62,58 @@ func NewCameraService(
 		logger = zap.NewNop()
 	}
 	return &CameraService{
-		store:     store,
-		cipher:    cipher,
-		prober:    prober,
-		registry:  registry,
-		hub:       hub,
-		scheduler: scheduler,
-		logger:    logger.Named("camera.service"),
+		store:      store,
+		cipher:     cipher,
+		prober:     prober,
+		discoverer: discovery.NewUDPDiscoverer(logger),
+		registry:   registry,
+		hub:        hub,
+		scheduler:  scheduler,
+		logger:     logger.Named("camera.service"),
 	}
+}
+
+// SetDiscoverer replaces the default discoverer implementation (primarily for testing).
+func (s *CameraService) SetDiscoverer(d discovery.Discoverer) {
+	s.discoverer = d
+}
+
+// Discover probes local network for ONVIF IP cameras via WS-Discovery.
+func (s *CameraService) Discover(ctx context.Context, timeout time.Duration) ([]DiscoveredDeviceResponse, error) {
+	if s.discoverer == nil {
+		s.discoverer = discovery.NewUDPDiscoverer(s.logger)
+	}
+
+	opts := discovery.DiscoverOptions{
+		Timeout: timeout,
+	}
+	rawDevices, err := s.discoverer.Discover(ctx, opts)
+	if err != nil {
+		return nil, apperr.New(
+			apperr.KindInternal,
+			"CAMERA_DISCOVER_FAILED",
+			"Failed to discover cameras on local network",
+			err,
+		)
+	}
+
+	res := make([]DiscoveredDeviceResponse, len(rawDevices))
+	for i, d := range rawDevices {
+		res[i] = DiscoveredDeviceResponse{
+			ID:               d.ID,
+			IP:               d.IP,
+			Port:             d.Port,
+			XAddr:            d.XAddr,
+			Name:             d.Name,
+			Manufacturer:     d.Manufacturer,
+			Model:            d.Model,
+			Hardware:         d.Hardware,
+			Types:            d.Types,
+			SuggestedRtspUrl: d.SuggestedRtspUrl,
+		}
+	}
+
+	return res, nil
 }
 
 // ensureCapacity rejects creation once the camera table is full. It is shared by

@@ -46,6 +46,11 @@ func init() {
 			"zh-Hans": "探测 RTSP 视频流失败，无法提取有效元数据",
 			"zh-Hant": "探測 RTSP 視訊串流失敗，無法擷取有效元資料",
 		},
+		"CAMERA_DISCOVER_FAILED": {
+			"en":      "Failed to discover cameras on local network",
+			"zh-Hans": "局域网摄像机探测失败，请检查网络",
+			"zh-Hant": "區域網路攝影機探測失敗，請檢查網路",
+		},
 		"CAMERA_LIMIT_EXCEEDED": {
 			"en":      "Maximum camera capacity reached (limit 128)",
 			"zh-Hans": "已达到系统摄像机数量上限（上限 128 台）",

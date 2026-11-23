@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useMemo, useState } from 'react'
 import useDialogState from '@/hooks/use-dialog-state'
-import { type Camera } from '../data/schema'
+import { type Camera, type DiscoveredDevice } from '../data/schema'
 
 type CamerasDialogType =
   | 'create'
@@ -8,15 +8,20 @@ type CamerasDialogType =
   | 'delete'
   | 'multi-delete'
   | 'diagnose'
+  | 'discover'
 
 interface CamerasStateContextType {
   open: CamerasDialogType | null
   currentRow: Camera | null
+  discoveredDevice: DiscoveredDevice | null
 }
 
 interface CamerasActionsContextType {
   setOpen: (str: CamerasDialogType | null) => void
   setCurrentRow: React.Dispatch<React.SetStateAction<Camera | null>>
+  setDiscoveredDevice: React.Dispatch<
+    React.SetStateAction<DiscoveredDevice | null>
+  >
 }
 
 interface CamerasContextType
@@ -30,19 +35,23 @@ const CamerasActionsContext = createContext<CamerasActionsContextType | null>(
 export function CamerasProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useDialogState<CamerasDialogType>(null)
   const [currentRow, setCurrentRow] = useState<Camera | null>(null)
+  const [discoveredDevice, setDiscoveredDevice] =
+    useState<DiscoveredDevice | null>(null)
 
   const stateValue = useMemo<CamerasStateContextType>(
     () => ({
       open,
       currentRow,
+      discoveredDevice,
     }),
-    [open, currentRow]
+    [open, currentRow, discoveredDevice]
   )
 
   const actionsValue = useMemo<CamerasActionsContextType>(
     () => ({
       setOpen,
       setCurrentRow,
+      setDiscoveredDevice,
     }),
     [setOpen]
   )

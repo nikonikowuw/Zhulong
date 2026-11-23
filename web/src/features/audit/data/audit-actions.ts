@@ -19,6 +19,7 @@ export const AUDIT_ACTION_KEYS = [
   'camera.update',
   'camera.delete',
   'camera.toggle',
+  'camera.discover',
   // 分析任务
   'task.create',
   'task.update',

@@ -75,3 +75,17 @@ type DiagnoseResponse struct {
 	State    *CameraStateInfo `json:"state"`
 	Message  string           `json:"message"`
 }
+
+// DiscoveredDeviceResponse represents a single camera found on local network via WS-Discovery.
+type DiscoveredDeviceResponse struct {
+	ID               string   `json:"id"`
+	IP               string   `json:"ip"`
+	Port             int      `json:"port"`
+	XAddr            string   `json:"xAddr"`
+	Name             string   `json:"name"`
+	Manufacturer     string   `json:"manufacturer"`
+	Model            string   `json:"model"`
+	Hardware         string   `json:"hardware"`
+	Types            []string `json:"types"`
+	SuggestedRtspUrl string   `json:"suggestedRtspUrl"`
+}

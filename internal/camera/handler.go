@@ -68,6 +68,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	{
 		// SSE endpoint must be registered before param routes to avoid routing collisions
 		group.GET("/events", h.Events)
+		group.POST("/discover", h.Discover)
 
 		group.POST("", h.Create)
 		group.GET("", h.List)
@@ -836,4 +837,44 @@ func updateAuditDetail(req UpdateCameraRequest) string {
 		return ""
 	}
 	return string(b)
+}
+
+// Discover godoc
+// @Summary      Discover cameras on local network
+// @Tags         camera
+// @Accept       json
+// @Produce      json
+// @Param        request body DiscoverCamerasRequest false "Discovery parameters"
+// @Success      200  {object}  httputil.Response{data=[]DiscoveredDeviceResponse}
+// @Failure      400  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /cameras/discover [post]
+func (h *Handler) Discover(c *gin.Context) {
+	audithttp.Tag(
+		c,
+		audit.ActionCameraDiscover,
+		"camera",
+		"Discover cameras on LAN",
+	)
+
+	var req DiscoverCamerasRequest
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httputil.HandleBindError(c, err)
+			return
+		}
+	}
+
+	var timeout time.Duration
+	if req.TimeoutSeconds > 0 {
+		timeout = time.Duration(req.TimeoutSeconds) * time.Second
+	}
+
+	devices, err := h.service.Discover(c.Request.Context(), timeout)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+
+	httputil.Success(c, devices)
 }

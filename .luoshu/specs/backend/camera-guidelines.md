@@ -285,6 +285,20 @@ CREATE TABLE camera_streams (
 4. **单点逆映射与边界时钟**：`consumeAIResults` 在 `ParseInferenceResult` 之后、`region.Filter` 之前，当 `ref.needsViewPoll()` 为真时刷新 `GetView`，按 `res.Timestamp < view.Since` 选择 `viewPrev` 或当前 `view.Rect` 执行 `region.Reproject`，下游抓拍/告警/ROI/MASK/SSE 全程吃全幅坐标。
 5. **共享物理流释放前显式清空**：`ReleaseAIStreamSubscriber` 在锁外 `Close` 底层 `MediaStream` **之前**必须先调用 `SetView(clearCtx, nil)`（忽略 `ErrNotFound` / `ErrStreamNotReady`），防止 preview 仍持有同一物理流时残留上一任裁剪窗口。
 
+---
+
+## 8. 局域网设备发现 (ONVIF WS-Discovery)
+
+1. **纯 Go 控制面隔离 (`internal/camera/discovery`)**：
+   - 使用 Go 标准库（`net`、`encoding/xml`）向 `239.255.255.250:3702` 发送 SOAP 1.2 `Probe`（`dn:NetworkVideoTransmitter`），严禁下沉至 C++ Native Engine 或引入盲目 IP/TCP 端口扫描。
+   - 枚举所有处于 `FlagUp` 且非 `FlagLoopback` 的 IPv4 接口发出组播，并按设备 `UUID`/`IP` 去重。
+2. **有界超时与防刷保护**：
+   - 每次探测受显式上下文与绝对超时（默认 `3s`，上限 `10s`）约束，Context 取消时立即 `SetDeadline(time.Now())` 打断阻塞读取。
+   - 通过 `singleflight.Group` 协同并发发现请求，并维持 `5s` 内存短缓存防止频繁点击引发组播风暴。
+3. **接入契约与双流门禁复用**：
+   - 端点 `POST /api/v1/cameras/discover` 挂载于 `protected_routes`（必须在 `/:id` 路由前注册），并记录 `camera.discover` 审计动作。
+   - 发现结果仅用于前端预填 `name` 与推荐 RTSP 模板路径；最终入库仍须经由 `ProbeService.ValidateStreams` 双流原子探测门禁，严禁跳过校验。
+
 
 
 

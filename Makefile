@@ -239,7 +239,11 @@ pkg-test:
 	fi
 
 api-docs:
-	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/audit,internal/asyncjob,internal/camera,internal/network,internal/systemtime,internal/systeminfo,internal/storage,internal/algorithm,internal/person,internal/mediafile,internal/record,internal/task,internal/gb28181,internal/aitypes,internal/region,internal/spatial,internal/apitoken,internal/alertpush,internal/openapi --generalInfo main.go --output internal/apidocs --parseInternal
+	@if command -v swag >/dev/null 2>&1; then \
+		swag init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/audit,internal/asyncjob,internal/camera,internal/network,internal/systemtime,internal/systeminfo,internal/storage,internal/algorithm,internal/person,internal/mediafile,internal/record,internal/task,internal/gb28181,internal/aitypes,internal/region,internal/spatial,internal/apitoken,internal/alertpush,internal/openapi --generalInfo main.go --output internal/apidocs --parseInternal; \
+	else \
+		$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/audit,internal/asyncjob,internal/camera,internal/network,internal/systemtime,internal/systeminfo,internal/storage,internal/algorithm,internal/person,internal/mediafile,internal/record,internal/task,internal/gb28181,internal/aitypes,internal/region,internal/spatial,internal/apitoken,internal/alertpush,internal/openapi --generalInfo main.go --output internal/apidocs --parseInternal; \
+	fi
 
 go-check: native-build
 	test -z "$$(gofmt -l cmd internal)"

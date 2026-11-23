@@ -25,3 +25,8 @@ type UpdateCameraRequest struct {
 	SubStream  *CreateStreamRequest `json:"subStream,omitempty"`
 	Revision   int64                `json:"revision" binding:"required"`
 }
+
+// DiscoverCamerasRequest represents parameters for discovering cameras on LAN.
+type DiscoverCamerasRequest struct {
+	TimeoutSeconds int `json:"timeoutSeconds" binding:"omitempty,min=1,max=10"`
+}

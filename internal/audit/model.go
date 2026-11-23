@@ -10,13 +10,14 @@ const (
 
 // Standard action constants
 const (
-	ActionAuthInit     = "auth.init"
-	ActionAuthLogin    = "auth.login"
-	ActionAuthLogout   = "auth.logout"
-	ActionCameraCreate = "camera.create"
-	ActionCameraUpdate = "camera.update"
-	ActionCameraDelete = "camera.delete"
-	ActionCameraToggle = "camera.toggle"
+	ActionAuthInit       = "auth.init"
+	ActionAuthLogin      = "auth.login"
+	ActionAuthLogout     = "auth.logout"
+	ActionCameraCreate   = "camera.create"
+	ActionCameraUpdate   = "camera.update"
+	ActionCameraDelete   = "camera.delete"
+	ActionCameraToggle   = "camera.toggle"
+	ActionCameraDiscover = "camera.discover"
 	// ActionAuditClear is the self-audit record written when audit logs are
 	// cleared. It is exempt from Prune so the clearing history survives.
 	ActionAuditClear = "audit.clear"
