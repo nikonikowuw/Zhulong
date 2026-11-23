@@ -95,11 +95,12 @@ describe('DataTableShell', () => {
     expect(container.querySelectorAll('tbody tr').length).toBe(1)
   })
 
-  it('有数据时渲染默认分页条', async () => {
-    const { container } = await render(<Harness data={people} />)
+  it('有数据时渲染默认分页条并透传总条数', async () => {
+    const { container } = await render(<Harness data={people} totalRows={42} />)
 
     expect(container.querySelectorAll('tbody tr').length).toBe(2)
     expect(container.querySelectorAll('button').length).toBeGreaterThan(0)
+    expect(container.textContent).toContain('共 42 条')
   })
 
   it('加载态按 skeletonRows 渲染骨架行，且优先于空态', async () => {

@@ -257,7 +257,7 @@ export function PersonsTable({
             onResetFilters={handleResetFilters}
           />
           {/* 空态不渲染分页条：`Page 1 of 0` 是纯噪音。 */}
-          {!isEmpty && <DataTablePagination table={table} />}
+          {!isEmpty && <DataTablePagination table={table} total={total} />}
         </div>
       )}
 

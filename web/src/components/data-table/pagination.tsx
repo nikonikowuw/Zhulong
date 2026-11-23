@@ -36,31 +36,38 @@ export function DataTablePagination<TData>({
   return (
     <div
       className={cn(
-        'flex items-center justify-between overflow-clip px-2',
-        '@max-2xl/content:flex-col-reverse @max-2xl/content:gap-4',
+        'flex items-center justify-between gap-4 overflow-clip px-2',
+        '@max-2xl/content:flex-col-reverse @max-2xl/content:gap-3',
         className
       )}
       style={{ overflowClipMargin: 1 }}
     >
-      <div className='flex w-full items-center justify-between'>
+      <div className='flex items-center gap-4 @max-2xl/content:w-full @max-2xl/content:justify-between'>
         <div className='flex min-w-0 items-center gap-3'>
           {typeof total === 'number' && (
             <p className='shrink-0 text-sm whitespace-nowrap text-muted-foreground'>
               {t('table.pagination.totalItems', { total })}
             </p>
           )}
-          <div className='flex min-w-25 shrink-0 items-center justify-center text-sm font-medium whitespace-nowrap @2xl/content:hidden'>
+          <div className='flex shrink-0 items-center justify-center text-sm font-medium whitespace-nowrap @2xl/content:hidden'>
             {t('table.pagination.pageOf', { currentPage, totalPages })}
           </div>
         </div>
-        <div className='flex items-center gap-2 @max-2xl/content:flex-row-reverse'>
+        <div className='flex shrink-0 items-center gap-2'>
+          <p className='hidden text-sm whitespace-nowrap text-muted-foreground sm:block'>
+            {t('table.pagination.rowsPerPage')}
+          </p>
           <Select
             value={`${table.getState().pagination.pageSize}`}
             onValueChange={(value) => {
               table.setPageSize(Number(value))
             }}
           >
-            <SelectTrigger className='h-8 w-17.5'>
+            <SelectTrigger
+              size='sm'
+              className='h-8 min-w-18'
+              aria-label={t('table.pagination.rowsPerPage')}
+            >
               <SelectValue placeholder={table.getState().pagination.pageSize} />
             </SelectTrigger>
             <SelectContent side='top'>
@@ -71,17 +78,14 @@ export function DataTablePagination<TData>({
               ))}
             </SelectContent>
           </Select>
-          <p className='hidden text-sm font-medium sm:block'>
-            {t('table.pagination.rowsPerPage')}
-          </p>
         </div>
       </div>
 
-      <div className='flex items-center gap-6 lg:gap-8'>
-        <div className='flex min-w-25 shrink-0 items-center justify-center text-sm font-medium whitespace-nowrap @max-3xl/content:hidden'>
+      <div className='flex items-center gap-4 lg:gap-6'>
+        <div className='flex shrink-0 items-center justify-center text-sm font-medium whitespace-nowrap @max-2xl/content:hidden'>
           {t('table.pagination.pageOf', { currentPage, totalPages })}
         </div>
-        <div className='flex items-center gap-2'>
+        <div className='flex items-center gap-1.5'>
           <Button
             variant='outline'
             className='size-8 p-0 @max-md/content:hidden'

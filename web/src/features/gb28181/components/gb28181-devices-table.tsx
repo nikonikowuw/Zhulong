@@ -130,7 +130,8 @@ export function Gb28181DevicesTable({
   const columnCount = columns.length
   // 0 行不渲染分页条：否则空态会多出一行「第 1 页，共 0 页」和每页行数选择器
   // （theme-and-i18n.md §4.1 空态铁律）。
-  const hasRows = table.getFilteredRowModel().rows.length > 0
+  const filteredRowCount = table.getFilteredRowModel().rows.length
+  const hasRows = filteredRowCount > 0
 
   return (
     <div className='flex flex-1 flex-col gap-3'>
@@ -287,7 +288,9 @@ export function Gb28181DevicesTable({
         </Table>
       </div>
 
-      {hasRows && <DataTablePagination table={table} />}
+      {hasRows && (
+        <DataTablePagination table={table} total={filteredRowCount} />
+      )}
     </div>
   )
 }

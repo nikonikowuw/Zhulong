@@ -114,4 +114,37 @@ describe('DataTablePagination page indicator', () => {
 
     expect(getByText(/^共 \d+ 条$/).query()).toBeNull()
   })
+
+  it('keeps exactly one visible page indicator at intermediate widths (700px)', async () => {
+    const { container } = await render(<Harness width={700} totalPages={10} />)
+
+    const el = await waitForSingleVisibleIndicator(container)
+    expect(lineCount(el)).toBe(1)
+  })
+
+  it('places rows-per-page label before the select trigger with matching height and gap from page indicator', async () => {
+    const { container, getByText } = await render(
+      <Harness width={1024} totalPages={5} total={45} />
+    )
+
+    const indicator = await waitForSingleVisibleIndicator(container)
+    const label = getByText('每页行数').element()
+    const trigger = container.querySelector('[data-slot="select-trigger"]')
+    expect(trigger).not.toBeNull()
+
+    const labelRect = label.getBoundingClientRect()
+    const triggerRect = trigger!.getBoundingClientRect()
+    const indicatorRect = indicator.getBoundingClientRect()
+
+    // 标签在选择器左侧，且两者与右侧页码信息之间有明显间距（不会贴在一起）
+    expect(labelRect.right).toBeLessThanOrEqual(triggerRect.left)
+    expect(indicatorRect.left - triggerRect.right).toBeGreaterThanOrEqual(16)
+    // SelectTrigger (size="sm") 与分页按钮同为 32px 高，且不截断 20 这类两位数页大小
+    expect(Math.round(triggerRect.height)).toBe(32)
+    const selectValue = trigger!.querySelector('[data-slot="select-value"]')
+    expect(selectValue).not.toBeNull()
+    expect(selectValue!.scrollWidth).toBeLessThanOrEqual(
+      Math.ceil(selectValue!.getBoundingClientRect().width) + 1
+    )
+  })
 })

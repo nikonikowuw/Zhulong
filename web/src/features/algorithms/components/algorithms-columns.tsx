@@ -127,8 +127,7 @@ export const algorithmsColumns: ColumnDef<Algorithm>[] = [
     id: 'actions',
     meta: {
       className: cn(
-        'sticky inset-e-0 z-10 w-28 text-end',
-        'relative bg-card',
+        'sticky inset-e-0 z-20 w-28 bg-card text-end',
         'before:pointer-events-none before:absolute before:inset-0 before:bg-muted/50 before:opacity-0 before:transition-opacity',
         'group-hover:before:opacity-100 group-data-[state=selected]:before:bg-muted group-data-[state=selected]:before:opacity-100'
       ),

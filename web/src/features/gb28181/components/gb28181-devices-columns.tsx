@@ -201,7 +201,7 @@ export function createGb28181DeviceColumns({
       meta: {
         // 悬浮高亮用伪元素叠加，底层保持实色，横向滚动时不会透出文字。
         className: cn(
-          'relative sticky inset-e-0 z-10 w-12 bg-card text-end',
+          'sticky inset-e-0 z-10 w-12 bg-card text-end',
           'before:pointer-events-none before:absolute before:inset-0 before:bg-muted/50 before:opacity-0 before:transition-opacity',
           'group-hover:before:opacity-100'
         ),

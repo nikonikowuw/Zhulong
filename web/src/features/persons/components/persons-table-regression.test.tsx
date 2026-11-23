@@ -98,6 +98,20 @@ describe('PersonsTable regression guards', () => {
     expect(document.body.textContent).not.toContain('每页行数')
   })
 
+  it('shows total person count in table view', async () => {
+    const tableScreen = await renderTable([makePerson('p1', 'Alice')], {}, 45)
+    await expect.element(tableScreen.getByText('共 45 条')).toBeInTheDocument()
+  })
+
+  it('shows total person count in grid view', async () => {
+    const gridScreen = await renderTable(
+      [makePerson('p1', 'Alice')],
+      { view: 'grid' },
+      45
+    )
+    await expect.element(gridScreen.getByText('共 45 条')).toBeInTheDocument()
+  })
+
   it('keeps the skeleton cell count aligned with the visible column count', async () => {
     const { container } = await render(
       <QueryClientProvider client={new QueryClient()}>

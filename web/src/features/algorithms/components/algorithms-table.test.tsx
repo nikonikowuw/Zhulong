@@ -297,7 +297,8 @@ describe('AlgorithmsTable', () => {
     )
 
     const row = getByRole('row', { name: /face_recognition/i })
-    await row.click()
+    // 默认视口 414px 下右侧操作列 sticky 悬浮、首列是带 data-prevent-row-click 的复选框；点名称列单元格触发行点击
+    await row.getByRole('cell').nth(1).click()
 
     await expect
       .element(getByRole('heading', { name: '人脸识别算法' }))
@@ -345,5 +346,22 @@ describe('AlgorithmsTable', () => {
       .element(getByRole('button', { name: '确认卸载' }))
       .toBeInTheDocument()
     await expect.element(getByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('pins the rightmost actions column with sticky positioning', async () => {
+    const algos = [
+      makeAlgorithm({
+        id: 'face_recognition',
+        name: '人脸识别算法',
+        version: '1.0.0',
+      }),
+    ]
+    const { container } = await renderTable({ data: algos })
+
+    const actionCell = container.querySelector('tbody tr td:last-child')
+    expect(actionCell).not.toBeNull()
+    await vi.waitFor(() => {
+      expect(getComputedStyle(actionCell!).position).toBe('sticky')
+    })
   })
 })

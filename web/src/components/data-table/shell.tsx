@@ -124,7 +124,10 @@ export function DataTableShell<TData>({
         </Table>
       </div>
 
-      {footer ?? (totalRows > 0 ? <DataTablePagination table={table} /> : null)}
+      {footer ??
+        (totalRows > 0 ? (
+          <DataTablePagination table={table} total={totalRows} />
+        ) : null)}
     </div>
   )
 }
