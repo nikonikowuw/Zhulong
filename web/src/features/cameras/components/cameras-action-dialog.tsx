@@ -2,22 +2,13 @@ import { useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
+import { AlertCircle, Loader2, RefreshCw, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { handleFormError } from '@/lib/form-error'
 import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import {
   Form,
   FormControl,
@@ -27,6 +18,15 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { camerasApi } from '../api/cameras-api'
 import {
@@ -183,62 +183,72 @@ function CamerasActionDialogBody({
 
   return (
     <>
-      <DialogHeader className='text-start'>
-        <DialogTitle>
-          {isEdit ? t('dialog.editTitle') : t('dialog.createTitle')}
-        </DialogTitle>
-        <DialogDescription>
-          {isGb28181
-            ? t('dialog.gb28181EditDesc')
-            : isEdit
-              ? t('dialog.editDesc')
-              : t('dialog.createDesc')}
-        </DialogDescription>
-      </DialogHeader>
-
-      {conflictError ? (
-        <div
-          className={cn(
-            'flex items-start gap-2.5 rounded-lg border p-3 text-sm',
-            STATUS_LEVEL_CLASS.warning
-          )}
-        >
-          <AlertCircle className='mt-0.5 size-4 shrink-0' />
-          <div className='flex-1 leading-relaxed'>{conflictError}</div>
-          {isEdit && camera ? (
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              className='h-7 shrink-0 text-xs'
-              disabled={isRefreshingRevision}
-              onClick={() => void handleRefreshRevision()}
-            >
-              <RefreshCw
-                className={cn(
-                  'me-1 size-3',
-                  isRefreshingRevision && 'animate-spin'
-                )}
-              />
-              {t('actions.refreshLatest')}
-            </Button>
-          ) : null}
+      <SheetHeader className='shrink-0 gap-2 border-b px-6 py-4 pe-14 text-start'>
+        <div className='flex items-center gap-3'>
+          <div className='flex size-10 shrink-0 items-center justify-center rounded-xl border border-border/80 bg-muted/50 text-primary shadow-2xs'>
+            <Video className='size-5' />
+          </div>
+          <div className='min-w-0 space-y-1'>
+            <SheetTitle className='text-base font-semibold tracking-tight'>
+              {isEdit ? t('dialog.editTitle') : t('dialog.createTitle')}
+            </SheetTitle>
+            <SheetDescription className='text-xs text-muted-foreground'>
+              {isGb28181
+                ? t('dialog.gb28181EditDesc')
+                : isEdit
+                  ? t('dialog.editDesc')
+                  : t('dialog.createDesc')}
+            </SheetDescription>
+          </div>
         </div>
-      ) : null}
+      </SheetHeader>
 
-      {probeError ? (
-        <div
-          className={cn(
-            'flex items-start gap-2.5 rounded-lg border p-3 text-sm',
-            STATUS_LEVEL_CLASS.destructive
-          )}
-        >
-          <AlertCircle className='mt-0.5 size-4 shrink-0' />
-          <div className='flex-1 leading-relaxed'>{probeError}</div>
-        </div>
-      ) : null}
+      <div
+        data-testid='cameras-action-scroll'
+        className='min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4'
+      >
+        {conflictError ? (
+          <div
+            className={cn(
+              'flex items-start gap-2.5 rounded-lg border p-3 text-sm',
+              STATUS_LEVEL_CLASS.warning
+            )}
+          >
+            <AlertCircle className='mt-0.5 size-4 shrink-0' />
+            <div className='flex-1 leading-relaxed'>{conflictError}</div>
+            {isEdit && camera ? (
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                className='h-7 shrink-0 text-xs'
+                disabled={isRefreshingRevision}
+                onClick={() => void handleRefreshRevision()}
+              >
+                <RefreshCw
+                  className={cn(
+                    'me-1 size-3',
+                    isRefreshingRevision && 'animate-spin'
+                  )}
+                />
+                {t('actions.refreshLatest')}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
 
-      <div className='max-h-[70vh] overflow-y-auto py-1 pe-2'>
+        {probeError ? (
+          <div
+            className={cn(
+              'flex items-start gap-2.5 rounded-lg border p-3 text-sm',
+              STATUS_LEVEL_CLASS.destructive
+            )}
+          >
+            <AlertCircle className='mt-0.5 size-4 shrink-0' />
+            <div className='flex-1 leading-relaxed'>{probeError}</div>
+          </div>
+        ) : null}
+
         <Form {...form}>
           <form
             id='camera-action-form'
@@ -297,7 +307,7 @@ function CamerasActionDialogBody({
         </Form>
       </div>
 
-      <DialogFooter className='gap-y-2 pt-2 sm:items-center sm:justify-between'>
+      <SheetFooter className='mt-0 shrink-0 gap-y-2 border-t bg-muted/20 px-6 py-3.5 sm:flex-row sm:items-center sm:justify-between'>
         <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
           {isPending ? (
             <>
@@ -310,12 +320,12 @@ function CamerasActionDialogBody({
             </>
           ) : null}
         </div>
-        <div className='flex items-center justify-end gap-2'>
-          <DialogClose asChild>
+        <div className='flex w-full items-center justify-end gap-2 sm:w-auto'>
+          <SheetClose asChild>
             <Button variant='outline' disabled={isPending}>
               {t('actions.cancel')}
             </Button>
-          </DialogClose>
+          </SheetClose>
           <Button
             type='submit'
             form='camera-action-form'
@@ -334,7 +344,7 @@ function CamerasActionDialogBody({
                 : t('actions.confirmAdd')}
           </Button>
         </div>
-      </DialogFooter>
+      </SheetFooter>
     </>
   )
 }
@@ -347,15 +357,19 @@ export function CamerasActionDialog() {
   const isOpen = open === 'create' || isEdit
 
   return (
-    <Dialog
+    <Sheet
       open={isOpen}
       onOpenChange={(val) => {
+        // 探测/提交期间拒绝遮罩点击与 ESC 的关闭请求，避免异步中间态被丢弃
         if (!isPending && !val) {
           setOpen(null)
         }
       }}
     >
-      <DialogContent className='w-full sm:max-w-lg'>
+      <SheetContent
+        side='right'
+        className='flex h-full w-full flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl'
+      >
         {isOpen ? (
           <CamerasActionDialogBody
             key={isEdit && currentRow ? `edit-${currentRow.id}` : 'create'}
@@ -365,7 +379,10 @@ export function CamerasActionDialog() {
             onPendingChange={setIsPending}
           />
         ) : null}
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   )
 }
+
+// 语义别名：抽屉化后新代码可直接按 Drawer 命名引用，原导出名继续兼容既有调用点
+export const CamerasActionDrawer = CamerasActionDialog

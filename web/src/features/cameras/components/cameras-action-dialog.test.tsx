@@ -50,6 +50,25 @@ const gbCamera: Camera = {
   updatedAt: '2026-10-25T07:00:00Z',
 }
 
+// 取当前抽屉的三段结构（内容容器 / 滚动区 / 底栏），缺失即断言失败
+function getDrawerParts() {
+  const last = (selector: string) => {
+    const nodes = document.querySelectorAll(selector)
+    return nodes[nodes.length - 1]
+  }
+  const sheet = last('[data-slot="sheet-content"]')
+  const scroll = last('[data-testid="cameras-action-scroll"]')
+  const footer = last('[data-slot="sheet-footer"]')
+  if (
+    !(sheet instanceof HTMLElement) ||
+    !(scroll instanceof HTMLElement) ||
+    !(footer instanceof HTMLElement)
+  ) {
+    throw new Error('camera drawer structure is incomplete')
+  }
+  return { sheet, scroll, footer }
+}
+
 function TestComponent() {
   const { setOpen, setCurrentRow } = useCamerasContext()
   return (
@@ -93,6 +112,58 @@ describe('CamerasActionDialog', () => {
     await expect
       .element(getByRole('button', { name: /确认添加/i }))
       .toBeInTheDocument()
+
+    // 抽屉形态：右侧 Sheet 承载表单，居中 Dialog 已不再出现
+    expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull()
+    const { sheet, scroll, footer } = getDrawerParts()
+    const viewportRight = () =>
+      document.documentElement.getBoundingClientRect().right
+    // 入场动画落位后再量几何，避免量到 slide-in 中间态
+    await vi.waitFor(() =>
+      expect(
+        Math.abs(sheet.getBoundingClientRect().right - viewportRight())
+      ).toBeLessThanOrEqual(1)
+    )
+
+    // 抽屉自带的关闭按钮（sr-only "Close"）常驻右上角，不依赖业务表单实现
+    await expect
+      .element(getByRole('button', { name: 'Close' }))
+      .toBeInTheDocument()
+
+    const sheetRect = sheet.getBoundingClientRect()
+    expect(Math.round(sheetRect.top)).toBe(0)
+    // 移动端铺满视口：左缘贴 0、右缘贴内联末端（滚动条会带来几像素误差）
+    expect(Math.abs(sheetRect.left)).toBeLessThanOrEqual(1)
+    expect(Math.abs(sheetRect.right - viewportRight())).toBeLessThanOrEqual(1)
+    // 右缘锚定：收窄抽屉后仍然贴住视口内联末端，左锚定会露馅
+    const previousMaxWidth = sheet.style.maxWidth
+    sheet.style.maxWidth = '240px'
+    expect(
+      Math.abs(sheet.getBoundingClientRect().right - viewportRight())
+    ).toBeLessThanOrEqual(1)
+    expect(sheet.getBoundingClientRect().left).toBeGreaterThan(100)
+    sheet.style.maxWidth = previousMaxWidth
+
+    // 只有中部滚动区滚动，底栏固定在抽屉底边
+    expect(getComputedStyle(scroll).overflowY).toBe('auto')
+    expect(Math.round(footer.getBoundingClientRect().bottom)).toBe(
+      Math.round(sheetRect.bottom)
+    )
+    expect(scroll.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      footer.getBoundingClientRect().top + 1
+    )
+    expect(scroll.scrollWidth).toBeLessThanOrEqual(scroll.clientWidth + 1)
+
+    // 滚动内容时底栏与抽屉外框保持原位
+    const footerTop = footer.getBoundingClientRect().top
+    scroll.scrollTop = 10_000
+    expect(Math.round(footer.getBoundingClientRect().top)).toBe(
+      Math.round(footerTop)
+    )
+    expect(Math.round(sheet.getBoundingClientRect().top)).toBe(
+      Math.round(sheetRect.top)
+    )
+    scroll.scrollTop = 0
   })
 
   it('updates a GB28181 camera without submitting its stream as RTSP', async () => {
@@ -196,5 +267,39 @@ describe('CamerasActionDialog', () => {
         enabled: gbCamera.enabled,
       },
     })
+  })
+
+  it('ignores close requests while a submit is pending', async () => {
+    let resolveUpdate: (value: unknown) => void = () => {}
+    updateCamera.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = resolve
+        })
+    )
+
+    const queryClient = new QueryClient()
+    const { getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <CamerasProvider>
+          <TestComponent />
+        </CamerasProvider>
+      </QueryClientProvider>
+    )
+
+    await userEvent.click(getByRole('button', { name: 'Open GB Edit' }))
+    await userEvent.click(getByRole('button', { name: '保存更改' }))
+    await vi.waitFor(() => expect(updateCamera).toHaveBeenCalledTimes(1))
+
+    // 提交在途时 ESC 关闭请求被拦截，抽屉与草稿都保留
+    await userEvent.keyboard('{Escape}')
+    await expect
+      .element(getByRole('heading', { name: '编辑摄像机配置' }))
+      .toBeInTheDocument()
+
+    resolveUpdate({ ...gbCamera })
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-slot="sheet-content"]')).toBeNull()
+    )
   })
 })

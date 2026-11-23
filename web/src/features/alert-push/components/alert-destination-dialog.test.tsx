@@ -67,6 +67,37 @@ const mockDestination: AlertDestination = {
   },
 }
 
+// 取当前抽屉的三段结构（内容容器 / 滚动区 / 底栏），缺失即断言失败
+function getDrawerParts() {
+  const last = (selector: string) => {
+    const nodes = document.querySelectorAll(selector)
+    return nodes[nodes.length - 1]
+  }
+  const sheet = last('[data-slot="sheet-content"]')
+  const scroll = last('[data-testid="alert-destination-scroll"]')
+  const footer = last('[data-slot="sheet-footer"]')
+  if (
+    !(sheet instanceof HTMLElement) ||
+    !(scroll instanceof HTMLElement) ||
+    !(footer instanceof HTMLElement)
+  ) {
+    throw new Error('alert destination drawer structure is incomplete')
+  }
+  return { sheet, scroll, footer }
+}
+
+// 等待入场动画落位，再量几何，避免量到 slide-in 中间态
+async function settledSheet(sheet: HTMLElement) {
+  const viewportRight = () =>
+    document.documentElement.getBoundingClientRect().right
+  await vi.waitFor(() =>
+    expect(
+      Math.abs(sheet.getBoundingClientRect().right - viewportRight())
+    ).toBeLessThanOrEqual(1)
+  )
+  return viewportRight
+}
+
 describe('AlertDestinationDialog & Table Capabilities', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -109,6 +140,46 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
     await expect
       .element(getByText('设备存活上报', { exact: true }))
       .toBeInTheDocument()
+
+    // 抽屉形态：右侧 Sheet 承载表单，居中 Dialog 已不再出现
+    expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull()
+    const { sheet, scroll, footer } = getDrawerParts()
+    const viewportRight = await settledSheet(sheet)
+
+    // 抽屉自带的关闭按钮（sr-only "Close"）常驻右上角，不依赖业务表单实现
+    await expect
+      .element(getByRole('button', { name: 'Close' }))
+      .toBeInTheDocument()
+
+    const sheetRect = sheet.getBoundingClientRect()
+    expect(Math.round(sheetRect.top)).toBe(0)
+    expect(Math.abs(sheetRect.left)).toBeLessThanOrEqual(1)
+    expect(Math.abs(sheetRect.right - viewportRight())).toBeLessThanOrEqual(1)
+
+    // 只有中部滚动区滚动，底栏固定在抽屉底边
+    expect(getComputedStyle(scroll).overflowY).toBe('auto')
+    expect(Math.round(footer.getBoundingClientRect().bottom)).toBe(
+      Math.round(sheetRect.bottom)
+    )
+    expect(scroll.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      footer.getBoundingClientRect().top + 1
+    )
+    expect(scroll.scrollWidth).toBeLessThanOrEqual(scroll.clientWidth + 1)
+
+    // 滚动内容时标题与底栏都保持原位
+    const header = document.querySelector(
+      '[data-slot="sheet-header"]'
+    ) as HTMLElement
+    const headerTop = header.getBoundingClientRect().top
+    const footerTop = footer.getBoundingClientRect().top
+    scroll.scrollTop = 10_000
+    expect(Math.round(footer.getBoundingClientRect().top)).toBe(
+      Math.round(footerTop)
+    )
+    expect(Math.round(header.getBoundingClientRect().top)).toBe(
+      Math.round(headerTop)
+    )
+    scroll.scrollTop = 0
   })
 
   it('toggles event push and device liveness sections and blocks submit when both are disabled', async () => {
@@ -239,12 +310,13 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
   it('sends undefined for untouched headers and empty object {} when clearing all headers in edit mode', async () => {
     const queryClient = new QueryClient()
     const onSuccess = vi.fn()
+    const onOpenChange = vi.fn()
     const { getByRole } = await render(
       <QueryClientProvider client={queryClient}>
         <AlertDestinationDialog
           open={true}
           destination={mockDestination}
-          onOpenChange={vi.fn()}
+          onOpenChange={onOpenChange}
           onSuccess={onSuccess}
         />
       </QueryClientProvider>
@@ -275,6 +347,46 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
       expect.objectContaining({
         secret: expect.objectContaining({ headers: {} }),
       })
+    )
+
+    // 保存成功后通知父级刷新并关闭抽屉
+    await vi.waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(2))
+    expect(onOpenChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it('keeps the drawer footer pinned when custom headers grow', async () => {
+    const queryClient = new QueryClient()
+    const { getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={mockDestination}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await expect
+      .element(getByRole('heading', { name: /编辑推送目标/i }))
+      .toBeInTheDocument()
+
+    const { sheet, scroll, footer } = getDrawerParts()
+    await settledSheet(sheet)
+    const footerTop = footer.getBoundingClientRect().top
+
+    for (let i = 0; i < 3; i += 1) {
+      await userEvent.click(getByRole('button', { name: '添加标头' }))
+    }
+
+    // 标头行增多：新增行进入滚动区，横向布局不撑破，底栏仍贴在抽屉底边
+    expect(getByRole('button', { name: '移除标头' }).all()).toHaveLength(4)
+    expect(scroll.scrollWidth).toBeLessThanOrEqual(scroll.clientWidth + 1)
+    expect(Math.round(footer.getBoundingClientRect().top)).toBe(
+      Math.round(footerTop)
+    )
+    expect(Math.round(footer.getBoundingClientRect().bottom)).toBe(
+      Math.round(sheet.getBoundingClientRect().bottom)
     )
   })
 

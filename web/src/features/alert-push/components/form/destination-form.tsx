@@ -9,8 +9,8 @@ import { statusDotClass, statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { DialogFooter } from '@/components/ui/dialog'
 import { Form } from '@/components/ui/form'
+import { SheetFooter } from '@/components/ui/sheet'
 import {
   Tooltip,
   TooltipContent,
@@ -358,74 +358,80 @@ export function DestinationForm({
       <form
         id='alert-destination-form'
         onSubmit={form.handleSubmit(onSubmit)}
-        className='space-y-4'
+        className='flex min-h-0 flex-1 flex-col'
       >
-        {/* 全局冲突或未捕获错误横幅 */}
-        {conflictError ? (
-          <div
-            className={cn(
-              'flex items-start gap-2.5 rounded-xl border p-3 text-xs',
-              statusLevelClass('warning')
-            )}
-          >
-            <AlertCircle className='mt-0.5 size-4 shrink-0' />
-            <div className='flex-1 leading-relaxed'>{conflictError}</div>
-          </div>
-        ) : null}
+        {/* 抽屉滚动区：横幅 + 全部分区，Footer 固定在抽屉底部 */}
+        <div
+          data-testid='alert-destination-scroll'
+          className='min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4'
+        >
+          {/* 全局冲突或未捕获错误横幅 */}
+          {conflictError ? (
+            <div
+              className={cn(
+                'flex items-start gap-2.5 rounded-xl border p-3 text-xs',
+                statusLevelClass('warning')
+              )}
+            >
+              <AlertCircle className='mt-0.5 size-4 shrink-0' />
+              <div className='flex-1 leading-relaxed'>{conflictError}</div>
+            </div>
+          ) : null}
 
-        {unhandledError ? (
-          <div
-            className={cn(
-              'flex items-start gap-2.5 rounded-xl border p-3 text-xs',
-              statusLevelClass('destructive')
-            )}
-          >
-            <AlertCircle className='mt-0.5 size-4 shrink-0' />
-            <div className='flex-1 leading-relaxed'>{unhandledError}</div>
-          </div>
-        ) : null}
+          {unhandledError ? (
+            <div
+              className={cn(
+                'flex items-start gap-2.5 rounded-xl border p-3 text-xs',
+                statusLevelClass('destructive')
+              )}
+            >
+              <AlertCircle className='mt-0.5 size-4 shrink-0' />
+              <div className='flex-1 leading-relaxed'>{unhandledError}</div>
+            </div>
+          ) : null}
 
-        {/* 分区 1：基础连接与凭据 */}
-        <ChannelTypeCards
-          control={form.control}
-          setValue={form.setValue}
-          isEdit={isEdit}
-          disabled={testing || isSubmitting}
-          onResetTestResult={() => {
-            testSeqRef.current += 1
-            setTestResult(null)
-          }}
-        />
-
-        {channelType === 'webhook' ? (
-          <WebhookConfigSection
+          {/* 分区 1：基础连接与凭据 */}
+          <ChannelTypeCards
             control={form.control}
+            setValue={form.setValue}
             isEdit={isEdit}
-            secretSet={destination?.secretSet}
-            originalHeaderNames={originalHeaderNames}
-            initialAdvancedOpen={hasCustomHeaders}
+            disabled={testing || isSubmitting}
+            onResetTestResult={() => {
+              testSeqRef.current += 1
+              setTestResult(null)
+            }}
           />
-        ) : (
-          <MqttConfigSection
+
+          {channelType === 'webhook' ? (
+            <WebhookConfigSection
+              control={form.control}
+              isEdit={isEdit}
+              secretSet={destination?.secretSet}
+              originalHeaderNames={originalHeaderNames}
+              initialAdvancedOpen={hasCustomHeaders}
+            />
+          ) : (
+            <MqttConfigSection
+              control={form.control}
+              isEdit={isEdit}
+              secretSet={destination?.secretSet}
+              initialAdvancedOpen={hasCustomHeaders}
+            />
+          )}
+
+          {/* 分区 2：感知事件推送能力（开关 + 图片交付 + 过滤器） */}
+          <DestinationFiltersSection
             control={form.control}
-            isEdit={isEdit}
-            secretSet={destination?.secretSet}
-            initialAdvancedOpen={hasCustomHeaders}
+            setValue={form.setValue}
+            initialFiltersOpen={hasCustomFilters}
           />
-        )}
 
-        {/* 分区 2：感知事件推送能力（开关 + 图片交付 + 过滤器） */}
-        <DestinationFiltersSection
-          control={form.control}
-          setValue={form.setValue}
-          initialFiltersOpen={hasCustomFilters}
-        />
-
-        {/* 分区 3：设备存活上报能力（开关 + 上报间隔 + 分流路由/LWT） */}
-        <HeartbeatCapabilitySection control={form.control} />
+          {/* 分区 3：设备存活上报能力（开关 + 上报间隔 + 分流路由/LWT） */}
+          <HeartbeatCapabilitySection control={form.control} />
+        </div>
 
         {/* 底部 Footer */}
-        <DialogFooter className='gap-y-3 border-t border-border/60 pt-3 sm:items-center sm:justify-between'>
+        <SheetFooter className='mt-0 shrink-0 gap-y-3 border-t border-border/60 bg-muted/20 px-6 py-3.5 sm:flex-row sm:items-center sm:justify-between'>
           {/* 左侧探测工具与状态指示 */}
           <div className='flex flex-wrap items-center gap-2'>
             <Tooltip>
@@ -515,7 +521,7 @@ export function DestinationForm({
               </span>
             </Button>
           </div>
-        </DialogFooter>
+        </SheetFooter>
       </form>
     </Form>
   )
