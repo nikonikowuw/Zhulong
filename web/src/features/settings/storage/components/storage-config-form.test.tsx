@@ -99,6 +99,33 @@ describe('StorageConfigForm retention grid', () => {
     expect(lefts.size).toBe(3)
   })
 
+  it('aligns S3 spool buffer inputs on the same baseline with full descriptions', async () => {
+    const screen = await renderForm(s3Config)
+    await expect
+      .element(screen.getByText('本地 Spool 异步暂存缓冲'))
+      .toBeInTheDocument()
+
+    const spoolDirInput = screen.getByLabelText('本地 Spool 暂存目录').element()
+    const spoolMaxInput = screen
+      .getByLabelText('本地 Spool 容量上限 (MB)')
+      .element()
+
+    const dirRect = spoolDirInput.getBoundingClientRect()
+    const maxRect = spoolMaxInput.getBoundingClientRect()
+
+    // 锁住 Spool 目录输入框与 Spool 容量上限输入框顶边一致
+    expect(Math.round(dirRect.top)).toBe(Math.round(maxRect.top))
+    // 左右两列并排，不重叠
+    expect(Math.round(maxRect.left)).toBeGreaterThan(Math.round(dirRect.right))
+
+    // 验证新补充的说明文案正确渲染
+    await expect
+      .element(
+        screen.getByText(/本地暂存缓冲池最大容量，超出时触发写入反压保护/)
+      )
+      .toBeInTheDocument()
+  })
+
   it('switches from local to S3 backend, tests connection, and requires secret on first setup', async () => {
     const connResp: ConnectionTestResponse = {
       backend: 's3',

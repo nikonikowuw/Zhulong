@@ -3,6 +3,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Cloud,
+  HardDrive,
   Loader2,
   PlugZap,
 } from 'lucide-react'
@@ -129,7 +130,7 @@ export function S3BackendFields({
         </div>
       )}
 
-      <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
+      <div className='grid grid-cols-1 items-start gap-4 sm:grid-cols-2'>
         <FormField
           control={control}
           name='s3.endpoint'
@@ -425,50 +426,28 @@ export function S3BackendFields({
         )}
       />
 
-      <div className='grid grid-cols-1 gap-4 sm:grid-cols-3'>
-        <FormField
-          control={control}
-          name='spoolDirectory'
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>
-                {t('s3.spool_directory', {
-                  defaultValue: '本地 Spool 暂存目录',
-                })}
+      <FormField
+        control={control}
+        name='localFallback'
+        render={({ field }) => (
+          <FormItem className='flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/60 p-3'>
+            <div className='space-y-0.5'>
+              <FormLabel className='text-sm font-medium'>
+                {t('s3.local_fallback', { defaultValue: '本地历史兜底回退读' })}
               </FormLabel>
-              <FormControl>
-                <Input className='font-mono text-sm' {...field} />
-              </FormControl>
-              <FormDescription>{t('s3.spool_directory_desc')}</FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+              <FormDescription className='text-xs'>
+                {t('s3.local_fallback_desc')}
+              </FormDescription>
+            </div>
+            <FormControl>
+              <Switch checked={field.value} onCheckedChange={field.onChange} />
+            </FormControl>
+          </FormItem>
+        )}
+      />
 
-        <FormField
-          control={control}
-          name='spoolMaxMb'
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>
-                {t('s3.spool_max_mb', {
-                  defaultValue: '本地 Spool 容量上限 (MB)',
-                })}
-              </FormLabel>
-              <FormControl>
-                <Input
-                  type='number'
-                  min={128}
-                  max={1048576}
-                  {...field}
-                  onChange={(e) => field.onChange(Number(e.target.value))}
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
+      {/* S3 Remote Quota */}
+      <div className='grid grid-cols-1 items-start gap-4 sm:grid-cols-2'>
         <FormField
           control={control}
           name='s3.quotaGb'
@@ -494,25 +473,69 @@ export function S3BackendFields({
         />
       </div>
 
-      <FormField
-        control={control}
-        name='localFallback'
-        render={({ field }) => (
-          <FormItem className='flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/60 p-3'>
-            <div className='space-y-0.5'>
-              <FormLabel className='text-sm font-medium'>
-                {t('s3.local_fallback', { defaultValue: '本地历史兜底回退读' })}
-              </FormLabel>
-              <FormDescription className='text-xs'>
-                {t('s3.local_fallback_desc')}
-              </FormDescription>
-            </div>
-            <FormControl>
-              <Switch checked={field.value} onCheckedChange={field.onChange} />
-            </FormControl>
-          </FormItem>
-        )}
-      />
+      {/* Local Spool Buffer */}
+      <div className='space-y-3 rounded-md border border-border/60 bg-background/50 p-3.5'>
+        <div className='flex items-center gap-2'>
+          <HardDrive className='size-4 text-primary' />
+          <span className='text-xs font-semibold text-foreground'>
+            {t('s3.spool_section_title', {
+              defaultValue: '本地 Spool 异步暂存缓冲',
+            })}
+          </span>
+        </div>
+        <div className='grid grid-cols-1 items-start gap-4 sm:grid-cols-2'>
+          <FormField
+            control={control}
+            name='spoolDirectory'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>
+                  {t('s3.spool_directory', {
+                    defaultValue: '本地 Spool 暂存目录',
+                  })}
+                </FormLabel>
+                <FormControl>
+                  <Input className='font-mono text-sm' {...field} />
+                </FormControl>
+                <FormDescription>
+                  {t('s3.spool_directory_desc')}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={control}
+            name='spoolMaxMb'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>
+                  {t('s3.spool_max_mb', {
+                    defaultValue: '本地 Spool 容量上限 (MB)',
+                  })}
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={128}
+                    max={1048576}
+                    {...field}
+                    onChange={(e) => field.onChange(Number(e.target.value))}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t('s3.spool_max_mb_desc', {
+                    defaultValue:
+                      '本地暂存缓冲池最大容量，超出时触发写入反压保护（默认 4096 MB）。',
+                  })}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+      </div>
     </div>
   )
 }
