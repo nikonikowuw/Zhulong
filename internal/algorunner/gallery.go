@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 	"go.uber.org/zap"
@@ -184,6 +185,13 @@ func marshalGalleryShardPayload(
 type GalleryBroadcaster struct {
 	broadcaster AIMessageBroadcaster
 	logger      *zap.Logger
+
+	// generation counts runtime mutations of the gallery (enrollment, deletion).
+	// It measures how often the host's source of truth changed, not how often a
+	// runner acknowledged it, so it only moves forward and resets with the
+	// process. A full snapshot compares it before and after the broadcast: a
+	// mismatch means the snapshot raced a mutation and must be republished.
+	generation atomic.Uint64
 }
 
 // NewGalleryBroadcaster creates a GalleryBroadcaster instance.
@@ -195,6 +203,16 @@ func NewGalleryBroadcaster(broadcaster AIMessageBroadcaster, logger *zap.Logger)
 		broadcaster: broadcaster,
 		logger:      logger.Named("algorithm.gallery_broadcaster"),
 	}
+}
+
+// Generation reports how many runtime gallery mutations have been published.
+//
+// Callers use it as a staleness guard around a full snapshot: capture it before
+// reading the snapshot, compare after the shards are out, and republish when it
+// moved. Without the guard a snapshot taken before an enrollment silently rolls
+// that enrollment back on every runner it reaches.
+func (b *GalleryBroadcaster) Generation() uint64 {
+	return b.generation.Load()
 }
 
 // BroadcastSync performs cold-start or full synchronization of the face gallery to all active runners.
@@ -244,12 +262,18 @@ func (b *GalleryBroadcaster) BroadcastUpsert(ctx context.Context, item GalleryUp
 	if b.broadcaster == nil {
 		return nil
 	}
+	// Advance the generation before publishing: a marshal or IPC failure still
+	// leaves this generation dirty, and an extra snapshot push is far cheaper
+	// than the missed enrollment this counter exists to catch.
+	b.generation.Add(1)
 	payload, err := json.Marshal(item)
 	if err != nil {
 		return fmt.Errorf("marshal gallery upsert: %w", err)
 	}
-	// Incremental updates are best-effort: the next full snapshot reconciles any
-	// runner that missed this one, so the delivery count carries no decision.
+	// Incremental updates are best-effort: the periodic reconcile pass in
+	// Supervisor.galleryReconcileLoop is what actually delivers "the next full
+	// snapshot" to a runner that missed this one, so the count carries no
+	// decision here.
 	_, err = b.broadcaster.BroadcastAIMessage(
 		ctx,
 		0,
@@ -264,12 +288,13 @@ func (b *GalleryBroadcaster) BroadcastDelete(ctx context.Context, faceID, person
 	if b.broadcaster == nil {
 		return nil
 	}
+	b.generation.Add(1)
 	payload, err := json.Marshal(GalleryDeletePayload{FaceID: faceID, PersonID: personID})
 	if err != nil {
 		return fmt.Errorf("marshal gallery delete: %w", err)
 	}
 	// Same contract as BroadcastUpsert: a missed delete is corrected by the next
-	// full snapshot, so only the transport error matters here.
+	// reconcile pass, so only the transport error matters here.
 	_, err = b.broadcaster.BroadcastAIMessage(
 		ctx,
 		0,
