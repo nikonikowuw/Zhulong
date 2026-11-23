@@ -32,6 +32,22 @@ const (
 	// provider query, so the goroutine always has an exit.
 	gallerySyncTimeout = 10 * time.Second
 
+	// galleryReconcileInterval is the cadence of the background reconcile pass.
+	//
+	// The gallery is state, not an event: the Broker keeps no replay cache for
+	// MSG_GALLERY_*, so a runner that connects after the cold-start push can only
+	// be corrected by a later full snapshot. Before this loop the only "later"
+	// was a process restart, which made one lost push permanent. 30s balances the
+	// convergence window against idle cost (one paged query plus a few hundred KB
+	// of JSON, milliseconds on ARM).
+	galleryReconcileInterval = 30 * time.Second
+
+	// gallerySnapshotFollowUps bounds how many times one push may republish a
+	// snapshot that raced a gallery mutation (see pushGallerySnapshot). One is
+	// enough to close the window; anything larger turns a burst of enrollments
+	// into a burst of full snapshots.
+	gallerySnapshotFollowUps = 1
+
 	// taskConfigPushTimeout bounds resolving + pushing the per-stream task config
 	// before a spawn. It sits on the start path, so it must be much shorter than
 	// the gallery's: a slow config query must never look like a hung start.
@@ -67,6 +83,14 @@ type Supervisor struct {
 	// It is never taken by StopAll, so a ladder waiting here cannot delay shutdown;
 	// the ladder itself re-checks stopCh once it holds the lock.
 	gallerySyncMu sync.Mutex
+
+	// galleryReconcileStarted guards the reconcile loop against a second start
+	// when SetGallerySync runs again during a re-wire.
+	galleryReconcileStarted bool
+
+	// galleryReconcileDone closes when the reconcile loop returns, so StopAll can
+	// confirm the goroutine converged instead of leaving it to the runtime.
+	galleryReconcileDone chan struct{}
 
 	// stopCh is closed by StopAll so background goroutines (gallery sync) have a
 	// deterministic exit instead of only their own timeout.
@@ -107,6 +131,8 @@ func NewSupervisor(
 		watchers: make(map[string]*workerWatcher),
 		opts:     opts.normalize(),
 		stopCh:   make(chan struct{}),
+
+		galleryReconcileDone: make(chan struct{}),
 	}
 }
 
@@ -128,9 +154,23 @@ func (s *Supervisor) SetBrokerSubscriptionResolver(resolver BrokerSubscriptionRe
 // first StartAlgorithm call.
 func (s *Supervisor) SetGallerySync(provider GallerySyncProvider, broadcaster *GalleryBroadcaster) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.gallerySyncProvider = provider
 	s.galleryBroadcaster = broadcaster
+	startLoop := !s.galleryReconcileStarted && provider != nil && broadcaster != nil
+	if startLoop {
+		if s.galleryReconcileDone == nil {
+			// A supervisor assembled by hand (tests, future refactors) has no done
+			// channel; creating it here keeps shutdown a join instead of a panic.
+			s.galleryReconcileDone = make(chan struct{})
+		}
+		s.galleryReconcileStarted = true
+	}
+	s.mu.Unlock()
+
+	// Started outside the lock so the loop never observes a half-wired state.
+	if startLoop {
+		go s.galleryReconcileLoop(galleryReconcileInterval, s.countLiveRunners)
+	}
 }
 
 // SetTaskConfig wires the per-stream task configuration path: the provider turns
@@ -267,7 +307,7 @@ func (s *Supervisor) pushGalleryUntilDelivered(
 	}
 
 	for attempt := 1; ; attempt++ {
-		items, syncID, delivered, err := s.pushGalleryOnce(provider, broadcaster)
+		items, syncID, delivered, err := s.pushGallerySnapshot(provider, broadcaster, gallerySnapshotFollowUps)
 		if err == nil && delivered > 0 {
 			s.logger.Info("cold-start gallery sync delivered",
 				zap.String("sync_id", syncID),
@@ -304,6 +344,41 @@ func (s *Supervisor) pushGalleryUntilDelivered(
 	}
 }
 
+// pushGallerySnapshot reads one snapshot and broadcasts it, republishing when a
+// gallery mutation lands while the shards are in flight.
+//
+// A snapshot taken before an enrollment rolls that enrollment back on every
+// runner it reaches, so a generation that moved mid-push must be answered with
+// fresh data instead of being ignored. The bound matters more than the accuracy
+// of one attempt: under continuous enrollment the remaining window is handed to
+// the next reconcile tick rather than spun on here.
+//
+// followUps is a parameter instead of a constant read so the ladder and the
+// reconcile loop can be driven by white-box tests without waiting on wall time.
+func (s *Supervisor) pushGallerySnapshot(
+	provider GallerySyncProvider,
+	broadcaster *GalleryBroadcaster,
+	followUps int,
+) (items []GallerySyncItem, syncID string, delivered int, err error) {
+	for republish := 0; ; republish++ {
+		generation := broadcaster.Generation()
+		items, syncID, delivered, err = s.pushGalleryOnce(provider, broadcaster)
+		if err != nil || delivered == 0 {
+			// Nobody took the shards: republishing would meet the same empty
+			// broker, so the retry budget (ladder) or the next tick (reconcile)
+			// is what has to find a connected runner.
+			return items, syncID, delivered, err
+		}
+		if republish >= followUps || broadcaster.Generation() == generation {
+			return items, syncID, delivered, nil
+		}
+		s.logger.Debug("gallery snapshot raced a gallery mutation; republishing",
+			zap.String("sync_id", syncID),
+			zap.Uint64("generation", generation),
+		)
+	}
+}
+
 // pushGalleryOnce runs one full-snapshot attempt and reports how many runners
 // assembled it (0 = nobody did, retry needed).
 func (s *Supervisor) pushGalleryOnce(
@@ -323,6 +398,147 @@ func (s *Supervisor) pushGalleryOnce(
 		return items, syncID, 0, fmt.Errorf("broadcast gallery snapshot: %w", err)
 	}
 	return items, syncID, delivered, nil
+}
+
+// galleryReconcileLoop republishes the gallery snapshot on a fixed cadence.
+//
+// The interval and the liveness probe are parameters rather than reads of the
+// package constants so white-box tests can drive convergence at a 10ms cadence
+// instead of waiting out production timings.
+func (s *Supervisor) galleryReconcileLoop(interval time.Duration, liveRunners func() int) {
+	// Read the channel once: it is assigned before this goroutine starts, and a
+	// nil channel must not turn shutdown into a panic.
+	done := s.galleryReconcileDone
+	if done != nil {
+		defer close(done)
+	}
+
+	if interval <= 0 || liveRunners == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+		}
+		s.reconcileGallery(liveRunners)
+	}
+}
+
+// reconcileGallery republishes the full snapshot once, whatever the previous
+// attempt reported. That is the whole point of the pass: a push that reached
+// *some* runner says nothing about the runner this snapshot was meant for.
+func (s *Supervisor) reconcileGallery(liveRunners func() int) {
+	s.mu.RLock()
+	provider := s.gallerySyncProvider
+	broadcaster := s.galleryBroadcaster
+	s.mu.RUnlock()
+	if provider == nil || broadcaster == nil {
+		return
+	}
+
+	// Nothing to deliver to: skip the paged DB read and the multi-hundred-KB
+	// marshalling instead of paying for them on an idle box.
+	alive := liveRunners()
+	if alive == 0 {
+		return
+	}
+
+	// Give way to a ladder that is already pushing the same state. TryLock, not
+	// Lock: queueing here would turn a 30s ladder into back-to-back snapshots
+	// and make every tick drift behind it.
+	if !s.gallerySyncMu.TryLock() {
+		s.logger.Debug("gallery reconcile skipped: a snapshot push is already in flight")
+		return
+	}
+	defer s.gallerySyncMu.Unlock()
+
+	select {
+	case <-s.stopCh:
+		// Shutdown may have landed while this goroutine waited for the lock; it
+		// must not write one more snapshot into a broker that is going away.
+		return
+	default:
+	}
+
+	items, syncID, delivered, err := s.pushGallerySnapshot(provider, broadcaster, gallerySnapshotFollowUps)
+	alive = liveRunners()
+	switch {
+	case err != nil:
+		s.logger.Warn("gallery reconcile failed",
+			zap.String("sync_id", syncID),
+			zap.Int("alive_runners", alive),
+			zap.Error(err),
+		)
+	case delivered == 0:
+		// The signal the old log could not produce: a runner is alive, yet not a
+		// single one took the snapshot. Deliveries may be landing on another
+		// algorithm's process that shares the broker.
+		s.logger.Warn("gallery reconcile reached no runner",
+			zap.String("sync_id", syncID),
+			zap.Int("items_count", len(items)),
+			zap.Int("alive_runners", alive),
+			zap.Uint64("generation", broadcaster.Generation()),
+		)
+	default:
+		// Debug on purpose: this fires every 30s, an Info line would drown the
+		// warnings that actually need an operator.
+		s.logger.Debug("gallery reconcile delivered",
+			zap.String("sync_id", syncID),
+			zap.Int("items_count", len(items)),
+			zap.Int("delivered", delivered),
+			zap.Int("alive_runners", alive),
+			zap.Uint64("generation", broadcaster.Generation()),
+		)
+	}
+}
+
+// countLiveRunners mirrors SummaryCounts' notion of "worth pushing to": a
+// watcher whose process exists or is about to. Backoff and crash-loop watchers
+// have no runner attached, so a snapshot push would only cost marshalling.
+func (s *Supervisor) countLiveRunners() int {
+	s.mu.RLock()
+	watchers := make([]*workerWatcher, 0, len(s.watchers))
+	for _, w := range s.watchers {
+		watchers = append(watchers, w)
+	}
+	s.mu.RUnlock()
+
+	alive := 0
+	for _, w := range watchers {
+		switch w.currentStatus() {
+		case StatusRunning, StatusStarting, StatusRollingBack:
+			alive++
+		}
+	}
+	return alive
+}
+
+// stopGalleryReconcile joins the reconcile loop after stopCh closed.
+//
+// Bounded by stopAlgorithmTimeout: a shutdown that lands mid-snapshot must not
+// stall the caller, and the push itself aborts at its next stopCh check.
+func (s *Supervisor) stopGalleryReconcile() {
+	s.mu.RLock()
+	started := s.galleryReconcileStarted
+	s.mu.RUnlock()
+	if !started {
+		return
+	}
+
+	select {
+	case <-s.galleryReconcileDone:
+	case <-time.After(stopAlgorithmTimeout):
+		// The loop is mid-push, and one push is bounded by gallerySyncTimeout
+		// rather than by the shutdown budget. Say so instead of stalling the
+		// caller for it; the snapshot in flight targets a runner that is being
+		// torn down anyway.
+		s.logger.Debug("gallery reconcile loop still finishing a snapshot push at shutdown")
+	}
 }
 
 // brokerResolver snapshots the configured broker subscription resolver under a
@@ -861,6 +1077,7 @@ func (s *Supervisor) SummaryCounts() (active, failed int) {
 // StopAll stops all managed processes gracefully on application shutdown.
 func (s *Supervisor) StopAll(timeout time.Duration) {
 	s.stopOnce.Do(func() { close(s.stopCh) })
+	s.stopGalleryReconcile()
 
 	s.mu.Lock()
 	watchers := make([]*workerWatcher, 0, len(s.watchers))

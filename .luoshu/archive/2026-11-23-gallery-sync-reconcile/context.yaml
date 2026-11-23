@@ -1,0 +1,17 @@
+version: 1
+change_id: 2026-11-23-gallery-sync-reconcile
+mode: full
+base_commit: c3c744d5b4449031ff098712dca335c2c2c2057a
+created_at: 2026-11-23T07:18:30.402Z
+specs:
+  - native/algo-plugin-contract.md
+  - backend/algorithm-guidelines.md
+  - architecture.md
+rules:
+  - algorithm/algorithm-worker-ipc
+  - algorithm/algorithm-runner-process
+  - go-host/concurrency-and-errors
+  - go-host/code-style
+  - go-host/test-wiring
+  - go-host/sensitive-logging
+new_specs: []

@@ -235,7 +235,7 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
   漏掉重放的故障形态是「跑几天后突然回默认值」。
 - **重放缓存只覆盖任务级配置，不覆盖底库**：`FrameBroker::broadcast_message` 只缓存
   `MSG_TASK_CONFIG` / `MSG_TASK_REGIONS`；底库分片是纯 JSON、Broker 不解载荷，所以晚连上的 runner
-  永远收不到快照。底库的可靠性靠**投递回执 + 有界重试**（见 §7.3），不是靠 Broker 缓存。
+  永远收不到快照。底库的可靠性靠**投递回执 + 有界重试 + 周期全量对账**（见 §7.3），不是靠 Broker 缓存。
   反例（2026-11 现场事故）：冷启动 sync 用 100ms 固定延迟猜连接时刻，广播落在「runner 还在加载
   RKNN 模型、0 个订阅者」的窗口里，`broadcast_ai_message` 仍返回 `Zhulong_OK`，宿主照打
   `cold-start gallery sync broadcast completed`，底库永久为空 —— 表现是「某天起所有人 similarity=0」。
@@ -565,12 +565,12 @@ Go 侧与 Runner 进程之间 IPC 载荷统一使用 `features` 字段，表示�
 
 | 维度 | 规范与实现 |
 | :--- | :--- |
-| **触发时机** | 人员/人脸 CRUD 成功后（增量，`BroadcastUpsert` / `BroadcastDelete`）；runner 每次拉起成功后（全量，`Supervisor.triggerGallerySyncAsync`）。全量路径覆盖初始启动、`RestartAlgorithm`、`rollbackToOld` 与崩溃重启 `respawn()` —— **不要**只在某一条 spawn 路径上触发 |
+| **触发时机** | 人员/人脸 CRUD 成功后（增量，`BroadcastUpsert` / `BroadcastDelete`）；runner 每次拉起成功后（全量，`Supervisor.triggerGallerySyncAsync`），覆盖初始启动、`RestartAlgorithm`、`rollbackToOld` 与崩溃重启 `respawn()`（**不要**只在某一条 spawn 路径上触发）；以及后台周期全量对账（`Supervisor.galleryReconcileLoop`，默认 30s 间隔，仅在存在存活 runner 时触发，用于自愈多算法共 broker 误判、晚到 runner 或丢失增量） |
 | **传输通道** | 复用 `FrameBroker` 点对点 Unix Domain Socket 连接，经 `Engine::broadcast_ai_message` 下行广播 |
 | **消息类型** | `MSG_GALLERY_SYNC` (10)、`MSG_GALLERY_UPSERT` (11)、`MSG_GALLERY_DELETE` (12)、`MSG_GALLERY_ACK` (13) |
 | **ACK 语义** | 全量 `MSG_GALLERY_SYNC` 组装完成后 runner 回复 `MSG_GALLERY_ACK`，增量同步不回复。**Go 宿主目前不消费该消息**：可靠送达的判据是 `Zhulong_engine_broadcast_ai_message` 的投递计数，`MSG_GALLERY_ACK` 只在 runner 侧用于自校验 |
 | **单条上限与分片** | 单条上限 64KB。Go 侧按**实测字节数**切分（`shardBudget = 90% × MaxIpcPayloadSize`，512 维 float32 约 6.3KB/条、每片约 9 条，不要再按固定「10 项/片」估算），Runner 维持 5 秒组装窗口，收齐后原子应用并清空旧底库；超时或乱序显式报错 |
-| **投递回执与重试** | `Zhulong_engine_broadcast_ai_message(..., size_t *out_delivered)` 回报实际收到的 runner 连接数：`stream=0` 取各流**最小值**（部分流没人连即视为未送达），0 = 报文被静默丢弃。`GalleryBroadcaster.BroadcastSync` 返回所有分片的最小投递数，**任一分片为 0 立即判失败**（缺一片则 runner 的组装窗口永远无法 `is_complete()`）。`Supervisor.pushGalleryUntilDelivered` 每 500ms 重试、上限 60 次（≈30s 窗口，覆盖 RK3568 实测 ~1.5s 冷启动），每次尝试**重新取快照并换新 `sync_id`**：陈旧快照会覆盖期间的新登记，复用 id 会撞进上一轮 5 秒组装窗口。同一时刻**只允许一条重试阶梯**（`gallerySyncMu`）：两条阶梯交错会把不同 `sync_id` 的分片混进同一个 runner，而它在 id 变化时重置组装上下文 —— 快照永远收不齐，但两边都看到非零写入数以为自己送达了 |
+| **投递回执与重试** | `Zhulong_engine_broadcast_ai_message(..., size_t *out_delivered)` 回报实际收到的 runner 连接数：`stream=0` 取各流**最小值**（部分流没人连即视为未送达），0 = 报文被静默丢弃。`GalleryBroadcaster.BroadcastSync` 返回所有分片的最小投递数，**任一分片为 0 立即判失败**（缺一片则 runner 的组装窗口永远无法 `is_complete()`）。`Supervisor.pushGalleryUntilDelivered` 每 500ms 重试、上限 60 次（≈30s 窗口，覆盖 RK3568 实测 ~1.5s 冷启动），每次尝试**重新取快照并换新 `sync_id`**：陈旧快照会覆盖期间的新登记，复用 id 会撞进上一轮 5 秒组装窗口。同一时刻**只允许一条重试阶梯**（`gallerySyncMu`）：两条阶梯交错会把不同 `sync_id` 的分片混进同一个 runner，而它在 id 变化时重置组装上下文 —— 快照永远收不齐，但两边都看到非零写入数以为自己送达了。`Supervisor.pushGallerySnapshot` 在推送前后比对 `GalleryBroadcaster.Generation()`，若期间发生增量变更则有界补推（上限 1 次）；`galleryReconcileLoop` 复用同一 `gallerySyncMu`（`TryLock` 非阻塞让路给在途阶梯），并在 `StopAll` 时通过 `stopCh` 与 `galleryReconcileDone` 收口 |
 | **分片聚合幂等与范围门禁** | 聚合逻辑统一走 `accumulate_sync_shard(ctx, shard)`（`gallery_parser.hpp`），必须同时满足：① `shard_index ∈ [0, shard_total)`，越界/负值分片直接丢弃且**不改变 `ctx` 任何状态**；② 同一 `shard_index` 重复到达时**跳过 items 累加**。⚠️ `received_shards.insert()` 幂等但 `collected_items.push_back()` 不是 —— 只靠 `insert` 会让 `is_complete()` 判定不变而 `collected_items` 重复膨胀，最终经 `gallery_index.reset()` **永久污染底库** |
 | **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**，未绑定时为空串，严禁混用内部行 ID |
 | **宿主侧回转身份** | 载荷 `person_id` 只用于展示与对账，**绝不写入 `recognitions.person_id` 外键列**。回顾落库时一律经 `matched_face_id → person_faces.id → person_faces.person_id`（内部主键）解析，并把载荷里的业务键原值快照到 `recognitions.person_external_id`。详见 [数据库规约 · 对外业务键与内部主键分列](../backend/database-guidelines.md)。反例：直接把载荷值写进外键列，会让业务键 ≠ 内部主键的人员每次命中都 `FOREIGN KEY constraint failed`，整批识别记录静默丢失 |
