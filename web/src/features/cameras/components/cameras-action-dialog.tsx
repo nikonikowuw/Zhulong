@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
+import { AlertCircle, Loader2, Radar, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { handleFormError } from '@/lib/form-error'
@@ -57,6 +57,7 @@ function CamerasActionDialogBody({
 }: CamerasActionDialogBodyProps) {
   const { t } = useTranslation('cameras')
   const queryClient = useQueryClient()
+  const { discoveredDevice } = useCamerasContext()
   const [probeError, setProbeError] = useState<string | null>(null)
   const [conflictError, setConflictError] = useState<string | null>(null)
   const [latestRevision, setLatestRevision] = useState<number | null>(null)
@@ -89,9 +90,16 @@ function CamerasActionDialogBody({
             subTransport: (subStream?.transport as 'tcp' | 'udp') || 'tcp',
           }
         : {
-            name: '',
+            name:
+              discoveredDevice?.name ||
+              discoveredDevice?.model ||
+              (discoveredDevice?.ip ? `Camera-${discoveredDevice.ip}` : ''),
             enabled: true,
-            mainRtspUrl: '',
+            mainRtspUrl:
+              discoveredDevice?.suggestedRtspUrl ||
+              (discoveredDevice?.ip
+                ? `rtsp://admin:password@${discoveredDevice.ip}:554/live/ch0`
+                : ''),
             mainTransport: 'tcp',
             hasSubStream: false,
             subRtspUrl: '',
@@ -195,6 +203,13 @@ function CamerasActionDialogBody({
               : t('dialog.createDesc')}
         </DialogDescription>
       </DialogHeader>
+
+      {!isEdit && discoveredDevice ? (
+        <div className='flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 p-2.5 text-xs text-primary'>
+          <Radar className='size-4 shrink-0' />
+          <span>{t('discover.prefilledTip', { ip: discoveredDevice.ip })}</span>
+        </div>
+      ) : null}
 
       {conflictError ? (
         <div
@@ -340,28 +355,40 @@ function CamerasActionDialogBody({
 }
 
 export function CamerasActionDialog() {
-  const { open, setOpen, currentRow } = useCamerasContext()
+  const { open, setOpen, currentRow, discoveredDevice, setDiscoveredDevice } =
+    useCamerasContext()
   const [isPending, setIsPending] = useState(false)
 
   const isEdit = open === 'edit' && Boolean(currentRow)
   const isOpen = open === 'create' || isEdit
+
+  const handleClose = () => {
+    setDiscoveredDevice(null)
+    setOpen(null)
+  }
 
   return (
     <Dialog
       open={isOpen}
       onOpenChange={(val) => {
         if (!isPending && !val) {
-          setOpen(null)
+          handleClose()
         }
       }}
     >
       <DialogContent className='w-full sm:max-w-lg'>
         {isOpen ? (
           <CamerasActionDialogBody
-            key={isEdit && currentRow ? `edit-${currentRow.id}` : 'create'}
+            key={
+              isEdit && currentRow
+                ? `edit-${currentRow.id}`
+                : discoveredDevice
+                  ? `create-${discoveredDevice.id || discoveredDevice.ip}`
+                  : 'create'
+            }
             isEdit={isEdit}
             camera={currentRow}
-            onClose={() => setOpen(null)}
+            onClose={handleClose}
             onPendingChange={setIsPending}
           />
         ) : null}

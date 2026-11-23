@@ -33,6 +33,7 @@
     "camera.update": "更新攝影機",
     "camera.delete": "刪除攝影機",
     "camera.toggle": "啟停攝影機",
+    "camera.discover": "探測區域網路攝影機",
     "task.create": "建立分析任務",
     "task.update": "更新分析任務",
     "task.delete": "刪除分析任務",

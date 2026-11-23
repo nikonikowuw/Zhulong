@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
+	"github.com/nikonikowuw/Zhulong/internal/camera/discovery"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
@@ -749,5 +750,75 @@ func TestCreateGB28181Camera(t *testing.T) {
 	}
 	if fetched.Streams[0].Protocol != ProtocolGB28181 {
 		t.Errorf("expected fetched protocol gb28181, got %q", fetched.Streams[0].Protocol)
+	}
+}
+
+type testMockDiscoverer struct {
+	devices []discovery.DiscoveredDevice
+	err     error
+}
+
+func (m *testMockDiscoverer) Discover(ctx context.Context, opts discovery.DiscoverOptions) ([]discovery.DiscoveredDevice, error) {
+	return m.devices, m.err
+}
+
+func TestCameraHandlerDiscover(t *testing.T) {
+	router, service, _, _, cleanup := setupTestCameraApp(t)
+	defer cleanup()
+
+	mockDisc := &testMockDiscoverer{
+		devices: []discovery.DiscoveredDevice{
+			{
+				ID:               "mock-device-uuid-001",
+				IP:               "192.168.1.120",
+				Port:             80,
+				XAddr:            "http://192.168.1.120/onvif/device_service",
+				Name:             "FrontDoor",
+				Manufacturer:     "Hikvision",
+				Model:            "DS-2CD2047G2",
+				SuggestedRtspUrl: "rtsp://admin:password@192.168.1.120:554/Streaming/Channels/101",
+			},
+		},
+	}
+	service.SetDiscoverer(mockDisc)
+
+	// 1. 成功发现测试
+	reqBody := `{"timeoutSeconds": 3}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras/discover", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Code    string                     `json:"code"`
+		Message string                     `json:"message"`
+		Data    []DiscoveredDeviceResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Code != "OK" {
+		t.Errorf("expected code OK, got %q", resp.Code)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected 1 discovered device, got %d", len(resp.Data))
+	}
+	if resp.Data[0].IP != "192.168.1.120" || resp.Data[0].Manufacturer != "Hikvision" {
+		t.Errorf("unexpected device data: %+v", resp.Data[0])
+	}
+
+	// 2. 参数校验测试：超时时间超出上限 (max 10)
+	invalidReq := `{"timeoutSeconds": 20}`
+	wInvalid := httptest.NewRecorder()
+	reqInvalid, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras/discover", bytes.NewBufferString(invalidReq))
+	reqInvalid.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(wInvalid, reqInvalid)
+
+	if wInvalid.Code != http.StatusUnprocessableEntity {
+		t.Errorf("expected 422 for invalid timeout, got %d", wInvalid.Code)
 	}
 }

@@ -766,6 +766,38 @@ definitions:
       state:
         $ref: '#/definitions/camera.CameraStateInfo'
     type: object
+  camera.DiscoverCamerasRequest:
+    properties:
+      timeoutSeconds:
+        maximum: 10
+        minimum: 1
+        type: integer
+    type: object
+  camera.DiscoveredDeviceResponse:
+    properties:
+      hardware:
+        type: string
+      id:
+        type: string
+      ip:
+        type: string
+      manufacturer:
+        type: string
+      model:
+        type: string
+      name:
+        type: string
+      port:
+        type: integer
+      suggestedRtspUrl:
+        type: string
+      types:
+        items:
+          type: string
+        type: array
+      xAddr:
+        type: string
+    type: object
   camera.StreamResponse:
     properties:
       codec:
@@ -4101,6 +4133,41 @@ paths:
         type: string
       responses: {}
       summary: WebSocket 视频流实时预览
+      tags:
+      - camera
+  /cameras/discover:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Discovery parameters
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/camera.DiscoverCamerasRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/camera.DiscoveredDeviceResponse'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Discover cameras on local network
       tags:
       - camera
   /cameras/events:

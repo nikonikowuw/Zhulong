@@ -180,3 +180,20 @@ export function createCameraFormSchema(t?: TFunction, streamEditable = true) {
 export type CameraFormValues = z.infer<
   ReturnType<typeof createCameraFormSchema>
 >
+
+export const discoveredDeviceSchema = z.object({
+  id: z.string(),
+  ip: z.string(),
+  port: z.number().default(80),
+  xAddr: z.string().default(''),
+  name: z.string().default(''),
+  manufacturer: z.string().default(''),
+  model: z.string().default(''),
+  hardware: z.string().default(''),
+  types: z.array(z.string()).default([]),
+  suggestedRtspUrl: z.string().default(''),
+})
+
+export type DiscoveredDevice = z.infer<typeof discoveredDeviceSchema>
+
+export const discoverCamerasResponseSchema = z.array(discoveredDeviceSchema)

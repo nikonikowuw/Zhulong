@@ -1,0 +1,22 @@
+version: 1
+change_id: 2026-11-22-onvif-ws-discovery
+mode: full
+base_commit: b199f1e926e65219b3fcfe4e435803a05b926e1c
+created_at: 2026-11-22T16:48:40.095Z
+specs:
+  - architecture.md
+  - backend/index.md
+  - backend/camera-guidelines.md
+  - backend/http-api-guidelines.md
+  - frontend/index.md
+  - frontend/development-guidelines.md
+  - frontend/theme-and-i18n.md
+rules:
+  - go-host/http-contract
+  - go-host/concurrency-and-errors
+  - go-host/code-style
+  - go-host/host-lifecycle
+  - go-host/route-auth-boundary
+  - web/frontend-api-boundary
+  - web/frontend-browser-tests
+new_specs: []

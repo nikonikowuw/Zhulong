@@ -5,11 +5,13 @@ import {
   cameraSchema,
   deleteCameraResponseSchema,
   diagnoseResponseSchema,
+  discoverCamerasResponseSchema,
   type Camera,
   type CameraCredentialsResponse,
   type CameraListResponse,
   type DeleteCameraResponse,
   type DiagnoseResponse,
+  type DiscoveredDevice,
 } from '../data/schema'
 
 export interface CreateStreamDto {
@@ -153,5 +155,16 @@ export const camerasApi = {
     }
 
     return { ...first, items, total: first.total }
+  },
+
+  /**
+   * 发现局域网内的 ONVIF 摄像机设备
+   */
+  async discoverCameras(timeoutSeconds?: number): Promise<DiscoveredDevice[]> {
+    const resp = await apiClient.post<ApiResponse<DiscoveredDevice[]>>(
+      '/cameras/discover',
+      timeoutSeconds ? { timeoutSeconds } : {}
+    )
+    return discoverCamerasResponseSchema.parse(resp.data.data ?? [])
   },
 }

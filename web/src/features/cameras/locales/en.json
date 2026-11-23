@@ -56,6 +56,7 @@
   },
   "actions": {
     "create": "Add Camera",
+    "discover": "Discover",
     "refresh": "Refresh",
     "edit": "Edit Camera",
     "diagnose": "Diagnose",
@@ -157,5 +158,19 @@
     "batchDeletePartial": "Deleted {{success}} cameras, {{failed}} failed",
     "deleteFailed": "Failed to delete camera",
     "refreshLatestFailed": "Failed to refresh camera details"
+  },
+  "discover": {
+    "title": "Discover Cameras on LAN",
+    "description": "Automatically discover ONVIF network cameras on local network and prefill configurations.",
+    "startScan": "Start Scan",
+    "scanning": "Scanning local network...",
+    "scanComplete": "Scan complete, found {{count}} devices",
+    "noDevices": "No Cameras Found",
+    "noDevicesDesc": "Make sure cameras are on the same local network as Zhulong with ONVIF enabled.",
+    "useDevice": "Use Device",
+    "ip": "IP Address",
+    "manufacturer": "Manufacturer",
+    "model": "Model",
+    "prefilledTip": "Prefilled configuration from local device {{ip}}"
   }
 }

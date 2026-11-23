@@ -215,5 +215,33 @@ describe('camerasApi', () => {
       // 不重复、不丢失
       expect(new Set(res.items.map((c) => c.id)).size).toBe(128)
     })
+
+    it('discoverCameras posts to /cameras/discover with timeout', async () => {
+      const mockDiscovered = [
+        {
+          id: 'dev-01',
+          ip: '192.168.1.100',
+          port: 80,
+          xAddr: 'http://192.168.1.100/onvif/device_service',
+          name: 'Hikvision IPC',
+          manufacturer: 'Hikvision',
+          model: 'DS-2CD2047G2',
+          hardware: 'DS-2CD2047G2',
+          types: ['dn:NetworkVideoTransmitter'],
+          suggestedRtspUrl:
+            'rtsp://admin:password@192.168.1.100:554/Streaming/Channels/101',
+        },
+      ]
+
+      vi.spyOn(apiClient, 'post').mockResolvedValueOnce(
+        mockResponse(mockDiscovered)
+      )
+
+      const res = await camerasApi.discoverCameras(5)
+      expect(res).toEqual(mockDiscovered)
+      expect(apiClient.post).toHaveBeenCalledWith('/cameras/discover', {
+        timeoutSeconds: 5,
+      })
+    })
   })
 })

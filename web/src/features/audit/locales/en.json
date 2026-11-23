@@ -33,6 +33,7 @@
     "camera.update": "Update Camera",
     "camera.delete": "Delete Camera",
     "camera.toggle": "Toggle Camera",
+    "camera.discover": "Discover Cameras on LAN",
     "task.create": "Create Analysis Task",
     "task.update": "Update Analysis Task",
     "task.delete": "Delete Analysis Task",

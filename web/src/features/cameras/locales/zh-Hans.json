@@ -56,6 +56,7 @@
   },
   "actions": {
     "create": "新增摄像机",
+    "discover": "发现设备",
     "refresh": "刷新",
     "edit": "编辑配置",
     "diagnose": "一键诊断",
@@ -157,5 +158,19 @@
     "batchDeletePartial": "已删除 {{success}} 台摄像机，{{failed}} 台失败",
     "deleteFailed": "删除摄像机失败",
     "refreshLatestFailed": "刷新摄像机最新配置失败"
+  },
+  "discover": {
+    "title": "局域网发现摄像机",
+    "description": "通过 ONVIF 协议自动探测局域网内的网络摄像机，支持一键填入配置。",
+    "startScan": "开始扫描",
+    "scanning": "正在扫描局域网...",
+    "scanComplete": "扫描完成，发现 {{count}} 台设备",
+    "noDevices": "未发现局域网摄像机",
+    "noDevicesDesc": "请确认摄像机与 Zhulong 处于同一局域网并已开启 ONVIF 服务。",
+    "useDevice": "以此设备添加",
+    "ip": "IP 地址",
+    "manufacturer": "厂商",
+    "model": "型号",
+    "prefilledTip": "已从局域网设备 {{ip}} 预填配置"
   }
 }
