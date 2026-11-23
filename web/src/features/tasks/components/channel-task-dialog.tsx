@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { type Algorithm } from '@/features/algorithms/contract'
 import { type Camera as CameraSchema } from '@/features/cameras/contract'
 import { type FrameSurfaceState } from '@/features/live'
@@ -24,7 +24,11 @@ import {
   type ChannelTaskAlgoTab,
 } from './channel-task-algo-panel'
 import { ChannelTaskDialogFooter } from './channel-task-dialog-footer'
-import { ChannelTaskDialogHeader } from './channel-task-dialog-header'
+import {
+  CHANNEL_TASK_WORKBENCH_DESC_ID,
+  CHANNEL_TASK_WORKBENCH_TITLE_ID,
+  ChannelTaskDialogHeader,
+} from './channel-task-dialog-header'
 import { ChannelTaskRegionViewport } from './channel-task-region-viewport'
 
 const EDITABLE_TARGET_SELECTOR =
@@ -94,6 +98,16 @@ function ChannelTaskDialogContent({
 
   const syncMutation = useSyncChannelAlgorithms()
   const deleteMutation = useDeleteTask()
+  const isSaving = syncMutation.isPending || deleteMutation.isPending
+
+  // 全屏工作台打开期间锁定底层文档滚动，卸载或关闭时精准恢复原值。
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prevOverflow
+    }
+  }, [])
 
   const algoMap = useMemo(
     () => new Map(algorithms.map((algo) => [algo.id, algo])),
@@ -135,6 +149,20 @@ function ChannelTaskDialogContent({
       }
 
       if (
+        event.key === 'Escape' &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        if (!isSaving) {
+          event.preventDefault()
+          onClose()
+        }
+        return
+      }
+
+      if (
         (event.ctrlKey || event.metaKey) &&
         !event.altKey &&
         !event.shiftKey &&
@@ -166,6 +194,8 @@ function ChannelTaskDialogContent({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
+    isSaving,
+    onClose,
     canEditRegion,
     canEditCrop,
     canUndo,
@@ -374,9 +404,13 @@ function ChannelTaskDialogContent({
   }
 
   return (
-    <DialogContent
-      showCloseButton={false}
-      className='flex h-[94vh] max-h-[1000px] w-[98vw] max-w-none flex-col gap-0 overflow-hidden border-border bg-background p-0 shadow-2xl sm:max-w-[97vw] 2xl:max-w-[1680px]'
+    <div
+      role='dialog'
+      aria-modal='true'
+      aria-labelledby={CHANNEL_TASK_WORKBENCH_TITLE_ID}
+      aria-describedby={CHANNEL_TASK_WORKBENCH_DESC_ID}
+      data-slot='channel-task-workbench'
+      className='fixed inset-0 z-50 flex h-dvh w-screen flex-col gap-0 overflow-hidden bg-background text-foreground'
     >
       <ChannelTaskDialogHeader
         camera={{
@@ -400,7 +434,9 @@ function ChannelTaskDialogContent({
           autoEnableDisabled,
           onAutoEnableChange: setAutoEnableDisabled,
         }}
-        onClose={onClose}
+        onClose={() => {
+          if (!isSaving) onClose()
+        }}
       />
 
       <div className='flex min-h-0 flex-1 flex-col divide-y divide-border overflow-y-auto bg-muted/20 lg:flex-row lg:divide-x lg:divide-y-0 lg:overflow-hidden'>
@@ -437,17 +473,14 @@ function ChannelTaskDialogContent({
       </div>
 
       <ChannelTaskDialogFooter
-        canSave={
-          !isOverBudget &&
-          !syncMutation.isPending &&
-          !deleteMutation.isPending &&
-          Boolean(cameraId)
-        }
-        isSaving={syncMutation.isPending || deleteMutation.isPending}
+        canSave={!isOverBudget && !isSaving && Boolean(cameraId)}
+        isSaving={isSaving}
         onSave={handleSave}
-        onClose={onClose}
+        onClose={() => {
+          if (!isSaving) onClose()
+        }}
       />
-    </DialogContent>
+    </div>
   )
 }
 
@@ -462,16 +495,22 @@ export function ChannelTaskDialog({
 }: ChannelTaskDialogProps): React.JSX.Element | null {
   if (!open) return null
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChannelTaskDialogContent
-        initialCameraId={initialCameraId}
-        initialAlgorithmId={initialAlgorithmId}
-        cameras={cameras}
-        algorithms={algorithms}
-        allTasks={allTasks}
-        onClose={() => onOpenChange(false)}
-      />
-    </Dialog>
+  const content = (
+    <ChannelTaskDialogContent
+      initialCameraId={initialCameraId}
+      initialAlgorithmId={initialAlgorithmId}
+      cameras={cameras}
+      algorithms={algorithms}
+      allTasks={allTasks}
+      onClose={() => onOpenChange(false)}
+    />
   )
+
+  if (typeof document === 'undefined') {
+    return content
+  }
+
+  return createPortal(content, document.body)
 }
+
+export { ChannelTaskDialog as ChannelTaskWorkbench }

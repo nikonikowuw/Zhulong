@@ -38,10 +38,11 @@ vi.mock('@/features/live', async (importOriginal) => {
 })
 
 const mockSyncMutate = vi.hoisted(() => vi.fn())
+let mockSyncPending = false
 vi.mock('../hooks/use-sync-channel-algorithms', () => ({
   useSyncChannelAlgorithms: () => ({
     mutate: mockSyncMutate,
-    isPending: false,
+    isPending: mockSyncPending,
   }),
 }))
 
@@ -160,10 +161,12 @@ function renderDialog({
   initialAlgorithmId,
   algorithms = [buildAlgorithm()],
   allTasks = [buildTask()],
+  onOpenChange = vi.fn(),
 }: {
   initialAlgorithmId?: string
   algorithms?: Algorithm[]
   allTasks?: Task[]
+  onOpenChange?: (open: boolean) => void
 } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -173,7 +176,7 @@ function renderDialog({
     <QueryClientProvider client={queryClient}>
       <ChannelTaskDialog
         open={true}
-        onOpenChange={vi.fn()}
+        onOpenChange={onOpenChange}
         initialCameraId='cam-1'
         initialAlgorithmId={initialAlgorithmId}
         cameras={[mockCamera]}
@@ -187,6 +190,7 @@ function renderDialog({
 describe('ChannelTaskDialog', () => {
   beforeEach(() => {
     mockSyncMutate.mockClear()
+    mockSyncPending = false
     streamState = 'live'
   })
 
@@ -454,8 +458,8 @@ describe('ChannelTaskDialog region editing', () => {
 
     await expect.element(getByText(/本通道算力/)).toBeVisible()
 
-    const dialogEl = document.querySelector(
-      '[data-slot="dialog-content"]'
+    const workbenchEl = document.querySelector(
+      '[data-slot="channel-task-workbench"]'
     ) as HTMLElement
     const frameEl = getByTestId('frame-surface').element()
     const matrixHeading = getByText('算法调度矩阵').element()
@@ -463,10 +467,12 @@ describe('ChannelTaskDialog region editing', () => {
     const frameRect = frameEl.getBoundingClientRect()
     const matrixRect = matrixHeading.getBoundingClientRect()
 
-    // chromium-default (414px < lg)：上下堆叠、画布保有高度且弹窗不横向溢出
+    // chromium-default (414px < lg)：上下堆叠、画布保有高度且工作台不横向溢出
     expect(frameRect.height).toBeGreaterThanOrEqual(200)
     expect(frameRect.bottom).toBeLessThanOrEqual(matrixRect.top + 4)
-    expect(dialogEl.scrollWidth).toBeLessThanOrEqual(dialogEl.clientWidth + 1)
+    expect(workbenchEl.scrollWidth).toBeLessThanOrEqual(
+      workbenchEl.clientWidth + 1
+    )
   })
 
   it('switches back to the params tab when validation fails from the schedule tab', async () => {
@@ -572,5 +578,55 @@ describe('ChannelTaskDialog region editing', () => {
 
     await userEvent.keyboard('{Control>}z{/Control}')
     await expect.element(clearCropBtn).not.toBeDisabled()
+  })
+
+  it('fills the full viewport via body portal and locks/restores body scroll', async () => {
+    document.body.style.overflow = 'auto'
+    const { getByRole, unmount } = await renderDialog()
+
+    const dialog = getByRole('dialog')
+    await expect.element(dialog).toBeVisible()
+    await expect.element(dialog).toHaveAttribute('aria-modal', 'true')
+
+    const el = dialog.element()
+    expect(el.parentElement).toBe(document.body)
+
+    const rect = el.getBoundingClientRect()
+    expect(rect.top).toBe(0)
+    expect(rect.left).toBe(0)
+    expect(Math.round(rect.width)).toBe(window.innerWidth)
+    expect(Math.round(rect.height)).toBe(window.innerHeight)
+
+    expect(document.body.style.overflow).toBe('hidden')
+
+    await unmount()
+    expect(document.body.style.overflow).toBe('auto')
+    document.body.style.overflow = ''
+  })
+
+  it('closes on Escape when idle while ignoring Escape inside inputs', async () => {
+    const onOpenChange = vi.fn()
+    const { getByRole } = await renderDialog({ onOpenChange })
+
+    // 焦点在输入框内时按 Escape 不误关工作台
+    const thresholdInput = getByRole('textbox', { name: '置信度阈值' })
+    await thresholdInput.click()
+    await userEvent.keyboard('{Escape}')
+    expect(onOpenChange).not.toHaveBeenCalled()
+
+    // 失焦后按 Escape 正常关闭
+    ;(thresholdInput.element() as HTMLElement).blur()
+    await userEvent.keyboard('{Escape}')
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('prevents closing via Escape or cancel button while saving', async () => {
+    mockSyncPending = true
+    const onOpenChange = vi.fn()
+    const { getByRole } = await renderDialog({ onOpenChange })
+
+    await userEvent.keyboard('{Escape}')
+    await getByRole('button', { name: '取消' }).click()
+    expect(onOpenChange).not.toHaveBeenCalled()
   })
 })
