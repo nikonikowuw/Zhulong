@@ -1,0 +1,15 @@
+version: 1
+change_id: 2026-11-23-unify-list-page-shell
+mode: full
+base_commit: 0bc6d7e142b50ba3f1a7a677554fb1b1ab6f2211
+created_at: 2026-11-23T04:11:38.753Z
+specs:
+  - frontend/index.md
+  - frontend/theme-and-i18n.md
+  - frontend/development-guidelines.md
+  - frontend/directory-structure.md
+  - frontend/quality-guidelines.md
+rules:
+  - web/frontend-browser-tests
+  - web/frontend-route-boundary
+new_specs: []

@@ -43,7 +43,7 @@ describe('PersonsTable', () => {
   it('renders table headers and person row data', async () => {
     const queryClient = new QueryClient()
 
-    const { getByText, getByRole } = await render(
+    const { getByText, getByRole, container } = await render(
       <QueryClientProvider client={queryClient}>
         <PersonsProvider>
           <PersonsTable
@@ -60,6 +60,13 @@ describe('PersonsTable', () => {
     )
 
     await expect.element(getByRole('table')).toBeInTheDocument()
+    // 表格骨架由 DataTableShell 提供，页面不应再自建容器
+    expect(
+      container.querySelector('[data-slot="data-table-container"]')
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-slot="data-table-toolbar"]')
+    ).not.toBeNull()
     // aria-label 已本地化（规范要求所有可见/可读文本走 i18n）
     await expect
       .element(getByRole('checkbox', { name: /全选本页/i }))

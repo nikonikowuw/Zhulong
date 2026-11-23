@@ -1,4 +1,5 @@
 export { DataTablePagination } from './pagination'
+export { DataTableShell, DataTableToolbarRow } from './shell'
 export { DataTableColumnHeader } from './column-header'
 export { DataTableToolbar } from './toolbar'
 export { DataTableBulkActions } from './bulk-actions'

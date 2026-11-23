@@ -1,12 +1,6 @@
 import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { ConfigDrawer } from '@/components/config-drawer'
-import { LanguageSwitch } from '@/components/language-switch'
-import { Header } from '@/components/layout/header'
-import { Main } from '@/components/layout/main'
-import { ProfileDropdown } from '@/components/profile-dropdown'
-import { Search } from '@/components/search'
-import { ThemeSwitch } from '@/components/theme-switch'
+import { ListPage } from '@/components/list-page'
 import { useAlgorithms } from '@/features/algorithms/contract'
 import { useAllCameras, useCameraEvents } from '@/features/cameras/contract'
 import { TasksComputeBudgetCard } from './components/tasks-compute-budget-card'
@@ -48,31 +42,14 @@ function TasksContent() {
 
   return (
     <>
-      <Header fixed>
-        <Search className='me-auto' />
-        <LanguageSwitch />
-        <ThemeSwitch />
-        <ConfigDrawer />
-        <ProfileDropdown />
-      </Header>
-
-      <Main className='flex flex-1 flex-col gap-4 sm:gap-6'>
-        {/* 页面标题与主操作区 */}
-        <div className='flex flex-wrap items-end justify-between gap-2'>
-          <div className='min-w-0 flex-1'>
-            <h2 className='text-2xl font-bold tracking-tight'>
-              {t('pageTitle', '视频分析任务')}
-            </h2>
-            <p className='max-w-3xl text-sm text-muted-foreground'>
-              {t(
-                'pageDesc',
-                '管理边缘摄像头与算法包的动态业务调度，支持通道级多算法聚合配置与全平台 1,000 点算力预算管控。'
-              )}
-            </p>
-          </div>
-          <TasksPrimaryButtons />
-        </div>
-
+      <ListPage
+        title={t('pageTitle', '视频分析任务')}
+        description={t(
+          'pageDesc',
+          '管理边缘摄像头与算法包的动态业务调度，支持通道级多算法聚合配置与全平台 1,000 点算力预算管控。'
+        )}
+        actions={<TasksPrimaryButtons />}
+      >
         {/* 算力配额全局指示看板：无算法订阅时既无占用也无调度，不占位渲染 */}
         {hasConfiguredTasks && <TasksComputeBudgetCard budget={budget} />}
 
@@ -87,7 +64,7 @@ function TasksContent() {
           search={search}
           navigate={navigate}
         />
-      </Main>
+      </ListPage>
 
       <TasksDialogs />
     </>

@@ -31,51 +31,45 @@
 
 ## 2. 表格与表单落地模式 (Table & Form Patterns)
 
-### 2.1 表格 URL 状态驱动范式
+### 2.1 列表页骨架与 URL 状态驱动范式
 
-```typescript
-// features/camera/components/CameraTable.tsx
-import { useTableUrlState } from '@/hooks/use-table-url-state'
-import {
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-} from '@tanstack/react-table'
+列表页一律由 `ListPage` + `DataTableShell` 组装（槽位契约见 [主题与三语国际化契约 §4.1](./theme-and-i18n.md)）：页面入口只声明标题、描述与顶层操作，表格只声明列、URL 状态与四态插槽。**禁止在入口手拼 `Header` / `Main` / 标题行，也禁止再手写 `DataTablePagination`**——分页由 shell 依据 `totalRows` 自动渲染（0 行不渲染）；已迁移入口的 `Header`/`Main` 导入由 ESLint 封禁。
 
-export function CameraTable({ data, totalCount }: CameraTableProps) {
-  // 分页与筛选双向绑定到 URL
-  const { page, pageSize, search, setPage, setPageSize, setSearch } =
-    useTableUrlState({
-      defaultPage: 1,
-      defaultPageSize: 10,
-    })
+```tsx
+// features/camera/index.tsx —— 入口只负责标题与顶层操作
+return (
+  <ListPage
+    title={t('title')}
+    description={t('description')}
+    actions={<CamerasPrimaryButtons />}
+  >
+    <CamerasTable data={data} isLoading={isLoading} isError={isError} onRetry={refetch} />
+  </ListPage>
+)
 
-  const table = useReactTable({
-    data,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-    manualPagination: true,
-    pageCount: Math.ceil(totalCount / pageSize),
-  })
+// features/camera/components/CameraTable.tsx —— 表格只负责列、URL 状态与四态插槽
+const table = useReactTable({
+  data,
+  columns,
+  getCoreRowModel: getCoreRowModel(),
+  manualPagination: true,
+  pageCount: Math.ceil(totalCount / pageSize),
+})
 
-  // 渲染 @/components/data-table/ 下的通用 toolbar 与 pagination
-  return (
-    <div className='space-y-4'>
-      <DataTableToolbar table={table} search={search} onSearch={setSearch} />
-      <div className='rounded-md border border-border'>
-        <Table>{/* 表格内容 */}</Table>
-      </div>
-      <DataTablePagination
-        table={table}
-        page={page}
-        pageSize={pageSize}
-        onPageChange={setPage}
-        onPageSizeChange={setPageSize}
-      />
-    </div>
-  )
-}
+return (
+  <DataTableShell
+    table={table}
+    toolbar={<DataTableToolbar table={table} search={search} onSearch={setSearch} />}
+    totalRows={totalCount}
+    isLoading={isLoading}
+    isError={isError}
+    errorState={<TableRow>{/* colSpan=列数 的错误态 */}</TableRow>}
+    emptyState={<TableRow>{/* colSpan=列数 的空态与 CTA */}</TableRow>}
+  />
+)
 ```
+
+分页、页码与筛选仍通过 `useTableUrlState` 双向绑定 URL，保证刷新、前进后退与链接分享不丢状态。
 
 ### 2.2 表格 Sticky 列与 Hover 透明穿透避坑规范
 

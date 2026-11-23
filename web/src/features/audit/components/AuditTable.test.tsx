@@ -71,6 +71,13 @@ describe('AuditTable', () => {
     )
 
     await expect.element(getByRole('table')).toBeInTheDocument()
+    // 骨架组件接管容器与工具栏后，容器 token / 工具栏间距不再由本页自行拼装。
+    expect(
+      container.querySelector('[data-slot="data-table-container"]')
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-slot="data-table-toolbar"]')
+    ).not.toBeNull()
     await expect.element(getByText('动作类型')).toBeInTheDocument()
     await expect.element(getByText('状态筛选')).toBeInTheDocument()
     await expect.element(getByText('时间范围')).toBeInTheDocument()

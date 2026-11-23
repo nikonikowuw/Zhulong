@@ -133,6 +133,18 @@ describe('AlgorithmsTable', () => {
     )
   }
 
+  it('renders the shared list shell container and toolbar slots', async () => {
+    const { container } = await renderTable({ data: [] })
+
+    // 容器 token 与工具栏间距由 DataTableShell 统一负责，页面不再自建。
+    expect(
+      container.querySelector('[data-slot="data-table-container"]')
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-slot="data-table-toolbar"]')
+    ).not.toBeNull()
+  })
+
   it('renders empty state when no algorithms exist', async () => {
     mockAlgorithmsData = []
     const { getByText } = await renderTable({ data: [] })

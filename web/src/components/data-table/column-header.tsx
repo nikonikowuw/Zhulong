@@ -29,7 +29,20 @@ export function DataTableColumnHeader<TData, TValue>({
 }: DataTableColumnHeaderProps<TData, TValue>) {
   const { t } = useTranslation()
   if (!column.getCanSort()) {
-    return <div className={cn(className)}>{title}</div>
+    // 与可排序分支同盒模型（h-8 + px-3），文字左内缩才能与 ghost Button 的 px-3 对齐。
+    // 但 px-3 会把表头单元格撑宽 24px，整表随之变宽——在 414px 视口里行中心会落到
+    // 横向滚动容器之外，点行打开详情的命中区就没了。这里用 -mx-3 抵消内边距的占位、
+    // 再用 start-3 做纯视觉右移：排版宽度不变，文字仍落在与可排序列一致的 20px 处。
+    return (
+      <div
+        className={cn(
+          'relative start-3 -mx-3 flex h-8 items-center px-3',
+          className
+        )}
+      >
+        {title}
+      </div>
+    )
   }
 
   return (

@@ -75,7 +75,7 @@ describe('CamerasTable', () => {
   it('renders table, camera rows, and masks RTSP credentials', async () => {
     const queryClient = new QueryClient()
 
-    const { getByText, getByRole } = await render(
+    const { getByText, getByRole, container } = await render(
       <QueryClientProvider client={queryClient}>
         <CamerasProvider>
           <CamerasTable
@@ -90,6 +90,12 @@ describe('CamerasTable', () => {
       </QueryClientProvider>
     )
 
+    expect(
+      container.querySelector('[data-slot="data-table-container"]')
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-slot="data-table-toolbar"]')
+    ).not.toBeNull()
     await expect.element(getByRole('table')).toBeInTheDocument()
     await expect.element(getByText('Front Gate Camera')).toBeInTheDocument()
     await expect.element(getByText('cam_test_01')).toBeInTheDocument()

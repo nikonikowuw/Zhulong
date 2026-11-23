@@ -3,13 +3,7 @@ import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { errorMessageOf } from '@/lib/handle-server-error'
-import { ConfigDrawer } from '@/components/config-drawer'
-import { LanguageSwitch } from '@/components/language-switch'
-import { Header } from '@/components/layout/header'
-import { Main } from '@/components/layout/main'
-import { ProfileDropdown } from '@/components/profile-dropdown'
-import { Search } from '@/components/search'
-import { ThemeSwitch } from '@/components/theme-switch'
+import { ListPage } from '@/components/list-page'
 import { PersonsDialogs } from './components/persons-dialogs'
 import { PersonsPrimaryButtons } from './components/persons-primary-buttons'
 import {
@@ -165,26 +159,13 @@ function PersonsContent() {
 
   return (
     <>
-      <Header fixed>
-        <Search className='me-auto' />
-        <LanguageSwitch />
-        <ThemeSwitch />
-        <ConfigDrawer />
-        <ProfileDropdown />
-      </Header>
-
-      <Main className='flex flex-1 flex-col gap-4 sm:gap-6'>
-        {/* 页面标题与主操作区 */}
-        <div className='flex flex-wrap items-end justify-between gap-2'>
-          <div className='min-w-0 flex-1'>
-            <h2 className='text-2xl font-bold tracking-tight'>{t('title')}</h2>
-            <p className='max-w-3xl text-sm text-muted-foreground'>
-              {t('description')}
-            </p>
-          </div>
+      <ListPage
+        title={t('title')}
+        description={t('description')}
+        actions={
           <PersonsPrimaryButtons search={searchQuery} faceStatus={faceStatus} />
-        </div>
-
+        }
+      >
         {/* 核心数据表格。翻页时 `placeholderData` 会继续显示上一页，若不给任何
             信号，用户会以为点击没生效 —— 用降低不透明度做弱提示。 */}
         <div
@@ -205,7 +186,7 @@ function PersonsContent() {
             navigate={navigate}
           />
         </div>
-      </Main>
+      </ListPage>
 
       <PersonsUrlSync personId={search.personId} navigate={navigate} />
       <PersonsReextractResume />
