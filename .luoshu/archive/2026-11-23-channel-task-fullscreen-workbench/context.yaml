@@ -1,0 +1,14 @@
+version: 1
+change_id: 2026-11-23-channel-task-fullscreen-workbench
+mode: full
+base_commit: 35fedae2e9628ae2f6f02687c1fa59f45c56d613
+created_at: 2026-11-23T03:26:29.000Z
+specs:
+  - frontend/index.md
+  - frontend/development-guidelines.md
+  - frontend/quality-guidelines.md
+rules:
+  - web/frontend-api-boundary
+  - web/frontend-browser-tests
+  - web/frontend-route-boundary
+new_specs: []

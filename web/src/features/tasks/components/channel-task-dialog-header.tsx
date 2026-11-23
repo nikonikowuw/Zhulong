@@ -5,11 +5,6 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -50,11 +45,16 @@ export interface ChannelTaskSwitchConfig {
   onAutoEnableChange: (autoEnable: boolean) => void
 }
 
+export const CHANNEL_TASK_WORKBENCH_TITLE_ID = 'channel-task-workbench-title'
+export const CHANNEL_TASK_WORKBENCH_DESC_ID = 'channel-task-workbench-desc'
+
 export interface ChannelTaskDialogHeaderProps {
   camera: ChannelTaskCameraConfig
   budget: ChannelTaskBudgetConfig
   switches: ChannelTaskSwitchConfig
   onClose?: () => void
+  titleId?: string
+  descriptionId?: string
 }
 
 /** 顶部控制条：通道标识、算力占用、通道总开关与自动激活选项。 */
@@ -63,6 +63,8 @@ export function ChannelTaskDialogHeader({
   budget,
   switches,
   onClose,
+  titleId = CHANNEL_TASK_WORKBENCH_TITLE_ID,
+  descriptionId = CHANNEL_TASK_WORKBENCH_DESC_ID,
 }: ChannelTaskDialogHeaderProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
   const { cameraId, cameras, fixedCameraName, isCameraOnline, onCameraChange } =
@@ -78,7 +80,7 @@ export function ChannelTaskDialogHeader({
   const selectedCamera = cameras.find((item) => item.id === cameraId)
 
   return (
-    <DialogHeader className='shrink-0 border-b border-border bg-card px-4 py-3 text-start sm:px-6 sm:py-3.5'>
+    <header className='flex shrink-0 flex-col gap-2 border-b border-border bg-card px-4 py-3 text-start sm:px-6 sm:py-3.5'>
       <div className='flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5'>
         <div className='flex min-w-0 items-center gap-3'>
           <div className='flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/60 text-muted-foreground'>
@@ -86,15 +88,18 @@ export function ChannelTaskDialogHeader({
           </div>
           <div className='flex min-w-0 flex-col gap-0.5'>
             <div className='flex flex-wrap items-center gap-2'>
-              <DialogTitle className='text-sm font-semibold text-foreground'>
+              <h2
+                id={titleId}
+                className='text-sm font-semibold text-foreground'
+              >
                 {t('dialog.title', '配置通道算法任务')}
-              </DialogTitle>
-              <DialogDescription className='sr-only'>
+              </h2>
+              <p id={descriptionId} className='sr-only'>
                 {t(
                   'dialog.desc',
                   '为摄像头选择并发执行的算法包，独立设置采样帧率与运行参数。'
                 )}
-              </DialogDescription>
+              </p>
               {selectedCamera && (
                 <Badge
                   variant='outline'
@@ -222,6 +227,6 @@ export function ChannelTaskDialogHeader({
           )}
         </div>
       </div>
-    </DialogHeader>
+    </header>
   )
 }

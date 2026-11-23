@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
-import { DialogFooter } from '@/components/ui/dialog'
 
 export interface ChannelTaskDialogFooterProps {
   /** 预算超限或缺少摄像头时为 false。 */
@@ -20,7 +19,7 @@ export function ChannelTaskDialogFooter({
   const { t } = useTranslation('tasks')
 
   return (
-    <DialogFooter className='flex shrink-0 items-center justify-end gap-2 border-t border-border bg-card px-6 py-3'>
+    <footer className='flex shrink-0 items-center justify-end gap-2 border-t border-border bg-card px-6 py-3'>
       <Button
         type='button'
         variant='outline'
@@ -42,6 +41,6 @@ export function ChannelTaskDialogFooter({
           ? t('dialog.saving', '下发同步中...')
           : t('dialog.save', '保存并下发调度')}
       </Button>
-    </DialogFooter>
+    </footer>
   )
 }
