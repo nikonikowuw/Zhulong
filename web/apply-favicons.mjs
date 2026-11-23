@@ -7,25 +7,35 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const imagesDir = path.join(__dirname, 'public/images');
 const publicDir = path.join(__dirname, 'public');
 
-const Z_PATH = 'M 14 14 H 50 L 14 50 H 50';
-const NODE_PATH = 'M 28 28 H 36 V 36 H 28 Z';
+const RING_PATH = 'M 27 10 C 41 8 54 18 54 32 C 54 44.5 44 54 32 54 C 19.5 54 10 44 10 32 C 10 24 14.5 17 21 13';
+const HORN_PATH = 'M 27 10 C 23 10 19 6.5 17 4 C 18 8.5 16 12 13 14 C 17.5 14 21.5 12.5 24 10.5 Z';
 
 export function getSvgZ(mode = 'light') {
   const isDark = mode === 'dark';
-  const ink = isDark ? '#F1E9DA' : '#1D2B2E';
-  const signal = isDark ? '#FF7655' : '#C44536';
+  const ink = isDark ? '#F8FAFC' : '#0F172A';
+  const signal = isDark ? '#FF2A54' : '#E11D48';
+  const voidBg = isDark ? '#090D16' : '#FFFFFF';
+  const voidBorder = isDark ? 'rgba(255,255,255,0.25)' : '#CBD5E1';
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <path d="${Z_PATH}" stroke="${ink}" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"/>
-  <path d="${NODE_PATH}" fill="${signal}"/>
+  <path d="${RING_PATH}" stroke="${ink}" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="${HORN_PATH}" fill="${signal}"/>
+  <circle cx="21" cy="13" r="2.25" fill="${ink}"/>
+  <circle cx="32" cy="32" r="8.5" fill="${voidBg}" stroke="${voidBorder}" stroke-width="1.5"/>
+  <circle cx="32" cy="32" r="5" fill="${signal}"/>
+  <circle cx="33.8" cy="30.2" r="1.3" fill="#FFFFFF"/>
 </svg>`;
 }
 
 export function getSvgZAppIcon() {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect width="64" height="64" fill="#161B1D"/>
-  <path d="${Z_PATH}" stroke="#F1E9DA" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"/>
-  <path d="${NODE_PATH}" fill="#FF7655"/>
+  <rect width="64" height="64" fill="#090D16"/>
+  <path d="${RING_PATH}" stroke="#FFFFFF" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="${HORN_PATH}" fill="#FF2A54"/>
+  <circle cx="21" cy="13" r="2.25" fill="#FFFFFF"/>
+  <circle cx="32" cy="32" r="8.5" fill="#090D16" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+  <circle cx="32" cy="32" r="5" fill="#FF2A54"/>
+  <circle cx="33.8" cy="30.2" r="1.3" fill="#FFFFFF"/>
 </svg>`;
 }
 

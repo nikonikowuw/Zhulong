@@ -16,15 +16,15 @@ interface TerrainPalettes {
 
 /**
  * 与 `src/styles/theme.css` 中的 OKLCH 语义色对齐的双模色板：
- * - 暗色模式：深海玄青底上浮现冷银山脊，点缀 `--brand-signal` 朱砂信号橙脉动
- * - 浅色模式：宣纸白底上的青灰等高线版画，保留克制的朱砂橙高程亮点
+ * - 暗色模式：深海玄青底上浮现冷银山脊，点缀 `--brand-signal` 激光赤曜红脉动
+ * - 浅色模式：宣纸白底上的青灰等高线版画，保留克制的激光赤红高程亮点
  */
 export const TERRAIN_PALETTES: TerrainPalettes = {
   dark: {
     valley: '#162544',
     mid: '#3f6496',
     crest: '#dbeafe',
-    signal: '#ff7846',
+    signal: '#FF2A54',
     mote: '#cbd5e1',
     lineOpacity: 0.42,
     particleOpacity: 0.86,
@@ -34,7 +34,7 @@ export const TERRAIN_PALETTES: TerrainPalettes = {
     valley: '#cbd5e1',
     mid: '#64748b',
     crest: '#1e293b',
-    signal: '#d9532c',
+    signal: '#E11D48',
     mote: '#94a3b8',
     lineOpacity: 0.28,
     particleOpacity: 0.66,
