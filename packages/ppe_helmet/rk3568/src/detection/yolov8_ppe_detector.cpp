@@ -9,7 +9,7 @@ namespace zhulong::ppe {
 namespace {
 
 constexpr char kModule[] = "ppe_helmet";
-constexpr float kInv255 = 1.0f / 255.0f;
+constexpr int64_t kRegChannels = 4 * kDflBins; // 68 (reg_max=16 -> 17 bins * 4 sides)
 
 bool image_usable(const zhulong_frame_view& raw) noexcept {
     return raw.width > 0 && raw.height > 0 && raw.planes[0] != nullptr;
@@ -53,14 +53,14 @@ std::string describe_outputs(const std::vector<zhulong::Tensor>& outputs) {
 }
 
 #if !defined(ZHULONG_INFERENCE_RKNN)
-/** @brief HWC RGB24 UINT8 -> NCHW FLOAT32（/255），供 ONNX 档使用 */
-void hwc_to_nchw_normalized(const uint8_t* source, float* destination) {
+/** @brief HWC RGB24 UINT8 -> NCHW FLOAT32（保持 [0, 255] 量纲，DAMO-YOLO 不除 255），供 ONNX 档使用 */
+void hwc_to_nchw_rgb(const uint8_t* source, float* destination) {
     const size_t pixel_count = static_cast<size_t>(kPpeModelWidth) * kPpeModelHeight;
     for (size_t pixel = 0; pixel < pixel_count; ++pixel) {
         const size_t base = pixel * 3;
-        destination[pixel] = static_cast<float>(source[base]) * kInv255;
-        destination[pixel_count + pixel] = static_cast<float>(source[base + 1]) * kInv255;
-        destination[pixel_count * 2 + pixel] = static_cast<float>(source[base + 2]) * kInv255;
+        destination[pixel] = static_cast<float>(source[base]);
+        destination[pixel_count + pixel] = static_cast<float>(source[base + 1]);
+        destination[pixel_count * 2 + pixel] = static_cast<float>(source[base + 2]);
     }
 }
 #endif
@@ -70,7 +70,7 @@ void hwc_to_nchw_normalized(const uint8_t* source, float* destination) {
 PpeDetectorWorkspace::PpeDetectorWorkspace()
     : letterboxed_({kPpeModelHeight, kPpeModelWidth, 3}, zhulong::DataType::UINT8) {
 #if defined(ZHULONG_INFERENCE_RKNN)
-    // RKNN 模型内嵌 mean=0/std=255，直接喂原始 RGB uint8 NHWC；量化/归一化由 NPU 完成。
+    // RKNN 模型内嵌 mean=0/std=1，直接喂原始 RGB uint8 NHWC（[0, 255]）；量化由 NPU 完成。
     inputs_.emplace_back(std::vector<int64_t>{1, kPpeModelHeight, kPpeModelWidth, 3},
                          zhulong::DataType::UINT8);
 #else
@@ -144,8 +144,8 @@ const std::vector<zhulong::Detection>& Yolov8PpeDetector::detect(
     }
 
 #if !defined(ZHULONG_INFERENCE_RKNN)
-    hwc_to_nchw_normalized(workspace.letterboxed_tensor().data<uint8_t>(),
-                           workspace.model_input().data<float>());
+    hwc_to_nchw_rgb(workspace.letterboxed_tensor().data<uint8_t>(),
+                    workspace.model_input().data<float>());
 #endif
 
     const std::vector<zhulong::Tensor> outputs = session.forward(workspace.model_inputs());
@@ -161,7 +161,7 @@ const std::vector<zhulong::Detection>& Yolov8PpeDetector::detect(
     for (const int stride : kPpeStrides) {
         const int grid_h = kPpeModelHeight / stride;
         const int grid_w = kPpeModelWidth / stride;
-        const zhulong::Tensor* box_output = find_output(outputs, 64, grid_h, grid_w);
+        const zhulong::Tensor* box_output = find_output(outputs, kRegChannels, grid_h, grid_w);
         const zhulong::Tensor* score_output = find_output(outputs, kClassCount, grid_h, grid_w);
         if (box_output == nullptr || score_output == nullptr) {
             if (workspace.should_report_layout_mismatch()) {

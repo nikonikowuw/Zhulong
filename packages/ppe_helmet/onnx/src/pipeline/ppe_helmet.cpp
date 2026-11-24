@@ -131,7 +131,7 @@ std::vector<zhulong::Detection> PpeHelmetPlugin::detect(zhulong::Session& sessio
     const std::vector<zhulong::Detection>& detections =
         detector_.detect(session, image, config.score_threshold, config.nms_threshold,
                          workspace.detector);
-    associate_helmets(detections, config.min_person_height_ratio, workspace.decisions);
+    associate_helmets(detections, config.min_head_height_ratio, workspace.decisions);
     std::vector<zhulong::Detection> results =
         tracker_.confirm(task_context.task_id, workspace.decisions, config.confirm_frames);
 
@@ -142,7 +142,7 @@ std::vector<zhulong::Detection> PpeHelmetPlugin::detect(zhulong::Session& sessio
             }
             zhulong::Detection detection;
             copy_box(detection.box, decision.box);
-            detection.confidence = std::min(decision.person_score, decision.head_score);
+            detection.confidence = decision.score;
             detection.class_id = kClassHeadHelmet;
             detection.label = "helmet";
             results.push_back(std::move(detection));

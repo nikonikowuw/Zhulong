@@ -17,12 +17,12 @@
 
 namespace zhulong::ppe {
 
-/** @brief 默认检测置信度阈值（person / head_helmet / head_nohelmet 共用） */
-inline constexpr float kDefaultScoreThreshold = 0.25f;
+/** @brief 默认检测置信度阈值（head_helmet / head_nohelmet 共用） */
+inline constexpr float kDefaultScoreThreshold = 0.40f;
 /** @brief 默认 NMS IoU 阈值 */
-inline constexpr float kDefaultNmsThreshold = 0.45f;
-/** @brief 默认参与安全帽研判的人体最小高度（归一化，相对画面高度） */
-inline constexpr float kDefaultMinPersonHeightRatio = 0.08f;
+inline constexpr float kDefaultNmsThreshold = 0.50f;
+/** @brief 默认参与安全帽研判的头部最小高度（归一化，相对画面高度） */
+inline constexpr float kDefaultMinHeadHeightRatio = 0.02f;
 /** @brief 默认是否上报合规人员（调试/画框用，不产生告警） */
 inline constexpr bool kDefaultReportCompliant = false;
 /** @brief 默认连续确认帧数：单帧 head_nohelmet 可能来自侧脸/逆光，两帧更稳 */
@@ -37,8 +37,8 @@ inline constexpr float kMinScoreThreshold = 0.05f;
 inline constexpr float kMaxScoreThreshold = 0.95f;
 inline constexpr float kMinNmsThreshold = 0.10f;
 inline constexpr float kMaxNmsThreshold = 0.90f;
-inline constexpr float kMinMinPersonHeightRatio = 0.02f;
-inline constexpr float kMaxMinPersonHeightRatio = 0.50f;
+inline constexpr float kMinMinHeadHeightRatio = 0.005f;
+inline constexpr float kMaxMinHeadHeightRatio = 0.50f;
 inline constexpr int kMinConfirmFrames = 1;
 inline constexpr int kMaxConfirmFrames = 10;
 
@@ -48,7 +48,7 @@ inline constexpr int kMaxConfirmFrames = 10;
 struct PpeConfig {
     float score_threshold{kDefaultScoreThreshold};
     float nms_threshold{kDefaultNmsThreshold};
-    float min_person_height_ratio{kDefaultMinPersonHeightRatio};
+    float min_head_height_ratio{kDefaultMinHeadHeightRatio};
     bool report_compliant{kDefaultReportCompliant};
     int confirm_frames{kDefaultConfirmFrames};
 };
@@ -190,9 +190,9 @@ inline PpeConfig resolve_ppe_config(std::string_view json_view, const PpeConfig&
         num_val >= kMinNmsThreshold && num_val <= kMaxNmsThreshold) {
         config.nms_threshold = static_cast<float>(num_val);
     }
-    if (find_json_number(json, "min_person_height_ratio", num_val) &&
-        num_val >= kMinMinPersonHeightRatio && num_val <= kMaxMinPersonHeightRatio) {
-        config.min_person_height_ratio = static_cast<float>(num_val);
+    if (find_json_number(json, "min_head_height_ratio", num_val) &&
+        num_val >= kMinMinHeadHeightRatio && num_val <= kMaxMinHeadHeightRatio) {
+        config.min_head_height_ratio = static_cast<float>(num_val);
     }
     if (find_json_number(json, "confirm_frames", num_val) &&
         num_val >= static_cast<double>(kMinConfirmFrames) &&

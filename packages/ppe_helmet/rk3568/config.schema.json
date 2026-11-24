@@ -7,27 +7,27 @@
       "type": "number",
       "minimum": 0.05,
       "maximum": 0.95,
-      "default": 0.25,
-      "description": "人体与头部检测的置信度阈值，越低越容易召回远景人员，代价是误检增多"
+      "default": 0.4,
+      "description": "头部安全帽检测的置信度阈值，越低越容易召回远景目标，代价是误检增多"
     },
     "nms_threshold": {
       "type": "number",
       "minimum": 0.1,
       "maximum": 0.9,
-      "default": 0.45,
+      "default": 0.5,
       "description": "同类检测框的非极大值抑制 IoU 阈值"
     },
-    "min_person_height_ratio": {
+    "min_head_height_ratio": {
       "type": "number",
-      "minimum": 0.02,
+      "minimum": 0.005,
       "maximum": 0.5,
-      "default": 0.08,
-      "description": "参与安全帽研判的人体最小高度（占画面高度的比例），过滤远景过小人员"
+      "default": 0.02,
+      "description": "参与安全帽研判的头部最小高度（占画面高度的比例），过滤远景过小目标"
     },
     "report_compliant": {
       "type": "boolean",
       "default": false,
-      "description": "是否同时上报已正确佩戴安全帽的人员框（用于调试与画框，不产生告警）"
+      "description": "是否同时上报已正确佩戴安全帽的头部框（用于调试与画框，不产生告警）"
     },
     "confirm_frames": {
       "type": "integer",

@@ -1,8 +1,8 @@
 /**
  * @file yolov8_ppe_detector.hpp
- * @brief YOLOv8 安全帽检测器：letterbox + 后端推理 + 输出布局校验 + 解码
+ * @brief DAMO-YOLO-S 安全帽检测器：letterbox + 后端推理 + 输出布局校验 + 解码
  *
- * 输入尺寸在编译期固定为 640x384（两档权重都是该尺寸）；这里不开放运行期尺寸，
+ * 输入尺寸在编译期固定为 512x288（两档权重都是该尺寸）；这里不开放运行期尺寸，
  * 避免「配置改了但权重没换」导致的静默零检出。
  */
 
@@ -18,8 +18,8 @@
 
 namespace zhulong::ppe {
 
-inline constexpr int kPpeModelWidth = 640;
-inline constexpr int kPpeModelHeight = 384;
+inline constexpr int kPpeModelWidth = 512;
+inline constexpr int kPpeModelHeight = 288;
 /** @brief FPN 输出尺度（模型固定三个，输出张量数 = 尺度数 × 2 个头） */
 inline constexpr std::array<int, 3> kPpeStrides{8, 16, 32};
 

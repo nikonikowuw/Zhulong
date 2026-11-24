@@ -19,7 +19,7 @@ namespace {
 zhulong::Detection make_confirmed(const HelmetDecision& decision) {
     zhulong::Detection detection;
     copy_box(detection.box, decision.box);
-    detection.confidence = std::min(decision.person_score, decision.head_score);
+    detection.confidence = decision.score;
     detection.class_id = kClassHeadNoHelmet;
     detection.label = "no_helmet";
     return detection;

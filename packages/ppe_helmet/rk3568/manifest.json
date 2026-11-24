@@ -1,8 +1,8 @@
 {
   "id": "ppe_helmet",
   "name": "安全帽穿戴检测算法",
-  "version": "1.0.0",
-  "description": "基于 YOLOv8n-PPE 的人体与头部联合检测，输出未佩戴安全帽人员的人体框；可选上报合规人员",
+  "version": "1.1.0",
+  "description": "基于 DAMO-YOLO-S（512×288）的头部安全帽检测，输出未佩戴安全帽人员的头部框；可选上报合规人员",
   "task_type": "detection",
   "category": "safety",
   "platform": {

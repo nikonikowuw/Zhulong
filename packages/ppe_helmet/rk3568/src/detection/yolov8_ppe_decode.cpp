@@ -9,14 +9,7 @@
 namespace zhulong::ppe {
 namespace {
 
-/** @brief DFL 每个方向的分箱数（64 通道 ÷ 4 边） */
-constexpr int kDflBins = 16;
-
-float sigmoid(float value) noexcept {
-    return 1.0f / (1.0f + std::exp(-value));
-}
-
-/** @brief 对 16 个 DFL logits 做 softmax 期望，得到该方向到框边的离散距离 */
+/** @brief 对 17 个 DFL logits 做 softmax 期望，得到该方向到框边的离散距离 */
 float dfl_expectation(const float* logits, int count) noexcept {
     float max_logit = logits[0];
     for (int k = 1; k < count; ++k) {
@@ -38,7 +31,6 @@ const char* ppe_class_label(int32_t class_id) noexcept {
     switch (class_id) {
         case kClassHeadHelmet: return "head_helmet";
         case kClassHeadNoHelmet: return "head_nohelmet";
-        case kClassPerson: return "person";
         default: return "object";
     }
 }
@@ -71,29 +63,21 @@ void decode_yolov8_ppe(const std::vector<Yolov8PpeHeadView>& heads,
                 const size_t anchor = static_cast<size_t>(row) * static_cast<size_t>(head.grid_w) +
                                       static_cast<size_t>(col);
 
-                // 单标签解码：先取 17 类最大 logit，只有赢家属于目标三类才继续。
-                // 否则一个 anchor 会同时吐出 person 和同位置的 head 框，平白增加关联歧义。
+                // DAMO-YOLO ZeroHead 导出头 cls_* 已经过 sigmoid，直接取两类最大概率。
                 int32_t best_class = 0;
-                float best_logit = head.score[anchor];
+                float best_score = head.score[anchor];
                 for (int32_t class_id = 1; class_id < kClassCount; ++class_id) {
-                    const float logit =
+                    const float candidate_score =
                         head.score[static_cast<size_t>(class_id) * plane + anchor];
-                    if (logit > best_logit) {
-                        best_logit = logit;
+                    if (candidate_score > best_score) {
+                        best_score = candidate_score;
                         best_class = class_id;
                     }
                 }
-                if (best_class != kClassPerson && best_class != kClassHeadHelmet &&
-                    best_class != kClassHeadNoHelmet) {
+                if (!std::isfinite(best_score) || best_score < score_threshold) {
                     continue;
                 }
-                if (!std::isfinite(best_logit)) {
-                    continue;
-                }
-                const float score = sigmoid(best_logit);
-                if (score < score_threshold) {
-                    continue;
-                }
+                const float score = best_score;
 
                 float dfl[4] = {0.0f, 0.0f, 0.0f, 0.0f};
                 bool finite_dfl = true;
@@ -112,9 +96,9 @@ void decode_yolov8_ppe(const std::vector<Yolov8PpeHeadView>& heads,
                     continue;
                 }
 
-                // 与 python demo 一致：stride_w / stride_h 独立计算，不能用模型高/宽混算。
-                const float center_x = static_cast<float>(col) + 0.5f;
-                const float center_y = static_cast<float>(row) + 0.5f;
+                // DAMO-YOLO ZeroHead 直接以网格点 (col, row) * stride 为锚点（无 +0.5 偏移）。
+                const float center_x = static_cast<float>(col);
+                const float center_y = static_cast<float>(row);
                 float x1 = (center_x - dfl[0]) * static_cast<float>(head.stride_w);
                 float y1 = (center_y - dfl[1]) * static_cast<float>(head.stride_h);
                 float x2 = (center_x + dfl[2]) * static_cast<float>(head.stride_w);

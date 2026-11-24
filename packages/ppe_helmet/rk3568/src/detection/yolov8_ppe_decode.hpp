@@ -1,12 +1,11 @@
 /**
  * @file yolov8_ppe_decode.hpp
- * @brief YOLOv8 安全帽模型输出解码（DFL + 按类 NMS），不依赖任何推理后端
+ * @brief DAMO-YOLO-S 安全帽模型输出解码（DFL + 按类 NMS），不依赖任何推理后端
  *
- * 模型为 YOLOv8n，输入 640x384（NCHW），三个 FPN 尺度（stride 8/16/32）各一对输出：
- *   box_{s}   [1, 64, H/stride, W/stride]  4 边 × 16 bin 的 DFL logits
- *   score_{s} [1, 17, H/stride, W/stride]  17 类 logits（模型内**无** sigmoid）
- * 只保留 person / head_helmet / head_nohelmet 三类；NMS 必须按 class_id 分组，
- * 否则 person 框会把框内的头部框抑制掉。
+ * 模型为 DAMO-YOLO-S（safety-helmet），输入 512x288（NCHW），三个 FPN 尺度（stride 8/16/32）各一对输出：
+ *   reg_{s} [1, 68, H/stride, W/stride]  4 边 × 17 bin（reg_max=16）的 DFL logits
+ *   cls_{s} [1,  2, H/stride, W/stride]  2 类概率（模型内**已** sigmoid）
+ * 类别 0 为 head_helmet（safety hat），类别 1 为 head_nohelmet（no safety hat）。
  */
 
 #pragma once
@@ -19,12 +18,13 @@
 
 namespace zhulong::ppe {
 
-/** @brief 模型类别 ID（0..16 顺序见 ppe_labels_list.txt） */
-inline constexpr int32_t kClassHeadHelmet = 12;
-inline constexpr int32_t kClassHeadNoHelmet = 13;
-inline constexpr int32_t kClassPerson = 14;
-/** @brief 模型类别总数（score 张量的通道数） */
-inline constexpr int32_t kClassCount = 17;
+/** @brief 模型类别 ID（0=safety hat, 1=no safety hat） */
+inline constexpr int32_t kClassHeadHelmet = 0;
+inline constexpr int32_t kClassHeadNoHelmet = 1;
+/** @brief 模型类别总数（cls 张量的通道数） */
+inline constexpr int32_t kClassCount = 2;
+/** @brief DFL 每个方向的分箱数（reg_max + 1 = 17，68 通道 ÷ 4 边） */
+inline constexpr int kDflBins = 17;
 
 /** @brief 候选上限：避免异常模型输出把内存顶穿，超出后按置信度截断 */
 inline constexpr size_t kPpeMaxCandidates = 2048;

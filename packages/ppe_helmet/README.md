@@ -1,22 +1,17 @@
 # ppe_helmet — 安全帽穿戴检测算法包
 
-本包基于 YOLOv8n-PPE，检测画面中的 `person`、`head_helmet`、`head_nohelmet`，
-按人体框与头部框的几何关系判断每位人员是否正确佩戴安全帽，默认只输出未佩戴人员的**人体框**。
+本包基于 **DAMO-YOLO-S**（`iic/cv_tinynas_object-detection_damoyolo_safety-helmet`），检测画面中的头部目标 `head_helmet`（`safety hat`）与 `head_nohelmet`（`no safety hat`），直接输出未佩戴安全帽人员的**头部框**。
 一个包同时提供 `onnx`（x86_64）与 `rk3568`（aarch64 + RKNN/RGA）两档，不含任何宿主代码改动。
 
 ## 1. 输出语义
 
 | 标签 | class_id | 何时输出 | 宿主行为 |
 | --- | --- | --- | --- |
-| `no_helmet` | 13 | 人员关联到 `head_nohelmet`，且连续 `confirm_frames` 帧确认 | 命中 `alarmKeywords`，产生告警抓拍 |
-| `helmet` | 12 | 仅 `report_compliant=true` 时，人员关联到 `head_helmet` | 命中 `nonAlarmExactLabels`，只抓拍、不告警 |
+| `no_helmet` | 1 | 检测到 `head_nohelmet`，且连续 `confirm_frames` 帧确认 | 命中 `alarmKeywords`，产生告警抓拍 |
+| `helmet` | 0 | 仅 `report_compliant=true` 时，检测到 `head_helmet` | 命中 `nonAlarmExactLabels`，只抓拍、不告警 |
 
-- 框是**完整人体框**，不是头部框；告警裁剪图里能直接看到人员全身。
-- `confidence = min(person_score, head_score)`，避免“人头很确定、人体很虚”时分数虚高。
-- 人员没有可关联的头框（遮挡、背身、只露出半身）时视为 `unknown`：不输出，也不告警，
-  避免把“没看到头”误判成“没戴帽”。
-- 同一人员同时关联到 helmet 与 nohelmet 头框时，取分数高者；平票（分数差 ≤ 1e-4）按
-  `no_helmet`（安全侧）。
+- 框是**头部框**（DAMO-YOLO-S 仅检测头部，不依赖人体框）。
+- 同一头部（IoU ≥ 0.50）同时命中 `head_helmet` 与 `head_nohelmet` 时，取分数高者；平票（分数差 ≤ 1e-4）按 `no_helmet`（安全侧）。
 - 每个 `task_id` 独立做 IoU 跟踪；违规连续 `confirm_frames` 帧才上报，合规帧清零。
 - `helmet` **不走**上述时序确认：本帧有头部证据就输出一次，宿主侧若要按人去重需自行处理。
 
@@ -27,13 +22,13 @@
 
 | 项 | 值 |
 | --- | --- |
-| 检测器 | YOLOv8n-PPE，17 类，单标签 argmax |
-| 本包只消费 | `head_helmet`(12)、`head_nohelmet`(13)、`person`(14) |
-| 输入 | RGB，640×384，letterbox 补边 114 |
-| 输出头 | `box_8/score_8`、`box_16/score_16`、`box_32/score_32` |
-| 解码 | 每类取最大 logit → sigmoid → 阈值；DFL 每边 16 bin softmax 期望 |
-| NMS | 按 `class_id` 分组，IoU 0.45（不能直接用 SDK 的全局 NMS） |
-| 权重 | `models/ppe_helmet.onnx`（12 MB）/ `models/ppe_helmet.rknn`（4.1 MB，INT8） |
+| 检测器 | DAMO-YOLO-S（`TinyNAS_res` + `GiraffeNeckV2` + `ZeroHead`），2 类 |
+| 类别 | `head_helmet`(0, `safety hat`)、`head_nohelmet`(1, `no safety hat`) |
+| 输入 | RGB，512×288，保持 `[0, 255]` 量纲（不除 255），letterbox 补边 114 |
+| 输出头 | `cls_8/reg_8`、`cls_16/reg_16`、`cls_32/reg_32` |
+| 解码 | `cls_*` 为模型内已 sigmoid 概率；`reg_*` 为 17 bin（`reg_max=16`）DFL softmax 期望，锚点无 `+0.5` 偏移 |
+| NMS | 按 `class_id` 分组，IoU 0.50 |
+| 权重 | `models/ppe_helmet.onnx` / `models/ppe_helmet.rknn`（INT8） |
 
 上游模型在 Roboflow `PPE Detection v3`（23000+ 图，10 epochs）上报告 mAP50 0.735，
 其中 `head_helmet` 0.866、`vest` 0.935；本包不使用 vest/gloves/mask 等类别。
@@ -48,10 +43,10 @@ RKNN 档量化校准集包含 `ppe.jpg` 与 19 张 COCO 图，`score_*` 的 INT8
 
 | 键 | 默认 | 范围 | 说明 |
 | --- | --- | --- | --- |
-| `score_threshold` | 0.25 | 0.05–0.95 | person/head 的 sigmoid 置信度阈值 |
-| `nms_threshold` | 0.45 | 0.10–0.90 | 同类 NMS 的 IoU 阈值 |
-| `min_person_height_ratio` | 0.08 | 0.02–0.50 | 小于画面高度该比例的人员不参与研判 |
-| `report_compliant` | `false` | bool | 是否额外输出 `helmet` 人员框（调试/画框用） |
+| `score_threshold` | 0.40 | 0.05–0.95 | `head_helmet` / `head_nohelmet` 置信度阈值 |
+| `nms_threshold` | 0.50 | 0.10–0.90 | 同类 NMS 的 IoU 阈值 |
+| `min_head_height_ratio` | 0.02 | 0.005–0.50 | 小于画面高度该比例的头部不参与研判 |
+| `report_compliant` | `false` | bool | 是否额外输出 `helmet` 头部框（调试/画框用） |
 | `confirm_frames` | 2 | 1–10 | 违规连续确认帧数；单帧侧脸/逆光容易误报 |
 
 - 进程级 `--config '<json>'` 设置默认值；任务级 `params.json` 按 `task_id` 覆盖。
