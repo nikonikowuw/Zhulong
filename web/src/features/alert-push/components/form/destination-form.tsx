@@ -20,6 +20,7 @@ import { alertPushApi } from '../../api/alert-push-api'
 import {
   areHeadersUntouched,
   createAlertDestinationFormSchema,
+  INLINE_MAX_KB_DEFAULT,
   type AlertDestinationFormValues,
   type HeaderEntry,
 } from '../../data/schema'
@@ -158,6 +159,9 @@ export function DestinationForm({
       qos: (isMqtt ? destination.config.qos : 0) ?? 0,
       keepAliveSeconds:
         (isMqtt ? destination.config.keepAliveSeconds : 30) || 30,
+      inlineMaxKb:
+        (isMqtt ? destination.config.inlineMaxKb : INLINE_MAX_KB_DEFAULT) ||
+        INLINE_MAX_KB_DEFAULT,
       mqttUser: (isMqtt ? destination.config.username : '') || '',
       mqttPass: '',
       tlsSkipVerify:
@@ -207,6 +211,9 @@ export function DestinationForm({
       qos: values.qos,
       keepAliveSeconds: values.keepAliveSeconds,
       tlsSkipVerify: values.tlsSkipVerify,
+      // 仅 base64 模式提交；其它模式不改动已保存的预算
+      inlineMaxKb:
+        values.imageMode === 'base64' ? values.inlineMaxKb : undefined,
       heartbeatIntervalSeconds: values.heartbeatIntervalSeconds,
     }
   }

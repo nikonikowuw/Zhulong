@@ -6,13 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"mime"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -112,7 +109,7 @@ func TestWebhookSenderURLMode(t *testing.T) {
 		CapturedAt: time.Now().UTC(),
 	}
 
-	if err := sender.Send(context.Background(), ev); err != nil {
+	if err := sender.Send(context.Background(), Delivery{Event: ev}); err != nil {
 		t.Fatalf("Send failed: %v", err)
 	}
 
@@ -123,111 +120,34 @@ func TestWebhookSenderURLMode(t *testing.T) {
 		t.Errorf("expected val-123, got %q", receivedCustom)
 	}
 
-	var payload AlarmPayload
+	var payload EventPayload
 	if err := json.Unmarshal(receivedBody, &payload); err != nil {
 		t.Fatalf("unmarshal received body: %v", err)
 	}
-	if !payload.ImageReady || payload.ImageURL == nil || payload.CropURL == nil {
-		t.Fatalf("expected both URLs populated, got ImageReady=%v, ImageURL=%v, CropURL=%v",
-			payload.ImageReady, payload.ImageURL, payload.CropURL)
+	if len(payload.Images) != 2 || payload.Images[0].Role != ImageRoleScene ||
+		payload.Images[1].Role != ImageRoleObject {
+		t.Fatalf("expected scene+object images, got %+v", payload.Images)
 	}
-	if payload.DeviceID != "site-a-gate-01" {
-		t.Fatalf("expected device_id site-a-gate-01, got %q", payload.DeviceID)
+	for _, img := range payload.Images {
+		if img.URL == nil || img.Part != nil || img.Base64 != nil {
+			t.Fatalf("url mode image = %+v", img)
+		}
+	}
+	if payload.DeviceID == nil || *payload.DeviceID != "site-a-gate-01" {
+		t.Fatalf("expected device_id site-a-gate-01, got %v", payload.DeviceID)
 	}
 
 	// Renaming the identity must affect the very next send without rebuilding the
 	// sender: the dispatcher deliberately resolves it per delivery.
 	identity.value = "site-a-gate-02"
-	if err := sender.Send(context.Background(), ev); err != nil {
+	if err := sender.Send(context.Background(), Delivery{Event: ev}); err != nil {
 		t.Fatalf("second Send failed: %v", err)
 	}
 	if err := json.Unmarshal(receivedBody, &payload); err != nil {
 		t.Fatalf("unmarshal second body: %v", err)
 	}
-	if payload.DeviceID != "site-a-gate-02" {
-		t.Fatalf("expected device_id to follow the provider, got %q", payload.DeviceID)
-	}
-}
-
-func TestWebhookSenderMultipartMode(t *testing.T) {
-	var receivedPayload []byte
-	var receivedImage []byte
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		mr := multipart.NewReader(r.Body, params["boundary"])
-		for {
-			part, err := mr.NextPart()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			data, partErr := io.ReadAll(part)
-			if partErr != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			switch part.FormName() {
-			case "payload":
-				receivedPayload = data
-			case "image":
-				receivedImage = data
-			}
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	fakeMedia := &fakeMediaService{
-		files: map[string][]byte{
-			"snapshots/cam_01/2026-11-03/01J8Z.jpg": []byte("mock-jpeg-bytes-12345"),
-		},
-	}
-
-	sender, err := NewWebhookSender(WebhookSenderOptions{
-		ID:        "dest_02",
-		ImageMode: ImageModeMultipart,
-		Media:     fakeMedia,
-		URL:       server.URL,
-		AuthType:  AuthTypeBasic,
-		Username:  "admin",
-		Password:  "pass123",
-	})
-	if err != nil {
-		t.Fatalf("NewWebhookSender: %v", err)
-	}
-	defer sender.Close()
-
-	ev := record.AlarmEvent{
-		ID:         "01J8ZALARM02",
-		CameraID:   "cam_01",
-		AlarmType:  "fire",
-		Score:      0.99,
-		ImagePath:  "snapshots/cam_01/2026-11-03/01J8Z.jpg",
-		ImageReady: true,
-		CapturedAt: time.Now().UTC(),
-	}
-
-	if err := sender.Send(context.Background(), ev); err != nil {
-		t.Fatalf("Send failed: %v", err)
-	}
-
-	if string(receivedImage) != "mock-jpeg-bytes-12345" {
-		t.Errorf("image bytes mismatch, got %q", string(receivedImage))
-	}
-	var payload AlarmPayload
-	if err := json.Unmarshal(receivedPayload, &payload); err != nil {
-		t.Fatalf("unmarshal payload: %v", err)
-	}
-	if !payload.ImageReady {
-		t.Error("expected payload.ImageReady true")
+	if payload.DeviceID == nil || *payload.DeviceID != "site-a-gate-02" {
+		t.Fatalf("expected device_id to follow the provider, got %v", payload.DeviceID)
 	}
 }
 
@@ -260,7 +180,7 @@ func TestWebhookSenderRetryOn500(t *testing.T) {
 		CapturedAt: time.Now().UTC(),
 	}
 
-	if err := sender.Send(context.Background(), ev); err != nil {
+	if err := sender.Send(context.Background(), Delivery{Event: ev}); err != nil {
 		t.Fatalf("expected successful send after retry, got %v", err)
 	}
 	if attempts.Load() != 2 {
@@ -293,7 +213,7 @@ func TestWebhookSenderNoRetryOn400(t *testing.T) {
 		CapturedAt: time.Now().UTC(),
 	}
 
-	if err := sender.Send(context.Background(), ev); err == nil {
+	if err := sender.Send(context.Background(), Delivery{Event: ev}); err == nil {
 		t.Fatal("expected error on 400 Bad Request, got nil")
 	}
 	if attempts.Load() != 1 {
@@ -305,6 +225,7 @@ func TestWebhookSenderHeartbeatRouteSplitAndSingleShot(t *testing.T) {
 	var mainHits atomic.Int32
 	var hbHits atomic.Int32
 	var gotAuth string
+	var gotHeaders http.Header
 	gotBody := []byte{}
 
 	mux := http.NewServeMux()
@@ -315,6 +236,7 @@ func TestWebhookSenderHeartbeatRouteSplitAndSingleShot(t *testing.T) {
 	mux.HandleFunc("/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		hbHits.Add(1)
 		gotAuth = r.Header.Get("Authorization")
+		gotHeaders = r.Header.Clone()
 		body, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -377,19 +299,25 @@ func TestWebhookSenderHeartbeatRouteSplitAndSingleShot(t *testing.T) {
 		t.Fatalf("expected shared bearer auth, got %q", gotAuth)
 	}
 
-	var payload HeartbeatPayload
+	var payload EventPayload
 	if err := json.Unmarshal(gotBody, &payload); err != nil {
 		t.Fatalf("unmarshal heartbeat payload: %v", err)
 	}
 	headerOK := payload.EventType == EventTypeHeartbeat &&
-		payload.Seq == 7 &&
-		payload.DeviceID == "edge-box-09"
+		payload.Seq != nil && *payload.Seq == 7 &&
+		payload.DeviceID != nil && *payload.DeviceID == "edge-box-09" &&
+		payload.Heartbeat != nil
 	if !headerOK {
 		t.Fatalf("unexpected heartbeat payload header: %+v", payload)
 	}
-	reasonsOK := len(payload.Reasons) == 1 && payload.Reasons[0] == "camera_offline"
-	if payload.Status != "degraded" || !reasonsOK {
-		t.Fatalf("unexpected status/reasons: %+v", payload)
+	reasonsOK := len(payload.Heartbeat.Reasons) == 1 && payload.Heartbeat.Reasons[0] == "camera_offline"
+	if payload.Heartbeat.Status != "degraded" || !reasonsOK {
+		t.Fatalf("unexpected status/reasons: %+v", payload.Heartbeat)
+	}
+	if gotHeaders.Get(headerZhulongEvent) != EventTypeHeartbeat ||
+		gotHeaders.Get(headerZhulongDelivery) != payload.ID ||
+		gotHeaders.Get(headerZhulongSchema) != "1" {
+		t.Fatalf("unexpected envelope headers on heartbeat: %v", gotHeaders)
 	}
 
 	// Verify SendHeartbeat does NOT retry on HTTP 500 (single-shot only).

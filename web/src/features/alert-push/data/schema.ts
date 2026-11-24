@@ -10,7 +10,16 @@ export const RESERVED_HEADERS = [
   'host',
   'accept',
   'connection',
+  // 推送载荷 v1 的信封标头由宿主写入，自定义标头不可覆盖
+  'x-zhulong-event',
+  'x-zhulong-delivery',
+  'x-zhulong-schema',
 ] as const
+
+/** MQTT base64 模式内联图片原始字节预算（KB），与后端 inline_max_kb 范围一致 */
+export const INLINE_MAX_KB_MIN = 64
+export const INLINE_MAX_KB_MAX = 8192
+export const INLINE_MAX_KB_DEFAULT = 500
 
 export interface HeaderEntry {
   key: string
@@ -89,6 +98,9 @@ export function createAlertDestinationFormSchema(
     keepAliveRange: t
       ? t('validation.keepAliveRange')
       : '保活间隔必须在 5 到 300 秒之间',
+    inlineMaxKbRange: t
+      ? t('validation.inlineMaxKbRange')
+      : `内联图片上限必须在 ${INLINE_MAX_KB_MIN} 到 ${INLINE_MAX_KB_MAX} KB 之间`,
     heartbeatCrossOrigin: t
       ? t('validation.heartbeatCrossOrigin')
       : '配置了鉴权凭据或自定义标头时，独立存活 URL 必须与主 Webhook URL 同源',
@@ -159,6 +171,7 @@ export function createAlertDestinationFormSchema(
       clientId: z.string().max(23, msg.clientIdMax),
       qos: z.number().min(0).max(2),
       keepAliveSeconds: z.number({ error: msg.keepAliveRange }),
+      inlineMaxKb: z.number({ error: msg.inlineMaxKbRange }),
       mqttUser: z.string(),
       mqttPass: z.string(),
       tlsSkipVerify: z.boolean(),
@@ -327,6 +340,19 @@ export function createAlertDestinationFormSchema(
             code: z.ZodIssueCode.custom,
             path: ['keepAliveSeconds'],
             message: msg.keepAliveRange,
+          })
+        }
+
+        if (
+          data.imageMode === 'base64' &&
+          (!Number.isInteger(data.inlineMaxKb) ||
+            data.inlineMaxKb < INLINE_MAX_KB_MIN ||
+            data.inlineMaxKb > INLINE_MAX_KB_MAX)
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['inlineMaxKb'],
+            message: msg.inlineMaxKbRange,
           })
         }
 

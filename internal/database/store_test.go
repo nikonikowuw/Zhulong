@@ -2550,3 +2550,124 @@ func TestMigration000039_EventClipsStorageStateSymmetry(t *testing.T) {
 		t.Fatalf("after re-Up(39): (%q, %q), want (local, local)", backend, uploadStatus)
 	}
 }
+
+// TestMigration000040_AlertFilterEventTypeSymmetry pins migration 40: only the
+// $.event_types array of alert_destinations.filter_json is rewritten to the v1
+// short names, sibling arrays that happen to contain the same strings stay intact,
+// and down/up round-trips back to the original values.
+func TestMigration000040_AlertFilterEventTypeSymmetry(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "migration_symmetry_40.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := db.Close(); closeErr != nil && !errors.Is(closeErr, sql.ErrConnDone) {
+			t.Errorf("db.Close: %v", closeErr)
+		}
+	})
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("sqlite3 instance: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("iofs driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance(
+		"iofs",
+		srcDriver,
+		"sqlite3",
+		dbDriver,
+	)
+	if err != nil {
+		t.Fatalf("migrator: %v", err)
+	}
+	t.Cleanup(func() {
+		srcErr, dbErr := migrator.Close()
+		if srcErr != nil {
+			t.Errorf("migrator source close: %v", srcErr)
+		}
+		if dbErr != nil {
+			t.Errorf("migrator db close: %v", dbErr)
+		}
+	})
+
+	if err := migrator.Migrate(39); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(39): %v", err)
+	}
+
+	const legacyFilter = `{"event_types":["alarm","face_recognition","plate_recognition"],` +
+		`"algorithm_ids":["vehicle","face"],"camera_ids":["cam_1"]}`
+	rows := []struct {
+		id         string
+		filter     string
+		wantUp     string
+		wantDownUp string
+	}{
+		{
+			id:     "legacy",
+			filter: legacyFilter,
+			wantUp: `{"event_types":["alarm","face","vehicle"],` +
+				`"algorithm_ids":["vehicle","face"],"camera_ids":["cam_1"]}`,
+			wantDownUp: `{"event_types":["alarm","face","vehicle"],` +
+				`"algorithm_ids":["vehicle","face"],"camera_ids":["cam_1"]}`,
+		},
+		{id: "empty", filter: `{}`, wantUp: `{}`, wantDownUp: `{}`},
+		{
+			id:         "alarm_only",
+			filter:     `{"event_types":["alarm"]}`,
+			wantUp:     `{"event_types":["alarm"]}`,
+			wantDownUp: `{"event_types":["alarm"]}`,
+		},
+	}
+	for _, row := range rows {
+		if _, err := db.Exec(
+			`INSERT INTO alert_destinations (id, name, channel_type, filter_json) VALUES (?, ?, 'webhook', ?)`,
+			row.id,
+			"dest_"+row.id,
+			row.filter,
+		); err != nil {
+			t.Fatalf("insert %s: %v", row.id, err)
+		}
+	}
+
+	readFilter := func(id string) string {
+		t.Helper()
+		var got string
+		if err := db.QueryRow(`SELECT filter_json FROM alert_destinations WHERE id = ?`, id).Scan(&got); err != nil {
+			t.Fatalf("select %s: %v", id, err)
+		}
+		return got
+	}
+
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("apply 40: %v", err)
+	}
+	for _, row := range rows {
+		if got := readFilter(row.id); got != row.wantUp {
+			t.Fatalf("after Up(40) %s filter = %s, want %s", row.id, got, row.wantUp)
+		}
+	}
+
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("rollback 40: %v", err)
+	}
+	if got := readFilter("legacy"); got != legacyFilter {
+		t.Fatalf("after Down(40) legacy filter = %s, want %s", got, legacyFilter)
+	}
+	if got := readFilter("empty"); got != `{}` {
+		t.Fatalf("after Down(40) empty filter = %s, want {}", got)
+	}
+
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("re-apply 40: %v", err)
+	}
+	for _, row := range rows {
+		if got := readFilter(row.id); got != row.wantDownUp {
+			t.Fatalf("after re-Up(40) %s filter = %s, want %s", row.id, got, row.wantDownUp)
+		}
+	}
+}

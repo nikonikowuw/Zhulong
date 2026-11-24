@@ -10,17 +10,25 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/filestore"
-	"github.com/nikonikowuw/Zhulong/internal/idutil"
-	"github.com/nikonikowuw/Zhulong/internal/record"
+)
+
+// Webhook envelope headers mirroring the payload's routing metadata.
+const (
+	headerZhulongEvent    = "X-Zhulong-Event"
+	headerZhulongDelivery = "X-Zhulong-Delivery"
+	headerZhulongSchema   = "X-Zhulong-Schema"
 )
 
 var reservedHeaders = map[string]struct{}{
-	"authorization":     {},
-	"content-type":      {},
-	"content-length":    {},
-	"transfer-encoding": {},
-	"connection":        {},
-	"host":              {},
+	"authorization":      {},
+	"content-type":       {},
+	"content-length":     {},
+	"transfer-encoding":  {},
+	"connection":         {},
+	"host":               {},
+	"x-zhulong-event":    {},
+	"x-zhulong-delivery": {},
+	"x-zhulong-schema":   {},
 }
 
 // MediaReader abstracts read access to media files with four-layer path protection.
@@ -36,7 +44,7 @@ type MediaPresigner interface {
 
 // Sender defines the delivery mechanism for an alert destination.
 type Sender interface {
-	Send(ctx context.Context, ev record.AlarmEvent) error
+	Send(ctx context.Context, d Delivery) error
 	SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, seq uint64) error
 	Close() error
 }
@@ -127,88 +135,6 @@ type HeartbeatWorkloadPayload struct {
 	Decode  HeartbeatDecodePayload  `json:"decode"`
 }
 
-// HeartbeatPayload is the external snake_case contract for outbound liveness reports.
-type HeartbeatPayload struct {
-	ID         string                    `json:"id"`
-	DeviceID   string                    `json:"device_id,omitempty"`
-	EventType  string                    `json:"event_type"`
-	Seq        uint64                    `json:"seq"`
-	ReportedAt string                    `json:"reported_at"`
-	Status     string                    `json:"status"`
-	Reasons    []string                  `json:"reasons"`
-	Host       HeartbeatHostPayload      `json:"host"`
-	Resources  HeartbeatResourcesPayload `json:"resources"`
-	Storage    HeartbeatStoragePayload   `json:"storage"`
-	Workload   HeartbeatWorkloadPayload  `json:"workload"`
-}
-
-// mqttOfflineWillPayload is registered on the MQTT broker at connect time (LWT).
-// It intentionally omits reported_at because static will bytes cannot stamp the
-// future moment when power or network connectivity drops.
-type mqttOfflineWillPayload struct {
-	DeviceID  string `json:"device_id,omitempty"`
-	EventType string `json:"event_type"`
-	Reason    string `json:"reason"`
-}
-
-// mqttOfflineGracefulPayload is actively published before a clean MQTT disconnect.
-type mqttOfflineGracefulPayload struct {
-	ID         string `json:"id"`
-	DeviceID   string `json:"device_id,omitempty"`
-	EventType  string `json:"event_type"`
-	ReportedAt string `json:"reported_at"`
-	Reason     string `json:"reason"`
-}
-
-// AlarmDataPayload holds behavior & safety alarm details.
-type AlarmDataPayload struct {
-	AlarmType string         `json:"alarm_type"`
-	Score     float64        `json:"score"`
-	Box       [4]float64     `json:"box"`
-	Extra     map[string]any `json:"extra"`
-}
-
-// FaceDataPayload holds face recognition identity and dynamic attributes.
-type FaceDataPayload struct {
-	Matched    bool           `json:"matched"`
-	PersonName string         `json:"person_name"`
-	PersonID   string         `json:"person_id"`
-	Similarity float64        `json:"similarity"`
-	Box        [4]float64     `json:"box"`
-	GalleryURL *string        `json:"gallery_url,omitempty"`
-	Attributes map[string]any `json:"attributes"`
-}
-
-// VehicleDataPayload holds vehicle & license plate details and dynamic attributes.
-type VehicleDataPayload struct {
-	PlateNumber  string         `json:"plate_number"`
-	PlateColor   string         `json:"plate_color"`
-	VehicleType  string         `json:"vehicle_type"`
-	VehicleColor string         `json:"vehicle_color"`
-	Score        float64        `json:"score"`
-	Box          [4]float64     `json:"box"`
-	Attributes   map[string]any `json:"attributes"`
-}
-
-// AlarmPayload is the external contract representation for perception event dispatch (snake_case).
-type AlarmPayload struct {
-	ID string `json:"id"`
-	// DeviceID is this host's business identity, configured under settings → system.
-	// It is what lets one aggregation platform tell two edge boxes apart.
-	DeviceID string `json:"device_id,omitempty"`
-	// EventType: "alarm" | "face_recognition" | "plate_recognition"
-	EventType   string              `json:"event_type"`
-	CameraID    string              `json:"camera_id"`
-	CapturedAt  string              `json:"captured_at"`
-	ImageReady  bool                `json:"image_ready"`
-	ImageURL    *string             `json:"image_url"`
-	CropURL     *string             `json:"crop_url"`
-	ImageBase64 *string             `json:"image_base64"`
-	Alarm       *AlarmDataPayload   `json:"alarm,omitempty"`
-	Face        *FaceDataPayload    `json:"face,omitempty"`
-	Vehicle     *VehicleDataPayload `json:"vehicle,omitempty"`
-}
-
 // isReservedHeader returns true if the header name is managed internally
 // and forbidden in custom headers.
 func isReservedHeader(name string) bool {
@@ -269,35 +195,6 @@ func resolveHeartbeatSnapshot(
 	}
 }
 
-func buildHeartbeatPayload(snap HeartbeatSnapshot, deviceID string, seq uint64) HeartbeatPayload {
-	reportedAt := snap.ReportedAt
-	if reportedAt.IsZero() {
-		reportedAt = time.Now().UTC()
-	}
-	status := snap.Status
-	if status == "" {
-		status = "ready"
-	}
-	reasons := snap.Reasons
-	if reasons == nil {
-		reasons = []string{}
-	}
-
-	return HeartbeatPayload{
-		ID:         idutil.New(),
-		DeviceID:   deviceID,
-		EventType:  EventTypeHeartbeat,
-		Seq:        seq,
-		ReportedAt: reportedAt.UTC().Format(time.RFC3339Nano),
-		Status:     status,
-		Reasons:    reasons,
-		Host:       snap.Host,
-		Resources:  snap.Resources,
-		Storage:    snap.Storage,
-		Workload:   snap.Workload,
-	}
-}
-
 // sameOrigin reports whether two HTTP(S) URLs share the exact same scheme, hostname
 // and effective port. Credentials bound to rawA may only be reused on rawB when true.
 func sameOrigin(rawA, rawB string) bool {
@@ -328,138 +225,6 @@ func effectivePort(scheme, explicit string) string {
 		return "443"
 	}
 	return "80"
-}
-
-// buildAlarmPayload creates the base payload from a perception event.
-func buildAlarmPayload(ev record.AlarmEvent, deviceID string) AlarmPayload {
-	eventType := string(ev.EventType)
-	if eventType == "" {
-		eventType = string(record.EventTypeAlarm)
-	}
-
-	payload := AlarmPayload{
-		ID:         ev.ID,
-		DeviceID:   deviceID,
-		EventType:  eventType,
-		CameraID:   ev.CameraID,
-		CapturedAt: ev.CapturedAt.UTC().Format(time.RFC3339Nano),
-		ImageReady: false,
-	}
-
-	switch ev.EventType {
-	case record.EventTypeFaceRecognition:
-		if ev.Face != nil {
-			attrs := ev.Face.Attributes
-			if attrs == nil {
-				attrs = map[string]any{}
-			}
-			payload.Face = &FaceDataPayload{
-				Matched:    ev.Face.Matched,
-				PersonName: ev.Face.PersonName,
-				PersonID:   ev.Face.PersonID,
-				Similarity: ev.Face.Similarity,
-				Box:        ev.Face.Box,
-				Attributes: attrs,
-			}
-		}
-	case record.EventTypePlateRecognition:
-		if ev.Vehicle != nil {
-			attrs := ev.Vehicle.Attributes
-			if attrs == nil {
-				attrs = map[string]any{}
-			}
-			payload.Vehicle = &VehicleDataPayload{
-				PlateNumber:  ev.Vehicle.PlateNumber,
-				PlateColor:   ev.Vehicle.PlateColor,
-				VehicleType:  ev.Vehicle.VehicleType,
-				VehicleColor: ev.Vehicle.VehicleColor,
-				Score:        ev.Vehicle.Score,
-				Box:          ev.Vehicle.Box,
-				Attributes:   attrs,
-			}
-		}
-	default:
-		// Default to behavior / safety alarm
-		var alarmData *AlarmDataPayload
-		if ev.Alarm != nil {
-			extra := ev.Alarm.Extra
-			if extra == nil {
-				extra = map[string]any{}
-			}
-			alarmData = &AlarmDataPayload{
-				AlarmType: ev.Alarm.AlarmType,
-				Score:     ev.Alarm.Score,
-				Box:       ev.Alarm.Box,
-				Extra:     extra,
-			}
-		} else {
-			extra := ev.Extra
-			if extra == nil {
-				extra = map[string]any{}
-			}
-			alarmData = &AlarmDataPayload{
-				AlarmType: ev.AlarmType,
-				Score:     ev.Score,
-				Box:       ev.Box,
-				Extra:     extra,
-			}
-		}
-		payload.Alarm = alarmData
-	}
-
-	return payload
-}
-
-type signedURLParams struct {
-	Payload       *AlarmPayload
-	Event         record.AlarmEvent
-	PublicBaseURL string
-	Signer        *URLSigner
-	Media         MediaReader
-	TTL           time.Duration
-}
-
-func populateSignedURLs(ctx context.Context, p signedURLParams) {
-	if p.Event.ImageReady && p.Event.ImagePath != "" {
-		if u, err := resolveSignedOrPresignedURL(ctx, p, p.Event.ImagePath); err == nil && u != "" {
-			p.Payload.ImageURL = &u
-			p.Payload.ImageReady = true
-		}
-	}
-	if p.Event.CropReady && p.Event.CropPath != "" {
-		if u, err := resolveSignedOrPresignedURL(ctx, p, p.Event.CropPath); err == nil && u != "" {
-			p.Payload.CropURL = &u
-		}
-	}
-	hasFaceGallery := p.Payload.Face != nil && p.Event.Face != nil && p.Event.Face.GalleryImagePath != ""
-	if hasFaceGallery {
-		if u, err := resolveSignedOrPresignedURL(ctx, p, p.Event.Face.GalleryImagePath); err == nil && u != "" {
-			p.Payload.Face.GalleryURL = &u
-		}
-	}
-}
-
-func resolveSignedOrPresignedURL(
-	ctx context.Context,
-	p signedURLParams,
-	relPath string,
-) (string, error) {
-	if p.Media != nil {
-		if presigner, ok := p.Media.(MediaPresigner); ok {
-			if urlStr, handled, err := presigner.PresignMediaURL(ctx, relPath, p.TTL); err == nil && handled && urlStr != "" {
-				return urlStr, nil
-			}
-		}
-	}
-	if p.Signer == nil || p.PublicBaseURL == "" {
-		return "", nil
-	}
-	return generateSignedURL(
-		p.PublicBaseURL,
-		p.Signer,
-		relPath,
-		p.TTL,
-	)
 }
 
 // generateSignedURL generates an absolute signed URL using the public base URL and URLSigner.

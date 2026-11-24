@@ -22,7 +22,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		{
 			name:        "empty filter matches all",
 			filter:      &destinationFilter{},
-			eventType:   "face_recognition",
+			eventType:   "face",
 			algorithmID: "algo_01",
 			cameraID:    "cam_01",
 			want:        true,
@@ -30,7 +30,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		{
 			name: "match specific event type, algorithm and camera",
 			filter: &destinationFilter{
-				EventTypes:   []string{"alarm", "face_recognition"},
+				EventTypes:   []string{"alarm", "face"},
 				AlgorithmIDs: []string{"algo_01", "algo_02"},
 				CameraIDs:    []string{"cam_01"},
 			},
@@ -42,7 +42,7 @@ func TestDestinationFilterMatches(t *testing.T) {
 		{
 			name: "event type mismatch",
 			filter: &destinationFilter{
-				EventTypes: []string{"face_recognition"},
+				EventTypes: []string{"face"},
 			},
 			eventType:   "alarm",
 			algorithmID: "algo_01",

@@ -17,6 +17,7 @@ import (
 type mockSender struct {
 	mu           sync.Mutex
 	received     []record.AlarmEvent
+	deliveries   []Delivery
 	heartbeatSeq []uint64
 	delay        time.Duration
 	err          error
@@ -24,7 +25,7 @@ type mockSender struct {
 	closed       atomic.Bool
 }
 
-func (m *mockSender) Send(ctx context.Context, ev record.AlarmEvent) error {
+func (m *mockSender) Send(ctx context.Context, d Delivery) error {
 	if m.delay > 0 {
 		select {
 		case <-ctx.Done():
@@ -37,7 +38,8 @@ func (m *mockSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.received = append(m.received, ev)
+	m.received = append(m.received, d.Event)
+	m.deliveries = append(m.deliveries, d)
 	return nil
 }
 
@@ -466,8 +468,9 @@ func TestDispatcherMQTTHotReloadNoSessionKickOrFalseOffline(t *testing.T) {
 		t.Fatalf("Dispatcher.Stop: %v", err)
 	}
 	offline := waitStatusMsg("shutdown offline")
+	offlineInfo, _ := offline["offline"].(map[string]any)
 	isGracefulOffline := offline["event_type"] == EventTypeOffline &&
-		offline["reason"] == OfflineReasonGracefulShutdown
+		offlineInfo != nil && offlineInfo["reason"] == OfflineReasonGracefulShutdown
 	if !isGracefulOffline {
 		t.Fatalf("expected graceful_shutdown offline on Stop, got %+v", offline)
 	}

@@ -118,16 +118,19 @@
     "filterEvents": "事件類型訂閱 (留空為全部)",
     "filterAlgorithms": "演算法過濾 (留空為全部)",
     "filterCameras": "攝影機過濾 (留空為全部)",
-    "secretRetained": "憑證已儲存，留空表示維持不變"
+    "secretRetained": "憑證已儲存，留空表示維持不變",
+    "inlineMaxKb": "內嵌圖片上限",
+    "inlineMaxKbUnit": "KB",
+    "inlineMaxKbHint": "單則訊息內嵌為 Base64 的圖片原始位元組總量（64–8192 KB）。Base64 編碼後約增大 33%，需小於 Broker 單則訊息上限：AWS IoT 128 KB、Azure IoT Hub 256 KB、EMQX 預設 1 MB。"
   },
   "eventTypes": {
     "all": "全部事件",
     "alarm": "行為與安全告警",
     "alarmDesc": "禁區入侵、人員越界、違規滯留等行為安全事件",
-    "face_recognition": "人臉辨識比對",
-    "face_recognitionDesc": "布控人員命中、陌生人抓拍與人臉特徵比對",
-    "plate_recognition": "車輛與車牌辨識",
-    "plate_recognitionDesc": "車輛結構化識別、車牌辨識與黑白名單比對"
+    "face": "人臉辨識比對",
+    "faceDesc": "布控人員命中、陌生人抓拍與人臉特徵比對",
+    "vehicle": "車輛與車牌辨識",
+    "vehicleDesc": "車輛結構化識別、車牌辨識與黑白名單比對"
   },
   "channelTypes": {
     "webhook": "HTTP Webhook",
@@ -141,7 +144,7 @@
     "multipart": "Multipart 附件",
     "multipartDesc": "圖片作為二進位表單同包上傳，適合公網或內部網路隔離環境",
     "base64": "Base64 內嵌編碼",
-    "base64Desc": "圖片轉為 Base64 字串內嵌 JSON 載荷 (≤500KB)，適合輕量中台"
+    "base64Desc": "小圖（特寫優先）在預算內以 Base64 內嵌，超限圖片（如 4K 場景圖）以 URL 提供（需設定 public_base_url），否則省略"
   },
   "authTypes": {
     "none": "無鑑權",
@@ -183,7 +186,8 @@
     "headerKeyRequired": "請輸入標頭名稱",
     "headerValueRequired": "請輸入標頭值",
     "headerValueReenterRequired": "修改或新增標頭時，請重新填寫此標頭值，或將其移除",
-    "conflictFallback": "目標設定發生衝突，請核對後重試"
+    "conflictFallback": "目標設定發生衝突，請核對後重試",
+    "inlineMaxKbRange": "內嵌圖片上限必須在 64 到 8192 KB 之間"
   },
   "toast": {
     "created": "推送目標已建立",

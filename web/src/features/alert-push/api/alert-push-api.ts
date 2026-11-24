@@ -87,6 +87,7 @@ export const mqttConfigSchema = z.object({
   qos: z.number().optional(),
   keepAliveSeconds: z.number().optional(),
   tlsSkipVerify: z.boolean().default(false),
+  inlineMaxKb: z.number().optional(),
   heartbeatIntervalSeconds: z.number().optional(),
 })
 

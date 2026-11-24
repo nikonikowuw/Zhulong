@@ -7434,6 +7434,10 @@ const docTemplate = `{
                 "heartbeatUrl": {
                     "type": "string"
                 },
+                "inlineMaxKb": {
+                    "description": "InlineMaxKB is the MQTT base64 inline image budget (64..8192 KiB, default 500).",
+                    "type": "integer"
+                },
                 "keepAliveSeconds": {
                     "type": "integer"
                 },

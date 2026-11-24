@@ -54,6 +54,14 @@ const (
 	OfflineReasonGracefulShutdown = "graceful_shutdown"
 )
 
+// MQTT base64 inline budget bounds, in KiB of raw (pre-encoding) image bytes. Base64 grows
+// the payload by ~4/3, so the effective cap must stay below the broker's message limit.
+const (
+	DefaultInlineMaxKB = 500
+	MinInlineMaxKB     = 64
+	MaxInlineMaxKB     = 8192
+)
+
 // AlertDestination represents the database persistence model for an alert target.
 //
 // ⚠️ EventsEnabled / HeartbeatEnabled intentionally omit GORM default tags: GORM drops
@@ -101,6 +109,20 @@ type mqttConfig struct {
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds,omitempty"`
 	HeartbeatTopic           string `json:"heartbeat_topic,omitempty"`
 	LWTEnabled               *bool  `json:"lwt_enabled,omitempty"`
+	// InlineMaxKB caps the raw bytes of all images inlined as base64 in one message.
+	// Zero means DefaultInlineMaxKB.
+	InlineMaxKB int `json:"inline_max_kb,omitempty"`
+}
+
+func normalizeInlineMaxKB(kb int) int {
+	if kb <= 0 {
+		return DefaultInlineMaxKB
+	}
+	return kb
+}
+
+func isValidInlineMaxKB(kb int) bool {
+	return kb >= MinInlineMaxKB && kb <= MaxInlineMaxKB
 }
 
 func (c mqttConfig) effectiveLWTEnabled() bool {

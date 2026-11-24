@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,8 +115,9 @@ func (s *WebhookSender) Close() error {
 	return nil
 }
 
-// Send dispatches an alarm event via Webhook according to the configured image mode.
-func (s *WebhookSender) Send(ctx context.Context, ev record.AlarmEvent) error {
+// Send dispatches a perception event via Webhook according to the configured image mode.
+// Retries reuse the delivery's id and seq; only sent_at is re-stamped per attempt.
+func (s *WebhookSender) Send(ctx context.Context, d Delivery) error {
 	const attempts = 3
 	backoffs := []time.Duration{
 		200*time.Millisecond + time.Duration(rand.IntN(50))*time.Millisecond,
@@ -134,7 +136,7 @@ func (s *WebhookSender) Send(ctx context.Context, ev record.AlarmEvent) error {
 			}
 		}
 
-		retryable, err := s.doSendOnce(ctx, ev)
+		retryable, err := s.doSendOnce(ctx, d)
 		if err == nil {
 			return nil
 		}
@@ -157,7 +159,12 @@ func (s *WebhookSender) SendHeartbeat(
 		targetURL = s.opts.URL
 	}
 
-	payload := buildHeartbeatPayload(snap, resolveDeviceID(s.opts.Identity), seq)
+	payload := buildHeartbeatEnvelope(
+		snap,
+		resolveDeviceID(s.opts.Identity),
+		seq,
+		time.Now(),
+	)
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal heartbeat payload: %w", err)
@@ -169,13 +176,14 @@ func (s *WebhookSender) SendHeartbeat(
 	}
 	req.Header.Set("Content-Type", "application/json")
 	s.applyAuthAndHeaders(req)
+	setEnvelopeHeaders(req, payload)
 
 	_, err = s.executeRequest(ctx, req, targetURL)
 	return err
 }
 
-func (s *WebhookSender) doSendOnce(ctx context.Context, ev record.AlarmEvent) (bool, error) {
-	req, cleanup, err := s.buildRequest(ctx, ev)
+func (s *WebhookSender) doSendOnce(ctx context.Context, d Delivery) (bool, error) {
+	req, cleanup, err := s.buildRequest(ctx, d)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -222,29 +230,31 @@ func (s *WebhookSender) executeRequest(
 
 func (s *WebhookSender) buildRequest(
 	ctx context.Context,
-	ev record.AlarmEvent,
+	d Delivery,
 ) (*http.Request, func(), error) {
-	payload := buildAlarmPayload(ev, resolveDeviceID(s.opts.Identity))
+	payload := buildEventPayload(d, resolveDeviceID(s.opts.Identity), time.Now())
 
 	if s.opts.ImageMode == ImageModeMultipart {
-		return s.buildMultipartRequest(ctx, payload, ev)
+		return s.buildMultipartRequest(ctx, payload, d.Event)
 	}
-	return s.buildJSONRequest(ctx, payload, ev)
+	return s.buildJSONRequest(ctx, payload, d.Event)
 }
 
-func (s *WebhookSender) buildJSONRequest(
-	ctx context.Context,
-	payload AlarmPayload,
-	ev record.AlarmEvent,
-) (*http.Request, func(), error) {
-	populateSignedURLs(ctx, signedURLParams{
-		Payload:       &payload,
-		Event:         ev,
+func (s *WebhookSender) imageURLParams() imageURLParams {
+	return imageURLParams{
 		PublicBaseURL: s.opts.PublicBaseURL,
 		Signer:        s.opts.Signer,
 		Media:         s.opts.Media,
 		TTL:           s.opts.SignedURLTTL,
-	})
+	}
+}
+
+func (s *WebhookSender) buildJSONRequest(
+	ctx context.Context,
+	payload EventPayload,
+	ev record.AlarmEvent,
+) (*http.Request, func(), error) {
+	payload.Images = resolveImageURLs(ctx, s.imageURLParams(), ev)
 
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -257,94 +267,136 @@ func (s *WebhookSender) buildJSONRequest(
 	}
 	req.Header.Set("Content-Type", "application/json")
 	s.applyAuthAndHeaders(req)
+	setEnvelopeHeaders(req, payload)
 	return req, nil, nil
+}
+
+// multipartImage is an opened evidence image that becomes one form part.
+type multipartImage struct {
+	part string
+	file io.ReadSeekCloser
+}
+
+// openMultipartImages opens every ready image as a part named image_<role>. Images that
+// cannot be opened fall back to a URL when one can be minted and are omitted otherwise.
+// The caller must close every returned file, on success and on error.
+func (s *WebhookSender) openMultipartImages(
+	ctx context.Context,
+	ev record.AlarmEvent,
+) ([]ImageInfo, []multipartImage) {
+	images := []ImageInfo{}
+	opened := []multipartImage{}
+	params := s.imageURLParams()
+
+	for _, c := range imageCandidates(ev) {
+		info := newImageInfo(c.role)
+		signed, ok := mintImageURL(
+			ctx,
+			params,
+			c.relPath,
+			false,
+		)
+		if ok {
+			info.URL = &signed.url
+			info.URLExpiresAt = &signed.expiresAt
+		}
+
+		if s.opts.Media != nil {
+			f, objInfo, err := s.opts.Media.OpenContent(ctx, c.relPath)
+			if err == nil {
+				partName := "image_" + c.role
+				size := objInfo.SizeBytes
+				info.Part = &partName
+				info.SizeBytes = &size
+				opened = append(opened, multipartImage{part: partName, file: f})
+			} else {
+				s.logger.Warn("failed to open image for multipart payload",
+					zap.String("role", c.role),
+					zap.String("path", c.relPath),
+					zap.Error(err),
+				)
+			}
+		}
+
+		if info.Part == nil && info.URL == nil {
+			continue
+		}
+		images = append(images, info)
+	}
+	return images, opened
 }
 
 func (s *WebhookSender) buildMultipartRequest(
 	ctx context.Context,
-	payload AlarmPayload,
+	payload EventPayload,
 	ev record.AlarmEvent,
 ) (*http.Request, func(), error) {
-	var file io.ReadSeekCloser
+	images, opened := s.openMultipartImages(ctx, ev)
 	cleanup := func() {
-		if file == nil {
-			return
-		}
-		if closeErr := file.Close(); closeErr != nil {
-			s.logger.Debug("close multipart snapshot file", zap.Error(closeErr))
-		}
-	}
-
-	var hasImage bool
-	hasSnapshotSource := ev.ImageReady && ev.ImagePath != "" && s.opts.Media != nil
-	if hasSnapshotSource {
-		f, _, err := s.opts.Media.OpenContent(ctx, ev.ImagePath)
-		if err == nil {
-			file = f
-			hasImage = true
-			payload.ImageReady = true
-		} else {
-			s.logger.Warn("failed to open snapshot file for multipart payload",
-				zap.String("path", ev.ImagePath),
-				zap.Error(err),
-			)
-			payload.ImageReady = false
+		for _, img := range opened {
+			if closeErr := img.file.Close(); closeErr != nil {
+				s.logger.Debug("close multipart image file", zap.Error(closeErr))
+			}
 		}
 	}
+	payload.Images = images
 
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 
-	// 1. Part: payload
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("marshal payload: %w", err)
+		return nil, cleanup, fmt.Errorf("marshal payload: %w", err)
 	}
-
 	h := make(textproto.MIMEHeader)
 	h.Set("Content-Disposition", `form-data; name="payload"`)
 	h.Set("Content-Type", "application/json")
 	pWriter, err := w.CreatePart(h)
 	if err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("create payload part: %w", err)
+		return nil, cleanup, fmt.Errorf("create payload part: %w", err)
 	}
 	if _, err := pWriter.Write(payloadBytes); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("write payload part: %w", err)
+		return nil, cleanup, fmt.Errorf("write payload part: %w", err)
 	}
 
-	// 2. Part: image (if available)
-	if hasImage && file != nil {
+	for _, img := range opened {
 		imgHeader := make(textproto.MIMEHeader)
-		imgHeader.Set("Content-Disposition", `form-data; name="image"; filename="snapshot.jpg"`)
-		imgHeader.Set("Content-Type", "image/jpeg")
+		role := strings.TrimPrefix(img.part, "image_")
+		imgHeader.Set(
+			"Content-Disposition",
+			fmt.Sprintf(`form-data; name=%q; filename=%q`, img.part, role+".jpg"),
+		)
+		imgHeader.Set("Content-Type", imageMIMEJPEG)
 		imgWriter, err := w.CreatePart(imgHeader)
 		if err != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("create image part: %w", err)
+			return nil, cleanup, fmt.Errorf("create image part: %w", err)
 		}
-		if _, err := io.Copy(imgWriter, file); err != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("copy image bytes: %w", err)
+		if _, err := io.Copy(imgWriter, img.file); err != nil {
+			return nil, cleanup, fmt.Errorf("copy image bytes: %w", err)
 		}
 	}
 
 	if err := w.Close(); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("close multipart writer: %w", err)
+		return nil, cleanup, fmt.Errorf("close multipart writer: %w", err)
 	}
 
 	req, err := http.NewRequest(http.MethodPost, s.opts.URL, bytes.NewReader(buf.Bytes()))
 	if err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("create multipart request: %w", err)
+		return nil, cleanup, fmt.Errorf("create multipart request: %w", err)
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.ContentLength = int64(buf.Len())
 	s.applyAuthAndHeaders(req)
+	setEnvelopeHeaders(req, payload)
 	return req, cleanup, nil
+}
+
+// setEnvelopeHeaders mirrors routing metadata into reserved headers so gateways can route
+// without parsing the body. It runs after custom headers, which can never override these.
+func setEnvelopeHeaders(req *http.Request, payload EventPayload) {
+	req.Header.Set(headerZhulongEvent, payload.EventType)
+	req.Header.Set(headerZhulongDelivery, payload.ID)
+	req.Header.Set(headerZhulongSchema, strconv.Itoa(payload.SchemaVersion))
 }
 
 func (s *WebhookSender) applyAuthAndHeaders(req *http.Request) {

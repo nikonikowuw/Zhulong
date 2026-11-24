@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,15 +16,16 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"go.uber.org/zap"
 
-	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/logsafe"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 )
 
-const (
-	maxMQTTBase64Bytes         = 500 * 1024 // 500KB
-	mqttGracefulOfflineTimeout = 500 * time.Millisecond
-)
+const mqttGracefulOfflineTimeout = 500 * time.Millisecond
+
+// inlinePriority is the order images claim the base64 budget: small, information-dense
+// crops first so they survive even when a 4K scene (1–3MB) cannot. Output order is
+// unaffected and stays scene → object → reference.
+var inlinePriority = []string{ImageRoleObject, ImageRoleReference, ImageRoleScene}
 
 var (
 	ErrMQTTBrokerMissing = errors.New("mqtt broker url is missing")
@@ -54,6 +56,12 @@ type MQTTSenderOptions struct {
 	QoS               uint8
 	KeepAlive         time.Duration
 	TLSSkipVerify     bool
+	// InlineMaxBytes caps the raw bytes of all base64-inlined images per message.
+	// Zero or negative means DefaultInlineMaxKB.
+	InlineMaxBytes int64
+	// NextSeq draws the next destination sequence number for the graceful offline notice.
+	// Nil leaves its seq null (connectivity probes never emit one).
+	NextSeq func() uint64
 	// Identity supplies the host device_id stamped onto every payload. Nil omits it.
 	Identity DeviceIDProvider
 	Logger   *zap.Logger
@@ -120,11 +128,12 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 	var willArmed bool
 	if opts.HeartbeatEnabled && opts.LWTEnabled {
 		willDeviceID = resolveDeviceID(opts.Identity)
-		willPayload := mqttOfflineWillPayload{
-			DeviceID:  willDeviceID,
-			EventType: EventTypeOffline,
-			Reason:    OfflineReasonConnectionLost,
-		}
+		willPayload := buildOfflineEnvelope(
+			OfflineReasonConnectionLost,
+			willDeviceID,
+			nil,
+			nil,
+		)
 		willBytes, err := json.Marshal(willPayload)
 		if err != nil {
 			return nil, fmt.Errorf("marshal mqtt will payload: %w", err)
@@ -235,13 +244,18 @@ func (s *MQTTSender) closeInternal(emitOffline bool) error {
 }
 
 func (s *MQTTSender) publishGracefulOfflineLocked() {
-	offline := mqttOfflineGracefulPayload{
-		ID:         idutil.New(),
-		DeviceID:   resolveDeviceID(s.opts.Identity),
-		EventType:  EventTypeOffline,
-		ReportedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		Reason:     OfflineReasonGracefulShutdown,
+	var seq *uint64
+	if s.opts.NextSeq != nil {
+		next := s.opts.NextSeq()
+		seq = &next
 	}
+	now := time.Now()
+	offline := buildOfflineEnvelope(
+		OfflineReasonGracefulShutdown,
+		resolveDeviceID(s.opts.Identity),
+		seq,
+		&now,
+	)
 	data, err := json.Marshal(offline)
 	if err != nil {
 		return
@@ -261,27 +275,18 @@ func (s *MQTTSender) publishGracefulOfflineLocked() {
 	}
 }
 
-// Send formats and publishes an alarm event to the target topic.
-func (s *MQTTSender) Send(ctx context.Context, ev record.AlarmEvent) error {
+// Send formats and publishes a perception event to the target topic.
+func (s *MQTTSender) Send(ctx context.Context, d Delivery) error {
 	if err := s.ensureConnected(); err != nil {
 		return err
 	}
 
-	payload := buildAlarmPayload(ev, resolveDeviceID(s.opts.Identity))
-
-	// Format image based on configured ImageMode
+	payload := buildEventPayload(d, resolveDeviceID(s.opts.Identity), time.Now())
 	switch s.opts.ImageMode {
 	case ImageModeBase64:
-		s.attachBase64Image(ctx, &payload, ev)
-	case ImageModeURL:
-		populateSignedURLs(ctx, signedURLParams{
-			Payload:       &payload,
-			Event:         ev,
-			PublicBaseURL: s.opts.PublicBaseURL,
-			Signer:        s.opts.Signer,
-			Media:         s.opts.Media,
-			TTL:           s.opts.SignedURLTTL,
-		})
+		payload.Images = s.inlineImages(ctx, d.Event)
+	default:
+		payload.Images = resolveImageURLs(ctx, s.imageURLParams(), d.Event)
 	}
 
 	data, err := json.Marshal(payload)
@@ -298,7 +303,12 @@ func (s *MQTTSender) SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, 
 		return err
 	}
 
-	payload := buildHeartbeatPayload(snap, resolveDeviceID(s.opts.Identity), seq)
+	payload := buildHeartbeatEnvelope(
+		snap,
+		resolveDeviceID(s.opts.Identity),
+		seq,
+		time.Now(),
+	)
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal mqtt heartbeat payload: %w", err)
@@ -345,50 +355,112 @@ func (s *MQTTSender) publishBytes(ctx context.Context, topic string, data []byte
 	return nil
 }
 
-func (s *MQTTSender) attachBase64Image(
-	ctx context.Context,
-	payload *AlarmPayload,
-	ev record.AlarmEvent,
-) {
-	canReadImage := ev.ImageReady && ev.ImagePath != "" && s.opts.Media != nil
-	if !canReadImage {
-		payload.ImageReady = false
-		return
+func (s *MQTTSender) imageURLParams() imageURLParams {
+	return imageURLParams{
+		PublicBaseURL: s.opts.PublicBaseURL,
+		Signer:        s.opts.Signer,
+		Media:         s.opts.Media,
+		TTL:           s.opts.SignedURLTTL,
+	}
+}
+
+func (s *MQTTSender) inlineBudget() int64 {
+	if s.opts.InlineMaxBytes <= 0 {
+		return int64(DefaultInlineMaxKB) * 1024
+	}
+	return s.opts.InlineMaxBytes
+}
+
+// inlineImages implements the base64 image mode. Images claim the raw-byte budget in
+// inlinePriority order; an image that does not fit falls back to a URL when one can be
+// minted and is omitted (with a warning) otherwise.
+func (s *MQTTSender) inlineImages(ctx context.Context, ev record.AlarmEvent) []ImageInfo {
+	candidates := imageCandidates(ev)
+	byRole := make(map[string]ImageInfo, len(candidates))
+	remaining := s.inlineBudget()
+	params := s.imageURLParams()
+
+	for _, role := range inlinePriority {
+		idx := slices.IndexFunc(candidates, func(c imageCandidate) bool { return c.role == role })
+		if idx < 0 {
+			continue
+		}
+		c := candidates[idx]
+		info := newImageInfo(c.role)
+		signed, ok := mintImageURL(
+			ctx,
+			params,
+			c.relPath,
+			false,
+		)
+		if ok {
+			info.URL = &signed.url
+			info.URLExpiresAt = &signed.expiresAt
+		}
+
+		data, size, err := s.readWithinBudget(ctx, c.relPath, remaining)
+		if size >= 0 {
+			info.SizeBytes = &size
+		}
+		if err == nil {
+			encoded := base64.StdEncoding.EncodeToString(data)
+			info.Base64 = &encoded
+			remaining -= int64(len(data))
+		}
+
+		if info.Base64 == nil && info.URL == nil {
+			s.logger.Warn("image omitted from mqtt payload: exceeds inline budget and no url available",
+				zap.String("role", c.role),
+				zap.Int64("size_bytes", size),
+				zap.Int64("remaining_budget_bytes", remaining),
+				zap.Error(err),
+			)
+			continue
+		}
+		byRole[c.role] = info
 	}
 
-	f, info, err := s.opts.Media.OpenContent(ctx, ev.ImagePath)
+	images := make([]ImageInfo, 0, len(byRole))
+	for _, c := range candidates {
+		if info, ok := byRole[c.role]; ok {
+			images = append(images, info)
+		}
+	}
+	return images
+}
+
+var errInlineBudgetExceeded = errors.New("image exceeds remaining inline budget")
+
+// readWithinBudget reads an image only if it fits the remaining budget. size is -1 when
+// the file could not be opened. The LimitReader guards against the file growing between
+// stat and read.
+func (s *MQTTSender) readWithinBudget(
+	ctx context.Context,
+	relPath string,
+	remaining int64,
+) ([]byte, int64, error) {
+	if s.opts.Media == nil {
+		return nil, -1, errors.New("media reader is not configured")
+	}
+	f, info, err := s.opts.Media.OpenContent(ctx, relPath)
 	if err != nil {
-		s.logger.Warn(
-			"failed to open media file for base64",
-			zap.String("path", ev.ImagePath),
-			zap.Error(err),
-		)
-		payload.ImageReady = false
-		return
+		return nil, -1, err
 	}
 	defer func() {
 		if closeErr := f.Close(); closeErr != nil {
-			s.logger.Debug("close base64 media file", zap.Error(closeErr))
+			s.logger.Debug("close inline media file", zap.Error(closeErr))
 		}
 	}()
 
-	if info.SizeBytes > maxMQTTBase64Bytes {
-		s.logger.Warn(
-			"image size exceeds 500KB limit, dropping base64 image",
-			zap.Int64("bytes", info.SizeBytes),
-			zap.String("path", ev.ImagePath),
-		)
-		payload.ImageReady = false
-		return
+	if info.SizeBytes > remaining {
+		return nil, info.SizeBytes, errInlineBudgetExceeded
 	}
-
-	data, err := io.ReadAll(io.LimitReader(f, maxMQTTBase64Bytes+1))
-	if err != nil || len(data) > maxMQTTBase64Bytes {
-		payload.ImageReady = false
-		return
+	data, err := io.ReadAll(io.LimitReader(f, remaining+1))
+	if err != nil {
+		return nil, info.SizeBytes, err
 	}
-
-	b64Str := base64.StdEncoding.EncodeToString(data)
-	payload.ImageBase64 = &b64Str
-	payload.ImageReady = true
+	if int64(len(data)) > remaining {
+		return nil, info.SizeBytes, errInlineBudgetExceeded
+	}
+	return data, info.SizeBytes, nil
 }

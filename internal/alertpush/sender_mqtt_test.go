@@ -108,7 +108,7 @@ func TestMQTTSenderBase64AndURL(t *testing.T) {
 		CapturedAt: time.Now().UTC(),
 	}
 
-	if err := sender.Send(context.Background(), ev); err != nil {
+	if err := sender.Send(context.Background(), Delivery{Event: ev}); err != nil {
 		t.Fatalf("Send failed: %v", err)
 	}
 
@@ -131,14 +131,17 @@ func TestMQTTSenderBase64AndURL(t *testing.T) {
 		t.Fatal("expected message received on subscriber, got none")
 	}
 
-	var payload AlarmPayload
+	var payload EventPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		t.Fatalf("unmarshal payload failed: %v", err)
 	}
-	if !payload.ImageReady || payload.ImageBase64 == nil {
-		t.Fatalf("expected ImageReady true and base64 populated, got ready=%v", payload.ImageReady)
+	if len(payload.Images) != 1 || payload.Images[0].Role != ImageRoleScene || payload.Images[0].Base64 == nil {
+		t.Fatalf("expected inlined scene image, got %+v", payload.Images)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(*payload.ImageBase64)
+	if payload.SchemaVersion != SchemaVersion || payload.Alarm == nil {
+		t.Fatalf("unexpected envelope: %+v", payload)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(*payload.Images[0].Base64)
 	if err != nil {
 		t.Fatalf("base64 decode failed: %v", err)
 	}
@@ -196,7 +199,7 @@ func TestMQTTSenderBase64OversizedFallback(t *testing.T) {
 		CapturedAt: time.Now().UTC(),
 	}
 
-	if err := sender.Send(context.Background(), ev); err != nil {
+	if err := sender.Send(context.Background(), Delivery{Event: ev}); err != nil {
 		t.Fatalf("Send failed: %v", err)
 	}
 
@@ -215,15 +218,12 @@ func TestMQTTSenderBase64OversizedFallback(t *testing.T) {
 	payloadBytes := received
 	mu.Unlock()
 
-	var payload AlarmPayload
+	var payload EventPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		t.Fatalf("unmarshal payload failed: %v", err)
 	}
-	if payload.ImageReady {
-		t.Error("expected ImageReady=false when image exceeds 500KB")
-	}
-	if payload.ImageBase64 != nil {
-		t.Error("expected ImageBase64 to be nil when image exceeds 500KB")
+	if len(payload.Images) != 0 {
+		t.Errorf("expected oversized image without url to be omitted, got %+v", payload.Images)
 	}
 }
 
@@ -266,7 +266,7 @@ func TestMQTTSenderRespectsContextCancel(t *testing.T) {
 	}
 
 	start := time.Now()
-	err = sender.Send(ctx, ev)
+	err = sender.Send(ctx, Delivery{Event: ev})
 	if err != context.Canceled {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -306,6 +306,7 @@ func TestMQTTSenderHeartbeatAndGracefulOffline(t *testing.T) {
 		HeartbeatTopic:    "zhulong/status/box01",
 		LWTEnabled:        true,
 		QoS:               1,
+		NextSeq:           func() uint64 { return 99 },
 		Identity:          identity,
 	})
 	if err != nil {
@@ -323,11 +324,12 @@ func TestMQTTSenderHeartbeatAndGracefulOffline(t *testing.T) {
 
 	select {
 	case raw := <-msgCh:
-		var hb HeartbeatPayload
+		var hb EventPayload
 		if err := json.Unmarshal(raw, &hb); err != nil {
 			t.Fatalf("unmarshal heartbeat: %v", err)
 		}
-		headerOK := hb.EventType == EventTypeHeartbeat && hb.Seq == 3 && hb.DeviceID == "box-01"
+		headerOK := hb.EventType == EventTypeHeartbeat && hb.Seq != nil && *hb.Seq == 3 &&
+			hb.DeviceID != nil && *hb.DeviceID == "box-01" && hb.Heartbeat != nil
 		if !headerOK {
 			t.Fatalf("unexpected mqtt heartbeat: %+v", hb)
 		}
@@ -351,18 +353,19 @@ func TestMQTTSenderHeartbeatAndGracefulOffline(t *testing.T) {
 
 	select {
 	case raw := <-msgCh:
-		var offline mqttOfflineGracefulPayload
+		var offline EventPayload
 		if err := json.Unmarshal(raw, &offline); err != nil {
 			t.Fatalf("unmarshal graceful offline: %v", err)
 		}
-		if offline.EventType != EventTypeOffline || offline.Reason != OfflineReasonGracefulShutdown {
+		if offline.EventType != EventTypeOffline || offline.Offline == nil ||
+			offline.Offline.Reason != OfflineReasonGracefulShutdown {
 			t.Fatalf("unexpected graceful offline payload: %+v", offline)
 		}
-		fieldsPopulated := offline.DeviceID == "box-01-renamed" &&
-			offline.ReportedAt != "" &&
+		fieldsPopulated := offline.DeviceID != nil && *offline.DeviceID == "box-01-renamed" &&
+			offline.SentAt != nil && offline.Seq != nil && *offline.Seq == 99 &&
 			offline.ID != ""
 		if !fieldsPopulated {
-			t.Fatalf("expected populated id/device_id/reported_at on graceful offline: %+v", offline)
+			t.Fatalf("expected populated id/device_id/seq/sent_at on graceful offline: %+v", offline)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for graceful offline MQTT message")
