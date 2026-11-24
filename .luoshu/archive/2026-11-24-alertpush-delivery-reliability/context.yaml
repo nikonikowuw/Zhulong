@@ -1,0 +1,13 @@
+version: 1
+change_id: 2026-11-24-alertpush-delivery-reliability
+mode: quick
+base_commit: 544f56a1f3310fe557d8b6c48685173078bec0e9
+created_at: 2026-11-24T05:16:55.674Z
+specs:
+  - backend/alertpush-guidelines.md
+rules:
+  - go-host/code-style
+  - go-host/concurrency-and-errors
+  - go-host/test-wiring
+  - native/native-link-and-abi
+new_specs: []

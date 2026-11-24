@@ -472,3 +472,113 @@ func TestDispatcherMQTTHotReloadNoSessionKickOrFalseOffline(t *testing.T) {
 		t.Fatalf("expected graceful_shutdown offline on Stop, got %+v", offline)
 	}
 }
+
+type budgetAwareSender struct {
+	mu          sync.Mutex
+	eventBudget time.Duration
+	hbBudget    time.Duration
+	eventRemain time.Duration
+	hbRemain    time.Duration
+	eventDoneCh chan struct{}
+	hbDoneCh    chan struct{}
+	eventOnce   sync.Once
+	hbOnce      sync.Once
+}
+
+func (s *budgetAwareSender) EventSendBudget() time.Duration     { return s.eventBudget }
+func (s *budgetAwareSender) HeartbeatSendBudget() time.Duration { return s.hbBudget }
+
+func (s *budgetAwareSender) Send(ctx context.Context, _ record.AlarmEvent) error {
+	if dl, ok := ctx.Deadline(); ok {
+		s.mu.Lock()
+		s.eventRemain = time.Until(dl)
+		s.mu.Unlock()
+	}
+	s.eventOnce.Do(func() { close(s.eventDoneCh) })
+	return nil
+}
+
+func (s *budgetAwareSender) SendHeartbeat(ctx context.Context, _ HeartbeatSnapshot, _ uint64) error {
+	if dl, ok := ctx.Deadline(); ok {
+		s.mu.Lock()
+		s.hbRemain = time.Until(dl)
+		s.mu.Unlock()
+	}
+	s.hbOnce.Do(func() { close(s.hbDoneCh) })
+	return nil
+}
+
+func (s *budgetAwareSender) Close() error { return nil }
+
+func TestDispatcherUsesSenderTimeoutBudgets(t *testing.T) {
+	d := NewDispatcher(DispatcherOptions{Logger: zap.NewNop()})
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		if err := d.Stop(ctx); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	}()
+
+	sender := &budgetAwareSender{
+		eventBudget: 25 * time.Second,
+		hbBudget:    18 * time.Second,
+		eventDoneCh: make(chan struct{}),
+		hbDoneCh:    make(chan struct{}),
+	}
+	w := newDestinationWorker(destinationWorkerOptions{
+		dest: &AlertDestination{
+			ID:               "budget_worker",
+			ChannelType:      ChannelTypeWebhook,
+			EventsEnabled:    true,
+			HeartbeatEnabled: true,
+		},
+		sender:            sender,
+		heartbeatInterval: 50 * time.Millisecond,
+		noJitter:          true,
+		fingerprint:       "fp-budget",
+		logger:            zap.NewNop(),
+	})
+
+	d.mu.Lock()
+	d.workers[w.id] = w
+	d.mu.Unlock()
+	w.start()
+
+	d.Dispatch(record.AlarmEvent{ID: "ev-budget", CameraID: "cam-1"})
+
+	select {
+	case <-sender.eventDoneCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event delivery")
+	}
+	select {
+	case <-sender.hbDoneCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for heartbeat delivery")
+	}
+
+	sender.mu.Lock()
+	eventRemain := sender.eventRemain
+	hbRemain := sender.hbRemain
+	sender.mu.Unlock()
+
+	if eventRemain <= 20*time.Second {
+		t.Fatalf("event ctx budget was truncated: remaining=%v, want >20s", eventRemain)
+	}
+	if hbRemain <= 14*time.Second {
+		t.Fatalf("heartbeat ctx budget was truncated: remaining=%v, want >14s", hbRemain)
+	}
+
+	// Plain sender without timeoutBudgets keeps the 10s default.
+	plain := newDestinationWorker(destinationWorkerOptions{
+		dest:   &AlertDestination{ID: "plain", ChannelType: ChannelTypeWebhook},
+		sender: &mockSender{},
+		logger: zap.NewNop(),
+	})
+	if plain.eventSendBudget() != defaultSendBudget || plain.heartbeatSendBudget() != defaultSendBudget {
+		t.Fatalf("expected defaultSendBudget=%v for plain sender", defaultSendBudget)
+	}
+}

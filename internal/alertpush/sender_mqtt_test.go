@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -378,5 +379,113 @@ func TestMQTTSenderHeartbeatTopicWildcardRejected(t *testing.T) {
 	})
 	if err != ErrMQTTWildcardTopic {
 		t.Fatalf("expected ErrMQTTWildcardTopic for heartbeat_topic, got %v", err)
+	}
+}
+
+// startSilentTCPListener accepts connections and never responds, simulating a
+// blackholed MQTT broker that stalls the CONNACK handshake.
+func startSilentTCPListener(t *testing.T) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen silent tcp: %v", err)
+	}
+	var mu sync.Mutex
+	conns := []net.Conn{}
+	go func() {
+		for {
+			c, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	return "tcp://" + ln.Addr().String(), func() {
+		if closeErr := ln.Close(); closeErr != nil {
+			t.Errorf("close silent listener: %v", closeErr)
+		}
+		mu.Lock()
+		for _, c := range conns {
+			if cErr := c.Close(); cErr != nil && !errors.Is(cErr, net.ErrClosed) {
+				t.Errorf("close accepted conn: %v", cErr)
+			}
+		}
+		mu.Unlock()
+	}
+}
+
+func TestMQTTSenderConnectTimeoutReturnsError(t *testing.T) {
+	brokerURL, cleanup := startSilentTCPListener(t)
+	defer cleanup()
+
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:             "mqtt_timeout",
+		ImageMode:      ImageModeBase64,
+		Broker:         brokerURL,
+		ClientID:       "zhulong-timeout-1",
+		Topic:          "zhulong/alerts/timeout",
+		ConnectTimeout: 150 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	start := time.Now()
+	connectErr := sender.Connect()
+	elapsed := time.Since(start)
+	if !errors.Is(connectErr, ErrMQTTNotConnected) {
+		t.Fatalf("expected ErrMQTTNotConnected on connect timeout, got %v", connectErr)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Connect() took %v, expected prompt timeout near 150ms", elapsed)
+	}
+}
+
+func TestMQTTSenderCloseUnblocksInFlightConnect(t *testing.T) {
+	brokerURL, cleanup := startSilentTCPListener(t)
+	defer cleanup()
+
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:             "mqtt_close_race",
+		ImageMode:      ImageModeBase64,
+		Broker:         brokerURL,
+		ClientID:       "zhulong-close-1",
+		Topic:          "zhulong/alerts/close",
+		ConnectTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+
+	connectErrCh := make(chan error, 1)
+	go func() {
+		connectErrCh <- sender.Connect()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	closeStart := time.Now()
+	if closeErr := sender.Close(); closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+	if elapsed := time.Since(closeStart); elapsed > 500*time.Millisecond {
+		t.Fatalf("Close() blocked for %v while Connect() was in flight", elapsed)
+	}
+
+	select {
+	case connectErr := <-connectErrCh:
+		if connectErr == nil {
+			t.Fatal("expected non-nil error from Connect() after Close()")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Connect() did not unblock promptly after Close()")
 	}
 }
