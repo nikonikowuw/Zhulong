@@ -115,6 +115,27 @@ func (s *WebhookSender) Close() error {
 	return nil
 }
 
+// EventSendBudget returns the total context budget needed for up to 3 attempts
+// plus retry backoffs (~1.15s max) so the worker never truncates client.Timeout.
+func (s *WebhookSender) EventSendBudget() time.Duration {
+	const (
+		attempts       = 3
+		backoffCeiling = 2 * time.Second
+	)
+	if s.client == nil || s.client.Timeout <= 0 {
+		return defaultSendBudget
+	}
+	return attempts*s.client.Timeout + backoffCeiling
+}
+
+// HeartbeatSendBudget returns the single-shot context budget for one heartbeat POST.
+func (s *WebhookSender) HeartbeatSendBudget() time.Duration {
+	if s.client == nil || s.client.Timeout <= 0 {
+		return defaultSendBudget
+	}
+	return max(defaultSendBudget, s.client.Timeout+time.Second)
+}
+
 // Send dispatches a perception event via Webhook according to the configured image mode.
 // Retries reuse the delivery's id and seq; only sent_at is re-stamped per attempt.
 func (s *WebhookSender) Send(ctx context.Context, d Delivery) error {

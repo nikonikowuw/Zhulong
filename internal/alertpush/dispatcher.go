@@ -619,7 +619,7 @@ func (w *destinationWorker) runEvents() {
 				}
 			}
 		case qe := <-w.queue:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), w.eventSendBudget())
 			err := w.sender.Send(ctx, w.delivery(ctx, qe))
 			cancel()
 
@@ -692,7 +692,7 @@ func (w *destinationWorker) runHeartbeats() {
 				}
 			}
 
-			sendCtx, cancel := context.WithTimeout(w.hbCtx, 10*time.Second)
+			sendCtx, cancel := context.WithTimeout(w.hbCtx, w.heartbeatSendBudget())
 			snap := resolveHeartbeatSnapshot(sendCtx, w.snapshotProvider, w.publicBaseURL)
 			seq := w.seqCounter.Add(1)
 			err := w.sender.SendHeartbeat(sendCtx, snap, seq)
@@ -739,6 +739,24 @@ func (w *destinationWorker) recordSuccess() {
 	w.lastError.Store("")
 	now := time.Now().UTC()
 	w.lastSuccessAt.Store(&now)
+}
+
+func (w *destinationWorker) eventSendBudget() time.Duration {
+	if b, ok := w.sender.(timeoutBudgets); ok {
+		if d := b.EventSendBudget(); d > 0 {
+			return d
+		}
+	}
+	return defaultSendBudget
+}
+
+func (w *destinationWorker) heartbeatSendBudget() time.Duration {
+	if b, ok := w.sender.(timeoutBudgets); ok {
+		if d := b.HeartbeatSendBudget(); d > 0 {
+			return d
+		}
+	}
+	return defaultSendBudget
 }
 
 func (w *destinationWorker) initialHeartbeatDelay() time.Duration {

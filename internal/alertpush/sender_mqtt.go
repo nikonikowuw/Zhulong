@@ -55,6 +55,7 @@ type MQTTSenderOptions struct {
 	LWTEnabled        bool
 	QoS               uint8
 	KeepAlive         time.Duration
+	ConnectTimeout    time.Duration
 	TLSSkipVerify     bool
 	// InlineMaxBytes caps the raw bytes of all base64-inlined images per message.
 	// Zero or negative means DefaultInlineMaxKB.
@@ -69,13 +70,15 @@ type MQTTSenderOptions struct {
 
 // MQTTSender dispatches alert and heartbeat events over MQTT protocol.
 type MQTTSender struct {
-	opts         MQTTSenderOptions
-	client       mqtt.Client
-	willDeviceID string
-	willArmed    bool
-	logger       *zap.Logger
-	mu           sync.Mutex
-	closed       bool
+	opts           MQTTSenderOptions
+	client         mqtt.Client
+	connectTimeout time.Duration
+	willDeviceID   string
+	willArmed      bool
+	logger         *zap.Logger
+	mu             sync.Mutex
+	closed         bool
+	closeCh        chan struct{}
 }
 
 // NewMQTTSender constructs a new MQTTSender.
@@ -107,12 +110,16 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 	if keepAlive <= 0 {
 		keepAlive = 30 * time.Second
 	}
+	connectTimeout := opts.ConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = 5 * time.Second
+	}
 
 	clientOpts := mqtt.NewClientOptions().
 		AddBroker(opts.Broker).
 		SetClientID(opts.ClientID).
 		SetKeepAlive(keepAlive).
-		SetConnectTimeout(5 * time.Second).
+		SetConnectTimeout(connectTimeout).
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
 		SetConnectRetryInterval(2 * time.Second)
@@ -162,11 +169,13 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 
 	client := mqtt.NewClient(clientOpts)
 	sender := &MQTTSender{
-		opts:         opts,
-		client:       client,
-		willDeviceID: willDeviceID,
-		willArmed:    willArmed,
-		logger:       logger.Named("alertpush.mqtt").With(zap.String("destination_id", opts.ID)),
+		opts:           opts,
+		client:         client,
+		connectTimeout: connectTimeout,
+		willDeviceID:   willDeviceID,
+		willArmed:      willArmed,
+		logger:         logger.Named("alertpush.mqtt").With(zap.String("destination_id", opts.ID)),
+		closeCh:        make(chan struct{}),
 	}
 
 	return sender, nil
@@ -187,25 +196,47 @@ func (s *MQTTSender) hasStaleWillDeviceID() bool {
 	return s.willDeviceID != resolveDeviceID(s.opts.Identity)
 }
 
-// Connect initiates connection to the MQTT broker asynchronously or returns error.
+// Connect establishes the MQTT broker connection with a bounded timeout without
+// holding s.mu across the network wait, so Close() is never stalled by an
+// unreachable broker.
 func (s *MQTTSender) Connect() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return errors.New("mqtt sender is closed")
 	}
-	if s.client.IsConnected() {
+	client := s.client
+	timeout := s.connectTimeout
+	closeCh := s.closeCh
+	s.mu.Unlock()
+
+	if client.IsConnected() {
 		return nil
 	}
-	token := s.client.Connect()
-	if token.WaitTimeout(5*time.Second) && token.Error() != nil {
-		s.logger.Warn("mqtt broker connect failed",
+
+	token := client.Connect()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-closeCh:
+		return errors.New("mqtt sender is closed")
+	case <-token.Done():
+		if err := token.Error(); err != nil {
+			s.logger.Warn("mqtt broker connect failed",
+				zap.String("broker", logsafe.URL(s.opts.Broker)),
+				zap.Error(err),
+			)
+			return err
+		}
+		return nil
+	case <-timer.C:
+		s.logger.Warn("mqtt broker connect timed out",
 			zap.String("broker", logsafe.URL(s.opts.Broker)),
-			zap.Error(token.Error()),
+			zap.Duration("timeout", timeout),
 		)
-		return token.Error()
+		return fmt.Errorf("%w: connect timed out after %s", ErrMQTTNotConnected, timeout)
 	}
-	return nil
 }
 
 // IsConnected returns whether the underlying client is connected to broker.
@@ -234,6 +265,9 @@ func (s *MQTTSender) closeInternal(emitOffline bool) error {
 		return nil
 	}
 	s.closed = true
+	if s.closeCh != nil {
+		close(s.closeCh)
+	}
 	if s.client != nil && s.client.IsConnected() {
 		if emitOffline && s.willArmed {
 			s.publishGracefulOfflineLocked()
@@ -327,7 +361,10 @@ func (s *MQTTSender) ensureConnected() error {
 
 	if !s.client.IsConnected() {
 		if err := s.Connect(); err != nil {
-			return fmt.Errorf("%w: %v", ErrMQTTNotConnected, err)
+			if errors.Is(err, ErrMQTTNotConnected) {
+				return err
+			}
+			return fmt.Errorf("%w: %w", ErrMQTTNotConnected, err)
 		}
 	}
 	return nil
@@ -340,7 +377,10 @@ func (s *MQTTSender) publishBytes(ctx context.Context, topic string, data []byte
 		false,
 		data,
 	)
-	publishTimeout := 5 * time.Second
+	const publishTimeout = 5 * time.Second
+	timer := time.NewTimer(publishTimeout)
+	defer timer.Stop()
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -349,7 +389,7 @@ func (s *MQTTSender) publishBytes(ctx context.Context, topic string, data []byte
 			s.logger.Warn("mqtt publish failed", zap.Error(err))
 			return fmt.Errorf("%w: %v", ErrMQTTPublishFailed, err)
 		}
-	case <-time.After(publishTimeout):
+	case <-timer.C:
 		return fmt.Errorf("%w: timeout waiting for ack", ErrMQTTPublishFailed)
 	}
 	return nil

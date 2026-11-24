@@ -49,6 +49,15 @@ type Sender interface {
 	Close() error
 }
 
+const defaultSendBudget = 10 * time.Second
+
+// timeoutBudgets allows a Sender to declare the context budgets it needs so the
+// worker does not silently truncate configured per-request timeouts or retries.
+type timeoutBudgets interface {
+	EventSendBudget() time.Duration
+	HeartbeatSendBudget() time.Duration
+}
+
 // DeviceIDProvider supplies the stable business identity of this host. An
 // aggregation platform needs it to tell which edge box pushed an event; the hostname
 // is not usable because flashed images routinely share it.

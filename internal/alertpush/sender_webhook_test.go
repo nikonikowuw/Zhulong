@@ -442,3 +442,58 @@ func TestSameOrigin(t *testing.T) {
 		})
 	}
 }
+
+func TestWebhookSenderSendBudgets(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeout   time.Duration
+		wantEvent time.Duration
+		wantHB    time.Duration
+	}{
+		{
+			name:      "default 5s timeout",
+			timeout:   0,
+			wantEvent: 17 * time.Second,
+			wantHB:    10 * time.Second,
+		},
+		{
+			name:      "15s timeout exceeds legacy 10s cap",
+			timeout:   15 * time.Second,
+			wantEvent: 47 * time.Second,
+			wantHB:    16 * time.Second,
+		},
+		{
+			name:      "30s max timeout",
+			timeout:   30 * time.Second,
+			wantEvent: 92 * time.Second,
+			wantHB:    31 * time.Second,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sender, err := NewWebhookSender(WebhookSenderOptions{
+				ID:                "dest_budget",
+				ImageMode:         ImageModeURL,
+				SkipImageURLCheck: true,
+				URL:               "https://example.com/events",
+				Timeout:           tc.timeout,
+			})
+			if err != nil {
+				t.Fatalf("NewWebhookSender: %v", err)
+			}
+			defer func() {
+				if closeErr := sender.Close(); closeErr != nil {
+					t.Errorf("Close: %v", closeErr)
+				}
+			}()
+
+			if got := sender.EventSendBudget(); got != tc.wantEvent {
+				t.Errorf("EventSendBudget() = %v, want %v", got, tc.wantEvent)
+			}
+			if got := sender.HeartbeatSendBudget(); got != tc.wantHB {
+				t.Errorf("HeartbeatSendBudget() = %v, want %v", got, tc.wantHB)
+			}
+		})
+	}
+}
