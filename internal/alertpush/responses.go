@@ -40,6 +40,8 @@ type AlertDestinationConfigInfo struct {
 	KeepAliveSeconds         *int    `json:"keepAliveSeconds,omitempty"`
 	TLSSkipVerify            bool    `json:"tlsSkipVerify,omitempty"`
 	HeartbeatIntervalSeconds *int    `json:"heartbeatIntervalSeconds,omitempty"`
+	// InlineMaxKB is the MQTT base64 inline image budget (64..8192 KiB, default 500).
+	InlineMaxKB *int `json:"inlineMaxKb,omitempty"`
 }
 
 // AlertDestinationFilterInfo exposes event type, algorithm and camera filtering.

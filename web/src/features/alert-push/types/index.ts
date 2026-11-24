@@ -21,6 +21,8 @@ export interface MQTTConfig {
   keepAliveSeconds?: number
   tlsSkipVerify?: boolean
   heartbeatIntervalSeconds?: number
+  /** base64 模式内联图片原始字节预算（KB） */
+  inlineMaxKb?: number
 }
 
 export interface DestinationFilter {

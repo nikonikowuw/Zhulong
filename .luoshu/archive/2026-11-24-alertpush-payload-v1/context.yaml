@@ -1,0 +1,25 @@
+version: 1
+change_id: 2026-11-24-alertpush-payload-v1
+mode: full
+base_commit: 544f56a1f3310fe557d8b6c48685173078bec0e9
+created_at: 2026-11-24T03:30:41.344Z
+specs:
+  - architecture.md
+  - backend/alertpush-guidelines.md
+  - backend/record-guidelines.md
+  - backend/database-guidelines.md
+  - backend/dependency-injection.md
+  - backend/http-api-guidelines.md
+  - frontend/index.md
+  - guides/cross-layer-thinking-guide.md
+rules:
+  - go-host/code-style
+  - go-host/concurrency-and-errors
+  - go-host/http-contract
+  - go-host/test-wiring
+  - data/sqlite-persistence
+  - data/media-storage-boundary
+  - native/native-link-and-abi
+  - web/frontend-api-boundary
+  - web/frontend-browser-tests
+new_specs: []

@@ -118,16 +118,19 @@
     "filterEvents": "Event Type Subscription (Empty for all)",
     "filterAlgorithms": "Algorithm Filter (empty for all)",
     "filterCameras": "Camera Filter (empty for all)",
-    "secretRetained": "Credential saved; leave empty to keep unchanged"
+    "secretRetained": "Credential saved; leave empty to keep unchanged",
+    "inlineMaxKb": "Inline image budget",
+    "inlineMaxKbUnit": "KB",
+    "inlineMaxKbHint": "Total raw size of images inlined as Base64 per message (64–8192 KB). Base64 adds ~33%, so keep it below your broker limit: AWS IoT 128 KB, Azure IoT Hub 256 KB, EMQX 1 MB by default."
   },
   "eventTypes": {
     "all": "All Events",
     "alarm": "Safety & Behavior Alarms",
     "alarmDesc": "Intrusion, boundary crossing, loitering and behavioral safety events",
-    "face_recognition": "Face Recognition",
-    "face_recognitionDesc": "Target list matches, stranger captures and facial feature verification",
-    "plate_recognition": "Vehicle & Plate Recognition",
-    "plate_recognitionDesc": "Vehicle structured recognition, license plate reading and list checks"
+    "face": "Face Recognition",
+    "faceDesc": "Target list matches, stranger captures and facial feature verification",
+    "vehicle": "Vehicle & Plate Recognition",
+    "vehicleDesc": "Vehicle structured recognition, license plate reading and list checks"
   },
   "channelTypes": {
     "webhook": "HTTP Webhook",
@@ -141,7 +144,7 @@
     "multipart": "Multipart Attachment",
     "multipartDesc": "Raw image bytes uploaded as multipart form data in the same HTTP request",
     "base64": "Base64 Inline",
-    "base64Desc": "Image encoded as Base64 string directly inside JSON payload (≤500KB)"
+    "base64Desc": "Small images (crops first) are inlined as Base64 within the configured budget; larger ones such as 4K scenes are delivered as URLs (requires public_base_url), otherwise omitted"
   },
   "authTypes": {
     "none": "None",
@@ -183,7 +186,8 @@
     "headerKeyRequired": "Header name is required",
     "headerValueRequired": "Header value is required",
     "headerValueReenterRequired": "Re-enter header value when modifying custom headers, or remove this header",
-    "conflictFallback": "Destination configuration conflicts with an existing entry. Please review and try again."
+    "conflictFallback": "Destination configuration conflicts with an existing entry. Please review and try again.",
+    "inlineMaxKbRange": "Inline image budget must be between 64 and 8192 KB"
   },
   "toast": {
     "created": "Alert destination created",

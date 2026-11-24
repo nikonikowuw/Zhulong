@@ -505,6 +505,9 @@ func (h *Handler) resolveExistingTestTarget(
 		if req.Config.Broker != "" || req.Config.TLSSkipVerify {
 			cfg.TLSSkipVerify = req.Config.TLSSkipVerify
 		}
+		if req.Config.InlineMaxKB != nil {
+			cfg.InlineMaxKB = *req.Config.InlineMaxKB
+		}
 		cfgBytes, err := json.Marshal(cfg)
 		if err != nil {
 			return nil, nil, err
@@ -607,6 +610,7 @@ func (h *Handler) resolveDraftTestTarget(
 			TLSSkipVerify:            req.Config.TLSSkipVerify,
 			HeartbeatIntervalSeconds: hbInterval,
 			HeartbeatTopic:           hbTopic,
+			InlineMaxKB:              inlineMaxKBFromInfo(req.Config.InlineMaxKB),
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("marshal mqtt config: %w", err)
@@ -792,6 +796,7 @@ func (h *Handler) parseMQTTCreate(
 		HeartbeatIntervalSeconds: hbInterval,
 		HeartbeatTopic:           hbTopic,
 		LWTEnabled:               &lwtEnabled,
+		InlineMaxKB:              inlineMaxKBFromInfo(req.Config.InlineMaxKB),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal mqtt config: %w", err)
@@ -972,6 +977,9 @@ func (h *Handler) applyMQTTUpdate(
 			curCfg.KeepAliveSeconds = *req.Config.KeepAliveSeconds
 		}
 		curCfg.TLSSkipVerify = req.Config.TLSSkipVerify
+		if req.Config.InlineMaxKB != nil {
+			curCfg.InlineMaxKB = *req.Config.InlineMaxKB
+		}
 
 		if req.Config.ClientID != "" {
 			cID := req.Config.ClientID
@@ -1071,6 +1079,8 @@ func (h *Handler) toResponse(
 		resp.Config.KeepAliveSeconds = &cfg.KeepAliveSeconds
 		resp.Config.TLSSkipVerify = cfg.TLSSkipVerify
 		resp.Config.HeartbeatIntervalSeconds = &hbInterval
+		inlineMaxKB := normalizeInlineMaxKB(cfg.InlineMaxKB)
+		resp.Config.InlineMaxKB = &inlineMaxKB
 		if dest.MQTTClientID != nil {
 			resp.Config.ClientID = *dest.MQTTClientID
 		}
@@ -1091,6 +1101,10 @@ func (h *Handler) writeValidationError(c *gin.Context, err error) {
 	}
 	if errors.Is(err, ErrInvalidImageMode) {
 		httputil.WriteError(c, apperr.Invalid(CodeAlertImageModeUnsupported, err.Error(), err))
+		return
+	}
+	if errors.Is(err, ErrInvalidFilterEventType) {
+		httputil.WriteError(c, apperr.Invalid(CodeAlertEventTypeInvalid, err.Error(), err))
 		return
 	}
 	httputil.WriteError(c, apperr.Invalid(CodeAlertDestinationConfigInvalid, err.Error(), err))
@@ -1135,6 +1149,15 @@ func validateWebhookURL(rawURL string) error {
 
 func isValidTimeoutSeconds(v *int) bool {
 	return v != nil && *v >= 1 && *v <= 30
+}
+
+// inlineMaxKBFromInfo copies the optional API value verbatim; range checks live in
+// validateMQTTTarget so create, update and test share one rule. Absent means default (0).
+func inlineMaxKBFromInfo(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 func applyWebhookSecretOverrides(

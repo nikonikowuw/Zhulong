@@ -8,6 +8,7 @@ const (
 	CodeAlertDestinationConfigInvalid = "ALERT_DESTINATION_CONFIG_INVALID"
 	CodeAlertImageModeUnsupported     = "ALERT_IMAGE_MODE_UNSUPPORTED"
 	CodeAlertPublicBaseURLMissing     = "ALERT_PUBLIC_BASE_URL_MISSING"
+	CodeAlertEventTypeInvalid         = "ALERT_DESTINATION_EVENT_TYPE_INVALID"
 	CodeMediaURLInvalid               = "MEDIA_URL_INVALID"
 	CodeMediaURLExpired               = "MEDIA_URL_EXPIRED"
 )
@@ -38,6 +39,11 @@ func init() {
 			"en":      "Public base URL is not configured on the host",
 			"zh-Hans": "宿主未配置对外基地址（public_base_url），无法使用 URL 图片模式",
 			"zh-Hant": "宿主未設定對外基位址（public_base_url），無法使用 URL 圖片模式",
+		},
+		CodeAlertEventTypeInvalid: {
+			"en":      "Filter event types must be alarm, face or vehicle",
+			"zh-Hans": "过滤事件类型只能是 alarm、face 或 vehicle",
+			"zh-Hant": "過濾事件類型只能是 alarm、face 或 vehicle",
 		},
 		CodeMediaURLInvalid: {
 			"en":      "Signed media URL signature is invalid or tampered",

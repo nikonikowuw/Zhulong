@@ -45,6 +45,7 @@ import {
   type FilterOption,
 } from '../../hooks/use-destination-filter-options'
 import type { ImageMode } from '../../types'
+import { InlineBudgetField } from './inline-budget-field'
 
 const IMAGE_MODE_DESC_KEYS: Record<string, string> = {
   url: 'imageModes.urlDesc',
@@ -60,16 +61,16 @@ const EVENT_TYPE_OPTIONS = [
     descKey: 'eventTypes.alarmDesc',
   },
   {
-    type: 'face_recognition',
+    type: 'face',
     icon: UserCheck,
-    labelKey: 'eventTypes.face_recognition',
-    descKey: 'eventTypes.face_recognitionDesc',
+    labelKey: 'eventTypes.face',
+    descKey: 'eventTypes.faceDesc',
   },
   {
-    type: 'plate_recognition',
+    type: 'vehicle',
     icon: Car,
-    labelKey: 'eventTypes.plate_recognition',
-    descKey: 'eventTypes.plate_recognitionDesc',
+    labelKey: 'eventTypes.vehicle',
+    descKey: 'eventTypes.vehicleDesc',
   },
 ] as const
 
@@ -126,6 +127,10 @@ export function DestinationFiltersSection({
     control,
     name: 'channelType',
   })
+  const imageMode = useWatch({ control, name: 'imageMode' })
+  // 与图片模式下拉框的回退规则保持一致：切换协议时 imageMode 可能短暂为空
+  const effectiveImageMode =
+    imageMode || (channelType === 'mqtt' ? 'base64' : 'multipart')
 
   const selectedEventTypes =
     useWatch({
@@ -314,6 +319,10 @@ export function DestinationFiltersSection({
               )
             }}
           />
+
+          {channelType === 'mqtt' && effectiveImageMode === 'base64' ? (
+            <InlineBudgetField control={control} />
+          ) : null}
 
           {/* 可折叠的事件与通道过滤 */}
           <Collapsible

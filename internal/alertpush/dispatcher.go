@@ -39,6 +39,19 @@ type Config struct {
 	DeviceID DeviceIDProvider
 	// HeartbeatSnapshot supplies sanitized point-in-time host and workload summaries.
 	HeartbeatSnapshot HeartbeatSnapshotProvider
+	// Source resolves camera / algorithm display metadata per delivery. Nil leaves the
+	// names null; the payload still carries the raw IDs.
+	Source SourceResolver
+}
+
+// sourceResolveTimeout bounds metadata lookups so a slow store never stalls a worker
+// (or its retirement drain).
+const sourceResolveTimeout = 2 * time.Second
+
+// queuedEvent pairs an event with the sequence number assigned at enqueue time.
+type queuedEvent struct {
+	ev  record.AlarmEvent
+	seq uint64
 }
 
 // DispatcherOptions holds parameters for constructing a Dispatcher.
@@ -159,25 +172,10 @@ func (d *Dispatcher) Dispatch(ev record.AlarmEvent) {
 		if !w.eventsEnabled {
 			continue
 		}
-		if !w.filter.Matches(string(ev.EventType), ev.AlgorithmID, ev.CameraID) {
+		if !w.filter.Matches(externalEventType(ev.EventType), ev.AlgorithmID, ev.CameraID) {
 			continue
 		}
-
-		select {
-		case w.queue <- ev:
-		default:
-			// Queue full: drop oldest event and enqueue new event
-			select {
-			case <-w.queue:
-				w.dropped.Add(1)
-			default:
-			}
-			select {
-			case w.queue <- ev:
-			default:
-				w.dropped.Add(1)
-			}
-		}
+		w.enqueue(ev)
 	}
 }
 
@@ -319,6 +317,7 @@ func (d *Dispatcher) reconcile() {
 			snapshotProvider:  d.config.HeartbeatSnapshot,
 			publicBaseURL:     d.config.PublicBaseURL,
 			seqCounter:        d.counterFor(dest.ID),
+			sourceResolver:    d.config.Source,
 			onWillStale:       d.RequestReload,
 			logger:            d.logger,
 		})
@@ -427,6 +426,7 @@ func (d *Dispatcher) buildMQTTSender(dest *AlertDestination) (Sender, time.Durat
 	}
 
 	interval := time.Duration(normalizeHeartbeatInterval(cfg.HeartbeatIntervalSeconds)) * time.Second
+	counter := d.counterFor(dest.ID)
 	s, err := NewMQTTSender(MQTTSenderOptions{
 		ID:                dest.ID,
 		Name:              dest.Name,
@@ -447,6 +447,8 @@ func (d *Dispatcher) buildMQTTSender(dest *AlertDestination) (Sender, time.Durat
 		QoS:               cfg.QoS,
 		KeepAlive:         time.Duration(cfg.KeepAliveSeconds) * time.Second,
 		TLSSkipVerify:     cfg.TLSSkipVerify,
+		InlineMaxBytes:    int64(normalizeInlineMaxKB(cfg.InlineMaxKB)) * 1024,
+		NextSeq:           func() uint64 { return counter.Add(1) },
 		Identity:          d.config.DeviceID,
 		Logger:            d.logger,
 	})
@@ -466,6 +468,7 @@ type destinationWorkerOptions struct {
 	snapshotProvider  HeartbeatSnapshotProvider
 	publicBaseURL     string
 	seqCounter        *atomic.Uint64
+	sourceResolver    SourceResolver
 	onWillStale       func()
 	logger            *zap.Logger
 }
@@ -481,24 +484,28 @@ type destinationWorker struct {
 	snapshotProvider  HeartbeatSnapshotProvider
 	publicBaseURL     string
 	seqCounter        *atomic.Uint64
+	sourceResolver    SourceResolver
 	onWillStale       func()
 	filter            destinationFilter
 	sender            Sender
-	queue             chan record.AlarmEvent
-	dropped           atomic.Int64
-	state             atomic.Value // string
-	lastError         atomic.Value // string
-	lastSuccessAt     atomic.Pointer[time.Time]
-	fingerprint       string
-	started           atomic.Bool
-	suppressOffline   atomic.Bool
-	stopOnce          sync.Once
-	stopCh            chan struct{}
-	hbCtx             context.Context
-	hbCancel          context.CancelFunc
-	wg                sync.WaitGroup
-	doneCh            chan struct{}
-	logger            *zap.Logger
+	queue             chan queuedEvent
+	// enqueueMu makes seq assignment and enqueue one step, so concurrent Dispatch calls
+	// cannot reorder sequence numbers inside the queue.
+	enqueueMu       sync.Mutex
+	dropped         atomic.Int64
+	state           atomic.Value // string
+	lastError       atomic.Value // string
+	lastSuccessAt   atomic.Pointer[time.Time]
+	fingerprint     string
+	started         atomic.Bool
+	suppressOffline atomic.Bool
+	stopOnce        sync.Once
+	stopCh          chan struct{}
+	hbCtx           context.Context
+	hbCancel        context.CancelFunc
+	wg              sync.WaitGroup
+	doneCh          chan struct{}
+	logger          *zap.Logger
 }
 
 func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
@@ -532,10 +539,11 @@ func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
 		snapshotProvider:  opts.snapshotProvider,
 		publicBaseURL:     opts.publicBaseURL,
 		seqCounter:        seqCounter,
+		sourceResolver:    opts.sourceResolver,
 		onWillStale:       opts.onWillStale,
 		filter:            opts.filter,
 		sender:            opts.sender,
-		queue:             make(chan record.AlarmEvent, 16),
+		queue:             make(chan queuedEvent, 16),
 		fingerprint:       opts.fingerprint,
 		stopCh:            make(chan struct{}),
 		hbCtx:             hbCtx,
@@ -600,8 +608,8 @@ func (w *destinationWorker) runEvents() {
 			defer cancel()
 			for {
 				select {
-				case ev := <-w.queue:
-					if err := w.sender.Send(drainCtx, ev); err != nil {
+				case qe := <-w.queue:
+					if err := w.sender.Send(drainCtx, w.delivery(drainCtx, qe)); err != nil {
 						w.logger.Debug("failed to send drained event on retirement", zap.Error(err))
 					}
 				case <-drainCtx.Done():
@@ -610,9 +618,9 @@ func (w *destinationWorker) runEvents() {
 					return
 				}
 			}
-		case ev := <-w.queue:
+		case qe := <-w.queue:
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			err := w.sender.Send(ctx, ev)
+			err := w.sender.Send(ctx, w.delivery(ctx, qe))
 			cancel()
 
 			if err == nil {
@@ -625,6 +633,44 @@ func (w *destinationWorker) runEvents() {
 			}
 		}
 	}
+}
+
+// enqueue assigns the next sequence number and queues the event without blocking. When
+// the queue is full the oldest event is dropped; its sequence number becomes a gap the
+// receiver can observe.
+func (w *destinationWorker) enqueue(ev record.AlarmEvent) {
+	w.enqueueMu.Lock()
+	defer w.enqueueMu.Unlock()
+
+	qe := queuedEvent{ev: ev, seq: w.seqCounter.Add(1)}
+	select {
+	case w.queue <- qe:
+		return
+	default:
+	}
+	select {
+	case <-w.queue:
+		w.dropped.Add(1)
+	default:
+	}
+	select {
+	case w.queue <- qe:
+	default:
+		w.dropped.Add(1)
+	}
+}
+
+// delivery resolves source metadata off the Dispatch hot path. The lookup gets its own
+// short deadline derived from parent so it can neither outlive the send nor stall it.
+func (w *destinationWorker) delivery(parent context.Context, qe queuedEvent) Delivery {
+	d := Delivery{Event: qe.ev, Seq: qe.seq}
+	if w.sourceResolver == nil {
+		return d
+	}
+	ctx, cancel := context.WithTimeout(parent, sourceResolveTimeout)
+	defer cancel()
+	d.Source = w.sourceResolver.ResolveSource(ctx, qe.ev.CameraID, qe.ev.AlgorithmID)
+	return d
 }
 
 func (w *destinationWorker) runHeartbeats() {

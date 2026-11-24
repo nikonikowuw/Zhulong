@@ -22,7 +22,7 @@
 | [GB/T 28181 国标信令接入](./gb28181-guidelines.md) | SIP 信令分层、Digest 认证、AES 密文探针、可降级启动与未验证互操作边界 |
 | [感知记录与抓拍](./record-guidelines.md) | 推理结果过滤与 fan-out、记录归属快照、异步证据图和记录保留清理 |
 | [空间画布与轨迹分析](./spatial-guidelines.md) | 2D 底图目录生命周期、格式白名单、相机坐标归一化与驻留轨迹聚合 |
-| [告警多目标推送与签名媒体](./alertpush-guidelines.md) | Webhook / MQTT 多目标推送、布尔零值陷阱、HMAC-SHA256 签名媒体访问边界 |
+| [告警多目标推送与签名媒体](./alertpush-guidelines.md) | Webhook / MQTT 多目标推送、对外载荷 v1 契约、布尔零值陷阱、HMAC-SHA256 签名媒体访问边界 |
 | [OpenAPI 与后台异步任务](./openapi-and-asyncjob-guidelines.md) | M2M Bearer 并发上传限流与 Swagger 契约对齐；`asyncjob` 单向状态机与重启恢复 |
 | [算法包开发与交付规范](./algorithm-guidelines.md) | 算法包物理拓扑、manifest 元数据、C ABI/SDK 契约、结果规范与验包门禁 |
 | [视频分析任务管理](./task-guidelines.md) | 视频流分析任务调度、算法与相机绑定、算力预算分配与 D5 联动契约 |

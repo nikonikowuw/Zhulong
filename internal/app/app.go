@@ -1154,8 +1154,12 @@ type alertPushParams struct {
 	RecordService  *record.Service
 	SystemInfo     *systeminfo.IdentityService
 	StatusSnapshot *statusSnapshotAdapter `optional:"true"`
-	Config         Config
-	Logger         *zap.Logger
+	// CameraService / AlgorithmService only feed display names into pushed payloads;
+	// alerts still flow (with null names) when either is absent.
+	CameraService    *camera.CameraService `optional:"true"`
+	AlgorithmService *algorithm.Service    `optional:"true"`
+	Config           Config
+	Logger           *zap.Logger
 }
 
 func provideAlertPush(p alertPushParams) alertPushOut {
@@ -1174,6 +1178,7 @@ func provideAlertPush(p alertPushParams) alertPushOut {
 			SignedURLTTL:      p.Config.AlertPushSignedURLTTL,
 			DeviceID:          p.SystemInfo,
 			HeartbeatSnapshot: hbProvider,
+			Source:            newAlertSourceResolver(p.CameraService, p.AlgorithmService, p.Logger),
 		},
 		Logger: p.Logger,
 	})

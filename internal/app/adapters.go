@@ -978,3 +978,82 @@ func (a *recordClipPolicyAdapter) ClipPolicyFor(cameraID, algorithmID string) (r
 		RecognitionFilter: cfg.RecognitionFilter,
 	}, true
 }
+
+// alertSourceCameraReader and alertSourceAlgorithmReader are the narrow read paths the
+// alert source resolver needs; *camera.CameraService and *algorithm.Service satisfy them.
+type alertSourceCameraReader interface {
+	Get(ctx context.Context, id string) (*camera.CameraResponse, error)
+}
+
+type alertSourceAlgorithmReader interface {
+	GetAlgorithm(ctx context.Context, id string) (*algorithm.Algorithm, error)
+}
+
+// alertSourceResolver implements alertpush.SourceResolver from camera and algorithm data.
+// Lookups never fail the push: errors are logged at Debug and degrade to null names.
+type alertSourceResolver struct {
+	cameras    alertSourceCameraReader
+	algorithms alertSourceAlgorithmReader
+	logger     *zap.Logger
+}
+
+func newAlertSourceResolver(
+	cameras *camera.CameraService,
+	algorithms *algorithm.Service,
+	logger *zap.Logger,
+) *alertSourceResolver {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	r := &alertSourceResolver{logger: logger.Named("alertpush.source")}
+	// Assign only non-nil concrete pointers so a missing optional dependency stays a
+	// true nil interface instead of a typed nil that would panic on call.
+	if cameras != nil {
+		r.cameras = cameras
+	}
+	if algorithms != nil {
+		r.algorithms = algorithms
+	}
+	return r
+}
+
+func (r *alertSourceResolver) ResolveSource(
+	ctx context.Context,
+	cameraID, algorithmID string,
+) alertpush.SourceInfo {
+	src := alertpush.SourceInfo{
+		Camera: &alertpush.CameraSourceInfo{ID: cameraID},
+	}
+	if r.cameras != nil && strings.TrimSpace(cameraID) != "" {
+		cam, err := r.cameras.Get(ctx, cameraID)
+		switch {
+		case err != nil:
+			r.logger.Debug("resolve alert camera name", zap.String("camera_id", cameraID), zap.Error(err))
+		case cam != nil && cam.Name != "":
+			name := cam.Name
+			src.Camera.Name = &name
+		}
+	}
+
+	if strings.TrimSpace(algorithmID) == "" {
+		return src
+	}
+	src.Algorithm = &alertpush.AlgorithmSourceInfo{ID: algorithmID}
+	if r.algorithms == nil {
+		return src
+	}
+	algo, err := r.algorithms.GetAlgorithm(ctx, algorithmID)
+	if err != nil || algo == nil {
+		r.logger.Debug("resolve alert algorithm", zap.String("algorithm_id", algorithmID), zap.Error(err))
+		return src
+	}
+	if algo.Name != "" {
+		name := algo.Name
+		src.Algorithm.Name = &name
+	}
+	if algo.Version != "" {
+		version := algo.Version
+		src.Algorithm.Version = &version
+	}
+	return src
+}

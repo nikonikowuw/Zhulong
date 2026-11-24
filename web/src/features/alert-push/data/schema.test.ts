@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   createAlertDestinationFormSchema,
+  INLINE_MAX_KB_DEFAULT,
   isSameHttpOrigin,
+  RESERVED_HEADERS,
   type AlertDestinationFormValues,
 } from './schema'
 
@@ -30,6 +32,7 @@ function makeBaseWebhookValues(
     clientId: '',
     qos: 0,
     keepAliveSeconds: 30,
+    inlineMaxKb: 500,
     mqttUser: '',
     mqttPass: '',
     tlsSkipVerify: false,
@@ -317,5 +320,48 @@ describe('createAlertDestinationFormSchema', () => {
         )
       ).toBe(true)
     }
+  })
+
+  it('validates inlineMaxKb range only in MQTT base64 mode', () => {
+    const schema = createAlertDestinationFormSchema()
+    const mqttBase64 = (inlineMaxKb: number) =>
+      makeBaseWebhookValues({
+        channelType: 'mqtt',
+        imageMode: 'base64',
+        url: '',
+        broker: 'tcp://10.0.0.1:1883',
+        topic: 'zhulong/alarms',
+        inlineMaxKb,
+      })
+
+    expect(INLINE_MAX_KB_DEFAULT).toBe(500)
+    for (const ok of [64, 500, 8192]) {
+      expect(schema.safeParse(mqttBase64(ok)).success).toBe(true)
+    }
+    for (const bad of [63, 8193, 100.5, Number.NaN]) {
+      const res = schema.safeParse(mqttBase64(bad))
+      expect(res.success).toBe(false)
+      if (!res.success) {
+        expect(
+          res.error.issues.some((i) => i.path.includes('inlineMaxKb'))
+        ).toBe(true)
+      }
+    }
+
+    const urlMode = schema.safeParse({
+      ...mqttBase64(1),
+      imageMode: 'url',
+    })
+    expect(urlMode.success).toBe(true)
+  })
+
+  it('reserves the v1 envelope headers', () => {
+    expect(RESERVED_HEADERS).toEqual(
+      expect.arrayContaining([
+        'x-zhulong-event',
+        'x-zhulong-delivery',
+        'x-zhulong-schema',
+      ])
+    )
   })
 })

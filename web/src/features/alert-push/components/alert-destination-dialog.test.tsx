@@ -255,6 +255,33 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
       .toBeChecked()
   })
 
+  it('shows the inline image budget only for MQTT base64 mode', async () => {
+    const queryClient = new QueryClient()
+    const { getByText, getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    // Webhook (multipart) has no inline budget.
+    await expect.element(getByText(/内联图片上限/)).not.toBeInTheDocument()
+
+    // Switching to MQTT flips multipart to base64 and reveals the budget field.
+    await userEvent.click(getByText('MQTT 消息总线', { exact: true }))
+    await expect.element(getByText(/内联图片上限/)).toBeInTheDocument()
+    await expect
+      .element(getByRole('spinbutton', { name: /内联图片上限/ }))
+      .toHaveValue(500)
+    await expect.element(getByText(/AWS IoT 128 KB/)).toBeInTheDocument()
+
+    await userEvent.click(getByText('HTTP Webhook', { exact: true }))
+    await expect.element(getByText(/内联图片上限/)).not.toBeInTheDocument()
+  })
+
   it('executes connection probe test directly in the footer without context switching', async () => {
     const queryClient = new QueryClient()
     const { getByRole, getByText } = await render(

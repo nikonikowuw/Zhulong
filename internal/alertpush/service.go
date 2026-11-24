@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ var (
 	ErrInvalidChannelType         = errors.New("invalid channel_type")
 	ErrInvalidImageMode           = errors.New("invalid image_mode for channel_type")
 	ErrInvalidConfig              = errors.New("invalid alert destination config")
+	ErrInvalidFilterEventType     = errors.New("invalid filter event type")
 	ErrReservedHeaderUsed         = errors.New("reserved header is not allowed in custom headers")
 	ErrCrossOriginHeartbeatURL    = errors.New(
 		"heartbeat_url must share origin with url when credentials are configured",
@@ -279,14 +281,18 @@ func (s *Service) sendTestProbe(ctx context.Context, sender Sender, dest *AlertD
 		snap := resolveHeartbeatSnapshot(ctx, s.config.HeartbeatSnapshot, s.config.PublicBaseURL)
 		return sender.SendHeartbeat(ctx, snap, 1)
 	}
+	// The probe is a v1 alarm with seq 0: a real destination counter is never consumed.
 	testEvent := record.AlarmEvent{
 		ID:         "01TESTALARM0000000000000",
+		EventType:  record.EventTypeAlarm,
 		CameraID:   "test_cam",
-		AlarmType:  "test_ping",
-		Score:      1.0,
 		CapturedAt: time.Now().UTC(),
+		Alarm: &record.AlarmEventData{
+			AlarmType: "test_ping",
+			Score:     1.0,
+		},
 	}
-	return sender.Send(ctx, testEvent)
+	return sender.Send(ctx, Delivery{Event: testEvent, Seq: 0})
 }
 
 func (s *Service) buildTestWebhookSender(
@@ -355,6 +361,7 @@ func (s *Service) buildTestMQTTSender(dest *AlertDestination, sec *mqttSecret) (
 		QoS:               cfg.QoS,
 		KeepAlive:         30 * time.Second,
 		TLSSkipVerify:     cfg.TLSSkipVerify,
+		InlineMaxBytes:    int64(normalizeInlineMaxKB(cfg.InlineMaxKB)) * 1024,
 		Identity:          s.config.DeviceID,
 		Logger:            s.logger,
 	})
@@ -367,6 +374,9 @@ func (s *Service) validateDestination(dest *AlertDestination, secretRaw destinat
 
 	if dest.ChannelType != ChannelTypeWebhook && dest.ChannelType != ChannelTypeMQTT {
 		return ErrInvalidChannelType
+	}
+	if err := validateFilterEventTypes(dest.FilterJSON); err != nil {
+		return err
 	}
 
 	// Validate protocol x image_mode matrix
@@ -431,6 +441,25 @@ func validateWebhookHeartbeatOrigin(authType string, sec *webhookSecret) error {
 	return nil
 }
 
+// validateFilterEventTypes rejects anything outside the v1 short names. Unknown values are
+// refused rather than dropped: silently dropping the last entry would turn the filter into
+// "match everything".
+func validateFilterEventTypes(filterJSON string) error {
+	if strings.TrimSpace(filterJSON) == "" {
+		return nil
+	}
+	var filter destinationFilter
+	if err := json.Unmarshal([]byte(filterJSON), &filter); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	for _, eventType := range filter.EventTypes {
+		if !slices.Contains(filterEventTypes, eventType) {
+			return fmt.Errorf("%w: %q", ErrInvalidFilterEventType, eventType)
+		}
+	}
+	return nil
+}
+
 func validateMQTTTarget(configJSON string) error {
 	if configJSON == "" {
 		return nil
@@ -444,6 +473,14 @@ func validateMQTTTarget(configJSON string) error {
 	}
 	if strings.TrimSpace(cfg.HeartbeatTopic) != "" && strings.ContainsAny(cfg.HeartbeatTopic, "+#") {
 		return fmt.Errorf("%w: mqtt heartbeat_topic must not contain wildcards", ErrInvalidConfig)
+	}
+	if cfg.InlineMaxKB != 0 && !isValidInlineMaxKB(cfg.InlineMaxKB) {
+		return fmt.Errorf(
+			"%w: inline_max_kb must be between %d and %d",
+			ErrInvalidConfig,
+			MinInlineMaxKB,
+			MaxInlineMaxKB,
+		)
 	}
 	return nil
 }
