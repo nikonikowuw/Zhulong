@@ -20,12 +20,14 @@ const (
 )
 
 var reservedHeaders = map[string]struct{}{
+	"accept":             {},
 	"authorization":      {},
-	"content-type":       {},
-	"content-length":     {},
-	"transfer-encoding":  {},
 	"connection":         {},
+	"content-length":     {},
+	"content-type":       {},
 	"host":               {},
+	"transfer-encoding":  {},
+	"user-agent":         {},
 	"x-zhulong-event":    {},
 	"x-zhulong-delivery": {},
 	"x-zhulong-schema":   {},

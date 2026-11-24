@@ -17,6 +17,7 @@ var (
 	ErrDestinationNotFound     = errors.New("alert destination not found")
 	ErrDestinationNameConflict = errors.New("alert destination name conflict")
 	ErrClientIDConflict        = errors.New("mqtt client id conflict")
+	ErrMaxDestinationsReached  = errors.New("maximum alert destination limit reached")
 )
 
 // Cipher defines symmetric encryption capability for credentials.
@@ -121,6 +122,12 @@ func (s *Store) DecryptMQTTSecret(id string, ciphertext []byte) (*mqttSecret, er
 
 // Create inserts a new alert destination.
 func (s *Store) Create(ctx context.Context, dest *AlertDestination) error {
+	return s.CreateWithLimit(ctx, dest, 0)
+}
+
+// CreateWithLimit atomically checks the destination count ceiling (when limit > 0)
+// and inserts a new alert destination within one database transaction.
+func (s *Store) CreateWithLimit(ctx context.Context, dest *AlertDestination, limit int) error {
 	db, err := s.db(ctx)
 	if err != nil {
 		return err
@@ -134,13 +141,25 @@ func (s *Store) Create(ctx context.Context, dest *AlertDestination) error {
 	now := time.Now().UTC()
 	dest.CreatedAt = now
 	dest.UpdatedAt = now
-	if err := db.Create(dest).Error; err != nil {
-		if conflictErr := classifyStoreConflict(err); conflictErr != nil {
-			return conflictErr
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if limit > 0 {
+			count, countErr := gorm.G[AlertDestination](tx).Count(ctx, "*")
+			if countErr != nil {
+				return fmt.Errorf("count alert destinations: %w", countErr)
+			}
+			if count >= int64(limit) {
+				return ErrMaxDestinationsReached
+			}
 		}
-		return fmt.Errorf("create alert destination: %w", err)
-	}
-	return nil
+		if err := tx.Create(dest).Error; err != nil {
+			if conflictErr := classifyStoreConflict(err); conflictErr != nil {
+				return conflictErr
+			}
+			return fmt.Errorf("create alert destination: %w", err)
+		}
+		return nil
+	})
 }
 
 // Update updates an existing alert destination with explicit columns to avoid zero-value omission.

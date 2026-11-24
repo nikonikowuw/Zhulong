@@ -17,8 +17,6 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
-const maxDestinations = 32
-
 var errTestTargetStoreFailure = errors.New("load test destination from store")
 
 // Handler implements HTTP REST API for alert destinations.
@@ -118,22 +116,6 @@ func (h *Handler) Create(c *gin.Context) {
 	)
 
 	ctx := c.Request.Context()
-	existing, err := h.store.List(ctx)
-	if err != nil {
-		httputil.WriteError(
-			c,
-			apperr.Internal("INTERNAL_ERROR", "Failed to check destination limit", err),
-		)
-		return
-	}
-	if len(existing) >= maxDestinations {
-		httputil.WriteError(
-			c,
-			apperr.Invalid(CodeAlertDestinationConfigInvalid, "Maximum destination limit (32) reached", nil),
-		)
-		return
-	}
-
 	dest, secretRaw, err := h.parseCreateRequest(req)
 	if err != nil {
 		h.writeValidationError(c, err)
@@ -145,6 +127,17 @@ func (h *Handler) Create(c *gin.Context) {
 			httputil.WriteError(
 				c,
 				apperr.Conflict(CodeAlertDestinationNameConflict, "Name or MQTT ClientID conflict", err),
+			)
+			return
+		}
+		if errors.Is(err, ErrMaxDestinationsReached) {
+			httputil.WriteError(
+				c,
+				apperr.Invalid(
+					CodeAlertDestinationConfigInvalid,
+					fmt.Sprintf("Maximum destination limit (%d) reached", MaxDestinations),
+					err,
+				),
 			)
 			return
 		}
@@ -480,8 +473,8 @@ func (h *Handler) resolveExistingTestTarget(
 		if req.Config.Broker != "" {
 			cfg.Broker = req.Config.Broker
 		}
-		if req.Config.Username != "" {
-			cfg.Username = req.Config.Username
+		if req.Config.Username != nil {
+			cfg.Username = strings.TrimSpace(*req.Config.Username)
 		}
 		if req.Config.Topic != "" {
 			cfg.Topic = req.Config.Topic
@@ -499,11 +492,18 @@ func (h *Handler) resolveExistingTestTarget(
 		if req.Config.QoS != nil {
 			cfg.QoS = *req.Config.QoS
 		}
-		if req.Config.KeepAliveSeconds != nil && *req.Config.KeepAliveSeconds > 0 {
+		if req.Config.KeepAliveSeconds != nil {
+			if !isValidKeepAliveSeconds(*req.Config.KeepAliveSeconds) {
+				return nil, nil, fmt.Errorf(
+					"keepAliveSeconds must be between %d and %d",
+					MinKeepAliveSeconds,
+					MaxKeepAliveSeconds,
+				)
+			}
 			cfg.KeepAliveSeconds = *req.Config.KeepAliveSeconds
 		}
-		if req.Config.Broker != "" || req.Config.TLSSkipVerify {
-			cfg.TLSSkipVerify = req.Config.TLSSkipVerify
+		if req.Config.TLSSkipVerify != nil {
+			cfg.TLSSkipVerify = *req.Config.TLSSkipVerify
 		}
 		if req.Config.InlineMaxKB != nil {
 			cfg.InlineMaxKB = *req.Config.InlineMaxKB
@@ -590,7 +590,14 @@ func (h *Handler) resolveDraftTestTarget(
 			qos = *req.Config.QoS
 		}
 		keepAlive := 30
-		if req.Config.KeepAliveSeconds != nil && *req.Config.KeepAliveSeconds > 0 {
+		if req.Config.KeepAliveSeconds != nil {
+			if !isValidKeepAliveSeconds(*req.Config.KeepAliveSeconds) {
+				return nil, nil, fmt.Errorf(
+					"keepAliveSeconds must be between %d and %d",
+					MinKeepAliveSeconds,
+					MaxKeepAliveSeconds,
+				)
+			}
 			keepAlive = *req.Config.KeepAliveSeconds
 		}
 		hbInterval := DefaultHeartbeatIntervalSeconds
@@ -601,13 +608,21 @@ func (h *Handler) resolveDraftTestTarget(
 		if req.Config.HeartbeatTopic != nil {
 			hbTopic = strings.TrimSpace(*req.Config.HeartbeatTopic)
 		}
+		var username string
+		if req.Config.Username != nil {
+			username = strings.TrimSpace(*req.Config.Username)
+		}
+		var tlsSkipVerify bool
+		if req.Config.TLSSkipVerify != nil {
+			tlsSkipVerify = *req.Config.TLSSkipVerify
+		}
 		cfgJSON, err := json.Marshal(mqttConfig{
 			Broker:                   req.Config.Broker,
-			Username:                 req.Config.Username,
+			Username:                 username,
 			Topic:                    req.Config.Topic,
 			QoS:                      qos,
 			KeepAliveSeconds:         keepAlive,
-			TLSSkipVerify:            req.Config.TLSSkipVerify,
+			TLSSkipVerify:            tlsSkipVerify,
 			HeartbeatIntervalSeconds: hbInterval,
 			HeartbeatTopic:           hbTopic,
 			InlineMaxKB:              inlineMaxKBFromInfo(req.Config.InlineMaxKB),
@@ -616,8 +631,8 @@ func (h *Handler) resolveDraftTestTarget(
 			return nil, nil, fmt.Errorf("marshal mqtt config: %w", err)
 		}
 		dest.ConfigJSON = string(cfgJSON)
-		if req.Config.ClientID != "" {
-			cID := req.Config.ClientID
+		if req.Config.ClientID != nil && strings.TrimSpace(*req.Config.ClientID) != "" {
+			cID := strings.TrimSpace(*req.Config.ClientID)
 			dest.MQTTClientID = &cID
 		}
 		sec := &mqttSecret{}
@@ -734,12 +749,8 @@ func (h *Handler) parseMQTTCreate(
 	dest *AlertDestination,
 	req CreateAlertDestinationRequest,
 ) (*mqttSecret, error) {
-	if strings.TrimSpace(req.Config.Broker) == "" {
-		return nil, errors.New("broker url is required for mqtt")
-	}
-	u, err := url.Parse(req.Config.Broker)
-	if err != nil || u.User != nil {
-		return nil, errors.New("mqtt broker url must not contain userinfo")
+	if err := validateMQTTBroker(req.Config.Broker); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(req.Config.Topic) == "" {
 		return nil, errors.New("topic is required for mqtt")
@@ -769,30 +780,50 @@ func (h *Handler) parseMQTTCreate(
 		lwtEnabled = *req.Config.LWTEnabled
 	}
 
-	if req.Config.ClientID != "" {
-		if len(req.Config.ClientID) > 23 {
-			return nil, errors.New("mqtt client id must not exceed 23 characters")
+	if req.Config.ClientID != nil {
+		cID := strings.TrimSpace(*req.Config.ClientID)
+		if err := validateMQTTClientID(cID); err != nil {
+			return nil, err
 		}
-		cID := req.Config.ClientID
-		dest.MQTTClientID = &cID
+		if cID != "" {
+			dest.MQTTClientID = &cID
+		}
 	}
 
 	var qos uint8
 	if req.Config.QoS != nil {
+		if !isValidMQTTQoS(*req.Config.QoS) {
+			return nil, errors.New("mqtt qos must be 0, 1 or 2")
+		}
 		qos = *req.Config.QoS
 	}
 	keepAlive := 30
-	if req.Config.KeepAliveSeconds != nil && *req.Config.KeepAliveSeconds > 0 {
+	if req.Config.KeepAliveSeconds != nil {
+		if !isValidKeepAliveSeconds(*req.Config.KeepAliveSeconds) {
+			return nil, fmt.Errorf(
+				"keepAliveSeconds must be between %d and %d",
+				MinKeepAliveSeconds,
+				MaxKeepAliveSeconds,
+			)
+		}
 		keepAlive = *req.Config.KeepAliveSeconds
+	}
+	var username string
+	if req.Config.Username != nil {
+		username = strings.TrimSpace(*req.Config.Username)
+	}
+	var tlsSkipVerify bool
+	if req.Config.TLSSkipVerify != nil {
+		tlsSkipVerify = *req.Config.TLSSkipVerify
 	}
 
 	cfgJSON, err := json.Marshal(mqttConfig{
-		Broker:                   req.Config.Broker,
-		Username:                 req.Config.Username,
-		Topic:                    req.Config.Topic,
+		Broker:                   strings.TrimSpace(req.Config.Broker),
+		Username:                 username,
+		Topic:                    strings.TrimSpace(req.Config.Topic),
 		QoS:                      qos,
 		KeepAliveSeconds:         keepAlive,
-		TLSSkipVerify:            req.Config.TLSSkipVerify,
+		TLSSkipVerify:            tlsSkipVerify,
 		HeartbeatIntervalSeconds: hbInterval,
 		HeartbeatTopic:           hbTopic,
 		LWTEnabled:               &lwtEnabled,
@@ -942,16 +973,19 @@ func (h *Handler) applyMQTTUpdate(
 
 	if req.Config != nil {
 		if req.Config.Broker != "" {
-			curCfg.Broker = req.Config.Broker
+			if err := validateMQTTBroker(req.Config.Broker); err != nil {
+				return err
+			}
+			curCfg.Broker = strings.TrimSpace(req.Config.Broker)
 		}
-		if req.Config.Username != "" {
-			curCfg.Username = req.Config.Username
+		if req.Config.Username != nil {
+			curCfg.Username = strings.TrimSpace(*req.Config.Username)
 		}
 		if req.Config.Topic != "" {
 			if strings.ContainsAny(req.Config.Topic, "+#") {
 				return errors.New("mqtt topic must not contain wildcards")
 			}
-			curCfg.Topic = req.Config.Topic
+			curCfg.Topic = strings.TrimSpace(req.Config.Topic)
 		}
 		if req.Config.HeartbeatTopic != nil {
 			trimmed := strings.TrimSpace(*req.Config.HeartbeatTopic)
@@ -971,18 +1005,33 @@ func (h *Handler) applyMQTTUpdate(
 			curCfg.LWTEnabled = &lwt
 		}
 		if req.Config.QoS != nil {
+			if !isValidMQTTQoS(*req.Config.QoS) {
+				return errors.New("mqtt qos must be 0, 1 or 2")
+			}
 			curCfg.QoS = *req.Config.QoS
 		}
 		if req.Config.KeepAliveSeconds != nil {
+			if !isValidKeepAliveSeconds(*req.Config.KeepAliveSeconds) {
+				return fmt.Errorf(
+					"keepAliveSeconds must be between %d and %d",
+					MinKeepAliveSeconds,
+					MaxKeepAliveSeconds,
+				)
+			}
 			curCfg.KeepAliveSeconds = *req.Config.KeepAliveSeconds
 		}
-		curCfg.TLSSkipVerify = req.Config.TLSSkipVerify
+		if req.Config.TLSSkipVerify != nil {
+			curCfg.TLSSkipVerify = *req.Config.TLSSkipVerify
+		}
 		if req.Config.InlineMaxKB != nil {
 			curCfg.InlineMaxKB = *req.Config.InlineMaxKB
 		}
 
-		if req.Config.ClientID != "" {
-			cID := req.Config.ClientID
+		if req.Config.ClientID != nil {
+			cID := strings.TrimSpace(*req.Config.ClientID)
+			if err := validateMQTTClientID(cID); err != nil {
+				return err
+			}
 			params.ClientID = &cID
 		}
 	}
@@ -1067,8 +1116,12 @@ func (h *Handler) toResponse(
 		}
 		hbInterval := normalizeHeartbeatInterval(cfg.HeartbeatIntervalSeconds)
 		lwt := cfg.effectiveLWTEnabled()
+		tlsSkip := cfg.TLSSkipVerify
 		resp.Config.Broker = cfg.Broker
-		resp.Config.Username = cfg.Username
+		if cfg.Username != "" {
+			username := cfg.Username
+			resp.Config.Username = &username
+		}
 		resp.Config.Topic = cfg.Topic
 		if cfg.HeartbeatTopic != "" {
 			hbTopic := cfg.HeartbeatTopic
@@ -1077,12 +1130,13 @@ func (h *Handler) toResponse(
 		resp.Config.LWTEnabled = &lwt
 		resp.Config.QoS = &cfg.QoS
 		resp.Config.KeepAliveSeconds = &cfg.KeepAliveSeconds
-		resp.Config.TLSSkipVerify = cfg.TLSSkipVerify
+		resp.Config.TLSSkipVerify = &tlsSkip
 		resp.Config.HeartbeatIntervalSeconds = &hbInterval
 		inlineMaxKB := normalizeInlineMaxKB(cfg.InlineMaxKB)
 		resp.Config.InlineMaxKB = &inlineMaxKB
-		if dest.MQTTClientID != nil {
-			resp.Config.ClientID = *dest.MQTTClientID
+		if dest.MQTTClientID != nil && *dest.MQTTClientID != "" {
+			clientID := *dest.MQTTClientID
+			resp.Config.ClientID = &clientID
 		}
 
 		sec, err := h.store.DecryptMQTTSecret(dest.ID, dest.SecretCiphertext)

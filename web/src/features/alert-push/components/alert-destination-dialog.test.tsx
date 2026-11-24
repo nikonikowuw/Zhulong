@@ -61,6 +61,7 @@ const mockDestination: AlertDestination = {
   status: {
     consecutiveFailures: 0,
     totalDispatched: 10,
+    dropped: 0,
     queueLength: 2,
     queueCapacity: 16,
     state: 'idle',
@@ -475,5 +476,49 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
     await expect.element(getByText('存活上报 · 45s')).toBeInTheDocument()
     await expect.element(getByText('存活上报 · 30s')).toBeInTheDocument()
     await expect.element(getByText('2 / 16')).toBeInTheDocument()
+  })
+
+  it('renders connecting status badge and dropped overflow indicator in table', async () => {
+    const connectingMqtt: AlertDestination = {
+      id: 'dest-mqtt-conn',
+      name: 'Edge Broker',
+      channelType: 'mqtt',
+      enabled: true,
+      eventsEnabled: true,
+      heartbeatEnabled: false,
+      imageMode: 'base64',
+      config: {
+        broker: 'tcp://10.0.0.10:1883',
+        topic: 'zhulong/events',
+      },
+      filter: {
+        eventTypes: [],
+        algorithmIds: [],
+        cameraIds: [],
+      },
+      secretSet: false,
+      status: {
+        consecutiveFailures: 0,
+        totalDispatched: 0,
+        dropped: 7,
+        queueLength: 16,
+        queueCapacity: 16,
+        state: 'connecting',
+      },
+    }
+
+    const { getByText } = await render(
+      <AlertDestinationsTable
+        destinations={[connectingMqtt]}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onToggle={vi.fn()}
+        onTest={vi.fn()}
+      />
+    )
+
+    await expect.element(getByText('连接中')).toBeInTheDocument()
+    await expect.element(getByText('16 / 16')).toBeInTheDocument()
+    await expect.element(getByText('丢弃 7')).toBeInTheDocument()
   })
 })

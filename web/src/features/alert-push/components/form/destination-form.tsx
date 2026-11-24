@@ -199,10 +199,16 @@ export function DestinationForm({
     }
 
     const hbTopic = values.heartbeatTopic.trim()
+    const trimmedClientId = values.clientId.trim()
+    const trimmedMqttUser = values.mqttUser.trim()
     return {
       broker: values.broker.trim(),
-      clientId: values.clientId.trim() || undefined,
-      username: values.mqttUser.trim() || undefined,
+      clientId: includeEmptyOverrideForClear
+        ? trimmedClientId
+        : trimmedClientId || undefined,
+      username: includeEmptyOverrideForClear
+        ? trimmedMqttUser
+        : trimmedMqttUser || undefined,
       topic: values.topic.trim(),
       heartbeatTopic: includeEmptyOverrideForClear
         ? hbTopic

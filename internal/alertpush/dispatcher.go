@@ -22,11 +22,14 @@ import (
 
 // AlertDestinationStatus reports the operational health of a destination.
 type AlertDestinationStatus struct {
-	State         string     `json:"state"`
-	LastError     string     `json:"lastError"`
-	LastSuccessAt *time.Time `json:"lastSuccessAt"`
-	Dropped       int64      `json:"dropped"`
-	Queued        int64      `json:"queued"`
+	State               string     `json:"state"`
+	LastError           string     `json:"lastError"`
+	LastAttemptAt       *time.Time `json:"lastAttemptAt"`
+	LastSuccessAt       *time.Time `json:"lastSuccessAt"`
+	LastFailureAt       *time.Time `json:"lastFailureAt"`
+	ConsecutiveFailures int64      `json:"consecutiveFailures"`
+	Dropped             int64      `json:"dropped"`
+	Queued              int64      `json:"queued"`
 }
 
 // Config represents alertpush configuration injected into Dispatcher.
@@ -56,31 +59,33 @@ type queuedEvent struct {
 
 // DispatcherOptions holds parameters for constructing a Dispatcher.
 type DispatcherOptions struct {
-	Store  *Store
-	Signer *URLSigner
-	Media  MediaReader
-	Config Config
-	Logger *zap.Logger
+	Store        *Store
+	Signer       *URLSigner
+	Media        MediaReader
+	GalleryMedia MediaReader
+	Config       Config
+	Logger       *zap.Logger
 }
 
 // Dispatcher coordinates multi-target event filtering, asynchronous fan-out, and
 // dual-rail periodic heartbeat reporting.
 type Dispatcher struct {
-	store    *Store
-	signer   *URLSigner
-	media    MediaReader
-	config   Config
-	logger   *zap.Logger
-	workers  map[string]*destinationWorker
-	mu       sync.RWMutex
-	statsMu  sync.RWMutex
-	stats    map[string]AlertDestinationStatus
-	seqMu    sync.Mutex
-	seqMap   map[string]*atomic.Uint64
-	reloadCh chan struct{}
-	stopCh   chan struct{}
-	running  atomic.Bool
-	wg       sync.WaitGroup
+	store        *Store
+	signer       *URLSigner
+	media        MediaReader
+	galleryMedia MediaReader
+	config       Config
+	logger       *zap.Logger
+	workers      map[string]*destinationWorker
+	mu           sync.RWMutex
+	statsMu      sync.RWMutex
+	stats        map[string]AlertDestinationStatus
+	seqMu        sync.Mutex
+	seqMap       map[string]*atomic.Uint64
+	reloadCh     chan struct{}
+	stopCh       chan struct{}
+	running      atomic.Bool
+	wg           sync.WaitGroup
 }
 
 // NewDispatcher creates a new Dispatcher instance.
@@ -90,16 +95,17 @@ func NewDispatcher(opts DispatcherOptions) *Dispatcher {
 		logger = zap.NewNop()
 	}
 	return &Dispatcher{
-		store:    opts.Store,
-		signer:   opts.Signer,
-		media:    opts.Media,
-		config:   opts.Config,
-		logger:   logger.Named("alertpush.dispatcher"),
-		workers:  make(map[string]*destinationWorker),
-		stats:    make(map[string]AlertDestinationStatus),
-		seqMap:   make(map[string]*atomic.Uint64),
-		reloadCh: make(chan struct{}, 1),
-		stopCh:   make(chan struct{}),
+		store:        opts.Store,
+		signer:       opts.Signer,
+		media:        opts.Media,
+		galleryMedia: opts.GalleryMedia,
+		config:       opts.Config,
+		logger:       logger.Named("alertpush.dispatcher"),
+		workers:      make(map[string]*destinationWorker),
+		stats:        make(map[string]AlertDestinationStatus),
+		seqMap:       make(map[string]*atomic.Uint64),
+		reloadCh:     make(chan struct{}, 1),
+		stopCh:       make(chan struct{}),
 	}
 }
 
@@ -135,7 +141,7 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop cleanly drains workers and terminates dispatcher.
+// Stop cleanly drains workers concurrently and terminates dispatcher.
 func (d *Dispatcher) Stop(ctx context.Context) error {
 	if !d.running.CompareAndSwap(true, false) {
 		return nil
@@ -148,10 +154,30 @@ func (d *Dispatcher) Stop(ctx context.Context) error {
 	d.workers = make(map[string]*destinationWorker)
 	d.mu.Unlock()
 
+	var stopWg sync.WaitGroup
 	for _, w := range workers {
-		w.stop()
+		stopWg.Add(1)
+		go func(worker *destinationWorker) {
+			defer stopWg.Done()
+			worker.stop()
+		}(w)
 	}
+	stopWg.Wait()
 	return nil
+}
+
+// RemoveDestinationState drops cached status and sequence counter entries for a deleted destination.
+func (d *Dispatcher) RemoveDestinationState(id string) {
+	if id == "" {
+		return
+	}
+	d.statsMu.Lock()
+	delete(d.stats, id)
+	d.statsMu.Unlock()
+
+	d.seqMu.Lock()
+	delete(d.seqMap, id)
+	d.seqMu.Unlock()
 }
 
 // OnAlarm implements record.AlarmListener.
@@ -221,28 +247,28 @@ func (d *Dispatcher) UpdateTestResult(id string, success bool, reason string) {
 	w, ok := d.workers[id]
 	d.mu.RUnlock()
 
+	now := time.Now().UTC()
 	if ok {
 		if success {
-			w.state.Store(StateConnected)
-			w.lastError.Store("")
-			now := time.Now().UTC()
-			w.lastSuccessAt.Store(&now)
+			w.recordSuccess()
 		} else {
-			w.state.Store(StateFailed)
-			w.lastError.Store(reason)
+			w.recordFailure(reason)
 		}
 	}
 
 	d.statsMu.Lock()
 	st := d.stats[id]
+	st.LastAttemptAt = &now
 	if success {
 		st.State = StateConnected
 		st.LastError = ""
-		now := time.Now().UTC()
 		st.LastSuccessAt = &now
+		st.ConsecutiveFailures = 0
 	} else {
 		st.State = StateFailed
 		st.LastError = reason
+		st.LastFailureAt = &now
+		st.ConsecutiveFailures++
 	}
 	d.stats[id] = st
 	d.statsMu.Unlock()
@@ -337,14 +363,25 @@ func (d *Dispatcher) reconcile() {
 	}
 	d.mu.Unlock()
 
-	// Stop retiring workers BEFORE starting replacements so shared MQTT ClientIDs
-	// disconnect cleanly without broker session-takeover kicks or false LWT fires.
+	// Stop retiring workers concurrently BEFORE starting replacements so shared MQTT ClientIDs
+	// disconnect cleanly without broker session-takeover kicks or false LWT fires, while
+	// keeping shutdown latency bounded even when multiple destinations change at once.
+	var retireWg sync.WaitGroup
 	for _, w := range toRetireReload {
-		w.stopForReload()
+		retireWg.Add(1)
+		go func(worker *destinationWorker) {
+			defer retireWg.Done()
+			worker.stopForReload()
+		}(w)
 	}
 	for _, w := range toRetireOffline {
-		w.stop()
+		retireWg.Add(1)
+		go func(worker *destinationWorker) {
+			defer retireWg.Done()
+			worker.stop()
+		}(w)
 	}
+	retireWg.Wait()
 	for _, w := range toStart {
 		w.start()
 	}
@@ -394,6 +431,7 @@ func (d *Dispatcher) buildWebhookSender(dest *AlertDestination) (Sender, time.Du
 		SignedURLTTL:      d.config.SignedURLTTL,
 		Signer:            d.signer,
 		Media:             d.media,
+		GalleryMedia:      d.galleryMedia,
 		URL:               secret.URL,
 		HeartbeatURL:      secret.HeartbeatURL,
 		AuthType:          cfg.AuthType,
@@ -436,6 +474,7 @@ func (d *Dispatcher) buildMQTTSender(dest *AlertDestination) (Sender, time.Durat
 		SignedURLTTL:      d.config.SignedURLTTL,
 		Signer:            d.signer,
 		Media:             d.media,
+		GalleryMedia:      d.galleryMedia,
 		Broker:            cfg.Broker,
 		ClientID:          clientID,
 		Username:          cfg.Username,
@@ -491,21 +530,24 @@ type destinationWorker struct {
 	queue             chan queuedEvent
 	// enqueueMu makes seq assignment and enqueue one step, so concurrent Dispatch calls
 	// cannot reorder sequence numbers inside the queue.
-	enqueueMu       sync.Mutex
-	dropped         atomic.Int64
-	state           atomic.Value // string
-	lastError       atomic.Value // string
-	lastSuccessAt   atomic.Pointer[time.Time]
-	fingerprint     string
-	started         atomic.Bool
-	suppressOffline atomic.Bool
-	stopOnce        sync.Once
-	stopCh          chan struct{}
-	hbCtx           context.Context
-	hbCancel        context.CancelFunc
-	wg              sync.WaitGroup
-	doneCh          chan struct{}
-	logger          *zap.Logger
+	enqueueMu           sync.Mutex
+	dropped             atomic.Int64
+	state               atomic.Value // string
+	lastError           atomic.Value // string
+	lastAttemptAt       atomic.Pointer[time.Time]
+	lastSuccessAt       atomic.Pointer[time.Time]
+	lastFailureAt       atomic.Pointer[time.Time]
+	consecutiveFailures atomic.Int64
+	fingerprint         string
+	started             atomic.Bool
+	suppressOffline     atomic.Bool
+	stopOnce            sync.Once
+	stopCh              chan struct{}
+	hbCtx               context.Context
+	hbCancel            context.CancelFunc
+	wg                  sync.WaitGroup
+	doneCh              chan struct{}
+	logger              *zap.Logger
 }
 
 func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
@@ -586,12 +628,40 @@ func (w *destinationWorker) start() {
 }
 
 func (w *destinationWorker) initMQTTConnection(mqttSender *MQTTSender) {
+	mqttSender.SetConnectionHooks(
+		func() {
+			w.state.Store(StateConnected)
+			w.lastError.Store("")
+		},
+		func(lostErr error) {
+			reason := classifyError(lostErr)
+			if reason == "" {
+				reason = "not_connected"
+			}
+			w.state.Store(StateFailed)
+			w.lastError.Store(reason)
+			w.logger.Warn("mqtt broker connection lost",
+				zap.String("reason", reason),
+				zap.Error(lostErr),
+			)
+		},
+	)
+
 	if mqttSender.IsConnected() {
 		w.state.Store(StateConnected)
+		w.lastError.Store("")
 		return
 	}
+	w.wg.Add(1)
 	go func() {
-		if connectErr := mqttSender.Connect(); connectErr != nil {
+		defer w.wg.Done()
+		if connectErr := mqttSender.ConnectContext(w.hbCtx); connectErr != nil {
+			if w.hbCtx.Err() != nil {
+				return
+			}
+			reason := classifyError(connectErr)
+			w.state.Store(StateFailed)
+			w.lastError.Store(reason)
 			w.logger.Debug("initial mqtt connect attempt failed", zap.Error(connectErr))
 		}
 	}()
@@ -627,8 +697,7 @@ func (w *destinationWorker) runEvents() {
 				w.recordSuccess()
 			} else {
 				reason := classifyError(err)
-				w.state.Store(StateFailed)
-				w.lastError.Store(reason)
+				w.recordFailure(reason)
 				w.logger.Warn("destination dispatch failed", zap.Error(err))
 			}
 		}
@@ -718,8 +787,7 @@ func (w *destinationWorker) recordHeartbeatOutcome(err error, prevReason string)
 	}
 
 	reason := classifyError(err)
-	w.state.Store(StateFailed)
-	w.lastError.Store(reason)
+	w.recordFailure(reason)
 	if prevReason != reason {
 		w.logger.Warn("destination heartbeat failed",
 			zap.String("reason", reason),
@@ -735,10 +803,21 @@ func (w *destinationWorker) recordHeartbeatOutcome(err error, prevReason string)
 }
 
 func (w *destinationWorker) recordSuccess() {
+	now := time.Now().UTC()
 	w.state.Store(StateConnected)
 	w.lastError.Store("")
-	now := time.Now().UTC()
+	w.consecutiveFailures.Store(0)
+	w.lastAttemptAt.Store(&now)
 	w.lastSuccessAt.Store(&now)
+}
+
+func (w *destinationWorker) recordFailure(reason string) {
+	now := time.Now().UTC()
+	w.state.Store(StateFailed)
+	w.lastError.Store(reason)
+	w.consecutiveFailures.Add(1)
+	w.lastAttemptAt.Store(&now)
+	w.lastFailureAt.Store(&now)
 }
 
 func (w *destinationWorker) eventSendBudget() time.Duration {
@@ -828,11 +907,14 @@ func (w *destinationWorker) getStatus() AlertDestinationStatus {
 	}
 
 	return AlertDestinationStatus{
-		State:         st,
-		LastError:     lastErr,
-		LastSuccessAt: w.lastSuccessAt.Load(),
-		Dropped:       w.dropped.Load(),
-		Queued:        int64(len(w.queue)),
+		State:               st,
+		LastError:           lastErr,
+		LastAttemptAt:       w.lastAttemptAt.Load(),
+		LastSuccessAt:       w.lastSuccessAt.Load(),
+		LastFailureAt:       w.lastFailureAt.Load(),
+		ConsecutiveFailures: w.consecutiveFailures.Load(),
+		Dropped:             w.dropped.Load(),
+		Queued:              int64(len(w.queue)),
 	}
 }
 

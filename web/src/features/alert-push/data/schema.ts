@@ -3,13 +3,14 @@ import { type TFunction } from 'i18next'
 import type { AuthType } from '../types'
 
 export const RESERVED_HEADERS = [
-  'authorization',
-  'content-type',
-  'content-length',
-  'user-agent',
-  'host',
   'accept',
+  'authorization',
   'connection',
+  'content-length',
+  'content-type',
+  'host',
+  'transfer-encoding',
+  'user-agent',
   // 推送载荷 v1 的信封标头由宿主写入，自定义标头不可覆盖
   'x-zhulong-event',
   'x-zhulong-delivery',

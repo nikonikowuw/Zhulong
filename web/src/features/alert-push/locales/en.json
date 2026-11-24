@@ -63,6 +63,8 @@
     "enabled": "Enabled",
     "status": "Operational Status",
     "queue": "Queue In-Flight",
+    "droppedBadge": "Dropped {{count}}",
+    "droppedTooltip": "{{count}} older events were dropped due to a full queue (observable via seq gaps)",
     "lastAttempt": "Last Attempt",
     "actions": "Actions",
     "webhookUrl": "Webhook URL",
@@ -208,6 +210,7 @@
   },
   "states": {
     "idle": "Idle",
+    "connecting": "Connecting",
     "running": "Dispatching",
     "degraded": "Degraded",
     "disabled": "Disabled"

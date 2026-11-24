@@ -63,6 +63,8 @@
     "enabled": "启用状态",
     "status": "运行状态",
     "queue": "队列堆叠",
+    "droppedBadge": "丢弃 {{count}}",
+    "droppedTooltip": "队列已满导致丢弃了 {{count}} 条较早事件（接收端可通过 seq 缺口感知）",
     "lastAttempt": "最近推送",
     "actions": "操作",
     "webhookUrl": "Webhook URL",
@@ -208,6 +210,7 @@
   },
   "states": {
     "idle": "就绪空闲",
+    "connecting": "连接中",
     "running": "正在推送",
     "degraded": "异常降级",
     "disabled": "已禁用"

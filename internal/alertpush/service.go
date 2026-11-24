@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -29,22 +30,24 @@ var (
 
 // ServiceOptions holds dependencies for constructing a Service.
 type ServiceOptions struct {
-	Store      *Store
-	Dispatcher *Dispatcher
-	Signer     *URLSigner
-	Media      MediaReader
-	Config     Config
-	Logger     *zap.Logger
+	Store        *Store
+	Dispatcher   *Dispatcher
+	Signer       *URLSigner
+	Media        MediaReader
+	GalleryMedia MediaReader
+	Config       Config
+	Logger       *zap.Logger
 }
 
 // Service provides high-level domain operations for alert push destinations.
 type Service struct {
-	store      *Store
-	dispatcher *Dispatcher
-	signer     *URLSigner
-	media      MediaReader
-	config     Config
-	logger     *zap.Logger
+	store        *Store
+	dispatcher   *Dispatcher
+	signer       *URLSigner
+	media        MediaReader
+	galleryMedia MediaReader
+	config       Config
+	logger       *zap.Logger
 }
 
 // UpdateParams contains mutable fields for updating an alert destination.
@@ -73,12 +76,13 @@ func NewService(opts ServiceOptions) *Service {
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:      opts.Store,
-		dispatcher: opts.Dispatcher,
-		signer:     opts.Signer,
-		media:      opts.Media,
-		config:     opts.Config,
-		logger:     logger.Named("alertpush.service"),
+		store:        opts.Store,
+		dispatcher:   opts.Dispatcher,
+		signer:       opts.Signer,
+		media:        opts.Media,
+		galleryMedia: opts.GalleryMedia,
+		config:       opts.Config,
+		logger:       logger.Named("alertpush.service"),
 	}
 }
 
@@ -102,6 +106,9 @@ func (s *Service) Create(
 		if dest.MQTTClientID == nil || strings.TrimSpace(*dest.MQTTClientID) == "" {
 			cID := "z" + dest.ID[4:]
 			dest.MQTTClientID = &cID
+		} else {
+			cID := strings.TrimSpace(*dest.MQTTClientID)
+			dest.MQTTClientID = &cID
 		}
 		conflict, err := s.store.CheckMQTTClientIDConflict(ctx, "", *dest.MQTTClientID)
 		if err != nil {
@@ -118,7 +125,7 @@ func (s *Service) Create(
 	}
 	dest.SecretCiphertext = ciphertext
 
-	if err := s.store.Create(ctx, dest); err != nil {
+	if err := s.store.CreateWithLimit(ctx, dest, MaxDestinations); err != nil {
 		return err
 	}
 
@@ -152,23 +159,33 @@ func (s *Service) Update(
 	}
 
 	if existing.ChannelType == ChannelTypeMQTT {
-		targetClientID := "z" + existing.ID[4:]
-		if params.ClientID != nil && strings.TrimSpace(*params.ClientID) != "" {
+		// Preserve custom ClientID when params.ClientID is omitted; allow explicit empty
+		// string to revert back to the deterministic auto-derived ClientID.
+		var targetClientID string
+		switch {
+		case params.ClientID != nil:
 			targetClientID = strings.TrimSpace(*params.ClientID)
+		case existing.MQTTClientID != nil:
+			targetClientID = strings.TrimSpace(*existing.MQTTClientID)
 		}
-
-		conflict, err := s.store.CheckMQTTClientIDConflict(ctx, existing.ID, targetClientID)
-		if err != nil {
-			return err
-		}
-		if conflict {
-			return ErrClientIDConflict
+		if targetClientID == "" {
+			targetClientID = "z" + existing.ID[4:]
 		}
 		existing.MQTTClientID = &targetClientID
 	}
 
 	if err := s.validateDestination(existing, params.SecretRaw); err != nil {
 		return err
+	}
+
+	if existing.ChannelType == ChannelTypeMQTT && existing.MQTTClientID != nil {
+		conflict, err := s.store.CheckMQTTClientIDConflict(ctx, existing.ID, *existing.MQTTClientID)
+		if err != nil {
+			return err
+		}
+		if conflict {
+			return ErrClientIDConflict
+		}
 	}
 
 	if params.SecretRaw != nil {
@@ -196,11 +213,12 @@ func (s *Service) SetEnabled(ctx context.Context, id string, enabled bool) error
 	return nil
 }
 
-// Delete removes destination and requests reload.
+// Delete removes destination, clears its cached runtime state, and requests reload.
 func (s *Service) Delete(ctx context.Context, id string) error {
 	if err := s.store.Delete(ctx, id); err != nil {
 		return err
 	}
+	s.dispatcher.RemoveDestinationState(id)
 	s.dispatcher.RequestReload()
 	return nil
 }
@@ -278,8 +296,9 @@ func (s *Service) Test(
 
 func (s *Service) sendTestProbe(ctx context.Context, sender Sender, dest *AlertDestination) error {
 	if !dest.EventsEnabled && dest.HeartbeatEnabled {
+		// Connectivity probes always use seq 0 so they never collide with real monotonic stream seq >= 1.
 		snap := resolveHeartbeatSnapshot(ctx, s.config.HeartbeatSnapshot, s.config.PublicBaseURL)
-		return sender.SendHeartbeat(ctx, snap, 1)
+		return sender.SendHeartbeat(ctx, snap, 0)
 	}
 	// The probe is a v1 alarm with seq 0: a real destination counter is never consumed.
 	testEvent := record.AlarmEvent{
@@ -298,13 +317,21 @@ func (s *Service) sendTestProbe(ctx context.Context, sender Sender, dest *AlertD
 func (s *Service) buildTestWebhookSender(
 	dest *AlertDestination,
 	sec *webhookSecret,
-	timeout time.Duration,
+	maxTimeout time.Duration,
 ) (Sender, error) {
 	var cfg webhookConfig
 	if dest.ConfigJSON != "" {
 		if err := json.Unmarshal([]byte(dest.ConfigJSON), &cfg); err != nil {
 			return nil, fmt.Errorf("unmarshal webhook config: %w", err)
 		}
+	}
+
+	timeout := 5 * time.Second
+	if cfg.TimeoutSeconds >= 1 && cfg.TimeoutSeconds <= 30 {
+		timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+	}
+	if maxTimeout > 0 && timeout > maxTimeout {
+		timeout = maxTimeout
 	}
 
 	return NewWebhookSender(WebhookSenderOptions{
@@ -316,6 +343,7 @@ func (s *Service) buildTestWebhookSender(
 		SignedURLTTL:      s.config.SignedURLTTL,
 		Signer:            s.signer,
 		Media:             s.media,
+		GalleryMedia:      s.galleryMedia,
 		URL:               sec.URL,
 		HeartbeatURL:      sec.HeartbeatURL,
 		AuthType:          cfg.AuthType,
@@ -350,6 +378,7 @@ func (s *Service) buildTestMQTTSender(dest *AlertDestination, sec *mqttSecret) (
 		SignedURLTTL:      s.config.SignedURLTTL,
 		Signer:            s.signer,
 		Media:             s.media,
+		GalleryMedia:      s.galleryMedia,
 		Broker:            cfg.Broker,
 		ClientID:          clientID,
 		Username:          cfg.Username,
@@ -392,7 +421,7 @@ func (s *Service) validateDestination(dest *AlertDestination, secretRaw destinat
 		if dest.ImageMode != ImageModeURL && dest.ImageMode != ImageModeBase64 {
 			return ErrInvalidImageMode
 		}
-		if err := validateMQTTTarget(dest.ConfigJSON); err != nil {
+		if err := validateMQTTTarget(dest.ConfigJSON, dest.MQTTClientID); err != nil {
 			return err
 		}
 	}
@@ -460,13 +489,57 @@ func validateFilterEventTypes(filterJSON string) error {
 	return nil
 }
 
-func validateMQTTTarget(configJSON string) error {
+func validateMQTTBroker(rawBroker string) error {
+	trimmed := strings.TrimSpace(rawBroker)
+	if trimmed == "" {
+		return errors.New("broker url is required for mqtt")
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil {
+		return errors.New("mqtt broker url must be valid and must not contain userinfo")
+	}
+	return nil
+}
+
+func validateMQTTClientID(clientID string) error {
+	if len(clientID) > MaxMQTTClientIDLength {
+		return fmt.Errorf("mqtt client id must not exceed %d characters", MaxMQTTClientIDLength)
+	}
+	return nil
+}
+
+func validateMQTTTarget(configJSON string, clientID *string) error {
+	if clientID != nil {
+		if err := validateMQTTClientID(strings.TrimSpace(*clientID)); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
+	}
 	if configJSON == "" {
 		return nil
 	}
 	var cfg mqttConfig
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	if err := validateMQTTBroker(cfg.Broker); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	if strings.TrimSpace(cfg.Topic) == "" {
+		return fmt.Errorf("%w: topic is required for mqtt", ErrInvalidConfig)
+	}
+	if strings.ContainsAny(cfg.Topic, "+#") {
+		return fmt.Errorf("%w: mqtt publish topic must not contain wildcards", ErrInvalidConfig)
+	}
+	if !isValidMQTTQoS(cfg.QoS) {
+		return fmt.Errorf("%w: mqtt qos must be 0, 1 or 2", ErrInvalidConfig)
+	}
+	if cfg.KeepAliveSeconds != 0 && !isValidKeepAliveSeconds(cfg.KeepAliveSeconds) {
+		return fmt.Errorf(
+			"%w: keep_alive_seconds must be between %d and %d",
+			ErrInvalidConfig,
+			MinKeepAliveSeconds,
+			MaxKeepAliveSeconds,
+		)
 	}
 	if cfg.HeartbeatIntervalSeconds != 0 && !isValidHeartbeatInterval(cfg.HeartbeatIntervalSeconds) {
 		return fmt.Errorf("%w: heartbeat_interval_seconds must be between 15 and 3600", ErrInvalidConfig)

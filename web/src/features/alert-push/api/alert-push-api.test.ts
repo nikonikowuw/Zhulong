@@ -179,5 +179,81 @@ describe('alertPushApi', () => {
     expect(res[0].heartbeatEnabled).toBe(true)
     expect(res[0].status.state).toBe('running')
     expect(res[0].status.queueLength).toBe(0)
+    expect(res[0].status.dropped).toBe(0)
+  })
+
+  it('preserves connecting state, failure telemetry, and dropped counts from Go status payload', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      data: {
+        code: 'OK',
+        data: {
+          items: [
+            {
+              id: 'dest_mqtt_conn',
+              name: 'Connecting MQTT',
+              channelType: 'mqtt',
+              enabled: true,
+              eventsEnabled: true,
+              heartbeatEnabled: false,
+              imageMode: 'base64',
+              config: {
+                broker: 'tcp://10.0.0.1:1883',
+                topic: 'zhulong/events',
+              },
+              filter: { eventTypes: [], algorithmIds: [], cameraIds: [] },
+              secretSet: false,
+              status: {
+                state: 'connecting',
+                lastError: '',
+                lastAttemptAt: null,
+                lastSuccessAt: null,
+                lastFailureAt: null,
+                consecutiveFailures: 0,
+                dropped: 5,
+                queued: 3,
+              },
+            },
+            {
+              id: 'dest_wh_fail',
+              name: 'Failing Webhook',
+              channelType: 'webhook',
+              enabled: true,
+              eventsEnabled: true,
+              heartbeatEnabled: false,
+              imageMode: 'multipart',
+              config: {
+                url: 'https://ops.example.com/hook',
+                authType: 'none',
+              },
+              filter: { eventTypes: [], algorithmIds: [], cameraIds: [] },
+              secretSet: false,
+              status: {
+                state: 'failed',
+                lastError: 'timeout',
+                lastAttemptAt: '2026-11-24T10:00:00Z',
+                lastSuccessAt: null,
+                lastFailureAt: '2026-11-24T10:00:00Z',
+                consecutiveFailures: 4,
+                dropped: 2,
+                queued: 16,
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    const res = await alertPushApi.list()
+    expect(res).toHaveLength(2)
+    expect(res[0].status.state).toBe('connecting')
+    expect(res[0].status.dropped).toBe(5)
+    expect(res[0].status.queueLength).toBe(3)
+
+    expect(res[1].status.state).toBe('degraded')
+    expect(res[1].status.lastAttemptAt).toBe('2026-11-24T10:00:00Z')
+    expect(res[1].status.lastFailureAt).toBe('2026-11-24T10:00:00Z')
+    expect(res[1].status.lastFailureReason).toBe('timeout')
+    expect(res[1].status.consecutiveFailures).toBe(4)
+    expect(res[1].status.dropped).toBe(2)
   })
 })

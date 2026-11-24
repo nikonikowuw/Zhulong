@@ -40,6 +40,7 @@ type WebhookSenderOptions struct {
 	SignedURLTTL      time.Duration
 	Signer            *URLSigner
 	Media             MediaReader
+	GalleryMedia      MediaReader
 	URL               string
 	HeartbeatURL      string
 	AuthType          string
@@ -266,6 +267,7 @@ func (s *WebhookSender) imageURLParams() imageURLParams {
 		PublicBaseURL: s.opts.PublicBaseURL,
 		Signer:        s.opts.Signer,
 		Media:         s.opts.Media,
+		GalleryMedia:  s.opts.GalleryMedia,
 		TTL:           s.opts.SignedURLTTL,
 	}
 }
@@ -295,6 +297,8 @@ func (s *WebhookSender) buildJSONRequest(
 // multipartImage is an opened evidence image that becomes one form part.
 type multipartImage struct {
 	part string
+	mime string
+	ext  string
 	file io.ReadSeekCloser
 }
 
@@ -310,7 +314,7 @@ func (s *WebhookSender) openMultipartImages(
 	params := s.imageURLParams()
 
 	for _, c := range imageCandidates(ev) {
-		info := newImageInfo(c.role)
+		info := newImageInfo(c.role, c.relPath)
 		signed, ok := mintImageURL(
 			ctx,
 			params,
@@ -322,14 +326,20 @@ func (s *WebhookSender) openMultipartImages(
 			info.URLExpiresAt = &signed.expiresAt
 		}
 
-		if s.opts.Media != nil {
-			f, objInfo, err := s.opts.Media.OpenContent(ctx, c.relPath)
+		reader := mediaReaderForPath(s.opts.Media, s.opts.GalleryMedia, c.relPath)
+		if reader != nil {
+			f, objInfo, err := reader.OpenContent(ctx, c.relPath)
 			if err == nil {
 				partName := "image_" + c.role
 				size := objInfo.SizeBytes
 				info.Part = &partName
 				info.SizeBytes = &size
-				opened = append(opened, multipartImage{part: partName, file: f})
+				opened = append(opened, multipartImage{
+					part: partName,
+					mime: info.MIME,
+					ext:  imageExtForMIME(info.MIME),
+					file: f,
+				})
 			} else {
 				s.logger.Warn("failed to open image for multipart payload",
 					zap.String("role", c.role),
@@ -385,9 +395,9 @@ func (s *WebhookSender) buildMultipartRequest(
 		role := strings.TrimPrefix(img.part, "image_")
 		imgHeader.Set(
 			"Content-Disposition",
-			fmt.Sprintf(`form-data; name=%q; filename=%q`, img.part, role+".jpg"),
+			fmt.Sprintf(`form-data; name=%q; filename=%q`, img.part, role+img.ext),
 		)
-		imgHeader.Set("Content-Type", imageMIMEJPEG)
+		imgHeader.Set("Content-Type", img.mime)
 		imgWriter, err := w.CreatePart(imgHeader)
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("create image part: %w", err)

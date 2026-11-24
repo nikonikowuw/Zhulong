@@ -436,8 +436,8 @@ func TestHandlerTestEndpointHeartbeatOnlySendsHeartbeat(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &hb); err != nil {
 		t.Fatalf("unmarshal test heartbeat payload: %v", err)
 	}
-	if hb.EventType != EventTypeHeartbeat || hb.Seq == nil || *hb.Seq != 1 || hb.Heartbeat == nil {
-		t.Fatalf("expected test endpoint to send event_type=heartbeat seq=1, got %+v", hb)
+	if hb.EventType != EventTypeHeartbeat || hb.Seq == nil || *hb.Seq != 0 || hb.Heartbeat == nil {
+		t.Fatalf("expected test endpoint to send event_type=heartbeat seq=0, got %+v", hb)
 	}
 
 	// Unknown saved destination ID on /test must answer 404 (not 422).
@@ -535,7 +535,7 @@ func TestHandlerResolveExistingMQTTTestTargetAppliesOverrides(t *testing.T) {
 			HeartbeatTopic:   stringPtr("zhulong/status"),
 			QoS:              &qos,
 			KeepAliveSeconds: &keepAlive,
-			TLSSkipVerify:    true,
+			TLSSkipVerify:    boolPtr(true),
 			LWTEnabled:       boolPtr(false),
 		},
 	})

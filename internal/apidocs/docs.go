@@ -2602,7 +2602,7 @@ const docTemplate = `{
         },
         "/media/signed/{path}": {
             "get": {
-                "description": "Streams snapshot bytes verified by HMAC signature without cookie authentication.",
+                "description": "Streams snapshot or face gallery reference bytes verified by HMAC signature without cookie authentication.",
                 "produces": [
                     "image/jpeg"
                 ],
@@ -2613,7 +2613,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg",
+                        "description": "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg or faces/person_face.jpg",
                         "name": "path",
                         "in": "path",
                         "required": true
@@ -7565,10 +7565,19 @@ const docTemplate = `{
         "alertpush.AlertDestinationStatus": {
             "type": "object",
             "properties": {
+                "consecutiveFailures": {
+                    "type": "integer"
+                },
                 "dropped": {
                     "type": "integer"
                 },
+                "lastAttemptAt": {
+                    "type": "string"
+                },
                 "lastError": {
+                    "type": "string"
+                },
+                "lastFailureAt": {
                     "type": "string"
                 },
                 "lastSuccessAt": {

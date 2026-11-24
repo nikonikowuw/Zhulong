@@ -33,11 +33,11 @@ func (m *mockSender) Send(ctx context.Context, d Delivery) error {
 		case <-time.After(m.delay):
 		}
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		return m.err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.received = append(m.received, d.Event)
 	m.deliveries = append(m.deliveries, d)
 	return nil
@@ -583,5 +583,154 @@ func TestDispatcherUsesSenderTimeoutBudgets(t *testing.T) {
 	})
 	if plain.eventSendBudget() != defaultSendBudget || plain.heartbeatSendBudget() != defaultSendBudget {
 		t.Fatalf("expected defaultSendBudget=%v for plain sender", defaultSendBudget)
+	}
+}
+
+func TestDispatcherStatusTracksAttemptFailureAndRecovery(t *testing.T) {
+	sender := &mockSender{err: context.DeadlineExceeded}
+	w := newDestinationWorker(destinationWorkerOptions{
+		dest:        &AlertDestination{ID: "status_track", ChannelType: ChannelTypeWebhook, EventsEnabled: true},
+		sender:      sender,
+		fingerprint: "fp-status",
+		logger:      zap.NewNop(),
+	})
+	w.start()
+	defer w.stop()
+
+	w.enqueue(record.AlarmEvent{ID: "ev-fail-1"})
+	w.enqueue(record.AlarmEvent{ID: "ev-fail-2"})
+
+	deadline := time.Now().Add(time.Second)
+	for w.getStatus().ConsecutiveFailures < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	st := w.getStatus()
+	if st.State != StateFailed || st.ConsecutiveFailures != 2 {
+		t.Fatalf("expected failed with 2 consecutive failures, got %+v", st)
+	}
+	if st.LastAttemptAt == nil || st.LastFailureAt == nil || st.LastSuccessAt != nil {
+		t.Fatalf("expected LastAttemptAt & LastFailureAt set and LastSuccessAt nil, got %+v", st)
+	}
+
+	// Recover on next delivery: consecutiveFailures resets to 0 and LastSuccessAt is populated.
+	sender.mu.Lock()
+	sender.err = nil
+	sender.mu.Unlock()
+	w.enqueue(record.AlarmEvent{ID: "ev-ok"})
+
+	deadline = time.Now().Add(time.Second)
+	for w.getStatus().State != StateConnected && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	recovered := w.getStatus()
+	if recovered.State != StateConnected || recovered.ConsecutiveFailures != 0 || recovered.LastSuccessAt == nil {
+		t.Fatalf("expected recovered connected status with 0 failures, got %+v", recovered)
+	}
+}
+
+func TestDispatcherMQTTConnectionCallbacksUpdateState(t *testing.T) {
+	brokerURL, rawCleanupBroker := startInProcessBroker(t)
+	var closeBrokerOnce sync.Once
+	cleanupBroker := func() { closeBrokerOnce.Do(rawCleanupBroker) }
+	defer cleanupBroker()
+
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:        "mqtt-cb",
+		ImageMode: ImageModeBase64,
+		Broker:    brokerURL,
+		ClientID:  "zhulong-cb-test",
+		Topic:     "zhulong/events",
+		KeepAlive: 10 * time.Second,
+		Logger:    zap.NewNop(),
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+
+	w := newDestinationWorker(destinationWorkerOptions{
+		dest: &AlertDestination{
+			ID:               "mqtt-cb",
+			ChannelType:      ChannelTypeMQTT,
+			EventsEnabled:    true,
+			HeartbeatEnabled: false,
+		},
+		sender:      sender,
+		fingerprint: "fp-cb",
+		logger:      zap.NewNop(),
+	})
+	if st := w.getStatus(); st.State != StateConnecting {
+		t.Fatalf("initial MQTT state = %q, want connecting", st.State)
+	}
+	w.start()
+	defer w.stop()
+
+	// Without sending any event or heartbeat, OnConnect must transition connecting -> connected.
+	deadline := time.Now().Add(3 * time.Second)
+	for w.getStatus().State != StateConnected && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if st := w.getStatus(); st.State != StateConnected {
+		t.Fatalf("expected MQTT state connected via OnConnect hook, got %+v", st)
+	}
+
+	// Closing the broker must trigger ConnectionLost -> failed.
+	cleanupBroker()
+	deadline = time.Now().Add(3 * time.Second)
+	for w.getStatus().State != StateFailed && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if st := w.getStatus(); st.State != StateFailed || st.LastError == "" {
+		t.Fatalf("expected MQTT state failed after broker stop, got %+v", st)
+	}
+}
+
+func TestDispatcherConcurrentStopAndRemoveState(t *testing.T) {
+	d := NewDispatcher(DispatcherOptions{Logger: zap.NewNop()})
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// 4 workers each taking 300ms to drain one event; concurrent Stop must finish well below 1.2s.
+	for i := range 4 {
+		id := "slow-stop-" + string(rune('a'+i))
+		w := newDestinationWorker(destinationWorkerOptions{
+			dest:        &AlertDestination{ID: id, ChannelType: ChannelTypeWebhook, EventsEnabled: true},
+			sender:      &mockSender{delay: 300 * time.Millisecond},
+			fingerprint: "fp-" + id,
+			seqCounter:  d.counterFor(id),
+			logger:      zap.NewNop(),
+		})
+		w.enqueue(record.AlarmEvent{ID: "drain-" + id})
+		d.mu.Lock()
+		d.workers[id] = w
+		d.mu.Unlock()
+		w.start()
+	}
+
+	// Ensure RemoveDestinationState removes cached stats and sequence entries.
+	d.UpdateTestResult("deleted-id", true, "")
+	if got := d.counterFor("deleted-id").Add(1); got != 1 {
+		t.Fatalf("expected initial seq=1, got %d", got)
+	}
+	d.RemoveDestinationState("deleted-id")
+
+	d.statsMu.RLock()
+	_, hasStat := d.stats["deleted-id"]
+	d.statsMu.RUnlock()
+	d.seqMu.Lock()
+	_, hasSeq := d.seqMap["deleted-id"]
+	d.seqMu.Unlock()
+	if hasStat || hasSeq {
+		t.Fatalf("expected RemoveDestinationState to clear stats=%v seq=%v", hasStat, hasSeq)
+	}
+
+	start := time.Now()
+	if err := d.Stop(ctx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed >= 900*time.Millisecond {
+		t.Fatalf("expected concurrent Stop across 4 workers (<900ms), took %v", elapsed)
 	}
 }

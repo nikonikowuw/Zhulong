@@ -1151,6 +1151,8 @@ type alertPushParams struct {
 	CameraManager  *camera.LifecycleManager
 	MediaService   *mediafile.Service
 	MediaHandler   *mediafile.Handler
+	FileStore      *filestore.Manager `optional:"true"`
+	StorageSvc     *storage.Service   `optional:"true"`
 	RecordService  *record.Service
 	SystemInfo     *systeminfo.IdentityService
 	StatusSnapshot *statusSnapshotAdapter `optional:"true"`
@@ -1167,11 +1169,24 @@ func provideAlertPush(p alertPushParams) alertPushOut {
 	if p.StatusSnapshot != nil {
 		hbProvider = p.StatusSnapshot
 	}
+	var galleryMedia alertpush.MediaReader
+	if p.FileStore != nil {
+		var deliveryMode mediafile.DeliveryModeProvider
+		if p.StorageSvc != nil {
+			deliveryMode = mediafile.NewDeliveryModeProvider(p.StorageSvc)
+		}
+		galleryMedia = newAlertGalleryMediaAdapter(
+			p.FileStore,
+			deliveryMode,
+			p.Config.AlertPushSignedURLTTL,
+		)
+	}
 	comp := alertpush.NewComponents(alertpush.Options{
 		DBProvider:   p.DBProvider,
 		Cipher:       p.CameraCipher,
 		MediaService: p.MediaService,
 		MediaHandler: p.MediaHandler,
+		GalleryMedia: galleryMedia,
 		DataDir:      p.Config.DataDir,
 		Config: alertpush.Config{
 			PublicBaseURL:     p.Config.AlertPushPublicBaseURL,

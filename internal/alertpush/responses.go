@@ -23,22 +23,22 @@ type AlertDestinationListResponse struct {
 
 // AlertDestinationConfigInfo exposes non-sensitive configuration plus decrypted URLs for edit.
 //
-// HeartbeatURL and HeartbeatTopic use pointer fields so update requests can distinguish
-// "omitted (keep existing)" from "explicitly empty string (clear override)".
+// Optional pointer fields distinguish "omitted (keep existing)" from explicit empty/false values
+// during update and test requests.
 type AlertDestinationConfigInfo struct {
 	URL                      string  `json:"url,omitempty"`
 	HeartbeatURL             *string `json:"heartbeatUrl,omitempty"`
 	AuthType                 string  `json:"authType,omitempty"`
 	TimeoutSeconds           *int    `json:"timeoutSeconds,omitempty"`
 	Broker                   string  `json:"broker,omitempty"`
-	ClientID                 string  `json:"clientId,omitempty"`
-	Username                 string  `json:"username,omitempty"`
+	ClientID                 *string `json:"clientId,omitempty"`
+	Username                 *string `json:"username,omitempty"`
 	Topic                    string  `json:"topic,omitempty"`
 	HeartbeatTopic           *string `json:"heartbeatTopic,omitempty"`
 	LWTEnabled               *bool   `json:"lwtEnabled,omitempty"`
 	QoS                      *uint8  `json:"qos,omitempty"`
 	KeepAliveSeconds         *int    `json:"keepAliveSeconds,omitempty"`
-	TLSSkipVerify            bool    `json:"tlsSkipVerify,omitempty"`
+	TLSSkipVerify            *bool   `json:"tlsSkipVerify,omitempty"`
 	HeartbeatIntervalSeconds *int    `json:"heartbeatIntervalSeconds,omitempty"`
 	// InlineMaxKB is the MQTT base64 inline image budget (64..8192 KiB, default 500).
 	InlineMaxKB *int `json:"inlineMaxKb,omitempty"`

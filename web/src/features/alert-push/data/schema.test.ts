@@ -355,13 +355,28 @@ describe('createAlertDestinationFormSchema', () => {
     expect(urlMode.success).toBe(true)
   })
 
-  it('reserves the v1 envelope headers', () => {
+  it('reserves the v1 envelope and transport headers', () => {
     expect(RESERVED_HEADERS).toEqual(
       expect.arrayContaining([
+        'accept',
+        'authorization',
+        'connection',
+        'content-length',
+        'content-type',
+        'host',
+        'transfer-encoding',
+        'user-agent',
         'x-zhulong-event',
         'x-zhulong-delivery',
         'x-zhulong-schema',
       ])
     )
+    const schema = createAlertDestinationFormSchema()
+    const res = schema.safeParse(
+      makeBaseWebhookValues({
+        headers: [{ key: 'Transfer-Encoding', value: 'chunked' }],
+      })
+    )
+    expect(res.success).toBe(false)
   })
 })

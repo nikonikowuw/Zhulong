@@ -211,6 +211,52 @@ func TestStoreCRUD(t *testing.T) {
 	}
 }
 
+func TestStoreCreateDisabledAndLimit(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Explicit Enabled=false must persist as false (no GORM default:true zero-value trap).
+	disabledID := "01J8Z000000000000000000099"
+	dest := &AlertDestination{
+		ID:               disabledID,
+		Name:             "Created Disabled",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          false,
+		EventsEnabled:    true,
+		HeartbeatEnabled: false,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:       `{}`,
+	}
+	if err := store.CreateWithLimit(ctx, dest, 1); err != nil {
+		t.Fatalf("CreateWithLimit first failed: %v", err)
+	}
+	got, err := store.GetByID(ctx, disabledID)
+	if err != nil {
+		t.Fatalf("GetByID disabled failed: %v", err)
+	}
+	if got.Enabled {
+		t.Fatal("expected Enabled=false to be preserved on insert")
+	}
+
+	// Second insert exceeds limit=1 -> ErrMaxDestinationsReached.
+	second := &AlertDestination{
+		ID:               "01J8Z000000000000000000100",
+		Name:             "Exceeds Limit",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          true,
+		EventsEnabled:    true,
+		HeartbeatEnabled: false,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:       `{}`,
+	}
+	if err := store.CreateWithLimit(ctx, second, 1); !errors.Is(err, ErrMaxDestinationsReached) {
+		t.Fatalf("expected ErrMaxDestinationsReached, got %v", err)
+	}
+}
+
 func TestStoreMQTTClientIDUnique(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()

@@ -5,6 +5,7 @@ import {
   Globe,
   HeartPulse,
   Layers,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Play,
@@ -99,6 +100,7 @@ const DESTINATION_STATUS_LEVEL: Record<
   StatusLevel
 > = {
   running: 'active',
+  connecting: 'warning',
   degraded: 'destructive',
   idle: 'inactive',
   disabled: 'inactive',
@@ -153,6 +155,18 @@ export function DestinationStatusBadge({
           />
         </span>
         {t('states.running')}
+      </Badge>
+    )
+  }
+
+  if (status.state === 'connecting') {
+    return (
+      <Badge
+        variant='outline'
+        className={cn('gap-1.5 text-xs font-normal', statusLevelClass(level))}
+      >
+        <Loader2 className='size-3 animate-spin' />
+        {t('states.connecting')}
       </Badge>
     )
   }
@@ -314,11 +328,37 @@ export const AlertDestinationTableRow = React.memo(
 
         <TableCell>
           {dest.eventsEnabled ? (
-            <div className='flex items-center gap-1 text-xs text-muted-foreground'>
-              <Layers className='size-3.5' />
-              <span>
-                {dest.status.queueLength} / {dest.status.queueCapacity}
-              </span>
+            <div className='flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground'>
+              <div className='flex items-center gap-1'>
+                <Layers className='size-3.5' />
+                <span>
+                  {dest.status.queueLength} / {dest.status.queueCapacity}
+                </span>
+              </div>
+              {dest.status.dropped > 0 ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant='outline'
+                      className={cn(
+                        'h-5 cursor-help px-1.5 text-[10px] font-normal',
+                        statusLevelClass('warning')
+                      )}
+                    >
+                      {t('fields.droppedBadge', {
+                        count: dest.status.dropped,
+                      })}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className='text-xs'>
+                      {t('fields.droppedTooltip', {
+                        count: dest.status.dropped,
+                      })}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
             </div>
           ) : (
             <span className='text-xs text-muted-foreground'>—</span>

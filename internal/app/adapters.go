@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"runtime"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/faceextract"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/openapi"
 	"github.com/nikonikowuw/Zhulong/internal/person"
@@ -1056,4 +1058,134 @@ func (r *alertSourceResolver) ResolveSource(
 		src.Algorithm.Version = &version
 	}
 	return src
+}
+
+var alertGalleryNamespaces = map[string]bool{
+	filestore.NamespaceFaces: true,
+}
+
+const defaultGalleryPresignTTL = 10 * time.Minute
+
+// alertGalleryMediaAdapter exposes read-only access strictly to single-level faces/<file>
+// keys in filestore so alertpush can deliver face gallery reference images (multipart,
+// base64, signed URL, and S3 presign redirect) without opening /media/content/* to faces/.
+type alertGalleryMediaAdapter struct {
+	store        filestore.Store
+	deliveryMode mediafile.DeliveryModeProvider
+	defaultTTL   time.Duration
+}
+
+func newAlertGalleryMediaAdapter(
+	store filestore.Store,
+	deliveryMode mediafile.DeliveryModeProvider,
+	defaultTTL time.Duration,
+) *alertGalleryMediaAdapter {
+	if store == nil {
+		return nil
+	}
+	if defaultTTL <= 0 {
+		defaultTTL = defaultGalleryPresignTTL
+	}
+	return &alertGalleryMediaAdapter{
+		store:        store,
+		deliveryMode: deliveryMode,
+		defaultTTL:   defaultTTL,
+	}
+}
+
+func validateAlertGalleryKey(relPath string) (string, error) {
+	cleanKey, err := filestore.ValidateKeyInNamespaces(relPath, alertGalleryNamespaces)
+	if err != nil {
+		return "", err
+	}
+	if strings.Count(cleanKey, "/") != 1 {
+		return "", apperr.Invalid(
+			"MEDIA_PATH_INVALID",
+			"Gallery media path must be a single-level faces/<filename> key",
+			filestore.ErrInvalidKey,
+		)
+	}
+	return cleanKey, nil
+}
+
+func (a *alertGalleryMediaAdapter) OpenContent(
+	ctx context.Context,
+	relPath string,
+) (io.ReadSeekCloser, filestore.ObjectInfo, error) {
+	if a == nil || a.store == nil {
+		return nil, filestore.ObjectInfo{}, apperr.Internal(
+			"MEDIA_ROOT_UNAVAILABLE",
+			"Gallery media store is not configured",
+			filestore.ErrStoreUnavailable,
+		)
+	}
+	cleanKey, err := validateAlertGalleryKey(relPath)
+	if err != nil {
+		return nil, filestore.ObjectInfo{}, err
+	}
+	rc, info, err := a.store.Open(ctx, cleanKey)
+	if err != nil {
+		if errors.Is(err, filestore.ErrStoreUnavailable) {
+			return nil, filestore.ObjectInfo{}, apperr.Internal(
+				"MEDIA_ROOT_UNAVAILABLE",
+				"Gallery media store is unavailable",
+				err,
+			)
+		}
+		return nil, filestore.ObjectInfo{}, err
+	}
+	return rc, info, nil
+}
+
+func (a *alertGalleryMediaAdapter) PresignMediaURL(
+	ctx context.Context,
+	relPath string,
+	ttl time.Duration,
+) (string, bool, error) {
+	if a == nil || a.store == nil || a.deliveryMode == nil {
+		return "", false, nil
+	}
+	cleanKey, err := validateAlertGalleryKey(relPath)
+	if err != nil {
+		return "", false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(a.deliveryMode.DeliveryMode(ctx)), "redirect") {
+		return "", false, nil
+	}
+	presigner, ok := a.store.(filestore.Presigner)
+	if !ok {
+		return "", false, nil
+	}
+	if capable, ok := a.store.(filestore.PresignCapable); ok && !capable.SupportsPresign() {
+		return "", false, nil
+	}
+	if spoolCheck, ok := a.store.(interface {
+		ExistsInSpool(context.Context, string) (bool, error)
+	}); ok {
+		if inSpool, spoolErr := spoolCheck.ExistsInSpool(ctx, cleanKey); spoolErr == nil && inSpool {
+			return "", false, nil
+		}
+	}
+	if primaryCheck, ok := a.store.(interface {
+		ExistsInPrimary(context.Context, string) (bool, error)
+	}); ok {
+		inPrimary, primaryErr := primaryCheck.ExistsInPrimary(ctx, cleanKey)
+		if primaryErr != nil {
+			return "", false, primaryErr
+		}
+		if !inPrimary {
+			return "", false, nil
+		}
+	}
+	if ttl <= 0 {
+		ttl = a.defaultTTL
+	}
+	urlStr, err := presigner.PresignGet(ctx, cleanKey, ttl)
+	if err != nil {
+		if filestore.IsPresignUnsupported(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return urlStr, true, nil
 }

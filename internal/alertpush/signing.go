@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 )
 
 const (
@@ -26,9 +28,13 @@ const (
 var (
 	ErrInvalidSignerKey    = errors.New("invalid signing key length")
 	ErrSignerNotConfigured = errors.New("url signer key is not configured")
-	ErrPathNotAllowed      = errors.New("signed URL only supports snapshots")
+	ErrPathNotAllowed      = errors.New("signed URL only supports snapshots and face gallery images")
 	ErrURLExpired          = errors.New("signed URL has expired")
 	ErrURLInvalid          = errors.New("signed URL signature is invalid")
+
+	signedFaceNamespaces = map[string]bool{
+		filestore.NamespaceFaces: true,
+	}
 )
 
 // URLSigner manages HMAC-SHA256 signature generation and verification for media URLs.
@@ -87,7 +93,7 @@ func (s *URLSigner) IsConfigured() bool {
 // and expiration timestamp.
 func (s *URLSigner) Sign(relPath string, exp int64) (string, error) {
 	normPath := normalizeRelativePath(relPath)
-	if !strings.HasPrefix(normPath, "snapshots/") {
+	if !isAllowedSignedPath(normPath) {
 		return "", ErrPathNotAllowed
 	}
 
@@ -108,7 +114,7 @@ func (s *URLSigner) Sign(relPath string, exp int64) (string, error) {
 // Verify validates whether the given signature is valid and not expired.
 func (s *URLSigner) Verify(relPath string, exp int64, sig string) error {
 	normPath := normalizeRelativePath(relPath)
-	if !strings.HasPrefix(normPath, "snapshots/") {
+	if !isAllowedSignedPath(normPath) {
 		return ErrPathNotAllowed
 	}
 
@@ -216,6 +222,34 @@ func loadOrCreateSigningKey(dataDir string) (*URLSigner, error) {
 func normalizeRelativePath(p string) string {
 	clean := strings.TrimPrefix(filepath.ToSlash(p), "/")
 	return strings.TrimPrefix(clean, "./")
+}
+
+// isAllowedSignedPath limits signed media access strictly to snapshot evidence and
+// single-level face gallery images (faces/<filename>).
+func isAllowedSignedPath(normPath string) bool {
+	if isAllowedSnapshotSignedPath(normPath) {
+		return true
+	}
+	return isAllowedFaceSignedPath(normPath)
+}
+
+func isAllowedSnapshotSignedPath(normPath string) bool {
+	if !strings.HasPrefix(normPath, filestore.NamespaceSnapshots+"/") {
+		return false
+	}
+	_, err := filestore.ValidateMediaKey(normPath)
+	return err == nil
+}
+
+func isAllowedFaceSignedPath(normPath string) bool {
+	if !strings.HasPrefix(normPath, filestore.NamespaceFaces+"/") {
+		return false
+	}
+	if strings.Count(normPath, "/") != 1 {
+		return false
+	}
+	_, err := filestore.ValidateKeyInNamespaces(normPath, signedFaceNamespaces)
+	return err == nil
 }
 
 func buildSignaturePayload(normPath string, exp int64) string {

@@ -45,10 +45,10 @@ export interface DestinationStatus {
   lastFailureReason?: string
   consecutiveFailures: number
   totalDispatched: number
-  dropped?: number
+  dropped: number
   queueLength: number
   queueCapacity: number
-  state: 'idle' | 'running' | 'degraded' | 'disabled'
+  state: 'idle' | 'connecting' | 'running' | 'degraded' | 'disabled'
 }
 
 export interface WebhookAlertDestination {

@@ -285,3 +285,149 @@ func TestHandlerTestEndpointSendsV1AlarmProbe(t *testing.T) {
 		t.Fatalf("unexpected probe headers: %v", gotHeaders)
 	}
 }
+
+func TestMQTTUpdatePreservesCustomClientIDAndValidatesFields(t *testing.T) {
+	router, _, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	createReq := CreateAlertDestinationRequest{
+		Name:        "MQTT Custom",
+		ChannelType: ChannelTypeMQTT,
+		ImageMode:   ImageModeBase64,
+		Config: AlertDestinationConfigInfo{
+			Broker:        "ssl://broker.local:8883",
+			Topic:         "zhulong/events",
+			ClientID:      stringPtr("edge-custom-01"),
+			Username:      stringPtr("ops-user"),
+			TLSSkipVerify: boolPtr(true),
+		},
+	}
+	code, envCode, created := postDestination(t, router, createReq)
+	if code != http.StatusOK {
+		t.Fatalf("create failed: %d (%s)", code, envCode)
+	}
+	if created.Config.ClientID == nil || *created.Config.ClientID != "edge-custom-01" {
+		t.Fatalf("clientId = %v, want edge-custom-01", created.Config.ClientID)
+	}
+	if created.Config.Username == nil || *created.Config.Username != "ops-user" {
+		t.Fatalf("username = %v, want ops-user", created.Config.Username)
+	}
+	if created.Config.TLSSkipVerify == nil || !*created.Config.TLSSkipVerify {
+		t.Fatalf("tlsSkipVerify = %v, want true", created.Config.TLSSkipVerify)
+	}
+
+	// 1. Partial PUT updating name only must preserve custom ClientID, Username, and TLSSkipVerify.
+	code, envCode, updated := putDestination(t, router, created.ID, UpdateAlertDestinationRequest{
+		Name: stringPtr("MQTT Renamed"),
+	})
+	if code != http.StatusOK {
+		t.Fatalf("partial name update failed: %d (%s)", code, envCode)
+	}
+	if updated.Config.ClientID == nil || *updated.Config.ClientID != "edge-custom-01" {
+		t.Fatalf("custom clientId was clobbered on name update: got %v", updated.Config.ClientID)
+	}
+
+	// 2. Partial PUT updating inlineMaxKb must keep TLSSkipVerify=true, Username, and ClientID intact.
+	code, envCode, updated = putDestination(t, router, created.ID, UpdateAlertDestinationRequest{
+		Config: &AlertDestinationConfigInfo{
+			InlineMaxKB: intPtr(256),
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("partial config update failed: %d (%s)", code, envCode)
+	}
+	if updated.Config.ClientID == nil || *updated.Config.ClientID != "edge-custom-01" {
+		t.Fatalf("custom clientId lost on partial config update: got %v", updated.Config.ClientID)
+	}
+	if updated.Config.Username == nil || *updated.Config.Username != "ops-user" {
+		t.Fatalf("username lost on partial config update: got %v", updated.Config.Username)
+	}
+	if updated.Config.TLSSkipVerify == nil || !*updated.Config.TLSSkipVerify {
+		t.Fatalf("tlsSkipVerify reset on partial config update: got %v", updated.Config.TLSSkipVerify)
+	}
+
+	// 3. Explicit empty strings clear username and revert clientId to auto-derived "z<id[4:]>".
+	code, envCode, cleared := putDestination(t, router, created.ID, UpdateAlertDestinationRequest{
+		Config: &AlertDestinationConfigInfo{
+			Username:      stringPtr(""),
+			ClientID:      stringPtr(""),
+			TLSSkipVerify: boolPtr(false),
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("clear update failed: %d (%s)", code, envCode)
+	}
+	if cleared.Config.Username != nil {
+		t.Fatalf("username = %v, want cleared (nil)", *cleared.Config.Username)
+	}
+	wantAutoID := "z" + created.ID[4:]
+	if cleared.Config.ClientID == nil || *cleared.Config.ClientID != wantAutoID {
+		t.Fatalf("clientId = %v, want auto-derived %q", cleared.Config.ClientID, wantAutoID)
+	}
+	if cleared.Config.TLSSkipVerify == nil || *cleared.Config.TLSSkipVerify {
+		t.Fatalf("tlsSkipVerify = %v, want false", cleared.Config.TLSSkipVerify)
+	}
+
+	// 4. Invalid MQTT update fields must be rejected with 422.
+	invalidQoS := uint8(3)
+	invalidUpdates := []struct {
+		name string
+		cfg  AlertDestinationConfigInfo
+	}{
+		{name: "broker with userinfo", cfg: AlertDestinationConfigInfo{Broker: "tcp://user:pass@broker.local:1883"}},
+		{name: "clientId > 23 chars", cfg: AlertDestinationConfigInfo{ClientID: stringPtr("client-id-longer-than-23")}},
+		{name: "keepAlive 0", cfg: AlertDestinationConfigInfo{KeepAliveSeconds: intPtr(0)}},
+		{name: "keepAlive below 5", cfg: AlertDestinationConfigInfo{KeepAliveSeconds: intPtr(4)}},
+		{name: "keepAlive above 300", cfg: AlertDestinationConfigInfo{KeepAliveSeconds: intPtr(301)}},
+		{name: "qos > 2", cfg: AlertDestinationConfigInfo{QoS: &invalidQoS}},
+	}
+	for _, tc := range invalidUpdates {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgCopy := tc.cfg
+			st, codeStr, _ := putDestination(t, router, created.ID, UpdateAlertDestinationRequest{
+				Config: &cfgCopy,
+			})
+			if st != http.StatusUnprocessableEntity || codeStr != CodeAlertDestinationConfigInvalid {
+				t.Fatalf("%s: status=%d code=%q, want 422 %s", tc.name, st, codeStr, CodeAlertDestinationConfigInvalid)
+			}
+		})
+	}
+}
+
+func TestHandlerReservedHeadersParity(t *testing.T) {
+	router, _, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	for _, hdr := range []string{"User-Agent", "Accept", "Transfer-Encoding", "X-Zhulong-Schema"} {
+		req := CreateAlertDestinationRequest{
+			Name:        "Reserved-" + hdr,
+			ChannelType: ChannelTypeWebhook,
+			ImageMode:   ImageModeMultipart,
+			Config:      AlertDestinationConfigInfo{URL: "https://example.com/hook"},
+			Secret: &AlertDestinationSecretInfo{
+				Headers: map[string]string{hdr: "bad"},
+			},
+		}
+		code, envCode, _ := postDestination(t, router, req)
+		if code != http.StatusUnprocessableEntity || envCode != CodeAlertDestinationConfigInvalid {
+			t.Fatalf("header %q: status=%d code=%q, want 422", hdr, code, envCode)
+		}
+	}
+}
+
+func TestHandlerMaxDestinationsLimitEnforced(t *testing.T) {
+	router, _, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	for i := range MaxDestinations {
+		code, envCode, _ := postDestination(t, router, mqttCreateRequest("dest-limit-"+string(rune('A'+i/26))+string(rune('a'+i%26)), nil))
+		if code != http.StatusOK {
+			t.Fatalf("create #%d failed: %d (%s)", i+1, code, envCode)
+		}
+	}
+
+	code, envCode, _ := postDestination(t, router, mqttCreateRequest("dest-limit-overflow", nil))
+	if code != http.StatusUnprocessableEntity || envCode != CodeAlertDestinationConfigInvalid {
+		t.Fatalf("33rd destination: status=%d code=%q, want 422 %s", code, envCode, CodeAlertDestinationConfigInvalid)
+	}
+}

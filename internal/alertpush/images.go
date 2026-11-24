@@ -2,10 +2,17 @@ package alertpush
 
 import (
 	"context"
+	"path"
 	"strings"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/record"
+)
+
+const (
+	imageMIMEPNG  = "image/png"
+	imageMIMEWEBP = "image/webp"
 )
 
 // imageCandidate is one evidence image an event may carry, before any carrier is chosen.
@@ -19,6 +26,7 @@ type imageURLParams struct {
 	PublicBaseURL string
 	Signer        *URLSigner
 	Media         MediaReader
+	GalleryMedia  MediaReader
 	TTL           time.Duration
 }
 
@@ -42,9 +50,47 @@ func imageCandidates(ev record.AlarmEvent) []imageCandidate {
 	}
 	isFace := ev.EventType == record.EventTypeFaceRecognition
 	if isFace && ev.Face != nil && ev.Face.GalleryImagePath != "" {
-		out = append(out, imageCandidate{role: ImageRoleReference, relPath: ev.Face.GalleryImagePath})
+		if normRef, ok := normalizeGalleryRelPath(ev.Face.GalleryImagePath); ok {
+			out = append(out, imageCandidate{role: ImageRoleReference, relPath: normRef})
+		}
 	}
 	return out
+}
+
+// normalizeGalleryRelPath converts person_faces.image_path (bare filename in production,
+// or faces/<file> / snapshots/<...> in legacy fixtures) into a validated logical key.
+func normalizeGalleryRelPath(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	norm := normalizeRelativePath(trimmed)
+	if norm == "" {
+		return "", false
+	}
+	if isAllowedSnapshotSignedPath(norm) {
+		return norm, true
+	}
+	if isAllowedFaceSignedPath(norm) {
+		return norm, true
+	}
+	if !strings.Contains(norm, "/") {
+		candidate := filestore.NamespaceFaces + "/" + norm
+		if isAllowedFaceSignedPath(candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// mediaReaderForPath routes faces/ keys to the dedicated gallery reader when configured,
+// keeping /media/content/* isolated from enrolled face photos while letting unit tests
+// stub a single MediaReader.
+func mediaReaderForPath(media, galleryMedia MediaReader, relPath string) MediaReader {
+	if isAllowedFaceSignedPath(normalizeRelativePath(relPath)) && galleryMedia != nil {
+		return galleryMedia
+	}
+	return media
 }
 
 // resolveImageURLs implements the url image mode: every candidate that can be signed or
@@ -61,7 +107,7 @@ func resolveImageURLs(ctx context.Context, p imageURLParams, ev record.AlarmEven
 		if !ok {
 			continue
 		}
-		info := newImageInfo(c.role)
+		info := newImageInfo(c.role, c.relPath)
 		info.URL = &signed.url
 		info.URLExpiresAt = &signed.expiresAt
 		info.SizeBytes = signed.sizeBytes
@@ -79,8 +125,9 @@ func mintImageURL(
 	withSize bool,
 ) (signedImageURL, bool) {
 	expiresAt := formatPayloadTime(time.Now().Add(p.TTL))
+	reader := mediaReaderForPath(p.Media, p.GalleryMedia, relPath)
 
-	if presigner, ok := p.Media.(MediaPresigner); ok {
+	if presigner, ok := reader.(MediaPresigner); ok {
 		urlStr, handled, err := presigner.PresignMediaURL(ctx, relPath, p.TTL)
 		if err == nil && handled && urlStr != "" {
 			return signedImageURL{url: urlStr, expiresAt: expiresAt}, true
@@ -102,7 +149,7 @@ func mintImageURL(
 
 	out := signedImageURL{url: urlStr, expiresAt: expiresAt}
 	if withSize {
-		out.sizeBytes = statImageSize(ctx, p.Media, relPath)
+		out.sizeBytes = statImageSize(ctx, reader, relPath)
 	}
 	return out, true
 }
@@ -123,6 +170,28 @@ func statImageSize(ctx context.Context, media MediaReader, relPath string) *int6
 	return &size
 }
 
-func newImageInfo(role string) ImageInfo {
-	return ImageInfo{Role: role, MIME: imageMIMEJPEG}
+func newImageInfo(role, relPath string) ImageInfo {
+	return ImageInfo{Role: role, MIME: imageMIMEForPath(relPath)}
+}
+
+func imageMIMEForPath(relPath string) string {
+	switch strings.ToLower(path.Ext(relPath)) {
+	case ".png":
+		return imageMIMEPNG
+	case ".webp":
+		return imageMIMEWEBP
+	default:
+		return imageMIMEJPEG
+	}
+}
+
+func imageExtForMIME(mime string) string {
+	switch mime {
+	case imageMIMEPNG:
+		return ".png"
+	case imageMIMEWEBP:
+		return ".webp"
+	default:
+		return ".jpg"
+	}
 }

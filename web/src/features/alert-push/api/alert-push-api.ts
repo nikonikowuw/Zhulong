@@ -40,12 +40,18 @@ export const destinationStatusSchema = z
       state:
         raw.state === 'connected' || raw.state === 'running'
           ? 'running'
-          : raw.state === 'failed' || raw.state === 'degraded'
-            ? 'degraded'
-            : raw.state === 'disabled'
-              ? 'disabled'
-              : 'idle',
-      lastAttemptAt: raw.lastAttemptAt ?? raw.lastSuccessAt ?? undefined,
+          : raw.state === 'connecting'
+            ? 'connecting'
+            : raw.state === 'failed' || raw.state === 'degraded'
+              ? 'degraded'
+              : raw.state === 'disabled'
+                ? 'disabled'
+                : 'idle',
+      lastAttemptAt:
+        raw.lastAttemptAt ??
+        raw.lastSuccessAt ??
+        raw.lastFailureAt ??
+        undefined,
       lastSuccessAt: raw.lastSuccessAt ?? undefined,
       lastFailureAt: raw.lastFailureAt ?? undefined,
       lastFailureReason: raw.lastFailureReason || raw.lastError || undefined,

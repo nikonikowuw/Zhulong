@@ -2,6 +2,8 @@ package alertpush
 
 import (
 	"errors"
+	"net/http"
+	"path"
 	"strconv"
 	"strings"
 
@@ -9,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
@@ -18,6 +21,7 @@ import (
 type SignedMediaHandler struct {
 	signer       *URLSigner
 	mediaHandler *mediafile.Handler
+	galleryMedia MediaReader
 	rateLimiter  *httpmiddleware.IPRateLimiter
 	logger       *zap.Logger
 }
@@ -26,6 +30,22 @@ type SignedMediaHandler struct {
 func NewSignedMediaHandler(
 	signer *URLSigner,
 	mediaHandler *mediafile.Handler,
+	logger *zap.Logger,
+) *SignedMediaHandler {
+	return NewSignedMediaHandlerWithGallery(
+		signer,
+		mediaHandler,
+		nil,
+		logger,
+	)
+}
+
+// NewSignedMediaHandlerWithGallery constructs a SignedMediaHandler that can also stream
+// HMAC-verified face gallery reference photos without exposing faces/ on /media/content/*.
+func NewSignedMediaHandlerWithGallery(
+	signer *URLSigner,
+	mediaHandler *mediafile.Handler,
+	galleryMedia MediaReader,
 	logger *zap.Logger,
 ) *SignedMediaHandler {
 	if logger == nil {
@@ -39,6 +59,7 @@ func NewSignedMediaHandler(
 	return &SignedMediaHandler{
 		signer:       signer,
 		mediaHandler: mediaHandler,
+		galleryMedia: galleryMedia,
 		rateLimiter:  limiter,
 		logger:       logger.Named("alertpush.signed_media"),
 	}
@@ -54,13 +75,14 @@ func (h *SignedMediaHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	}
 }
 
-// ServeSignedMedia handles signature verification and delegates byte streaming to mediafile.
+// ServeSignedMedia handles signature verification and delegates byte streaming to mediafile
+// (for snapshots) or the isolated gallery reader (for faces).
 //
 // @Summary      Serve signed media content
-// @Description  Streams snapshot bytes verified by HMAC signature without cookie authentication.
+// @Description  Streams snapshot or face gallery reference bytes verified by HMAC signature without cookie authentication.
 // @Tags         media
 // @Produce      image/jpeg
-// @Param        path  path      string  true  "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg"
+// @Param        path  path      string  true  "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg or faces/person_face.jpg"
 // @Param        exp   query     int64   true  "Expiration Unix timestamp"
 // @Param        sig   query     string  true  "Base64URL HMAC signature"
 // @Success      200   {file}    binary
@@ -109,10 +131,103 @@ func (h *SignedMediaHandler) ServeSignedMedia(c *gin.Context) {
 		return
 	}
 
+	normPath := normalizeRelativePath(relPath)
+	if isAllowedFaceSignedPath(normPath) {
+		h.serveGalleryMedia(c, normPath)
+		return
+	}
+
 	if h.mediaHandler == nil {
 		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Media service unavailable", nil))
 		return
 	}
 
-	h.mediaHandler.ServeContent(c, relPath)
+	h.mediaHandler.ServeContent(c, normPath)
+}
+
+func (h *SignedMediaHandler) serveGalleryMedia(c *gin.Context, relPath string) {
+	if h.galleryMedia == nil {
+		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Gallery media reader unavailable", nil))
+		return
+	}
+
+	ctx := c.Request.Context()
+	if c.Request.Method != http.MethodHead {
+		if presigner, ok := h.galleryMedia.(MediaPresigner); ok {
+			redirectURL, handled, err := presigner.PresignMediaURL(ctx, relPath, 0)
+			if err != nil {
+				writeSignedGalleryError(c, err)
+				return
+			}
+			if handled && redirectURL != "" {
+				c.Header("Cache-Control", "no-store")
+				c.Redirect(http.StatusFound, redirectURL)
+				return
+			}
+		}
+	}
+
+	reader, info, err := h.galleryMedia.OpenContent(ctx, relPath)
+	if err != nil {
+		writeSignedGalleryError(c, err)
+		return
+	}
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			h.logger.Debug("close signed gallery media stream", zap.Error(closeErr))
+		}
+	}()
+
+	name := info.Name
+	if name == "" {
+		name = path.Base(relPath)
+	}
+	contentType := signedGalleryContentType(name, info.ContentType)
+	c.Header("Content-Type", contentType)
+	http.ServeContent(
+		c.Writer,
+		c.Request,
+		name,
+		info.ModifiedAt,
+		reader,
+	)
+}
+
+func signedGalleryContentType(name, fallback string) string {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".jpg", ".jpeg":
+		return imageMIMEJPEG
+	case ".png":
+		return imageMIMEPNG
+	case ".webp":
+		return imageMIMEWEBP
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "application/octet-stream"
+}
+
+func writeSignedGalleryError(c *gin.Context, err error) {
+	if filestore.IsNotFound(err) || errors.Is(err, filestore.ErrNotAFile) {
+		httputil.WriteError(
+			c,
+			apperr.NotFound("MEDIA_ENTRY_NOT_FOUND", "Media entry not found", err),
+		)
+		return
+	}
+	var appErr *apperr.Error
+	if errors.As(err, &appErr) && appErr.Code == "MEDIA_ROOT_UNAVAILABLE" {
+		httputil.WriteError(
+			c,
+			httputil.NewError(
+				http.StatusServiceUnavailable,
+				appErr.Code,
+				appErr.Message,
+				appErr.Err,
+			),
+		)
+		return
+	}
+	httputil.WriteError(c, err)
 }

@@ -45,6 +45,7 @@ type MQTTSenderOptions struct {
 	SignedURLTTL      time.Duration
 	Signer            *URLSigner
 	Media             MediaReader
+	GalleryMedia      MediaReader
 	Broker            string
 	ClientID          string
 	Username          string
@@ -70,15 +71,17 @@ type MQTTSenderOptions struct {
 
 // MQTTSender dispatches alert and heartbeat events over MQTT protocol.
 type MQTTSender struct {
-	opts           MQTTSenderOptions
-	client         mqtt.Client
-	connectTimeout time.Duration
-	willDeviceID   string
-	willArmed      bool
-	logger         *zap.Logger
-	mu             sync.Mutex
-	closed         bool
-	closeCh        chan struct{}
+	opts             MQTTSenderOptions
+	client           mqtt.Client
+	connectTimeout   time.Duration
+	willDeviceID     string
+	willArmed        bool
+	logger           *zap.Logger
+	mu               sync.Mutex
+	onConnect        func()
+	onConnectionLost func(error)
+	closed           bool
+	closeCh          chan struct{}
 }
 
 // NewMQTTSender constructs a new MQTTSender.
@@ -167,10 +170,8 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 		})
 	}
 
-	client := mqtt.NewClient(clientOpts)
 	sender := &MQTTSender{
 		opts:           opts,
-		client:         client,
 		connectTimeout: connectTimeout,
 		willDeviceID:   willDeviceID,
 		willArmed:      willArmed,
@@ -178,7 +179,36 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 		closeCh:        make(chan struct{}),
 	}
 
+	clientOpts.SetOnConnectHandler(func(_ mqtt.Client) {
+		sender.mu.Lock()
+		closed := sender.closed
+		hook := sender.onConnect
+		sender.mu.Unlock()
+		if !closed && hook != nil {
+			hook()
+		}
+	})
+	clientOpts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+		sender.mu.Lock()
+		closed := sender.closed
+		hook := sender.onConnectionLost
+		sender.mu.Unlock()
+		if !closed && hook != nil {
+			hook(err)
+		}
+	})
+
+	sender.client = mqtt.NewClient(clientOpts)
 	return sender, nil
+}
+
+// SetConnectionHooks registers callbacks invoked on broker connect/reconnect and disconnect.
+// Must be called before Connect() so initial transitions are observed.
+func (s *MQTTSender) SetConnectionHooks(onConnect func(), onLost func(error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onConnect = onConnect
+	s.onConnectionLost = onLost
 }
 
 func (s *MQTTSender) statusTopic() string {
@@ -200,6 +230,12 @@ func (s *MQTTSender) hasStaleWillDeviceID() bool {
 // holding s.mu across the network wait, so Close() is never stalled by an
 // unreachable broker.
 func (s *MQTTSender) Connect() error {
+	return s.ConnectContext(context.Background())
+}
+
+// ConnectContext establishes the MQTT broker connection, aborting promptly when ctx
+// is canceled or the sender is closed.
+func (s *MQTTSender) ConnectContext(ctx context.Context) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -219,6 +255,8 @@ func (s *MQTTSender) Connect() error {
 	defer timer.Stop()
 
 	select {
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-closeCh:
 		return errors.New("mqtt sender is closed")
 	case <-token.Done():
@@ -400,6 +438,7 @@ func (s *MQTTSender) imageURLParams() imageURLParams {
 		PublicBaseURL: s.opts.PublicBaseURL,
 		Signer:        s.opts.Signer,
 		Media:         s.opts.Media,
+		GalleryMedia:  s.opts.GalleryMedia,
 		TTL:           s.opts.SignedURLTTL,
 	}
 }
@@ -426,7 +465,7 @@ func (s *MQTTSender) inlineImages(ctx context.Context, ev record.AlarmEvent) []I
 			continue
 		}
 		c := candidates[idx]
-		info := newImageInfo(c.role)
+		info := newImageInfo(c.role, c.relPath)
 		signed, ok := mintImageURL(
 			ctx,
 			params,
@@ -479,10 +518,11 @@ func (s *MQTTSender) readWithinBudget(
 	relPath string,
 	remaining int64,
 ) ([]byte, int64, error) {
-	if s.opts.Media == nil {
+	reader := mediaReaderForPath(s.opts.Media, s.opts.GalleryMedia, relPath)
+	if reader == nil {
 		return nil, -1, errors.New("media reader is not configured")
 	}
-	f, info, err := s.opts.Media.OpenContent(ctx, relPath)
+	f, info, err := reader.OpenContent(ctx, relPath)
 	if err != nil {
 		return nil, -1, err
 	}

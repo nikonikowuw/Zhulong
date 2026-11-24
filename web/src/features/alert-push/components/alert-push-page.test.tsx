@@ -53,6 +53,7 @@ const sampleDest: AlertDestination = {
   status: {
     consecutiveFailures: 0,
     totalDispatched: 5,
+    dropped: 0,
     queueLength: 0,
     queueCapacity: 16,
     state: 'running',

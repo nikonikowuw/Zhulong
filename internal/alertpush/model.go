@@ -60,18 +60,24 @@ const (
 	DefaultInlineMaxKB = 500
 	MinInlineMaxKB     = 64
 	MaxInlineMaxKB     = 8192
+
+	MaxDestinations       = 32
+	MinKeepAliveSeconds   = 5
+	MaxKeepAliveSeconds   = 300
+	MaxMQTTClientIDLength = 23
+	MaxMQTTQoS            = 2
 )
 
 // AlertDestination represents the database persistence model for an alert target.
 //
-// ⚠️ EventsEnabled / HeartbeatEnabled intentionally omit GORM default tags: GORM drops
+// ⚠️ Enabled / EventsEnabled / HeartbeatEnabled intentionally omit GORM default tags: GORM drops
 // zero-value fields that carry a default tag on INSERT, which would silently flip an
-// explicit EventsEnabled=false back to SQLite's DEFAULT 1.
+// explicit false back to SQLite's DEFAULT 1.
 type AlertDestination struct {
 	ID               string    `gorm:"primaryKey;column:id" json:"-"`
 	Name             string    `gorm:"column:name;not null" json:"-"`
 	ChannelType      string    `gorm:"column:channel_type;not null" json:"-"`
-	Enabled          bool      `gorm:"column:enabled;not null;default:true" json:"-"`
+	Enabled          bool      `gorm:"column:enabled;not null" json:"-"`
 	EventsEnabled    bool      `gorm:"column:events_enabled;not null" json:"-"`
 	HeartbeatEnabled bool      `gorm:"column:heartbeat_enabled;not null" json:"-"`
 	ImageMode        string    `gorm:"column:image_mode;not null;default:'url'" json:"-"`
@@ -138,6 +144,14 @@ func normalizeHeartbeatInterval(sec int) int {
 
 func isValidHeartbeatInterval(sec int) bool {
 	return sec >= MinHeartbeatIntervalSeconds && sec <= MaxHeartbeatIntervalSeconds
+}
+
+func isValidKeepAliveSeconds(sec int) bool {
+	return sec >= MinKeepAliveSeconds && sec <= MaxKeepAliveSeconds
+}
+
+func isValidMQTTQoS(qos uint8) bool {
+	return qos <= MaxMQTTQoS
 }
 
 // destinationFilter defines event type, algorithm, and camera filtering criteria

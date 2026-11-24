@@ -56,18 +56,31 @@ func TestURLSigner(t *testing.T) {
 		t.Fatalf("expected ErrURLInvalid for tampered path, got %v", err)
 	}
 
-	// 6. Path outside snapshots rejected
-	if _, err := signer.Sign("recordings/cam_01/test.mp4", futureExp); !errors.Is(
-		err,
-		ErrPathNotAllowed,
-	) {
-		t.Fatalf("expected ErrPathNotAllowed, got %v", err)
+	// 6. Face gallery single-level path allowed, nested or other namespaces rejected
+	facePath := "faces/person_alice_face_01.png"
+	faceSig, err := signer.Sign(facePath, futureExp)
+	if err != nil {
+		t.Fatalf("Sign face path failed: %v", err)
 	}
-	if err := signer.Verify("recordings/cam_01/test.mp4", futureExp, sig); !errors.Is(
-		err,
-		ErrPathNotAllowed,
-	) {
-		t.Fatalf("expected ErrPathNotAllowed, got %v", err)
+	if err := signer.Verify(facePath, futureExp, faceSig); err != nil {
+		t.Fatalf("Verify valid face path failed: %v", err)
+	}
+
+	disallowedPaths := []string{
+		"recordings/cam_01/test.mp4",
+		"exports/clip.mp4",
+		"maps/floor1.png",
+		"faces/nested/secret.jpg",
+		"faces/../snapshots/cam_01/a.jpg",
+		"person_alice_face_01.jpg",
+	}
+	for _, disallowed := range disallowedPaths {
+		if _, err := signer.Sign(disallowed, futureExp); !errors.Is(err, ErrPathNotAllowed) {
+			t.Fatalf("Sign(%q): expected ErrPathNotAllowed, got %v", disallowed, err)
+		}
+		if err := signer.Verify(disallowed, futureExp, sig); !errors.Is(err, ErrPathNotAllowed) {
+			t.Fatalf("Verify(%q): expected ErrPathNotAllowed, got %v", disallowed, err)
+		}
 	}
 
 	// 7. Reload from existing key file produces identical signature

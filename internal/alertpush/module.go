@@ -16,6 +16,7 @@ type Options struct {
 	Cipher       Cipher
 	MediaService *mediafile.Service
 	MediaHandler *mediafile.Handler
+	GalleryMedia MediaReader
 	DataDir      string
 	Config       Config
 	Logger       *zap.Logger
@@ -61,22 +62,29 @@ func NewComponents(opts Options) Components {
 	signer := NewEmptyURLSigner()
 	store := NewStore(opts.DBProvider, opts.Cipher)
 	dispatcher := NewDispatcher(DispatcherOptions{
-		Store:  store,
-		Signer: signer,
-		Media:  opts.MediaService,
-		Config: opts.Config,
-		Logger: logger,
+		Store:        store,
+		Signer:       signer,
+		Media:        opts.MediaService,
+		GalleryMedia: opts.GalleryMedia,
+		Config:       opts.Config,
+		Logger:       logger,
 	})
 	service := NewService(ServiceOptions{
-		Store:      store,
-		Dispatcher: dispatcher,
-		Signer:     signer,
-		Media:      opts.MediaService,
-		Config:     opts.Config,
-		Logger:     logger,
+		Store:        store,
+		Dispatcher:   dispatcher,
+		Signer:       signer,
+		Media:        opts.MediaService,
+		GalleryMedia: opts.GalleryMedia,
+		Config:       opts.Config,
+		Logger:       logger,
 	})
 	handler := NewHandler(service, store, logger)
-	signedMediaHandler := NewSignedMediaHandler(signer, opts.MediaHandler, logger)
+	signedMediaHandler := NewSignedMediaHandlerWithGallery(
+		signer,
+		opts.MediaHandler,
+		opts.GalleryMedia,
+		logger,
+	)
 
 	lifecycle := &alertPushLifecycleImpl{
 		signer:     signer,
