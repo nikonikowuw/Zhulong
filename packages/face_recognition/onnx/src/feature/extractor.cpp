@@ -70,8 +70,8 @@ std::vector<float> FaceFeatureExtractor::extract(
         norm_sq += value * value;
     }
     const float norm = std::sqrt(norm_sq);
-    if (!(norm > kMinimumFeatureNorm)) {
-        // 零向量 / NaN 输出不能冒充「有效的单位特征」：登记进底库后会永远匹配不上，
+    if (!std::isfinite(norm) || !(norm > kMinimumFeatureNorm)) {
+        // 零向量 / NaN / Inf 输出不能冒充「有效的单位特征」：登记进底库后会永远匹配不上，
         // 而且错因看起来像「底库照片质量差」。宁可返回空让上层报错。
         return {};
     }

@@ -1,3 +1,4 @@
+#include <zhulong/algo.hpp>
 #include <zhulong/runtime/runtime_factory.hpp>
 #include <zhulong/runtime/vision_backend.hpp>
 #include <cassert>
@@ -361,6 +362,130 @@ int main() {
         const auto tied_kept = zhulong::nms(tied, 0.45f);
         assert(tied_kept.size() == 2);
         assert(tied_kept[0].class_id == 1 && tied_kept[1].class_id == 2);
+    }
+
+    // 5. PluginApi::worker_create must fail-closed on invalid Session (prevent silent session theft)
+    //    and accept explicit Session::detached(worker_id) for model-less stubs/scaffolds.
+    {
+        struct TrackedContext : public zhulong::SessionContext {
+            int* destroyed_counter{nullptr};
+            ~TrackedContext() override {
+                if (destroyed_counter) {
+                    ++(*destroyed_counter);
+                }
+            }
+        };
+
+        class WorkerCreateTestPlugin {
+        public:
+            int* destroyed_counter{nullptr};
+
+            zhulong_status_t init(const std::string& config_json) {
+                (void)config_json;
+                return ZHULONG_PLUGIN_OK;
+            }
+
+            zhulong::Session create_session(uint32_t worker_id) {
+                if (worker_id == 0) {
+                    return zhulong::Session::detached(worker_id);
+                }
+                if (worker_id == 1) {
+                    // Explicit default-constructed invalid session
+                    return zhulong::Session();
+                }
+                // Invalid session with null backend + non-null ctx (must still be rejected and cleaned up)
+                auto ctx = std::make_unique<TrackedContext>();
+                ctx->worker_id = worker_id;
+                ctx->destroyed_counter = destroyed_counter;
+                return zhulong::Session(nullptr, std::move(ctx));
+            }
+
+            zhulong::SceneStructure detect_scene_structure(zhulong::Session& session,
+                                                           const zhulong::Image& image,
+                                                           zhulong::TaskContext& task_context) {
+                (void)image;
+                (void)task_context;
+                assert(session.valid());
+                assert(session.worker_id() == 0);
+                assert(session.forward({}).empty());
+
+                zhulong::SceneStructure scene;
+                zhulong::FaceStructureItem f_fused;
+                f_fused.box[2] = 0.5f;
+                f_fused.box[3] = 0.5f;
+                f_fused.quality = 0.9f;
+                f_fused.matched = true;
+                f_fused.similarity = 0.85f;
+                f_fused.is_fused = true;
+                scene.faces.push_back(f_fused);
+
+                zhulong::FaceStructureItem f_single;
+                f_single.box[0] = 0.5f;
+                f_single.box[2] = 0.9f;
+                f_single.box[3] = 0.5f;
+                f_single.quality = 0.8f;
+                f_single.is_fused = false;
+                scene.faces.push_back(f_single);
+                return scene;
+            }
+        };
+
+        using TestApi = zhulong::detail::PluginApi<WorkerCreateTestPlugin, zhulong::sdk::SceneStructureResultAdapter>;
+        zhulong_plugin_api_v1 api{};
+        assert(TestApi::get_api(1, &api, sizeof(api), "WorkerCreateTest", "1.0.0") == ZHULONG_PLUGIN_OK);
+
+        zhulong_model_group_h model_h = nullptr;
+        assert(api.model_create("{}", &model_h) == ZHULONG_PLUGIN_OK);
+        assert(model_h != nullptr);
+
+        int destroyed = 0;
+        reinterpret_cast<TestApi::ModelGroup*>(model_h)->plugin->destroyed_counter = &destroyed;
+
+        // worker_id 0 returns valid detached session -> succeeds
+        zhulong_worker_ctx_h worker0 = nullptr;
+        assert(api.worker_create(model_h, 0, &worker0) == ZHULONG_PLUGIN_OK);
+        assert(worker0 != nullptr);
+
+        // worker_id 1 returns empty Session() -> must fail and leave out_worker nullptr
+        zhulong_worker_ctx_h worker1 = reinterpret_cast<zhulong_worker_ctx_h>(uintptr_t{0xdeadbeef});
+        assert(api.worker_create(model_h, 1, &worker1) == ZHULONG_PLUGIN_ERR_INTERNAL);
+        assert(worker1 == nullptr);
+
+        // worker_id 2 returns Session(nullptr, ctx) -> must fail and destroy ctx before returning
+        zhulong_worker_ctx_h worker2 = reinterpret_cast<zhulong_worker_ctx_h>(uintptr_t{0xdeadbeef});
+        assert(api.worker_create(model_h, 2, &worker2) == ZHULONG_PLUGIN_ERR_INTERNAL);
+        assert(worker2 == nullptr);
+        assert(destroyed == 1);
+
+        // Exercise SceneStructureResultAdapter::pack and verify is_fused propagation
+        zhulong_task_ctx_h task0 = nullptr;
+        assert(api.task_open(worker0, 42, &task0) == ZHULONG_PLUGIN_OK);
+        zhulong_frame_view dummy_frame{};
+        dummy_frame.frame_id = 1;
+        dummy_frame.width = 16;
+        dummy_frame.height = 16;
+        dummy_frame.format = ZHULONG_PIXEL_FORMAT_RGB24;
+        zhulong_inference_result* infer_res = nullptr;
+        assert(api.process(task0, &dummy_frame, &infer_res) == ZHULONG_PLUGIN_OK);
+        assert(infer_res != nullptr);
+        assert(infer_res->result_type == ZHULONG_RESULT_TYPE_SCENE_STRUCTURE);
+        const auto* packed = static_cast<const zhulong_scene_structure*>(infer_res->data);
+        assert(packed != nullptr && packed->face_count == 2);
+        assert(packed->faces[0].is_fused == 1);
+        assert(packed->faces[1].is_fused == 0);
+        api.result_release(infer_res);
+        api.task_close(task0);
+        api.worker_destroy(worker0);
+        api.model_destroy(model_h);
+
+        // Verify Session::detached move semantics
+        zhulong::Session detached = zhulong::Session::detached(7);
+        assert(detached.valid());
+        assert(detached.worker_id() == 7);
+        zhulong::Session moved = std::move(detached);
+        assert(!detached.valid());
+        assert(moved.valid());
+        assert(moved.worker_id() == 7);
     }
 
     std::cout << "Algorithm runtime tests passed successfully!" << std::endl;

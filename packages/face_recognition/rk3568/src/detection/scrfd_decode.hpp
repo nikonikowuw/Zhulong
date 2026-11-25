@@ -199,19 +199,24 @@ inline bool scrfd_decode_anchor(const float* bboxes,
     const float clamp_w = static_cast<float>(letterbox.orig_width);
     const float clamp_h = static_cast<float>(letterbox.orig_height);
 
-    // 还原并扣除 Letterbox 居中补边与缩放比，映射回原帧像素坐标
-    out.box[0] = std::clamp((center_x - bboxes[index * kScrfdBoxValuesPerAnchor + 0] * stride - pad_x) / letterbox.det_scale,
-                            0.0f, clamp_w);
-    out.box[1] = std::clamp((center_y - bboxes[index * kScrfdBoxValuesPerAnchor + 1] * stride - pad_y) / letterbox.det_scale,
-                            0.0f, clamp_h);
-    out.box[2] = std::clamp((center_x + bboxes[index * kScrfdBoxValuesPerAnchor + 2] * stride - pad_x) / letterbox.det_scale,
-                            0.0f, clamp_w);
-    out.box[3] = std::clamp((center_y + bboxes[index * kScrfdBoxValuesPerAnchor + 3] * stride - pad_y) / letterbox.det_scale,
-                            0.0f, clamp_h);
+    // 还原并扣除 Letterbox 居中补边与缩放比，映射回原帧像素坐标；先校验有限性再钳位，
+    // 避免 ±inf 被 clamp 成 [0, clamp_w/h] 后伪装成合法整帧大框。
+    const float raw_x1 = (center_x - bboxes[index * kScrfdBoxValuesPerAnchor + 0] * stride - pad_x) / letterbox.det_scale;
+    const float raw_y1 = (center_y - bboxes[index * kScrfdBoxValuesPerAnchor + 1] * stride - pad_y) / letterbox.det_scale;
+    const float raw_x2 = (center_x + bboxes[index * kScrfdBoxValuesPerAnchor + 2] * stride - pad_x) / letterbox.det_scale;
+    const float raw_y2 = (center_y + bboxes[index * kScrfdBoxValuesPerAnchor + 3] * stride - pad_y) / letterbox.det_scale;
 
-    if (!std::isfinite(out.box[0]) || !std::isfinite(out.box[1]) ||
-        !std::isfinite(out.box[2]) || !std::isfinite(out.box[3]) ||
-        out.box[2] <= out.box[0] || out.box[3] <= out.box[1]) {
+    if (!std::isfinite(raw_x1) || !std::isfinite(raw_y1) ||
+        !std::isfinite(raw_x2) || !std::isfinite(raw_y2)) {
+        return false;
+    }
+
+    out.box[0] = std::clamp(raw_x1, 0.0f, clamp_w);
+    out.box[1] = std::clamp(raw_y1, 0.0f, clamp_h);
+    out.box[2] = std::clamp(raw_x2, 0.0f, clamp_w);
+    out.box[3] = std::clamp(raw_y2, 0.0f, clamp_h);
+
+    if (out.box[2] <= out.box[0] || out.box[3] <= out.box[1]) {
         return false;
     }
 

@@ -22,16 +22,18 @@
  */
 
 #include "alignment/aligner.hpp"
+#include "attribute/face_attribute.hpp"
+#include "attribute/person_attribute.hpp"
 #include "common/face_association.hpp"
 #include "common/face_enroll_enhance.hpp"
 #include "common/face_feature_fusion.hpp"
 #include "common/face_image_quality.hpp"
 #include "common/face_quality.hpp"
-#include "attribute/person_attribute.hpp"
 #include "common/scene_filter.hpp"
 #include "detection/detector.hpp"
 #include "detection/scrfd_decode.hpp"
 #include "matching/matcher.hpp"
+#include <zhulong/runtime/yuv_sampling.hpp>
 
 // HWC→NCHW 归一化只存在于「模型不自带归一化」的档位（ONNX）；RKNN 档位由模型自身
 // 完成归一化，因此没有这个头。按文件是否存在决定测不测，而不是按 SDK 后端宏 ——
@@ -2858,11 +2860,13 @@ void test_face_fusion_weighting() {
         MatchParams loose = params;
         loose.fusion_spatial_similarity_threshold = 0.20f;
         StreamFeatureFusionPool pool;
-        pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, loose, t0);
+        const auto f1 = pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, loose, t0);
         const auto v25 = vec_with_cos(0.25f);
         const auto r = pool.fuse_frame({FusionFaceObservation{&v25, 0.80f, box_moved, true}}, loose,
                                        t0 + milliseconds(100));
-        check(r[0].is_fused, "空间连续且过 0.20 否决门槛的观测仍应维持轨迹");
+        check(r[0].track_key == f1[0].track_key && pool.state_count() == 1 && r[0].reused_history,
+              "空间连续且过 0.20 否决门槛的观测仍应维持轨迹");
+        check(!r[0].is_fused, "零权重死帧未实际参与特征融合，不得误标 is_fused=true");
         check(dot_512(r[0].features, e0) > 0.9999f, "与锚点余弦 0.25 的帧必须零权重，不得污染模板");
     }
 
@@ -2974,21 +2978,23 @@ void test_person_attribute_track_cache() {
     check(cache.tracks.size() == 2, "轻微漂移不应新增轨迹");
     check(cache.tracks[second[0]].id == cache.tracks[first[0]].id, "漂移后仍应关联到原轨迹");
 
-    // 到期判定：从未分类 / 距上次分类满周期；同帧只取面积最大的前 N 个
+    // 到期判定：仅本帧实际出现且（从未分类 / 距上次分类满周期）；同帧只取面积最大的前 N 个
     auto due = select_tracks_for_classification(cache, 1200, 1000, 8);
     check(due.size() == 2, "从未分类过的轨迹都应到期");
     cache.tracks[first[0]].updated_ms = 1200;
     cache.tracks[first[1]].updated_ms = 1200;
+    (void)associate_person_tracks(cache, drifted, 1500);
     check(select_tracks_for_classification(cache, 1500, 1000, 8).empty(),
           "未满刷新周期不得重复分类");
+    (void)associate_person_tracks(cache, drifted, 2200);
     due = select_tracks_for_classification(cache, 2200, 1000, 1);
     check(due.size() == 1, "max_persons 限制本帧只分类 1 人");
     check(cache.tracks[due[0]].id == cache.tracks[first[1]].id, "应优先分类面积更大的人");
 
     // 淘汰：超过 max(3×刷新周期, 5s) 未见即删除
-    prune_person_attribute_tracks(cache, 1200 + 5000, 1000);
+    prune_person_attribute_tracks(cache, 2200 + 5000, 1000);
     check(cache.tracks.size() == 2, "刚好 5 秒仍应保留");
-    prune_person_attribute_tracks(cache, 1200 + 6000, 1000);
+    prune_person_attribute_tracks(cache, 2200 + 6000, 1000);
     check(cache.tracks.empty(), "超过 5 秒未见的轨迹必须淘汰");
 }
 
@@ -3015,6 +3021,607 @@ void test_resolve_person_attribute_params() {
     const auto malformed = resolve_person_attribute_params("{", defaults);
     check(malformed.enabled && malformed.refresh_ms == kDefaultPersonAttributeRefreshMs,
           "非法 JSON 必须回落默认");
+}
+
+// ============================================================================
+// 15. 人脸属性纯逻辑（年龄标签/分档、性别 softmax 门限、双输出与 ONNX 单输出张量解码）
+// ============================================================================
+
+void test_face_attribute_pure_logic() {
+    using namespace zhulong::face;
+
+    // 1) 年龄标签表与越界防卫
+    check(std::string(face_attribute_age_label(0)) == "Age0-18", "bucket 0 应为 Age0-18");
+    check(std::string(face_attribute_age_label(1)) == "Age18-30", "bucket 1 应为 Age18-30");
+    check(std::string(face_attribute_age_label(2)) == "Age30-45", "bucket 2 应为 Age30-45");
+    check(std::string(face_attribute_age_label(3)) == "Age45-60", "bucket 3 应为 Age45-60");
+    check(std::string(face_attribute_age_label(4)) == "Age60+", "bucket 4 应为 Age60+");
+    check(face_attribute_age_label(kFaceAttributeAgeBucketCount) == nullptr, "越界下标必须返回 nullptr");
+    check(face_attribute_age_label(999) == nullptr, "超大下标必须返回 nullptr");
+
+    // 2) 年龄分档精确边界与非法输入拒绝
+    check(face_attribute_age_bucket(0.0f) == 0, "0 岁应落入 Age0-18");
+    check(face_attribute_age_bucket(17.99f) == 0, "17.99 岁应落入 Age0-18");
+    check(face_attribute_age_bucket(18.0f) == 1, "18.0 岁边界应落入 Age18-30");
+    check(face_attribute_age_bucket(29.99f) == 1, "29.99 岁应落入 Age18-30");
+    check(face_attribute_age_bucket(30.0f) == 2, "30.0 岁边界应落入 Age30-45");
+    check(face_attribute_age_bucket(44.99f) == 2, "44.99 岁应落入 Age30-45");
+    check(face_attribute_age_bucket(45.0f) == 3, "45.0 岁边界应落入 Age45-60");
+    check(face_attribute_age_bucket(59.99f) == 3, "59.99 岁应落入 Age45-60");
+    check(face_attribute_age_bucket(60.0f) == 4, "60.0 岁边界应落入 Age60+");
+    check(face_attribute_age_bucket(100.0f) == 4, "100.0 岁边界应落入 Age60+");
+    check(face_attribute_age_bucket(-0.01f) == kFaceAttributeAgeBucketCount, "负年龄必须非法");
+    check(face_attribute_age_bucket(100.01f) == kFaceAttributeAgeBucketCount, "超 100 岁必须非法");
+    check(face_attribute_age_bucket(std::nanf("")) == kFaceAttributeAgeBucketCount, "NaN 年龄必须非法");
+    check(face_attribute_age_bucket(std::numeric_limits<float>::infinity()) == kFaceAttributeAgeBucketCount,
+          "Inf 年龄必须非法");
+
+    // 3) extract_face_attributes：性别 softmax + 0.60 截断 + 年龄固定 1.0 + 数值稳定性
+    {
+        const float male_logits[2] = {0.0f, 2.0f}; // softmax(Male) ≈ 0.8808
+        const float age_raw[1] = {0.25f};          // 25 岁 → Age18-30
+        const auto attrs = extract_face_attributes(male_logits, 2, age_raw, 1);
+        check(attrs.size() == 2, "性别与年龄都达标时应输出 2 条属性");
+        if (attrs.size() == 2) {
+            check(attrs[0].name == "Age18-30" && nearly_equal(attrs[0].score, 1.0f, 1e-6f),
+                  "年龄段固定 1.0 应排在第一位");
+            check(attrs[1].name == "Male" && attrs[1].score > 0.88f && attrs[1].score < 0.89f,
+                  "男性 logit 占优时应输出 Male 及正确 softmax 置信度");
+        }
+    }
+    {
+        const float female_logits[2] = {1000.0f, -1000.0f}; // 极大 logit 不得溢出 NaN
+        const float age_raw[1] = {0.72f};                   // 72 岁 → Age60+
+        const auto attrs = extract_face_attributes(female_logits, 2, age_raw, 1);
+        check(attrs.size() == 2 && std::isfinite(attrs[0].score) && std::isfinite(attrs[1].score),
+              "极大 logits 下 softmax 必须保持数值稳定");
+        bool saw_female = false;
+        bool saw_age60 = false;
+        for (const auto& a : attrs) {
+            if (a.name == "Female" && nearly_equal(a.score, 1.0f, 1e-6f)) saw_female = true;
+            if (a.name == "Age60+" && nearly_equal(a.score, 1.0f, 1e-6f)) saw_age60 = true;
+        }
+        check(saw_female && saw_age60, "大差值 Female + Age60+ 应正确输出");
+    }
+    {
+        const float ambiguous_logits[2] = {0.2f, 0.0f}; // softmax ≈ 0.5498 < 0.60
+        const float age_raw[1] = {0.35f};               // 35 岁 → Age30-45
+        const auto attrs = extract_face_attributes(ambiguous_logits, 2, age_raw, 1);
+        check(attrs.size() == 1 && attrs[0].name == "Age30-45",
+              "性别置信度低于 0.60 时不得输出性别标签，仅保留有效年龄段");
+    }
+    {
+        const float female_logits[2] = {2.0f, 0.0f};
+        const float bad_age[1] = {1.5f}; // 150 岁越界
+        const auto attrs = extract_face_attributes(female_logits, 2, bad_age, 1);
+        check(attrs.size() == 1 && attrs[0].name == "Female",
+              "年龄越界时只丢弃年龄，仍保留有效性别");
+    }
+    {
+        const float ok_gender[2] = {1.0f, 0.0f};
+        const float ok_age[1] = {0.3f};
+        const float nan_gender[2] = {std::nanf(""), 0.0f};
+        const float inf_age[1] = {std::numeric_limits<float>::infinity()};
+        check(extract_face_attributes(nullptr, 2, ok_age, 1).empty(), "空 gender 指针必须返回空");
+        check(extract_face_attributes(ok_gender, 1, ok_age, 1).empty(), "错误 gender 维度必须返回空");
+        check(extract_face_attributes(ok_gender, 2, nullptr, 1).empty(), "空 age 指针必须返回空");
+        check(extract_face_attributes(ok_gender, 2, ok_age, 2).empty(), "错误 age 维度必须返回空");
+        check(extract_face_attributes(nan_gender, 2, ok_age, 1).empty(), "NaN gender 必须返回空");
+        check(extract_face_attributes(ok_gender, 2, inf_age, 1).empty(), "Inf age 必须返回空");
+    }
+
+    // 4) extract_face_attributes_from_tensors：双输出（全后端）+ 单输出 [1,3]（ONNX）
+    {
+        std::vector<zhulong::Tensor> split_out;
+        split_out.push_back(make_float_tensor({1, 2}, {2.0f, 0.0f}));
+        split_out.push_back(make_float_tensor({1, 1}, {0.50f}));
+        const auto attrs = extract_face_attributes_from_tensors(split_out);
+        check(attrs.size() == 2 && attrs[0].name == "Age45-60" && attrs[1].name == "Female",
+              "双输出 [1,2]+[1,1] 布局必须正确解码");
+
+        std::vector<zhulong::Tensor> wrong_dtype;
+        wrong_dtype.push_back(zhulong::Tensor({1, 2}, zhulong::DataType::INT32));
+        wrong_dtype.push_back(make_float_tensor({1, 1}, {0.50f}));
+        check(extract_face_attributes_from_tensors(wrong_dtype).empty(),
+              "非 FLOAT32 张量必须拒绝");
+    }
+#if defined(ZHULONG_INFERENCE_ONNX)
+    {
+        std::vector<zhulong::Tensor> single_out;
+        single_out.push_back(make_float_tensor({1, 3}, {0.0f, 2.0f, 0.25f}));
+        const auto attrs = extract_face_attributes_from_tensors(single_out);
+        check(attrs.size() == 2 && attrs[0].name == "Age18-30" && attrs[1].name == "Male",
+              "ONNX 档位必须支持官方 InsightFace 单输出 [1,3] 布局");
+
+        std::vector<zhulong::Tensor> bad_single;
+        bad_single.push_back(make_float_tensor({1, 4}, {0.0f, 2.0f, 0.25f, 0.0f}));
+        check(extract_face_attributes_from_tensors(bad_single).empty(),
+              "长度不为 3 的单输出张量必须拒绝");
+    }
+#endif
+}
+
+// ============================================================================
+// 16. match_config 边界与解析修复（0.1 下界、畸形数字、嵌套/数组隔离、空间<=特征约束）
+// ============================================================================
+
+void test_match_config_bounds_and_parser_fixes() {
+    using namespace zhulong::face;
+    const MatchParams defaults;
+
+    // 1) schema 精确下界 0.1（IEEE-754 double 0.1 < float 0.10f 回归）
+    const MatchParams min_det_json = resolve_match_params(
+        R"({"face_det_threshold": 0.1, "person_det_threshold": 0.1})", defaults);
+    check(nearly_equal(min_det_json.face_det_threshold, 0.10f, 1e-6f),
+          "JSON 中 face_det_threshold=0.1（schema 精确下界）必须被接受");
+    check(nearly_equal(min_det_json.person_det_threshold, 0.10f, 1e-6f),
+          "JSON 中 person_det_threshold=0.1（schema 精确下界）必须被接受");
+
+    const MatchParams min_det_alias = resolve_match_params(R"({"det_threshold": 0.1})", defaults);
+    check(nearly_equal(min_det_alias.face_det_threshold, 0.10f, 1e-6f),
+          "别名 det_threshold=0.1 必须被接受");
+
+    ::setenv("ZHULONG_FACE_DET_THRESHOLD", "0.1", 1);
+    ::setenv("ZHULONG_PERSON_DET_THRESHOLD", "0.1", 1);
+    const MatchParams min_det_env = load_match_params_from_env();
+    check(nearly_equal(min_det_env.face_det_threshold, 0.10f, 1e-6f),
+          "环境变量 ZHULONG_FACE_DET_THRESHOLD=0.1 必须被接受");
+    check(nearly_equal(min_det_env.person_det_threshold, 0.10f, 1e-6f),
+          "环境变量 ZHULONG_PERSON_DET_THRESHOLD=0.1 必须被接受");
+    ::unsetenv("ZHULONG_FACE_DET_THRESHOLD");
+    ::unsetenv("ZHULONG_PERSON_DET_THRESHOLD");
+
+    // 2) 畸形数字 token（0.5abc / 0.5.6 / 0.5e+ / 0x10）必须拒绝并回落默认
+    const MatchParams bad_nums = resolve_match_params(
+        R"({"threshold": 0.5abc, "face_det_threshold": 0.5.6, "person_det_threshold": 0.5e+, "min_face_quality": 0x10})",
+        defaults);
+    check(nearly_equal(bad_nums.threshold, defaults.threshold, 1e-6f), "0.5abc 必须拒绝");
+    check(nearly_equal(bad_nums.face_det_threshold, defaults.face_det_threshold, 1e-6f), "0.5.6 必须拒绝");
+    check(nearly_equal(bad_nums.person_det_threshold, defaults.person_det_threshold, 1e-6f), "0.5e+ 必须拒绝");
+    check(nearly_equal(bad_nums.min_face_quality, defaults.min_face_quality, 1e-6f), "0x10 必须拒绝");
+
+    ::setenv("ZHULONG_FACE_MATCH_THRESHOLD", "0.5abc", 1);
+    const MatchParams bad_env_num = load_match_params_from_env();
+    check(nearly_equal(bad_env_num.threshold, defaults.threshold, 1e-6f),
+          "环境变量尾部带垃圾字符 0.5abc 必须拒绝");
+    ::unsetenv("ZHULONG_FACE_MATCH_THRESHOLD");
+
+    // 3) 嵌套对象、数组元素、转义引号、非空白隔离的伪冒号不得误匹配顶层键
+    const MatchParams array_key = resolve_match_params(
+        R"({"tags":["a","threshold"],"x":0.9})", defaults);
+    check(nearly_equal(array_key.threshold, defaults.threshold, 1e-6f),
+          "数组元素 \"threshold\" 不得越过 ] 误读相邻键的值");
+
+    const MatchParams nested_obj = resolve_match_params(
+        R"({"nested":{"threshold":0.9,"filter_unmatched":true},"other":1})", defaults);
+    check(nearly_equal(nested_obj.threshold, defaults.threshold, 1e-6f) && !nested_obj.filter_unmatched,
+          "嵌套对象内部的同名键不得冒充顶层配置");
+
+    const MatchParams escaped_str = resolve_match_params(
+        R"({"note":"fake\",\"threshold\":0.9","threshold":0.55})", defaults);
+    check(nearly_equal(escaped_str.threshold, 0.55f, 1e-6f),
+          "字符串字面量中转义的 \"threshold\" 不得抢先匹配");
+
+    const MatchParams junk_before_colon = resolve_match_params(
+        R"({"threshold" "junk" : 0.9})", defaults);
+    check(nearly_equal(junk_before_colon.threshold, defaults.threshold, 1e-6f),
+          "闭合引号与冒号之间含非空白字符时不得匹配");
+
+    const MatchParams dup_key = resolve_match_params(
+        R"({"threshold":"bad","threshold":0.77})", defaults);
+    check(nearly_equal(dup_key.threshold, 0.77f, 1e-6f),
+          "同名键首次为非数值时仍应继续匹配后续合法数值成员");
+
+    // 4) fusion_spatial_similarity_threshold <= fusion_similarity_threshold 不变量
+    const MatchParams clamped_pair = resolve_match_params(
+        R"({"fusion_similarity_threshold":0.50,"fusion_spatial_similarity_threshold":0.75})", defaults);
+    check(nearly_equal(clamped_pair.fusion_similarity_threshold, 0.50f, 1e-6f) &&
+              nearly_equal(clamped_pair.fusion_spatial_similarity_threshold, 0.50f, 1e-6f),
+          "空间门槛高于纯特征门槛时必须被钳位到纯特征门槛");
+
+    MatchParams high_spatial_defaults = defaults;
+    high_spatial_defaults.fusion_similarity_threshold = 0.70f;
+    high_spatial_defaults.fusion_spatial_similarity_threshold = 0.60f;
+    const MatchParams lowered_feature = resolve_match_params(
+        R"({"fusion_similarity_threshold":0.45})", high_spatial_defaults);
+    check(nearly_equal(lowered_feature.fusion_spatial_similarity_threshold, 0.45f, 1e-6f),
+          "任务级调低纯特征门槛后，继承的更高空间门槛也必须同步下钳");
+
+    ::setenv("ZHULONG_FUSION_SIMILARITY_THRESHOLD", "0.50", 1);
+    ::setenv("ZHULONG_FUSION_SPATIAL_SIMILARITY_THRESHOLD", "0.80", 1);
+    const MatchParams clamped_env = load_match_params_from_env();
+    check(nearly_equal(clamped_env.fusion_similarity_threshold, 0.50f, 1e-6f) &&
+              nearly_equal(clamped_env.fusion_spatial_similarity_threshold, 0.50f, 1e-6f),
+          "环境变量配置空间门槛高于纯特征门槛时同样必须下钳");
+    ::unsetenv("ZHULONG_FUSION_SIMILARITY_THRESHOLD");
+    ::unsetenv("ZHULONG_FUSION_SPATIAL_SIMILARITY_THRESHOLD");
+
+    // 5) 补齐其余环境变量加载覆盖
+    ::setenv("ZHULONG_MIN_FACE_SIZE", "64", 1);
+    ::setenv("ZHULONG_MIN_FACE_QUALITY", "0.42", 1);
+    ::setenv("ZHULONG_ENABLE_FACE_IMAGE_GATE", "yes", 1);
+    ::setenv("ZHULONG_MIN_FACE_SHARPNESS", "55.5", 1);
+    ::setenv("ZHULONG_MAX_FACE_UNDEREXPOSURE", "0.35", 1);
+    ::setenv("ZHULONG_MAX_FACE_OVEREXPOSURE", "0.25", 1);
+    ::setenv("ZHULONG_MIN_MATCH_MARGIN", "0.12", 1);
+    ::setenv("ZHULONG_ENABLE_FACE_FEATURE_FUSION", "no", 1);
+    ::setenv("ZHULONG_FUSION_TTL_SECONDS", "7.5", 1);
+    const MatchParams extra_env = load_match_params_from_env();
+    check(extra_env.min_face_size == 64 &&
+              nearly_equal(extra_env.min_face_quality, 0.42f, 1e-6f) &&
+              extra_env.enable_face_image_gate &&
+              nearly_equal(extra_env.min_face_sharpness, 55.5f, 1e-5f) &&
+              nearly_equal(extra_env.max_face_underexposure, 0.35f, 1e-6f) &&
+              nearly_equal(extra_env.max_face_overexposure, 0.25f, 1e-6f) &&
+              nearly_equal(extra_env.min_match_margin, 0.12f, 1e-6f) &&
+              !extra_env.enable_face_feature_fusion &&
+              nearly_equal(extra_env.fusion_ttl_seconds, 7.5f, 1e-5f),
+          "其余全部环境变量覆盖必须正确生效");
+    ::unsetenv("ZHULONG_MIN_FACE_SIZE");
+    ::unsetenv("ZHULONG_MIN_FACE_QUALITY");
+    ::unsetenv("ZHULONG_ENABLE_FACE_IMAGE_GATE");
+    ::unsetenv("ZHULONG_MIN_FACE_SHARPNESS");
+    ::unsetenv("ZHULONG_MAX_FACE_UNDEREXPOSURE");
+    ::unsetenv("ZHULONG_MAX_FACE_OVEREXPOSURE");
+    ::unsetenv("ZHULONG_MIN_MATCH_MARGIN");
+    ::unsetenv("ZHULONG_ENABLE_FACE_FEATURE_FUSION");
+    ::unsetenv("ZHULONG_FUSION_TTL_SECONDS");
+}
+
+// ============================================================================
+// 17. 人体属性轨迹：已消失但在 TTL 内的轨迹不得抢占分类名额或裁剪当前帧像素
+// ============================================================================
+
+void test_person_attribute_disappeared_tracks_excluded() {
+    using namespace zhulong::face;
+    WorkerAttributeCache cache;
+    const std::array<float, 4> small_box{0.10f, 0.10f, 0.20f, 0.30f}; // 面积 0.02
+    const std::array<float, 4> large_box{0.50f, 0.10f, 0.90f, 0.80f}; // 面积 0.28（更大）
+
+    // t=1000：两人都在画面里，并都完成一次分类
+    const auto t1 = associate_person_tracks(cache, {small_box, large_box}, 1000);
+    cache.tracks[t1[0]].updated_ms = 1000;
+    cache.tracks[t1[1]].updated_ms = 1000;
+
+    // t=2500（>= refresh_ms=1000 且 < TTL=5000）：大框目标已消失，本帧只有小框在画面里
+    prune_person_attribute_tracks(cache, 2500, 1000);
+    const auto t2 = associate_person_tracks(cache, {small_box}, 2500);
+    check(cache.tracks.size() == 2, "大框轨迹在 5s TTL 内仍保留在缓存中");
+    const auto due = select_tracks_for_classification(cache, 2500, 1000, 1);
+    check(due.size() == 1 && due[0] == t2[0],
+          "已消失的大框轨迹（last_seen_ms != now_ms）不得抢占当前帧分类名额");
+
+    // 未曾分类过的轨迹（updated_ms==0）在离开画面后同样不得被选中
+    WorkerAttributeCache cache2;
+    (void)associate_person_tracks(cache2, {large_box}, 1000); // updated_ms 仍为 0
+    const auto due_absent = select_tracks_for_classification(cache2, 1200, 1000, 2);
+    check(due_absent.empty(), "本帧未出现的未分类轨迹不得在当前帧触发分类");
+}
+
+// ============================================================================
+// 18. SCRFD 解码：±inf bbox 必须在 clamp 前被拒绝，避免伪造整帧大框
+// ============================================================================
+
+void test_scrfd_decode_rejects_inf_bbox() {
+    using namespace zhulong::face;
+    constexpr int kModel = 32;
+    constexpr int kAnchors = 2;
+    constexpr size_t kAnchorsTotal = (kModel / 8) * (kModel / 8) * kAnchors;
+    const std::array<int, 1> strides{8};
+
+    std::vector<float> scores(kAnchorsTotal, 0.0f);
+    std::vector<float> boxes(kAnchorsTotal * 4, 0.0f);
+    std::vector<float> kps(kAnchorsTotal * 10, 0.0f);
+
+    const float inf = std::numeric_limits<float>::infinity();
+    // anchor 0: 全 +inf bbox（旧实现 clamp 后会变成 [0, 0, 32, 32] 合法框！）
+    scores[0] = 0.99f;
+    boxes[0] = inf;
+    boxes[1] = inf;
+    boxes[2] = inf;
+    boxes[3] = inf;
+
+    // anchor 2: 单边 -inf bbox
+    scores[2] = 0.95f;
+    boxes[2 * 4 + 0] = -inf;
+    boxes[2 * 4 + 1] = 0.5f;
+    boxes[2 * 4 + 2] = 0.5f;
+    boxes[2 * 4 + 3] = 0.5f;
+
+    // anchor 10: 合法框，验证合法候选不受影响
+    const size_t ok_idx = (1 * 4 + 1) * 2;
+    scores[ok_idx] = 0.85f;
+    boxes[ok_idx * 4 + 0] = 0.5f;
+    boxes[ok_idx * 4 + 1] = 0.5f;
+    boxes[ok_idx * 4 + 2] = 0.5f;
+    boxes[ok_idx * 4 + 3] = 0.5f;
+
+    const auto decoded = decode_scrfd_candidates(
+        pack_outputs({scores, boxes, kps}), strides, kAnchors, kModel, kModel, 0.5f, 0.4f,
+        ScrfdDecodeLimits{128, 128}, ScrfdLetterbox{1.0f, 0, 0, 32, 32});
+    check(decoded.size() == 1 && nearly_equal(decoded[0].score, 0.85f, 1e-6f),
+          "含 ±inf 回归坐标的 bbox 必须在 clamp 前被拒绝，且不影响合法候选");
+}
+
+// ============================================================================
+// 19. Aligner：竖长各向异性 Y 轴超采样 + 彩色 YUV420P/NV12 浮点转换精度
+// ============================================================================
+
+void test_aligner_anisotropic_y_supersampling_and_colored_yuv() {
+    using namespace zhulong::face;
+
+    // 1) 竖长各向异性缩小：200×800 → 192×256（inv_scale_x≈1.04 <= 2.0，inv_scale_y=3.125 > 2.0）
+    //    水平方向恒定，垂直方向按 2px 周期交替 0 / 255；开启 Y 轴超采样后应平滑落入中灰附近
+    {
+        constexpr int src_w = 200;
+        constexpr int src_h = 800;
+        constexpr int dst_w = 192;
+        constexpr int dst_h = 256;
+        std::vector<uint8_t> src(static_cast<size_t>(src_w) * src_h * 3, 0);
+        for (int y = 0; y < src_h; ++y) {
+            const uint8_t v = ((y / 2) % 2 == 0) ? 0 : 255;
+            for (int x = 0; x < src_w; ++x) {
+                const size_t off = (static_cast<size_t>(y) * src_w + x) * 3;
+                src[off + 0] = v;
+                src[off + 1] = v;
+                src[off + 2] = v;
+            }
+        }
+        const zhulong_frame_view fv = make_packed_view(src.data(), src_w, src_h, src_w * 3, ZHULONG_PIXEL_FORMAT_RGB24);
+        const zhulong::Image img(fv);
+        const std::array<float, 6> affine{
+            static_cast<float>(dst_w) / static_cast<float>(src_w), 0.0f, 0.0f,
+            0.0f, static_cast<float>(dst_h) / static_cast<float>(src_h), 0.0f,
+        };
+        std::vector<uint8_t> dst(static_cast<size_t>(dst_w) * dst_h * 3, 0);
+        check(Aligner::crop_and_align_direct(img, affine, dst.data(), dst.size(), dst_w, dst_h),
+              "竖长各向异性裁剪应成功");
+        int extreme_rows = 0;
+        for (int y = 8; y < dst_h - 8; ++y) {
+            const uint8_t val = dst[(static_cast<size_t>(y) * dst_w + dst_w / 2) * 3];
+            if (val < 64 || val > 191) {
+                ++extreme_rows;
+            }
+        }
+        check(extreme_rows == 0,
+              "竖长各向异性缩小（inv_scale_x<=2, inv_scale_y>2）必须触发 Y 轴超采样抑制混叠");
+    }
+
+    // 2) 彩色 YUV420P / NV12（非灰 U!=128, V!=128）恒等与 4× 超采样精度
+    {
+        constexpr int w = 16;
+        constexpr int h = 16;
+        constexpr int uv_w = w / 2;
+        constexpr int uv_h = h / 2;
+        constexpr uint8_t kY = 128;
+        constexpr uint8_t kU = 90;  // 偏低 → B 偏低
+        constexpr uint8_t kV = 200; // 偏高 → R 偏高
+
+        float exp_r = 0.0f, exp_g = 0.0f, exp_b = 0.0f;
+        zhulong::yuv_to_rgb(static_cast<float>(kY), static_cast<float>(kU), static_cast<float>(kV),
+                            exp_r, exp_g, exp_b);
+
+        std::vector<uint8_t> y_plane(static_cast<size_t>(w) * h, kY);
+        std::vector<uint8_t> u_plane(static_cast<size_t>(uv_w) * uv_h, kU);
+        std::vector<uint8_t> v_plane(static_cast<size_t>(uv_w) * uv_h, kV);
+        std::vector<uint8_t> uv_plane(static_cast<size_t>(uv_w) * uv_h * 2);
+        for (size_t i = 0; i < static_cast<size_t>(uv_w) * uv_h; ++i) {
+            uv_plane[i * 2 + 0] = kU;
+            uv_plane[i * 2 + 1] = kV;
+        }
+
+        zhulong_frame_view yuv420{};
+        yuv420.width = w;
+        yuv420.height = h;
+        yuv420.format = ZHULONG_PIXEL_FORMAT_YUV420P;
+        yuv420.planes[0] = y_plane.data();
+        yuv420.planes[1] = u_plane.data();
+        yuv420.planes[2] = v_plane.data();
+        yuv420.strides[0] = w;
+        yuv420.strides[1] = uv_w;
+        yuv420.strides[2] = uv_w;
+        yuv420.dma_buf_fd = -1;
+
+        zhulong_frame_view nv12 = yuv420;
+        nv12.format = ZHULONG_PIXEL_FORMAT_NV12;
+        nv12.planes[1] = uv_plane.data();
+        nv12.planes[2] = nullptr;
+        nv12.strides[1] = uv_w * 2;
+        nv12.strides[2] = 0;
+
+        const std::array<float, 6> down4{0.25f, 0.0f, 0.0f, 0.0f, 0.25f, 0.0f};
+        for (const auto& view : {yuv420, nv12}) {
+            const zhulong::Image img(view);
+            std::vector<uint8_t> out(4 * 4 * 3, 0);
+            check(Aligner::crop_and_align_direct(img, down4, out.data(), out.size(), 4, 4),
+                  "彩色 YUV 4x 超采样裁剪应成功");
+            const uint8_t r = out[0], g = out[1], b = out[2];
+            check(r > g && r > b, "高 V 低 U 彩色 YUV 必须还原为暖红色调（R > G 且 R > B）");
+            check(std::abs(static_cast<int>(r) - static_cast<int>(std::lround(exp_r))) <= 1 &&
+                      std::abs(static_cast<int>(g) - static_cast<int>(std::lround(exp_g))) <= 1 &&
+                      std::abs(static_cast<int>(b) - static_cast<int>(std::lround(exp_b))) <= 1,
+                  "彩色 YUV420P/NV12 输出 RGB 必须与浮点 BT.601 公式一致");
+        }
+    }
+}
+
+// ============================================================================
+// 20. 特征融合：满库高质量锚点升级、死帧 is_fused=false 与轨迹身份重置
+// ============================================================================
+
+void test_face_feature_fusion_anchor_upgrade_and_identity_reset() {
+    using namespace zhulong::face;
+    using Clock = std::chrono::steady_clock;
+    using std::chrono::milliseconds;
+
+    const Clock::time_point t0 = Clock::now();
+    const MatchParams params;
+    const std::array<float, 4> box{0.40f, 0.30f, 0.50f, 0.45f};
+    const auto e0 = vec_with_cos(1.0f);
+
+    // 1) 锚点升级死锁回归：平庸锚点 q=0.50 + 4 帧近似侧脸 q=0.49(cos=0.85) 填满库后，
+    //    更高质量正脸 q=0.57(cos_to_e0=0.45, cos_to_fused≈0.408 >= 0.40) 必须被接纳并晋升为新锚点，
+    //    而非因相对旧锚点的 candidate_utility (≈0.755 < victim 0.905) 被拒之门外
+    {
+        StreamFeatureFusionPool pool;
+        auto t = t0;
+        pool.fuse_frame({FusionFaceObservation{&e0, 0.50f, box, true}}, params, t);
+        const auto sim85 = vec_with_cos(0.85f, 1);
+        for (size_t k = 1; k < kFusionTopFrames; ++k) {
+            t += milliseconds(100);
+            pool.fuse_frame({FusionFaceObservation{&sim85, 0.49f, box, true}}, params, t);
+        }
+
+        // 新正脸：q=0.57 > 0.50，与 e0 余弦 0.45、与 fused 余弦 ~0.408（均过空间否决门槛 0.40）
+        // 旧实现算得 candidate_utility = exp(0.7)*0.375 ≈ 0.755 < victim_utility 0.905 被拒！
+        const auto frontal = vec_with_cos(0.45f, 2);
+        t += milliseconds(100);
+        const auto upgraded = pool.fuse_frame({FusionFaceObservation{&frontal, 0.57f, box, true}}, params, t);
+        check(upgraded[0].valid && pool.state_count() == 1, "高质量正脸应关联回原轨迹");
+        check(dot_512(upgraded[0].features, frontal) > 0.90f,
+              "质量高于旧锚点的新帧必须突破满库锁死、入库并晋升为新锚点主导融合特征");
+    }
+
+    // 2) 零权重死帧不得误标 is_fused=true；后续真实融合帧到来后才置 is_fused=true
+    {
+        MatchParams loose = params;
+        loose.fusion_spatial_similarity_threshold = 0.20f;
+        StreamFeatureFusionPool pool;
+        const auto f1 = pool.fuse_frame({FusionFaceObservation{&e0, 0.80f, box, true}}, loose, t0);
+        const auto dead = vec_with_cos(0.25f, 3);
+        const auto f2 = pool.fuse_frame({FusionFaceObservation{&dead, 0.80f, box, true}}, loose,
+                                        t0 + milliseconds(100));
+        check(f2[0].track_key == f1[0].track_key && f2[0].reused_history && !f2[0].is_fused,
+              "零权重死帧仅维持轨迹，不得置 is_fused=true");
+        const auto good2 = vec_with_cos(0.90f, 4);
+        const auto f3 = pool.fuse_frame({FusionFaceObservation{&good2, 0.80f, box, true}}, loose,
+                                        t0 + milliseconds(200));
+        check(f3[0].track_key == f1[0].track_key && f3[0].is_fused,
+              "第二帧有效正权重帧进入后应置 is_fused=true");
+    }
+
+    // 3) 融合开启但关闭 enable_track_identity 时清空轨迹身份；reset_identity 定向清锁
+    {
+        TaskFeatureFusionManager mgr;
+        const auto f1 = mgr.fuse_frame(42, {FusionFaceObservation{&e0, 0.80f, box, true}}, params, t0);
+        IdentityEvidence strict_a;
+        strict_a.matched = true;
+        strict_a.margin_ok = true;
+        strict_a.score = 0.70f;
+        strict_a.person_id = "pA";
+        strict_a.person_name = "Alice";
+        strict_a.face_id = "fA";
+        const auto d1 = mgr.observe_identity(42, f1[0].track_key, strict_a, strict_a, params);
+        check(d1 && d1->confirmed && d1->person_id == "pA", "首帧应确认 pA");
+
+        // 定向 reset_identity 清除锁定但保留特征轨迹
+        mgr.reset_identity(42, f1[0].track_key);
+        const IdentityEvidence empty_ev;
+        const auto d_after_reset = mgr.observe_identity(42, f1[0].track_key, empty_ev, empty_ev, params);
+        check(d_after_reset && !d_after_reset->confirmed && mgr.state_count_for(42) == 1,
+              "reset_identity 必须清除僵尸锁定同时保留特征融合轨迹");
+
+        // 再次确认后，关闭 enable_track_identity（保持 fusion=true）必须清空所有轨迹身份
+        (void)mgr.observe_identity(42, f1[0].track_key, strict_a, strict_a, params);
+        MatchParams id_off = params;
+        id_off.enable_track_identity = false;
+        (void)mgr.fuse_frame(42, {FusionFaceObservation{&e0, 0.80f, box, true}}, id_off, t0 + milliseconds(100));
+        const auto d_after_toggle = mgr.observe_identity(42, f1[0].track_key, empty_ev, empty_ev, params);
+        check(d_after_toggle && !d_after_toggle->confirmed,
+              "关闭 enable_track_identity 后重新开启不得复活陈旧身份锁定");
+    }
+}
+
+// ============================================================================
+// 21. 轨迹身份修复：投票 face_id 对齐最高分票、raise_similarity 需 margin_ok、reset()
+// ============================================================================
+
+void test_track_identity_vote_face_id_margin_and_reset() {
+    using namespace zhulong::face;
+    const MatchParams params; // threshold 0.40, relax 0.05 -> floor 0.35, min_hits 2
+
+    auto make_ev = [](const char* person, const char* face, float score, bool matched, bool margin_ok = true) {
+        IdentityEvidence e;
+        e.matched = matched;
+        e.margin_ok = margin_ok;
+        e.score = score;
+        if (person != nullptr) {
+            e.person_id = person;
+            e.person_name = std::string("name_") + person;
+            e.face_id = face != nullptr ? std::string(face) : std::string();
+        }
+        return e;
+    };
+
+    // 1) 投票确认时 face_id 必须绑定产生 best_score 的历史票，而非当前较低分帧的 face_id
+    {
+        TrackIdentityState st;
+        const auto d1 = st.observe(make_ev("A", "f_best", 0.39f, false),
+                                   make_ev("A", "f_best", 0.39f, false), params);
+        check(!d1.confirmed, "单票不得确认");
+        const auto d2 = st.observe(make_ev("A", "f_cur", 0.36f, false),
+                                   make_ev("A", "f_cur", 0.36f, false), params);
+        check(d2.confirmed && d2.person_id == "A" &&
+                  nearly_equal(d2.similarity, 0.39f, 1e-6f) && d2.face_id == "f_best",
+              "投票确认必须将 best_score 与其真实来源 face_id (f_best) 绑定");
+    }
+
+    // 2) 已确认后，vote.margin_ok == false 不得经 raise_similarity 抬升相似度或改写 face_id
+    {
+        TrackIdentityState st;
+        st.observe(make_ev("A", "f_init", 0.45f, true), make_ev("A", "f_init", 0.45f, true), params);
+        const auto bad_margin = st.observe(make_ev("A", "f_ambig", 0.30f, false, false),
+                                           make_ev("A", "f_ambig", 0.80f, false, false), params);
+        check(nearly_equal(bad_margin.similarity, 0.45f, 1e-6f) && bad_margin.face_id == "f_init",
+              "margin_ok=false 的单帧证据不得改写已确认轨迹的 similarity 与 face_id");
+
+        const auto good_margin = st.observe(make_ev("A", "f_good", 0.30f, false, true),
+                                            make_ev("A", "f_good", 0.60f, false, true), params);
+        check(nearly_equal(good_margin.similarity, 0.60f, 1e-6f) && good_margin.face_id == "f_good",
+              "margin_ok=true 的更高分同人单帧证据应正常抬升相似度");
+    }
+
+    // 3) reset() 必须彻底清空已确认身份、历史票仓与冲突计数
+    {
+        TrackIdentityState st;
+        st.observe(make_ev("A", "f_a", 0.50f, true), make_ev("A", "f_a", 0.50f, true), params);
+        st.observe(make_ev("B", "f_b", 0.55f, true), make_ev("B", "f_b", 0.55f, true), params); // conflict_frames_=1
+        check(st.confirmed(), "重置前应处于确认态");
+        st.reset();
+        check(!st.confirmed(), "reset() 后必须回到未确认态");
+
+        // 单张近阈值票不得因残留旧票而确认
+        const auto after_one = st.observe(make_ev("A", "f_a2", 0.37f, false),
+                                          make_ev("A", "f_a2", 0.37f, false), params);
+        check(!after_one.confirmed, "reset() 后旧票仓必须已清空，单票不得确认");
+        const auto after_two = st.observe(make_ev("A", "f_a3", 0.38f, false),
+                                          make_ev("A", "f_a3", 0.38f, false), params);
+        check(after_two.confirmed && after_two.face_id == "f_a3",
+              "reset() 后轨迹仍可正常重新投票确认");
+    }
+}
+
+// ============================================================================
+// 22. Matcher：零范数 / 近零范数探针在 threshold==0 时不得伪命中
+// ============================================================================
+
+void test_matcher_rejects_zero_norm_probe() {
+    using namespace zhulong::face;
+    const Matcher matcher;
+    std::vector<zhulong::FaceTemplate> gallery{
+        make_template("f1", "p1", {1.0f, 0.0f, 0.0f}),
+        make_template("f2", "p2", {0.0f, 1.0f, 0.0f}),
+    };
+
+    const float zero_probe[] = {0.0f, 0.0f, 0.0f};
+    const MatchResult zero_res = matcher.match(zero_probe, 3, gallery, MatchLimits{0.0f, 3, 0.0f});
+    check(!zero_res.matched && zero_res.candidates.empty() && zero_res.similarity == 0.0f,
+          "零向量探针即使在 threshold=0.0 时也必须拒绝，不得产生伪命中或伪候选");
+
+    const float tiny_probe[] = {1e-7f, 0.0f, 0.0f};
+    const MatchResult tiny_res = matcher.match(tiny_probe, 3, gallery, MatchLimits{0.0f, 3, 0.0f});
+    check(!tiny_res.matched && tiny_res.candidates.empty(),
+          "模长低于 kMinimumFeatureNorm (1e-6) 的近零探针必须拒绝");
 }
 
 int main() {
@@ -3050,6 +3657,14 @@ int main() {
     test_person_attribute_box_iou();
     test_person_attribute_track_cache();
     test_resolve_person_attribute_params();
+    test_face_attribute_pure_logic();
+    test_match_config_bounds_and_parser_fixes();
+    test_person_attribute_disappeared_tracks_excluded();
+    test_scrfd_decode_rejects_inf_bbox();
+    test_aligner_anisotropic_y_supersampling_and_colored_yuv();
+    test_face_feature_fusion_anchor_upgrade_and_identity_reset();
+    test_track_identity_vote_face_id_margin_and_reset();
+    test_matcher_rejects_zero_norm_probe();
 #if defined(ZHULONG_FACE_HAS_PREPROCESS_HELPER)
     test_hwc_to_nchw_normalized();
 #endif

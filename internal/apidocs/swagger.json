@@ -7504,6 +7504,63 @@
                 }
             }
         },
+        "aitypes.FaceStructureItem": {
+            "type": "object",
+            "properties": {
+                "attributes": {
+                    "description": "Attributes 是挂在该张人脸自身上的属性（性别 / 年龄段）；见 FaceSubItem.Attributes。",
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "box": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/aitypes.FaceCandidate"
+                    }
+                },
+                "is_fused": {
+                    "type": "boolean"
+                },
+                "landmarks": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "format": "float64"
+                        }
+                    }
+                },
+                "matched": {
+                    "type": "boolean"
+                },
+                "matched_face_id": {
+                    "type": "string"
+                },
+                "person_id": {
+                    "type": "string"
+                },
+                "person_index": {
+                    "description": "-1 for isolated face; \u003e= 0 for associated person",
+                    "type": "integer"
+                },
+                "person_name": {
+                    "type": "string"
+                },
+                "quality": {
+                    "type": "number"
+                },
+                "similarity": {
+                    "type": "number"
+                }
+            }
+        },
         "aitypes.FaceSubItem": {
             "type": "object",
             "properties": {
@@ -8024,6 +8081,12 @@
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/aitypes.DetectionItem"
+                    }
+                },
+                "faces": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/aitypes.FaceStructureItem"
                     }
                 },
                 "height": {

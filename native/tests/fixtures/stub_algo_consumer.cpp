@@ -34,8 +34,7 @@ public:
     }
 
     zhulong::Session create_session(uint32_t worker_id) {
-        (void)worker_id;
-        return zhulong::Session();
+        return zhulong::Session::detached(worker_id);
     }
 
     std::vector<zhulong::Detection> detect(zhulong::Session& session, const zhulong::Image& image,

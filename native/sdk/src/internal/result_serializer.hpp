@@ -221,6 +221,7 @@ inline std::string serialize_inference_result(uint64_t stream_id,
                 }
                 ss << "]" << ",\"matched\":" << (f.matched ? "true" : "false")
                    << ",\"similarity\":" << f.similarity
+                   << ",\"is_fused\":" << (f.is_fused ? "true" : "false")
                    << ",\"person_id\":" << runner::json_quote(f.person_id)
                    << ",\"person_name\":" << runner::json_quote(f.person_name)
                    << ",\"matched_face_id\":" << runner::json_quote(f.matched_face_id)
@@ -317,6 +318,7 @@ inline std::string serialize_inference_result(uint64_t stream_id,
                 }
                 fs << "],\"matched\":" << (f.matched ? "true" : "false")
                    << ",\"similarity\":" << f.similarity
+                   << ",\"is_fused\":" << (f.is_fused ? "true" : "false")
                    << ",\"person_index\":" << f.person_index
                    << ",\"person_id\":" << runner::json_quote(f.person_id)
                    << ",\"person_name\":" << runner::json_quote(f.person_name)

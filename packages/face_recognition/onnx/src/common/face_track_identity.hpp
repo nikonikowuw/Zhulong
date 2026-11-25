@@ -102,7 +102,8 @@ public:
         if (strict_ok) {
             raise_similarity(strict);
         }
-        if (!vote.person_id.empty() && vote.person_id == confirmed_.person_id && std::isfinite(vote.score)) {
+        if (vote.margin_ok && !vote.person_id.empty() && vote.person_id == confirmed_.person_id &&
+            std::isfinite(vote.score)) {
             raise_similarity(vote);
         }
         return confirmed_;
@@ -111,12 +112,33 @@ public:
     /** @brief 当前是否已有确认身份（单测与诊断用） */
     [[nodiscard]] bool confirmed() const noexcept { return confirmed_.confirmed; }
 
+    /** @brief 清空已确认身份、历史投票与冲突状态（底库删人或关闭轨迹身份时调用） */
+    void reset() noexcept {
+        for (Vote& v : votes_) {
+            v.valid = false;
+            v.margin_ok = false;
+            v.score = 0.0f;
+            v.person_id.clear();
+            v.person_name.clear();
+            v.face_id.clear();
+        }
+        vote_next_ = 0;
+        confirmed_.confirmed = false;
+        confirmed_.similarity = 0.0f;
+        confirmed_.person_id.clear();
+        confirmed_.person_name.clear();
+        confirmed_.face_id.clear();
+        clear_conflict();
+    }
+
 private:
     struct Vote {
         bool valid{false};
         bool margin_ok{false};
         float score{0.0f};
         std::string person_id;
+        std::string person_name;
+        std::string face_id;
     };
 
     static float vote_floor(const MatchParams& params) noexcept {
@@ -138,6 +160,8 @@ private:
         slot.margin_ok = vote.margin_ok;
         slot.score = slot.valid ? vote.score : 0.0f;
         slot.person_id = slot.valid ? vote.person_id : std::string();
+        slot.person_name = slot.valid ? vote.person_name : std::string();
+        slot.face_id = slot.valid ? vote.face_id : std::string();
         vote_next_ = (vote_next_ + 1) % kTrackVoteWindow;
     }
 
@@ -147,15 +171,25 @@ private:
             return; // 本帧自己不合格：不允许靠历史票「隔空」确认
         }
         size_t hits = 0;
-        float best_score = 0.0f;
+        const Vote* best_vote = nullptr;
         for (const Vote& v : votes_) {
             if (v.valid && v.margin_ok && v.score >= floor && v.person_id == vote.person_id) {
                 ++hits;
-                best_score = std::max(best_score, v.score);
+                if (best_vote == nullptr || v.score > best_vote->score ||
+                    (v.score == best_vote->score && !v.face_id.empty() &&
+                     (best_vote->face_id.empty() || v.face_id < best_vote->face_id))) {
+                    best_vote = &v;
+                }
             }
         }
-        if (hits >= min_hits(params)) {
-            confirm(vote, best_score);
+        if (hits >= min_hits(params) && best_vote != nullptr) {
+            IdentityEvidence winner = vote;
+            winner.score = best_vote->score;
+            winner.face_id = best_vote->face_id;
+            if (winner.person_name.empty()) {
+                winner.person_name = best_vote->person_name;
+            }
+            confirm(winner, best_vote->score);
         }
     }
 

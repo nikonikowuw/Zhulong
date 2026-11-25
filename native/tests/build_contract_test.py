@@ -19,6 +19,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from check_package_drift_test import PackageDriftTests  # noqa: F401
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("native_build", ROOT / "native/scripts/build.py")
 build = importlib.util.module_from_spec(SPEC)

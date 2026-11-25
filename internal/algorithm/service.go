@@ -149,7 +149,9 @@ func normalizeInstallError(err error) error {
 			"Decompression bomb detected",
 			err,
 		)
-	case errors.Is(err, ErrVerificationFailed), errors.Is(err, ErrResultTypeMismatch):
+	case errors.Is(err, ErrVerificationFailed),
+		errors.Is(err, ErrResultTypeMismatch),
+		errors.Is(err, ErrVersionMismatch):
 		return apperr.Invalid("ALGO_VERIFICATION_FAILED", "Verification failed", err)
 	case errors.Is(err, ErrInvalidManifestToken):
 		return httputil.NewError(
@@ -726,6 +728,7 @@ func (s *Service) TrialInference(
 		Detections:      []aitypes.DetectionItem{},
 		Classifications: []aitypes.ClassificationItem{},
 		Persons:         []aitypes.PersonItem{},
+		Faces:           []aitypes.FaceStructureItem{},
 		Vehicles:        []aitypes.VehicleItem{},
 	}
 
@@ -743,7 +746,24 @@ func (s *Service) TrialInference(
 		resp.Classifications = report.Result.Classifications
 	}
 	if len(report.Result.Persons) > 0 {
-		resp.Persons = report.Result.Persons
+		persons := make([]aitypes.PersonItem, len(report.Result.Persons))
+		for i, p := range report.Result.Persons {
+			if p.Faces == nil {
+				p.Faces = []aitypes.FaceSubItem{}
+			}
+			persons[i] = p
+		}
+		resp.Persons = persons
+	}
+	if len(report.Result.Faces) > 0 {
+		faces := make([]aitypes.FaceStructureItem, len(report.Result.Faces))
+		for i, f := range report.Result.Faces {
+			if f.Landmarks == nil {
+				f.Landmarks = [][2]float64{}
+			}
+			faces[i] = f
+		}
+		resp.Faces = faces
 	}
 	if len(report.Result.Vehicles) > 0 {
 		resp.Vehicles = report.Result.Vehicles

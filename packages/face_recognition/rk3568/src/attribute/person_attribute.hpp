@@ -260,8 +260,9 @@ inline void prune_person_attribute_tracks(
 /**
  * @brief 选出本帧需要（重新）分类的轨迹下标
  *
- * 「到期」= 从未分类过，或距上次分类已满刷新周期；按人体框面积降序，只取前
- * `max_count` 条 —— 画面里同时出现很多人时，先保证近景大目标的属性准确。
+ * 只选**本帧实际出现**（`track.last_seen_ms == now_ms`）且「到期」（从未分类过，或距上次分类
+ * 已满刷新周期）的轨迹；按人体框面积降序，只取前 `max_count` 条 —— 画面里同时出现很多人时，
+ * 先保证近景大目标的属性准确，同时绝不拿 TTL 窗口内已消失轨迹的陈旧框去裁当前帧像素。
  */
 [[nodiscard]] inline std::vector<size_t> select_tracks_for_classification(
     const WorkerAttributeCache& cache, int64_t now_ms, int refresh_ms, int max_count
@@ -269,6 +270,9 @@ inline void prune_person_attribute_tracks(
     std::vector<size_t> due;
     for (size_t i = 0; i < cache.tracks.size(); ++i) {
         const PersonAttributeTrack& track = cache.tracks[i];
+        if (track.last_seen_ms != now_ms) {
+            continue;
+        }
         if (track.updated_ms != 0 && now_ms - track.updated_ms < refresh_ms) {
             continue;
         }

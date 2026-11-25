@@ -32,6 +32,45 @@ definitions:
       similarity:
         type: number
     type: object
+  aitypes.FaceStructureItem:
+    properties:
+      attributes:
+        additionalProperties: {}
+        description: Attributes 是挂在该张人脸自身上的属性（性别 / 年龄段）；见 FaceSubItem.Attributes。
+        type: object
+      box:
+        items:
+          type: number
+        type: array
+      candidates:
+        items:
+          $ref: '#/definitions/aitypes.FaceCandidate'
+        type: array
+      is_fused:
+        type: boolean
+      landmarks:
+        items:
+          items:
+            format: float64
+            type: number
+          type: array
+        type: array
+      matched:
+        type: boolean
+      matched_face_id:
+        type: string
+      person_id:
+        type: string
+      person_index:
+        description: -1 for isolated face; >= 0 for associated person
+        type: integer
+      person_name:
+        type: string
+      quality:
+        type: number
+      similarity:
+        type: number
+    type: object
   aitypes.FaceSubItem:
     properties:
       attributes:
@@ -380,6 +419,10 @@ definitions:
       detections:
         items:
           $ref: '#/definitions/aitypes.DetectionItem'
+        type: array
+      faces:
+        items:
+          $ref: '#/definitions/aitypes.FaceStructureItem'
         type: array
       height:
         type: integer

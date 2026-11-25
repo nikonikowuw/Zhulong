@@ -14,7 +14,6 @@ TOOLCHAIN ?=
 RKNN_ROOT ?=
 # RGA 前缀（视觉前处理走 rga 档位的 SDK 前缀才需要；否则留空）
 RGA_ROOT ?=
-ONNXRUNTIME_ROOT ?=
 EXTRA_CMAKE_ARGS ?=
 
 BUILD_DIR ?= $(CURDIR)/build
@@ -30,7 +29,7 @@ SRC_FILES := $(wildcard src/*.cpp src/*.hpp src/*/*.cpp src/*/*.hpp)
 # 配置参数指纹：切档位/SDK 前缀/厂商前缀时必须重跑 cmake。
 # ⚠️ 只依赖 CMakeLists.txt 的 mtime，会让上一次的 -DCMAKE_TOOLCHAIN_FILE / -DRGA_ROOT 静默沿用；
 #    症状是「换了档位编出来的包还是旧后端」，rga 前缀时直接报找不到 librga.so.2。
-CONFIGURE_ARGS := SDK_PREFIX=$(SDK_PREFIX)|TOOLCHAIN=$(TOOLCHAIN)|RKNN_ROOT=$(RKNN_ROOT)|RGA_ROOT=$(RGA_ROOT)|ONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT)|EXTRA=$(EXTRA_CMAKE_ARGS)
+CONFIGURE_ARGS := SDK_PREFIX=$(SDK_PREFIX)|TOOLCHAIN=$(TOOLCHAIN)|RKNN_ROOT=$(RKNN_ROOT)|RGA_ROOT=$(RGA_ROOT)|EXTRA=$(EXTRA_CMAKE_ARGS)
 CONFIGURE_STAMP := $(BUILD_DIR)/.configure-args
 
 # ⚠️ 规则必须放在 `all:` **之后**：Make 的默认目标是文件里第一个普通目标，
@@ -55,7 +54,6 @@ $(BUILD_DIR)/CMakeCache.txt: $(CONFIGURE_STAMP) CMakeLists.txt
 		$(if $(TOOLCHAIN),-DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN),) \
 		$(if $(RKNN_ROOT),-DRKNN_ROOT=$(RKNN_ROOT),) \
 		$(if $(RGA_ROOT),-DRGA_ROOT=$(RGA_ROOT),) \
-		$(if $(ONNXRUNTIME_ROOT),-DONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT),) \
 		$(EXTRA_CMAKE_ARGS)
 
 # ⚠️ 三个构建目标都挂 FORCE：`$(SRC_FILES)` 只覆盖包自己，**看不到 SDK 前缀里的头文件**。

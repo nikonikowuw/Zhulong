@@ -201,5 +201,6 @@ type AlgorithmTrialResponse struct {
 	Detections      []aitypes.DetectionItem      `json:"detections"`
 	Classifications []aitypes.ClassificationItem `json:"classifications"`
 	Persons         []aitypes.PersonItem         `json:"persons"`
+	Faces           []aitypes.FaceStructureItem  `json:"faces"`
 	Vehicles        []aitypes.VehicleItem        `json:"vehicles"`
 }

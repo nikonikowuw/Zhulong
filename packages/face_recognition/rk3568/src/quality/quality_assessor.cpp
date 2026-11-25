@@ -7,6 +7,18 @@
 
 namespace zhulong::face {
 
+namespace {
+
+/** @brief 构造单元素输入列表，避免 `forward({tensor})` 经 `initializer_list` 触发两次深拷贝 */
+std::vector<zhulong::Tensor> copy_single_input(const zhulong::Tensor& tensor) {
+    std::vector<zhulong::Tensor> inputs;
+    inputs.reserve(1);
+    inputs.push_back(tensor);
+    return inputs;
+}
+
+} // namespace
+
 bool FaceQualityAssessor::assess(
     zhulong::Session& session,
     const zhulong::Tensor& patch_tensor,
@@ -21,7 +33,7 @@ bool FaceQualityAssessor::assess(
     }
 
     // RKNN 模型自带均值/方差归一化（mean=127.5, std=127.5）：HWC uint8 裁剪块直接作为输入
-    const std::vector<zhulong::Tensor> outputs = session.forward({patch_tensor});
+    const std::vector<zhulong::Tensor> outputs = session.forward(copy_single_input(patch_tensor));
     if (outputs.size() != 1 || outputs[0].dtype() != zhulong::DataType::FLOAT32 ||
         outputs[0].element_count() != 1) {
         return false;

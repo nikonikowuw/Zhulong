@@ -306,6 +306,71 @@ static void test_face_attributes_serialization()
     assert(person_json.find("\"body_score\":0.9,\"attributes\"") == std::string::npos);
 }
 
+static void test_is_fused_serialization()
+{
+    // 1. SCENE_STRUCTURE: one fused face and one non-fused face
+    {
+        zhulong_face_structure_item faces[2]{};
+        faces[0].box[0] = 0.1f; faces[0].box[1] = 0.1f; faces[0].box[2] = 0.4f; faces[0].box[3] = 0.4f;
+        faces[0].quality = 0.92f;
+        faces[0].matched = 1;
+        faces[0].similarity = 0.88f;
+        faces[0].is_fused = 1;
+        faces[0].person_index = 0;
+
+        faces[1].box[0] = 0.5f; faces[1].box[1] = 0.1f; faces[1].box[2] = 0.8f; faces[1].box[3] = 0.4f;
+        faces[1].quality = 0.81f;
+        faces[1].matched = 0;
+        faces[1].similarity = 0.35f;
+        faces[1].is_fused = 0;
+        faces[1].person_index = -1;
+
+        zhulong_scene_structure scene{};
+        scene.face_count = 2;
+        scene.faces = faces;
+
+        zhulong_inference_result res{};
+        res.result_type = ZHULONG_RESULT_TYPE_SCENE_STRUCTURE;
+        res.count = 2;
+        res.data = &scene;
+
+        const std::string json = serialize_inference_result(1, 100, 200, 10, &res, "face_algo");
+        assert(json.find("\"matched\":true,\"similarity\":0.88,\"is_fused\":true,\"person_index\":0") != std::string::npos);
+        assert(json.find("\"matched\":false,\"similarity\":0.35,\"is_fused\":false,\"person_index\":-1") != std::string::npos);
+    }
+
+    // 2. PERSON_STRUCTURE: one fused face and one non-fused face
+    {
+        zhulong_face_item faces[2]{};
+        faces[0].box[2] = 0.4f; faces[0].box[3] = 0.4f;
+        faces[0].quality = 0.9f;
+        faces[0].matched = 1;
+        faces[0].similarity = 0.91f;
+        faces[0].is_fused = 1;
+
+        faces[1].box[0] = 0.5f; faces[1].box[2] = 0.9f; faces[1].box[3] = 0.4f;
+        faces[1].quality = 0.7f;
+        faces[1].matched = 0;
+        faces[1].similarity = 0.25f;
+        faces[1].is_fused = 0;
+
+        zhulong_person_item person{};
+        person.body_box[2] = 0.9f; person.body_box[3] = 0.9f;
+        person.body_score = 0.95f;
+        person.face_count = 2;
+        person.faces = faces;
+
+        zhulong_inference_result res{};
+        res.result_type = ZHULONG_RESULT_TYPE_PERSON_STRUCTURE;
+        res.count = 1;
+        res.data = &person;
+
+        const std::string json = serialize_inference_result(1, 100, 200, 10, &res, "face_algo");
+        assert(json.find("\"matched\":true,\"similarity\":0.91,\"is_fused\":true,\"person_id\":\"\"") != std::string::npos);
+        assert(json.find("\"matched\":false,\"similarity\":0.25,\"is_fused\":false,\"person_id\":\"\"") != std::string::npos);
+    }
+}
+
 int main()
 {
     test_base64_encode_basic();
@@ -313,6 +378,7 @@ int main()
     test_serializer_budget_protection();
     test_person_attributes_serialization();
     test_face_attributes_serialization();
+    test_is_fused_serialization();
     std::cout << "All result_serializer tests passed!\n";
     return 0;
 }

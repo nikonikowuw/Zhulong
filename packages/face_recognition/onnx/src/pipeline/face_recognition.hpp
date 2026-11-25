@@ -41,20 +41,23 @@ public:
      *
      * @return false 表示该分辨率不可用，**两个检测器都没有被修改**（宁可保持原状，
      *         也不能只生效一半）：要么没整除 FPN 粒度（人脸 32 / 人体 128），要么
-     *         本档位模型是静态形状（rk3568）。
-     *
-     * ⚠️ 必须先按更严的粒度（人体 128，是 32 的整数倍）预检再落值，否则会出现
-     *    「人脸已切到新分辨率、人体仍留在旧值」而调用方以为整体成功。
+     *         超出本档位模型支持的动态形状集合（rk3568 人脸支持 640×640 / 640×384，
+     *         人体模型为静态 640×640，切换人脸分辨率时人体保持静态 640×640，避免被困死在 640×640）。
      */
     bool set_detection_input_size(int width, int height) noexcept {
         std::lock_guard<std::mutex> lock(detector_mu_);
         FaceDetector temp_det = detector_;
-        PersonDetector temp_person = person_detector_;
-        if (!temp_det.set_input_size(width, height) || !temp_person.set_input_size(width, height)) {
+        if (!temp_det.set_input_size(width, height)) {
             return false;
         }
-        detector_ = temp_det;
+#if !defined(ZHULONG_INFERENCE_RKNN)
+        PersonDetector temp_person = person_detector_;
+        if (!temp_person.set_input_size(width, height)) {
+            return false;
+        }
         person_detector_ = temp_person;
+#endif
+        detector_ = temp_det;
         return true;
     }
 
@@ -68,7 +71,8 @@ public:
     /**
      * @brief 为 Worker 创建级联推理会话
      * @param worker_id 执行线程/Worker 唯一编号
-     * @return 主检测器会话；任一级联阶段创建失败时返回非法 session（防降级保护）
+     * @return 主检测器会话；核心必需阶段（人脸检测/质量评估/特征提取）任一创建失败时返回非法 session，
+     *         可选阶段（人体检测/人体属性/人脸属性）创建失败时记录告警并降级关闭该阶段
      */
     zhulong::Session create_session(uint32_t worker_id);
 

@@ -63,11 +63,19 @@ MatchResult Matcher::match(
         return result;
     }
 
-    // 探针只校验一次有限性（O(D)），避免在底库循环内重复检查探针分量
+    // 探针只校验一次有限性与非零模长（O(D)），避免在底库循环内重复检查探针分量，
+    // 同时防止零向量在 threshold == 0 时与任意底库模板产生相似度 0 的伪命中。
+    constexpr double kMinimumProbeNormSq = 1e-12;
+    double probe_norm_sq = 0.0;
     for (size_t i = 0; i < feature_dim; ++i) {
-        if (!std::isfinite(probe_features[i])) {
+        const float v = probe_features[i];
+        if (!std::isfinite(v)) {
             return result;
         }
+        probe_norm_sq += static_cast<double>(v) * static_cast<double>(v);
+    }
+    if (!std::isfinite(probe_norm_sq) || probe_norm_sq <= kMinimumProbeNormSq) {
+        return result;
     }
 
     // 只保留 (底库下标, 相似度)：不为每个底库项拷贝字符串，也不用 unordered_map 触发逐人节点分配

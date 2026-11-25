@@ -1,6 +1,6 @@
 # face_recognition — 人脸识别与人像关联算法包
 
-基于 SCRFD 人体/人脸级联检测 + 几何拓扑硬过滤 + Umeyama 5 点仿射对齐 + **eDifFIQA(T) 轻量级神经网络人脸质量评估** + 可选图像清晰度/曝光门禁 + FaceLiVTv2-L 512 维特征提取与身份级 1:N 比对的边缘监控人脸识别算法包。
+基于 SCRFD 人体/人脸级联检测（`onnx` 为 `det_500m`，`rk3568` 为 `det_10g`）+ 几何拓扑硬过滤 + Umeyama 5 点仿射对齐 + **eDifFIQA(T) 轻量级神经网络人脸质量评估** + 可选图像清晰度/曝光门禁 + 512 维特征提取（`onnx` 为 FaceLiVTv2-L，`rk3568` 为 ArcFace `w600k_r50`）与身份级 1:N 比对的边缘监控人脸识别算法包。
 当前档位：`onnx`（x86_64 宿主推理）与 `rk3568`（RK3568 RKNN NPU 推理）。
 
 ## 目录
@@ -8,22 +8,25 @@
 ```
 packages/face_recognition/
 ├── README.md                 本文件（包级单份说明）
+├── Makefile                  多档位统一构建/自测/打包入口
+├── .env.example              包级高阶调优环境变量模板
+├── scripts/
+│   └── build_package.py      自动化算法包组装与校验脚本
 ├── onnx/                     x86_64 ONNX Runtime 档位
 │   ├── manifest.json         包元信息（id / version / platform.target=onnx）
 │   ├── config.schema.json    宿主校验与前端渲染用的配置契约
 │   ├── models/               det_500m / scrfd_person_2.5g / ediffiqa_t / facelivtv2-l / pplcnet_person_attribute (.onnx)
 │   ├── sample.jpg            开发期冒烟样本帧
-│   ├── src/                  算法源码（common / detection / alignment / quality / feature / matching / pipeline）
-│   ├── tests/                包内无模型自测（aligner_matcher_test）+ 开发期出图（dev_infer）
-│   └── scripts/build_package.py
+│   ├── src/                  算法源码（common / detection / alignment / quality / feature / matching / attribute / pipeline）
+│   └── tests/                包内无模型自测（aligner_matcher_test）+ 开发期出图（dev_infer）
 └── rk3568/                   RK3568 RKNN 档位（与 onnx 共享通用算法源码，受漂移门禁约束）
     ├── manifest.json         包元信息（platform.target=rk3568）
     ├── config.schema.json    与 onnx 档位逐字节同步的配置契约
-    ├── models/               对应 .rknn 量化权重（含 ediffiqa_t.rknn INT8、pplcnet_person_attribute.rknn INT8、genderage_face.rknn）
+    ├── models/               det_10g / scrfd_person_2.5g / ediffiqa_t / w600k_r50 / pplcnet_person_attribute / genderage_face (.rknn)
     └── ...
 ```
 
-两档位通用源码一致性由仓库根 `make pkg-drift-check`（`native/scripts/check_package_drift.py`）守卫；`config.schema.json` 及白名单内的 `src/detection/detector.cpp`、`src/quality/quality_assessor.cpp`、`src/feature/extractor.cpp`、`src/pipeline/face_recognition.cpp` 修改时必须双端人工核对。
+两档位通用源码一致性由仓库根 `make pkg-drift-check`（`native/scripts/check_package_drift.py`）守卫；`config.schema.json` 及白名单内的 `src/detection/detector.cpp`、`src/quality/quality_assessor.cpp`、`src/feature/extractor.cpp`、`src/attribute/person_attribute.cpp`、`src/pipeline/face_recognition.cpp` 修改时必须双端人工核对。
 
 ## 开发命令
 
@@ -58,12 +61,12 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
 3. **5 点相似变换对齐、eDifFIQA(T) 质量评估与可选图像门禁（`src/alignment/` + `src/quality/` + `src/common/face_image_quality.hpp`）**
    - Umeyama 最小二乘求解相似变换矩阵，双线性采样输出 112×112 RGB24 对齐脸块。
    - **流式图像质量门禁（`enable_face_image_gate`，默认关闭）**：跳过对齐块 1px 外边框后，在 `110×110` 内部像素上计算 BT.601 亮度 4 邻域拉普拉斯方差（`< 112px` 小脸按 `|det(affine)|` 补偿），同时统计暗部欠曝比例（`Y < 32`）与亮部过曝比例（`Y > 224`）。门限参数非法时放行，对齐块本身非法时拒绝。
-   - **eDifFIQA(T) 深度学习人脸质量评估（`src/quality/quality_assessor.*`）**：与 FaceLiVTv2-L 共用同一 `112×112` RGB24 对齐脸块（ONNX 侧归一化为 `(x - 127.5) / 127.5`，RKNN 侧均值/方差已内置于 `.rknn`），输出 `[0.0, 1.0]` 质量分并受 `min_face_quality` 门控（默认 `0.28`）。
+   - **eDifFIQA(T) 深度学习人脸质量评估（`src/quality/quality_assessor.*`）**：与特征提取模型（`onnx` 为 FaceLiVTv2-L，`rk3568` 为 ArcFace `w600k_r50`）共用同一 `112×112` RGB24 对齐脸块（ONNX 侧归一化为 `(x - 127.5) / 127.5`，RKNN 侧均值/方差已内置于 `.rknn`），输出 `[0.0, 1.0]` 质量分并受 `min_face_quality` 门控（默认 `0.28`）。
      - **流式识别**：低于 `min_face_quality` 在特征提取前直接拦截，节省 512 维特征抽取算力；通过后得分写入 `FaceItem.quality` 并作为跨帧特征融合权重。
      - **底库登记（`--extract-feature`）**：同步接入 `eDifFIQA(T)` 质量门禁，低于 `min_face_quality` 时以帧级 `NO_FACE_DETECTED` 拒绝低质登记照（热进程不退出）。
      - 注：`rk3568` 档位当前打包 `ediffiqa_t.rknn`（INT8 量化，1.9 MB；相比 ONNX/FP16 分值存在约 `0.01~0.02` 系统下偏，板端耗时待实测）。
 4. **特征抽取、按流跨帧轨迹融合、轨迹级身份与 1:N 比对（`src/common/face_feature_fusion.hpp` + `face_track_identity.hpp` + `src/matching/matcher.*`）**
-   - FaceLiVTv2-L 输出 512 维单位特征向量；流式路径在 `enable_face_feature_fusion=true`（默认开启）时按 `task_id` 隔离维护最多 32 条活跃轨迹，对当帧合格人脸与活跃轨迹做一对一贪心互斥配对。
+   - `onnx` 使用 FaceLiVTv2-L、`rk3568` 使用 ArcFace `w600k_r50`，均输出 512 维单位特征向量（两档位嵌入空间不互通，跨档位切换须重新提取底库）；流式路径在 `enable_face_feature_fusion=true`（默认开启）时按 `task_id` 隔离维护最多 32 条活跃轨迹，对当帧合格人脸与活跃轨迹做一对一贪心互斥配对。
    - **空间优先 + 特征否决的关联**：观测携带人脸框。与轨迹上一帧框空间连续（IoU `>= 0.10`，或按两框平均宽/高分轴归一化的中心位移 `<= 1.5` 且面积开方比在 `[0.5, 2.0]`，并且距上次观测 `<= 1.0 s`）时，特征只承担防串人否决：与融合特征**及**最高质量锚点的余弦均 `>= fusion_spatial_similarity_threshold`（默认 `0.40`）即可关联；否则回落纯特征门槛 `fusion_similarity_threshold`（默认 `0.62`）。同帧配对时空间连续的边优先。这样侧脸/模糊等困难帧（帧间同人相似度常在 0.4~0.6）不再把轨迹打断。
    - **Top-K 帧库 + 相对质量 × 锚点一致性加权**：每条轨迹最多保留 5 帧单位特征，第 k 帧权重 `w_k = exp((q_k − q_anchor) / 0.10) · g(cos(f_k, anchor))`，融合 = 加权和 + 严格 L2 归一化。相对质量只看与锚点（库内最高质量帧）的质量差，与 eDifFIQA 分数的绝对标定无关（onnx FP32 与 rk3568 INT8 存在整体偏移），明显更差的帧迅速失去话语权（Δq = 0.2 → 0.14 倍）；一致性 `g` 在与锚点余弦 0.30 → 0.70 间线性升到满权，空间低门槛放进来的困难帧只负责维持轨迹连续、不以满权污染模板。满库时按同一效用淘汰（锚点永不被挤出，等效用先淘汰更早的帧），效用不及库内最差帧的新帧只维持轨迹、不进入特征。融合帧数 `>= 2` 时置 `is_fused = true`。
    - **轨迹级身份投票与锁定（`enable_track_identity`，默认开启，仅在融合开启时生效）**：本帧融合特征严格命中（阈值 + 分差）→ 立即确认；或最近 5 帧中至少 `track_vote_min_hits`（默认 2）帧的**单帧**特征 top-1 为同一身份、分数 `>= threshold - track_vote_relax`（默认 `0.05`）且分差门禁通过、本帧也满足 → 投票确认（计票用单帧特征，避免把逐帧相关的融合特征重复计票）。确认后锁定，侧脸/模糊帧继承身份；连续 2 帧严格命中另一身份才改判。已确认时 `similarity` 取轨迹内该身份的最高分（投票确认时可能略低于 `threshold`），`candidates` 仍为本帧证据。包内轨迹键**不写入** `track_id`（宿主独占）。
@@ -83,14 +86,14 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
    - **降级语义**：模型文件缺失/加载失败、或分类失败时，该人本帧不带 `attributes`（保留上一次缓存），人体检测、人脸识别、抓拍与记录链路完全不受影响。人体项属性字段属于 C ABI 1.4 追加段（`zhulong_person_item` 40 → 56 字节，仅尾部追加），旧宿主读取时自然忽略。
 
 7. **人脸属性识别（`src/attribute/face_attribute.*`，可选阶段）**
-   - InsightFace `genderage`（rknn_model_zoo `examples/age_gender`），在**已对齐**的人脸上做性别 + 年龄段分类：复用 3 阶段那套 112×112 相似变换，再乘 `96/112` 裁出 `96×96` RGB，`Tensor({1,96,96,3}, UINT8)` 原始像素直接喂入（转换脚本用 `mean=[[0,0,0]]/std=[[1,1,1]]` 把归一化烘进了图内，**不要**再归一化）。
-   - **输出两个张量**（`SPLIT_OUTPUT=1` 把最后一层 Concat 拆开，避免在 NPU 上做 concat）：`[1,2]` 性别 logits 走 `softmax(min-max)`；`[1,1]` age_raw `×100` 得年。
+   - InsightFace `genderage`（rknn_model_zoo `examples/age_gender`），在**已对齐**的人脸上做性别 + 年龄段分类：复用 3 阶段那套 112×112 相似变换，再乘 `96/112` 裁出 `96×96` RGB。RKNN 侧以 `Tensor({1,96,96,3}, UINT8)` 原始像素直接喂入（转换脚本用 `mean=[[0,0,0]]/std=[[1,1,1]]`、`rgb2bgr=False`）；ONNX 侧转为 `Tensor({1,3,96,96}, FLOAT32)`（保留原始 `[0,255]` RGB 数值，图内自带归一化，**不要**再做减均值/除方差）。
+   - **输出张量布局**：RKNN 侧为双输出（`SPLIT_OUTPUT=1` 把最后一层 Concat 拆开，避免在 NPU 上做 concat）：`[1,2]` 性别 logits 走 `softmax(min-max)`、`[1,1]` `age_raw × 100` 得年；ONNX 侧同时兼容双输出 `[1,2]+[1,1]` 与官方单输出 `[1,3]`（前 2 维性别 logits、第 3 维 `age/100`）。
    - **性别阈值 0.60**：低于阈值不输出任何性别标签——模型自己都不确定时输出一个 0.52 的标签只会污染下游报表。
    - **年龄只给区间，且固定 `score=1.0`**：回归头没有概率语义，伪造一个置信度会误导下游。分五档 `Age0-18` / `Age18-30` / `Age30-45` / `Age45-60` / `Age60+`。依据是 SCface 2009 年真实年龄对照（n=20）**MAE 3.6 年、相关系数 −0.036** —— 绝对年龄不可用，区间才有意义。
    - **与人体属性是两条独立通道**：人脸属性挂在 `faces[]` 的 `attributes` 上，人体属性挂在 `persons[]` 上，互不覆盖。两者标签空间重叠（都有 `Female`），宿主合并识别记录时**两条都保留**，人脸那条改名 `<标签>@face`（见 `internal/record/service_build.go`）。注意人体通道的年龄档是三段（`AgeLess18`/`Age18-60`/`AgeOver60`），人脸通道是五段，键名不同不会撞。
    - **代价**：RK3568 上约 **1.84 ms/张**（INT8，split 版实测，300 次三轮取最小），逐张实跑不再采样——单帧十几张脸也只有几十毫秒，远低于人体属性那条通道的成本。
    - **降级语义**：模型缺失/加载失败时整段跳过，插件照常可用；人脸属性字段属于 C ABI 1.5 追加段（`zhulong_face_item` 280 → 296、`zhulong_scene_structure` 32 → 48 字节，仅尾部追加），旧宿主读取时自然忽略。
-   - **onnx 档位暂无人脸属性**：该档位没有 `genderage_face.onnx`，人脸属性恒为空（静默降级，不报错）。代码与 rk3568 档位完全一致，补上模型文件即可生效。
+   - **onnx 档位暂未随包附带模型**：该档位未打包 `genderage_face.onnx`，人脸属性默认静默降级为空；源码已通过 `#if defined(ZHULONG_INFERENCE_ONNX)` 支持 NCHW FLOAT32 输入与 `[1,3]` / `[1,2]+[1,1]` 两种输出，补上 `models/genderage_face.onnx` 即可生效。
 
 ## 配置参数与三层生效优先级
 
@@ -114,9 +117,9 @@ make package TARGET=rk3568   # 或 python3 scripts/build_package.py --target rk3
 | `person_attribute_max_persons` | 单帧属性人数 | 2 | 1 – 8 | 每帧最多识别几个人（框面积大者优先） |
 | `enable_face_attributes` | 人脸属性识别 | true | 布尔 | 为每张人脸输出性别与年龄段（与人体属性互不覆盖） |
 
-### 2. 高阶/专家调优参数（收归算法包 `.env` 或任务 JSON 源码模式）
+### 2. 高阶/专家调优参数（收归算法包 `.env` 或进程级 `--config`）
 
-日常现场部署保持默认即可。如需深度微调，可在算法包根目录下配置 `.env` 文件（参考 `.env.example`）或在任务对话框中切换为“JSON 源码”模式配置：
+日常现场部署保持默认即可。因 `config.schema.json` 启用了 `"additionalProperties": false`，Web 任务配置表单/JSON 校验仅放行上表 11 项常用参数；如需深度微调以下专家参数，请在算法包根目录下配置 `.env` 文件（参考 `.env.example`）或通过进程级 `--config`（`ZHULONG_ALGO_CONFIG`）传入：
 
 | 键名 | 对应环境变量 | 默认值 | 区间 | 说明 |
 | :--- | :--- | ---: | :--- | :--- |

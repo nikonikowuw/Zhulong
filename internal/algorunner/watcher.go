@@ -398,40 +398,83 @@ func (w *workerWatcher) restartAfterBackoff(delay time.Duration) supervisionVerd
 	// since the runner was first started, so reusing the frozen list would leave
 	// the runner subscribed to stale streams. This runs OUTSIDE w.mu (and outside
 	// s.mu) because it performs DB / subscription IO.
-	w.refreshBrokerSocks()
+	refreshed := w.refreshBrokerSocks()
 
 	if w.stopRequested() {
 		w.setStatus(StatusDisabled)
 		return supervisionEnds
 	}
-	return w.respawn()
+	return w.respawnWithConfigSync(refreshed)
+}
+
+// withStopContext runs fn with a context that cancels promptly when w.stopCh closes,
+// guaranteeing the watcher helper goroutine exits before returning.
+func (w *workerWatcher) withStopContext(fn func(ctx context.Context)) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-w.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	fn(ctx)
+	cancel()
+	<-done
 }
 
 // refreshBrokerSocks re-resolves the subscription list, falling back to the
 // cached one. Never degrade into CRASH_LOOP just because re-resolution failed:
 // the previous list is still a working subscription set.
 //
+// Returns true when resolution succeeded (meaning w.brokerSocks reflects the
+// current live broker set), and false when it fell back to the cached list.
+//
 // w.brokerSocks has a single writer — this loop — so the assignment needs no
 // extra lock.
-func (w *workerWatcher) refreshBrokerSocks() {
-	newSocks, resolveErr := w.supervisor.resolveBrokerSocks(
-		context.Background(),
-		w.supervisor.brokerResolver(),
-		w.algo.ID,
+func (w *workerWatcher) refreshBrokerSocks() bool {
+	var (
+		newSocks   []string
+		resolveErr error
 	)
-	if resolveErr != nil {
-		w.supervisor.logger.Warn("failed to re-resolve broker paths on crash restart, reusing cached list",
-			zap.String("algorithm", w.algo.ID),
-			zap.Error(resolveErr),
+	w.withStopContext(func(ctx context.Context) {
+		newSocks, resolveErr = w.supervisor.resolveBrokerSocks(
+			ctx,
+			w.supervisor.brokerResolver(),
+			w.algo.ID,
 		)
-		return
+	})
+	if resolveErr != nil {
+		if !w.stopRequested() {
+			w.supervisor.logger.Warn("failed to re-resolve broker paths on crash restart, reusing cached list",
+				zap.String("algorithm", w.algo.ID),
+				zap.Error(resolveErr),
+			)
+		}
+		return false
 	}
 	w.brokerSocks = newSocks
+	return true
 }
 
 // respawn creates and starts a fresh process for the watcher, reporting whether
 // supervision must end.
 func (w *workerWatcher) respawn() supervisionVerdict {
+	return w.respawnWithConfigSync(true)
+}
+
+// respawnWithConfigSync creates and starts a fresh process for the watcher.
+// When pushTaskConfigs is true, it re-seeds per-stream task regions and configs
+// into each live FrameBroker before spawning so a recreated broker (e.g. after a
+// camera drop/reconnect) replays them during handshake instead of reverting the
+// package to compiled defaults. When false (broker refresh failed and fell back
+// to cached sockets), pushing is skipped to avoid pushing to stale brokers.
+func (w *workerWatcher) respawnWithConfigSync(pushTaskConfigs bool) supervisionVerdict {
 	w.setStatus(StatusStarting)
 
 	// Entry resolution is IO: it must not run under w.mu, which GetStatus /
@@ -446,6 +489,23 @@ func (w *workerWatcher) respawn() supervisionVerdict {
 			zap.Error(cfgErr),
 		)
 		return supervisionEnds
+	}
+
+	if w.stopRequested() {
+		w.setStatus(StatusDisabled)
+		return supervisionEnds
+	}
+
+	if pushTaskConfigs {
+		// Runs outside s.mu, w.mu, and w.stopMu: seeds MSG_TASK_REGIONS and
+		// MSG_TASK_CONFIG before the child connects and completes handshake.
+		w.withStopContext(func(ctx context.Context) {
+			w.supervisor.pushTaskConfigsContext(ctx, w.algo.ID)
+		})
+		if w.stopRequested() {
+			w.setStatus(StatusDisabled)
+			return supervisionEnds
+		}
 	}
 
 	process := NewRunnerProcess(cfg)

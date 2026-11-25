@@ -79,11 +79,7 @@ inline void sample_pixel_rgb_f(
         const float y_val = zhulong::sample_plane_bilinear(raw.planes[0], w, h, raw.strides[0] > 0 ? raw.strides[0] : w, fx, fy);
         const float u_val = zhulong::sample_plane_bilinear(raw.planes[1], uv_w, uv_h, u_stride, uv_x, uv_y);
         const float v_val = zhulong::sample_plane_bilinear(raw.planes[2], uv_w, uv_h, v_stride, uv_x, uv_y);
-        uint8_t r = 0, g = 0, b = 0;
-        zhulong::yuv_to_rgb_u8(y_val, u_val, v_val, r, g, b);
-        out_r = static_cast<float>(r);
-        out_g = static_cast<float>(g);
-        out_b = static_cast<float>(b);
+        zhulong::yuv_to_rgb(y_val, u_val, v_val, out_r, out_g, out_b);
         return;
     }
 
@@ -94,11 +90,7 @@ inline void sample_pixel_rgb_f(
         float u_val = 128.0f;
         float v_val = 128.0f;
         zhulong::sample_nv12_uv_bilinear(raw.planes[1], uv_w, uv_h, uv_stride, uv_x, uv_y, u_val, v_val);
-        uint8_t r = 0, g = 0, b = 0;
-        zhulong::yuv_to_rgb_u8(y_val, u_val, v_val, r, g, b);
-        out_r = static_cast<float>(r);
-        out_g = static_cast<float>(g);
-        out_b = static_cast<float>(b);
+        zhulong::yuv_to_rgb(y_val, u_val, v_val, out_r, out_g, out_b);
         return;
     }
 
@@ -295,8 +287,9 @@ bool Aligner::crop_and_align_direct(
     const float im3 = -m3 * inv_det;
     const float im4 = m0 * inv_det;
 
-    // 逆缩放比 > 2.0（原图人脸尺寸 > 224px）时启用子像素网格超采样，抑制直接双线性缩小的混叠/锯齿。
-    const float inv_scale = std::hypot(im0, im3);
+    // 逆缩放比 > 2.0（原图人脸尺寸 > 224px 或竖长/各向异性人体裁剪大幅缩小）时启用子像素网格超采样，
+    // 抑制直接双线性缩小的混叠/锯齿。取 X/Y 两轴逆缩放比最大值，避免竖长框跳过 Y 轴超采样。
+    const float inv_scale = std::max(std::hypot(im0, im3), std::hypot(im1, im4));
     const int supersample_grid =
         (inv_scale > 2.0f) ? std::clamp(static_cast<int>(std::ceil(inv_scale)), 2, 4) : 1;
 

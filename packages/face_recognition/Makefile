@@ -14,7 +14,7 @@ MAKE_ARGS := $(if $(SDK_PREFIX),SDK_PREFIX=$(SDK_PREFIX),) \
              $(if $(RKNN_ROOT),RKNN_ROOT=$(RKNN_ROOT),) \
              $(if $(RGA_ROOT),RGA_ROOT=$(RGA_ROOT),) \
              $(if $(ONNXRUNTIME_ROOT),ONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT),) \
-             $(if $(EXTRA_CMAKE_ARGS),EXTRA_CMAKE_ARGS=$(EXTRA_CMAKE_ARGS),)
+             $(if $(EXTRA_CMAKE_ARGS),EXTRA_CMAKE_ARGS="$(EXTRA_CMAKE_ARGS)",)
 
 .PHONY: all build test unit-test verify package pkg clean onnx rk3568 pkg-onnx pkg-rk3568
 
@@ -38,7 +38,8 @@ package:
 		$(if $(TOOLCHAIN),--toolchain "$(TOOLCHAIN)",) \
 		$(if $(RKNN_ROOT),--rknn-root "$(RKNN_ROOT)",) \
 		$(if $(RGA_ROOT),--rga-root "$(RGA_ROOT)",) \
-		$(if $(ONNXRUNTIME_ROOT),--onnxruntime-root "$(ONNXRUNTIME_ROOT)",)
+		$(if $(ONNXRUNTIME_ROOT),--onnxruntime-root "$(ONNXRUNTIME_ROOT)",) \
+		$(if $(EXTRA_CMAKE_ARGS),--extra-cmake-args "$(EXTRA_CMAKE_ARGS)",)
 
 pkg: package
 

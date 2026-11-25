@@ -100,6 +100,16 @@ constexpr std::array<float, kFaceAttributeAgeBucketCount> kFaceAttributeAgeBucke
 );
 
 /**
+ * @brief 从后端输出张量解码人脸属性
+ *
+ * RKNN 档位接受 `SPLIT_OUTPUT=1` 双输出（`[1,2]` + `[1,1]`）；
+ * ONNX 档位同时兼容双输出（`[1,2]` + `[1,1]`）与官方 InsightFace 单输出（`[1,3]`，前 2 维性别 logits、第 3 维 age/100）。
+ */
+[[nodiscard]] std::vector<zhulong::PersonAttribute> extract_face_attributes_from_tensors(
+    const std::vector<zhulong::Tensor>& outputs
+);
+
+/**
  * @brief 单张人脸的属性分类器
  *
  * 只负责「给定原帧与 5 点关键点，产出属性列表」；裁剪走 `Aligner` 的同一套相似变换，

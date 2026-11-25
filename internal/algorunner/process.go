@@ -227,17 +227,18 @@ func (p *RunnerProcess) runnerArgs() []string {
 	return args
 }
 
-// runnerEnv builds the child environment: the host environment overlaid with the
-// package's .env values and then with the configured extras.
+// BuildProcessEnviron constructs a package subprocess environment by overlaying
+// the host environment with values loaded from envFile (optional .env) and then
+// extraEnv. Each key appears exactly once so C getenv() never depends on scan order.
 //
-// Each key appears exactly once. Appending to os.Environ() instead would leave
-// duplicates, and which of the two values a library's getenv() returns then
-// depends on scan order rather than on the host's intent.
-func (p *RunnerProcess) runnerEnv() []string {
+// A missing envFile is ignored; real read/parse failures are logged with a stable
+// redacted reason (never exposing the package path) while preserving any entries
+// parsed before the error.
+func BuildProcessEnviron(envFile string, extraEnv map[string]string, logger *zap.Logger) []string {
 	overlay := make(map[string]string)
-	if p.config.EnvFile != "" {
-		loaded, err := LoadDotEnv(p.config.EnvFile)
-		if err != nil {
+	if envFile != "" {
+		loaded, err := LoadDotEnv(envFile)
+		if err != nil && logger != nil {
 			// A missing file is optional (LoadDotEnv turns os.IsNotExist into an
 			// empty map + nil error), so any error here is a real read/parse
 			// failure (e.g. a line longer than bufio.Scanner's 64KB token limit).
@@ -248,15 +249,25 @@ func (p *RunnerProcess) runnerEnv() []string {
 			// verbatim: a read failure surfaces as *fs.PathError, and the package
 			// directory path must not reach the host log (same rule the runner
 			// output path follows).
-			p.logger.Warn("failed to load runner dotenv file",
+			logger.Warn("failed to load runner dotenv file",
 				zap.String("reason", envFailureReason(err)),
 			)
 		}
 		maps.Copy(overlay, loaded)
 	}
-	maps.Copy(overlay, p.config.ExtraEnv)
+	maps.Copy(overlay, extraEnv)
 
 	return mergeEnviron(os.Environ(), overlay)
+}
+
+// runnerEnv builds the child environment: the host environment overlaid with the
+// package's .env values and then with the configured extras.
+//
+// Each key appears exactly once. Appending to os.Environ() instead would leave
+// duplicates, and which of the two values a library's getenv() returns then
+// depends on scan order rather than on the host's intent.
+func (p *RunnerProcess) runnerEnv() []string {
+	return BuildProcessEnviron(p.config.EnvFile, p.config.ExtraEnv, p.logger)
 }
 
 // envFailureReason classifies an env-file error without exposing any path.

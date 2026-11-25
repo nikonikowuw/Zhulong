@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
@@ -42,5 +43,22 @@ func TestNormalizeInstallErrorPlatformMismatchStaysDistinct(t *testing.T) {
 	}
 	if apiErr.Code != "ALGO_PLATFORM_MISMATCH" {
 		t.Errorf("expected code ALGO_PLATFORM_MISMATCH, got %q", apiErr.Code)
+	}
+}
+
+func TestNormalizeInstallErrorVersionMismatch(t *testing.T) {
+	err := normalizeInstallError(ErrVersionMismatch)
+	if err == nil {
+		t.Fatal("expected an API error, got nil")
+	}
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected *apperr.Error, got %T", err)
+	}
+	if appErr.Code != "ALGO_VERIFICATION_FAILED" {
+		t.Errorf("expected code ALGO_VERIFICATION_FAILED, got %q", appErr.Code)
+	}
+	if appErr.Kind != apperr.KindInvalid {
+		t.Errorf("expected kind KindInvalid, got %v", appErr.Kind)
 	}
 }

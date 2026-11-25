@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -47,10 +48,24 @@ constexpr size_t kMaxExecutablePathLength = 4096;
 /** @brief 二进制被原地替换/删除时内核会附加该后缀 */
 constexpr std::string_view kDeletedSuffix = " (deleted)";
 
-/** @brief 可提取特征的最低人脸置信度（低于它按「没有可用人脸」处理） */
-constexpr float kMinimumEmbeddableFaceScore = 0.50f;
 /** @brief 宿主特征提取用的固定会话 worker id（与推理 Worker 的命名空间隔离） */
 constexpr uint32_t kExtractSessionWorkerID = 999;
+
+/** @brief 向宿主日志分类器输出单行结构化告警（可选阶段降级时使用） */
+void log_optional_session_warning(uint32_t worker_id, const char* stage) noexcept {
+    char line[384];
+    const int written = std::snprintf(
+        line, sizeof(line),
+        "{\"zhulongLog\":true,\"level\":\"warn\",\"module\":\"face_recognition\",\"streamId\":0,"
+        "\"message\":\"optional session creation failed, stage disabled\","
+        "\"detail\":\"worker_id=%u stage=%s\"}\n",
+        worker_id, stage != nullptr ? stage : "unknown");
+    if (written <= 0 || static_cast<size_t>(written) >= sizeof(line)) {
+        return;
+    }
+    (void)std::fwrite(line, 1, static_cast<size_t>(written), stderr);
+    (void)std::fflush(stderr);
+}
 
 /** @brief 已提完特征、待序列化的人脸 */
 struct ProcessedFace {
@@ -219,11 +234,18 @@ zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
     zhulong::Session quality_session = quality_model_.create_session(worker_id);
     zhulong::Session rec_session = rec_model_.create_session(worker_id);
 
+    // 级联会话防降级保护：核心必需阶段（人脸检测 / 质量评估 / 特征提取）任一失败必须中止并返回非法 session
+    if (!det_session.valid() || !quality_session.valid() || !rec_session.valid()) {
+        return {};
+    }
+
+    // 可选阶段（人体检测 / 人体属性 / 人脸属性）会话创建失败时记录告警并优雅降级关闭该阶段，
+    // 不拖垮整个 worker 的人脸识别主链路。
     zhulong::Session person_session;
     if (person_model_.valid()) {
         person_session = person_model_.create_session(worker_id);
         if (!person_session.valid()) {
-            return {};
+            log_optional_session_warning(worker_id, "person_detector");
         }
     }
 
@@ -231,7 +253,7 @@ zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
     if (attribute_model_.valid()) {
         attribute_session = attribute_model_.create_session(worker_id);
         if (!attribute_session.valid()) {
-            return {};
+            log_optional_session_warning(worker_id, "person_attribute");
         }
     }
 
@@ -239,13 +261,8 @@ zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
     if (face_attribute_model_.valid()) {
         face_attribute_session = face_attribute_model_.create_session(worker_id);
         if (!face_attribute_session.valid()) {
-            return {};
+            log_optional_session_warning(worker_id, "face_attribute");
         }
-    }
-
-    // 级联会话防降级保护：任一阶段会话创建失败，必须立即中止并返回非法 session
-    if (!det_session.valid() || !quality_session.valid() || !rec_session.valid()) {
-        return {};
     }
 
     {
@@ -254,13 +271,19 @@ zhulong::Session FaceRecognitionPlugin::create_session(uint32_t worker_id) {
         rec_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(rec_session));
         if (person_session.valid()) {
             person_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(person_session));
+        } else {
+            person_sessions_.erase(worker_id);
         }
         if (attribute_session.valid()) {
             attribute_sessions_[worker_id] = std::make_shared<zhulong::Session>(std::move(attribute_session));
+        } else {
+            attribute_sessions_.erase(worker_id);
         }
         if (face_attribute_session.valid()) {
             face_attribute_sessions_[worker_id] =
                 std::make_shared<zhulong::Session>(std::move(face_attribute_session));
+        } else {
+            face_attribute_sessions_.erase(worker_id);
         }
     }
     return det_session;
@@ -367,32 +390,77 @@ void FaceRecognitionPlugin::apply_track_identity(uint64_t task_id,
                                                  MatchResult& io_result) {
     const IdentityEvidence strict = identity_evidence_from(io_result);
     IdentityEvidence vote = strict;
-    if (fused.is_fused && !io_result.matched) {
-        // 计票用**单帧**特征：融合特征逐帧高度相关，拿它计票等于把同一份证据数两次。
+    if ((fused.is_fused || fused.reused_history) && !io_result.matched) {
+        // 计票用**单帧**特征：融合特征或沿用历史锚点都与前帧高度相关，拿它计票等于把同一份证据数两次。
         // 严格命中时投票已无意义（直接确认），省掉这次额外的 1:N。
         vote = identity_evidence_from(matcher_.match(qualified.probe_features.data(), kFeatureDimension,
                                                      gallery, match_limits_from(match_params)));
     }
 
-    const std::optional<TrackIdentityDecision> decision =
+    std::optional<TrackIdentityDecision> decision =
         fusion_manager_.observe_identity(task_id, fused.track_key, strict, vote, match_params);
     if (!decision || !decision->confirmed) {
         return; // 轨迹尚未确认身份：保持逐帧比对结论
     }
-    // 已确认的人可能在轨迹存续期间被移出底库（删人 / 删脸）：持续在场的目标不会触发 TTL，
-    // 不校验就会一直报一个已不存在的身份。O(N) 字符串比较，远小于本帧 O(N·512) 的比对。
-    const bool still_enrolled =
-        std::any_of(gallery.begin(), gallery.end(), [&decision](const zhulong::FaceTemplate& item) {
-            return item.person_id == decision->person_id;
-        });
-    if (!still_enrolled) {
-        return;
+
+    struct GalleryLookup {
+        const zhulong::FaceTemplate* first_person_tpl{nullptr};
+        const zhulong::FaceTemplate* exact_face_tpl{nullptr};
+    };
+    const auto lookup_in_gallery = [&gallery](const TrackIdentityDecision& d) {
+        GalleryLookup found;
+        for (const zhulong::FaceTemplate& item : gallery) {
+            if (item.person_id != d.person_id) {
+                continue;
+            }
+            if (found.first_person_tpl == nullptr) {
+                found.first_person_tpl = &item;
+            }
+            if (!d.face_id.empty() && item.face_id == d.face_id) {
+                found.exact_face_tpl = &item;
+                break;
+            }
+        }
+        return found;
+    };
+
+    // 已确认的人可能在轨迹存续期间被移出底库（删人 / 删脸）或改名 / 替换模板：
+    // 持续在场的目标不会触发 TTL，必须对照当前底库快照校验并刷新元数据。
+    GalleryLookup found = lookup_in_gallery(*decision);
+    if (found.first_person_tpl == nullptr) {
+        // 人员已移出底库：立即重置该轨迹的身份状态以清除僵尸锁定，
+        // 并用本帧证据在干净状态上重新推进一次（若本帧已命中新身份则直接生效）。
+        fusion_manager_.reset_identity(task_id, fused.track_key);
+        decision = fusion_manager_.observe_identity(task_id, fused.track_key, strict, vote, match_params);
+        if (!decision || !decision->confirmed) {
+            return;
+        }
+        found = lookup_in_gallery(*decision);
+        if (found.first_person_tpl == nullptr) {
+            return;
+        }
     }
-    // 轨迹已确认：侧脸/模糊帧继承身份；candidates 保持本帧证据语义不变
+
+    const zhulong::FaceTemplate* current_tpl =
+        found.exact_face_tpl != nullptr ? found.exact_face_tpl : found.first_person_tpl;
+    std::string effective_face_id = (found.exact_face_tpl != nullptr) ? decision->face_id : std::string();
+    if (effective_face_id.empty()) {
+        if (strict.person_id == decision->person_id && !strict.face_id.empty()) {
+            effective_face_id = strict.face_id;
+        } else if (vote.person_id == decision->person_id && !vote.face_id.empty()) {
+            effective_face_id = vote.face_id;
+        } else {
+            effective_face_id = current_tpl->face_id;
+        }
+    }
+    const std::string& effective_name =
+        !current_tpl->person_name.empty() ? current_tpl->person_name : decision->person_name;
+
+    // 轨迹已确认：侧脸/模糊帧继承身份，姓名与模板 ID 与当前底库快照保持同步；candidates 保持本帧证据语义不变
     io_result.matched = true;
     io_result.person_id = decision->person_id;
-    io_result.person_name = decision->person_name;
-    io_result.matched_face_id = decision->face_id;
+    io_result.person_name = effective_name;
+    io_result.matched_face_id = std::move(effective_face_id);
     io_result.similarity = decision->similarity;
 }
 
@@ -517,39 +585,37 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
 
             const std::vector<FusedFaceOutput> fused_outputs =
                 fusion_manager_.fuse_frame(task_context.task_id, observations, match_params);
-            // 契约：与 observations 等长且同序。不等长说明融合池实现被改坏了，宁可本帧不出人脸，
-            // 也不能按下标错配地把 A 的特征贴到 B 的框上。
-            if (fused_outputs.size() != qualified_faces.size()) {
-                return {};
-            }
-
-            const auto gallery = zhulong::GalleryRegistry::instance().snapshot();
-            const MatchLimits limits = match_limits_from(match_params);
-            const bool use_track_identity =
-                match_params.enable_face_feature_fusion && match_params.enable_track_identity;
-            for (size_t i = 0; i < qualified_faces.size(); ++i) {
-                // 特征不可用（非有限/零模长）时直出只会得到「相似度 0 的伪候选人证据」，
-                // 该脸必须整条丢弃，而不是带着一张假证据进底库比对。
-                if (!fused_outputs[i].valid) {
-                    continue;
-                }
-                MatchResult match_result = matcher_.match(fused_outputs[i].features.data(), kFeatureDimension,
-                                                          *gallery, limits);
-                if (use_track_identity && fused_outputs[i].track_key != 0) {
-                    apply_track_identity(task_context.task_id, fused_outputs[i], qualified_faces[i],
-                                         *gallery, match_params, match_result);
-                }
-                ProcessedFace processed;
-                processed.face_box = qualified_faces[i].detection.face_box;
-                processed.landmarks_pixels =
-                    pixel_landmarks(qualified_faces[i].detection, image.width(), image.height());
-                if (populate_matched_face_item(qualified_faces[i],
-                                               fused_outputs[i].features,
-                                               fused_outputs[i].is_fused,
-                                               std::move(match_result),
-                                               match_params,
-                                               processed.item)) {
-                    processed_faces.push_back(std::move(processed));
+            // 契约：与 observations 等长且同序。不等长说明融合池实现被改坏了，宁可跳过本帧人脸比对，
+            // 也不能按下标错配地把 A 的特征贴到 B 的框上；但已检出的人体目标必须照常保留。
+            if (fused_outputs.size() == qualified_faces.size()) {
+                const auto gallery = zhulong::GalleryRegistry::instance().snapshot();
+                const MatchLimits limits = match_limits_from(match_params);
+                const bool use_track_identity =
+                    match_params.enable_face_feature_fusion && match_params.enable_track_identity;
+                for (size_t i = 0; i < qualified_faces.size(); ++i) {
+                    // 特征不可用（非有限/零模长）时直出只会得到「相似度 0 的伪候选人证据」，
+                    // 该脸必须整条丢弃，而不是带着一张假证据进底库比对。
+                    if (!fused_outputs[i].valid) {
+                        continue;
+                    }
+                    MatchResult match_result = matcher_.match(fused_outputs[i].features.data(), kFeatureDimension,
+                                                              *gallery, limits);
+                    if (use_track_identity && fused_outputs[i].track_key != 0) {
+                        apply_track_identity(task_context.task_id, fused_outputs[i], qualified_faces[i],
+                                             *gallery, match_params, match_result);
+                    }
+                    ProcessedFace processed;
+                    processed.face_box = qualified_faces[i].detection.face_box;
+                    processed.landmarks_pixels =
+                        pixel_landmarks(qualified_faces[i].detection, image.width(), image.height());
+                    if (populate_matched_face_item(qualified_faces[i],
+                                                   fused_outputs[i].features,
+                                                   fused_outputs[i].is_fused,
+                                                   std::move(match_result),
+                                                   match_params,
+                                                   processed.item)) {
+                        processed_faces.push_back(std::move(processed));
+                    }
                 }
             }
         }
@@ -943,10 +1009,12 @@ zhulong_status_t FaceExtractorContext::extract(
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
+    const float det_threshold = match_params_.face_det_threshold;
     auto try_prepare_patch = [&](const uint8_t* frame_rgb,
                                  int32_t frame_w,
                                  int32_t frame_h,
                                  int32_t frame_stride,
+                                 bool allow_patch_gamma,
                                  zhulong::Tensor& out_rec_input,
                                  std::array<float, 6>& out_affine_mat) -> zhulong_status_t {
         zhulong_frame_view fv{};
@@ -958,8 +1026,8 @@ zhulong_status_t FaceExtractorContext::extract(
         fv.dma_buf_fd = -1;
         zhulong::Image img(fv);
 
-        // 1. 人脸检测与 5 点关键点定位
-        const std::vector<FaceDetection> detections = detector_.detect(det_session_, img);
+        // 1. 人脸检测与 5 点关键点定位（遵循 .env 的 face_det_threshold，默认 0.50）
+        const std::vector<FaceDetection> detections = detector_.detect(det_session_, img, det_threshold);
         if (detections.empty()) {
             return ZHULONG_PLUGIN_ERR_NOT_FOUND;
         }
@@ -968,7 +1036,7 @@ zhulong_status_t FaceExtractorContext::extract(
         //    一律拒绝，绝不猜「哪张是本人」。
         size_t embeddable_faces = 0;
         for (const auto& detection : detections) {
-            if (detection.is_real_detection && detection.face_score >= kMinimumEmbeddableFaceScore) {
+            if (detection.is_real_detection && detection.face_score >= det_threshold) {
                 ++embeddable_faces;
             }
         }
@@ -988,7 +1056,7 @@ zhulong_status_t FaceExtractorContext::extract(
         if (!best_detection->is_real_detection) {
             return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
         }
-        if (best_detection->face_score < kMinimumEmbeddableFaceScore) {
+        if (best_detection->face_score < det_threshold) {
             return ZHULONG_PLUGIN_ERR_NOT_FOUND;
         }
 
@@ -1010,13 +1078,13 @@ zhulong_status_t FaceExtractorContext::extract(
             return ZHULONG_PLUGIN_ERR_INTERNAL;
         }
 
-        // 5. eDifFIQA(T) 质量门禁（暗光人脸自适应 Gamma 提亮且仅在提升质量分时采纳）
+        // 5. eDifFIQA(T) 质量门禁（仅在原图未做整帧 Gamma 时允许局部暗脸块自适应提亮，防止双 Gamma 叠加）
         float quality_score = 0.0f;
         if (!quality_assessor_.assess(quality_session_, out_rec_input, quality_score)) {
             return ZHULONG_PLUGIN_ERR_INTERNAL;
         }
 
-        if (match_params_.enable_enroll_image_enhance) {
+        if (allow_patch_gamma && match_params_.enable_enroll_image_enhance) {
             std::vector<uint8_t> enhanced_patch_buf;
             if (auto_enhance_dark_patch_rgb24(out_rec_input.data<uint8_t>(),
                                               kFeaturePatchWidth, kFeaturePatchHeight,
@@ -1053,37 +1121,43 @@ zhulong_status_t FaceExtractorContext::extract(
     zhulong::Tensor rec_input({1, kFeaturePatchHeight, kFeaturePatchWidth, 3}, zhulong::DataType::UINT8);
     std::array<float, 6> affine_mat{};
     zhulong_status_t prepare_rc =
-        try_prepare_patch(rgb_pixels, width, height, rgb_stride, rec_input, affine_mat);
+        try_prepare_patch(rgb_pixels, width, height, rgb_stride, true, rec_input, affine_mat);
 
-    // 常规正向未检出或未过质量门禁时，按需触发：暗光提亮重检 + 无 EXIF 侧躺/倒置照片旋转重检（90°/270°/180°）
+    // 常规正向未检出或未过质量门禁时，先对原始像素尝试旋转兜底（90°/270°/180°），
+    // 避免「暗背景 + 正常曝光侧躺照」在旋转前就被整帧 Gamma 污染；若仍未检出且整图偏暗，
+    // 再做整帧暗光 Gamma 提亮（正立 + 旋转），且关闭块级二次 Gamma 防止叠加失真。
     if (prepare_rc == ZHULONG_PLUGIN_ERR_NOT_FOUND && match_params_.enable_enroll_image_enhance) {
-        const uint8_t* fallback_src = rgb_pixels;
-        int32_t fallback_stride = rgb_stride;
-        std::vector<uint8_t> enhanced_frame_buf;
-        float mean_luma = 255.0f;
-        if (compute_rgb24_mean_luma(rgb_pixels, width, height, rgb_stride, mean_luma) &&
-            mean_luma < kEnrollDarkLumaThreshold &&
-            apply_gamma_rgb24(rgb_pixels, width, height, rgb_stride, kEnrollDetectGamma, enhanced_frame_buf)) {
-            fallback_src = enhanced_frame_buf.data();
-            fallback_stride = width * 3;
-            prepare_rc = try_prepare_patch(fallback_src, width, height, fallback_stride, rec_input, affine_mat);
-        }
-
-        if (prepare_rc == ZHULONG_PLUGIN_ERR_NOT_FOUND) {
-            std::vector<uint8_t> rotated_frame_buf;
-            constexpr std::array<int, 3> kFallbackRotations{90, 270, 180};
+        constexpr std::array<int, 3> kFallbackRotations{90, 270, 180};
+        std::vector<uint8_t> rotated_frame_buf;
+        auto try_rotations = [&](const uint8_t* src, int32_t src_stride, bool allow_patch_gamma) {
             for (int deg : kFallbackRotations) {
                 int rot_w = 0;
                 int rot_h = 0;
-                if (!rotate_rgb24(fallback_src, width, height, fallback_stride, deg,
+                if (!rotate_rgb24(src, width, height, src_stride, deg,
                                   rotated_frame_buf, rot_w, rot_h)) {
                     continue;
                 }
-                const zhulong_status_t rot_rc =
-                    try_prepare_patch(rotated_frame_buf.data(), rot_w, rot_h, rot_w * 3, rec_input, affine_mat);
+                const zhulong_status_t rot_rc = try_prepare_patch(
+                    rotated_frame_buf.data(), rot_w, rot_h, rot_w * 3, allow_patch_gamma, rec_input, affine_mat);
                 if (rot_rc != ZHULONG_PLUGIN_ERR_NOT_FOUND) {
                     prepare_rc = rot_rc;
                     break;
+                }
+            }
+        };
+
+        try_rotations(rgb_pixels, rgb_stride, true);
+
+        if (prepare_rc == ZHULONG_PLUGIN_ERR_NOT_FOUND) {
+            std::vector<uint8_t> enhanced_frame_buf;
+            float mean_luma = 255.0f;
+            if (compute_rgb24_mean_luma(rgb_pixels, width, height, rgb_stride, mean_luma) &&
+                mean_luma < kEnrollDarkLumaThreshold &&
+                apply_gamma_rgb24(rgb_pixels, width, height, rgb_stride, kEnrollDetectGamma, enhanced_frame_buf)) {
+                prepare_rc = try_prepare_patch(
+                    enhanced_frame_buf.data(), width, height, width * 3, false, rec_input, affine_mat);
+                if (prepare_rc == ZHULONG_PLUGIN_ERR_NOT_FOUND) {
+                    try_rotations(enhanced_frame_buf.data(), width * 3, false);
                 }
             }
         }

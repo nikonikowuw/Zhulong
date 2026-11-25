@@ -13,6 +13,20 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(ZhulongAlgoSDK 1.5 REQUIRED)
 find_package(Threads REQUIRED)
 
+# 包版本只认 manifest.json —— 唯一事实源。
+#
+# `main.cpp` 的 `ZHULONG_ALGO_MAIN(..., "FaceRecognition", <version>)` 会把包版本回显给
+# `--verify` 与宿主握手；版本号手写两份的结局是「清单升了、二进制还报旧版本」。这里在配置期
+# 把 version 抠出来编成宏，清单改了重新构建即可，不需要人记得改第二处。
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json" ZHULONG_FACE_MANIFEST_JSON)
+string(REGEX MATCH "\"version\"[ \t\r\n]*:[ \t\r\n]*\"([^\"]*)\"" _version_match "${ZHULONG_FACE_MANIFEST_JSON}")
+set(ZHULONG_FACE_PLUGIN_VERSION "${CMAKE_MATCH_1}")
+if(NOT ZHULONG_FACE_PLUGIN_VERSION)
+    message(WARNING "manifest.json 中未解析出 version：包版本回退为 0.0.0")
+    set(ZHULONG_FACE_PLUGIN_VERSION "0.0.0")
+endif()
+message(STATUS "face_recognition 包版本（manifest.json）: ${ZHULONG_FACE_PLUGIN_VERSION}")
+
 # 产品代码（算法类本体）：可执行文件与 devtest 共用，避免两份实现。
 add_library(face_recognition_core OBJECT
     src/detection/detector.cpp
@@ -34,6 +48,8 @@ add_executable(face_recognition
     $<TARGET_OBJECTS:face_recognition_core>
 )
 target_include_directories(face_recognition PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(face_recognition PRIVATE
+    ZHULONG_FACE_PLUGIN_VERSION="${ZHULONG_FACE_PLUGIN_VERSION}")
 # --exclude-libs 是 GNU ld 专属（Apple ld 报 unknown options）；macOS 开发机跳过即可。
 if(NOT APPLE)
     target_link_options(face_recognition PRIVATE "LINKER:--exclude-libs,ALL")
@@ -57,6 +73,7 @@ target_link_libraries(face_recognition_devtest PRIVATE Zhulong::AlgoRuntime)
 add_executable(face_recognition_unittest EXCLUDE_FROM_ALL
     tests/aligner_matcher_test.cpp
     src/alignment/aligner.cpp
+    src/attribute/face_attribute.cpp
     src/matching/matcher.cpp
 )
 target_include_directories(face_recognition_unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

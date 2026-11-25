@@ -33,6 +33,7 @@ var (
 	ErrVersionAlreadyInstalled = errors.New("algorithm version is already installed")
 	ErrVerificationFailed      = errors.New("dynamic package verification failed")
 	ErrResultTypeMismatch      = errors.New("plugin exported result_type does not match manifest task_type")
+	ErrVersionMismatch         = errors.New("plugin reported version does not match manifest version")
 	ErrInvalidComputeBudget    = errors.New("invalid compute budget in manifest")
 
 	// ErrPlatformTargetRetired marks a package whose manifest.platform.target is
@@ -244,6 +245,7 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*VerifyR
 			entryPath,
 			samplePath,
 			manifest.TaskType,
+			manifest.Version,
 		); err != nil {
 			return nil, err
 		}
@@ -420,7 +422,7 @@ var expectedResultType = map[string]ResultType{
 	TaskTypeSceneStructure:   ResultTypeSceneStructure,
 }
 
-func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, samplePath, taskType string) error {
+func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, samplePath, taskType, manifestVersion string) error {
 	vCtx, cancel := context.WithTimeout(ctx, v.timeout)
 	defer cancel()
 
@@ -456,13 +458,21 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 		return fmt.Errorf("%w: execution failed (%v): %s", ErrVerificationFailed, err, stderrBuf.String())
 	}
 
-	report, err := parseVerificationReport(stdoutBuf.String())
+	stdoutStr := stdoutBuf.String()
+	report, err := parseVerificationReport(stdoutStr)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrVerificationFailed, err)
 	}
 
 	if report.Status != "passed" {
 		return fmt.Errorf("%w: package reported status %q: %s", ErrVerificationFailed, report.Status, report.Error)
+	}
+
+	// Cross-check the binary's reported abi_verified.version against manifest.Version
+	// when both are non-empty, preventing manifest/binary version drift at install time.
+	if abiVersion := parseABIVerifiedVersion(stdoutStr); manifestVersion != "" && abiVersion != "" && abiVersion != manifestVersion {
+		return fmt.Errorf("%w: binary reported version %q, manifest declares %q",
+			ErrVersionMismatch, abiVersion, manifestVersion)
 	}
 
 	// 准入结论的可信度取决于「样本帧是否真的进了模型」：
@@ -492,6 +502,31 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 	}
 
 	return nil
+}
+
+// abiVerifiedRecord reflects the handshake line emitted before model_create during
+// `--verify` (`{"step":"abi_verified","name":"...","version":"..."}`).
+type abiVerifiedRecord struct {
+	Step    string `json:"step"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// parseABIVerifiedVersion extracts the reported version from the `abi_verified`
+// protocol line in `--verify` output. Returns "" when no such line is present
+// (e.g. minimal stubs) or when the binary left version empty.
+func parseABIVerifiedVersion(output string) string {
+	for _, rawLine := range strings.Split(output, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if !strings.HasPrefix(line, "{") || !strings.Contains(line, `"abi_verified"`) {
+			continue
+		}
+		var rec abiVerifiedRecord
+		if err := json.Unmarshal([]byte(line), &rec); err == nil && rec.Step == "abi_verified" {
+			return strings.TrimSpace(rec.Version)
+		}
+	}
+	return ""
 }
 
 // parseVerificationReport extracts and parses the final VerificationReport JSON from entry output.

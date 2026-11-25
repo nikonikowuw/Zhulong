@@ -6,10 +6,12 @@
 #pragma once
 
 #include "internal/gallery_index.hpp"
+#include <string>
 #include <string_view>
 #include <charconv>
 #include <cstdlib>
 #include <cstdint>
+#include <cstring>
 
 namespace zhulong::runner {
 
@@ -18,6 +20,53 @@ inline void skip_whitespace(std::string_view sv, size_t& i) {
         ++i;
     }
 }
+
+namespace detail {
+
+inline bool parse_hex4(std::string_view sv, size_t pos, uint32_t& out) {
+    if (pos + 4 > sv.size()) return false;
+    uint32_t value = 0;
+    for (size_t k = 0; k < 4; ++k) {
+        const char ch = sv[pos + k];
+        uint32_t digit = 0;
+        if (ch >= '0' && ch <= '9') {
+            digit = static_cast<uint32_t>(ch - '0');
+        } else if (ch >= 'a' && ch <= 'f') {
+            digit = static_cast<uint32_t>(10 + (ch - 'a'));
+        } else if (ch >= 'A' && ch <= 'F') {
+            digit = static_cast<uint32_t>(10 + (ch - 'A'));
+        } else {
+            return false;
+        }
+        value = (value << 4) | digit;
+    }
+    out = value;
+    return true;
+}
+
+inline void append_utf8(std::string& out, uint32_t cp) {
+    if (cp <= 0x7FU) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FFU) {
+        out.push_back(static_cast<char>(0xC0U | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
+    } else if (cp <= 0xFFFFU) {
+        out.push_back(static_cast<char>(0xE0U | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80U | ((cp >> 6) & 0x3FU)));
+        out.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
+    } else if (cp <= 0x10FFFFU) {
+        out.push_back(static_cast<char>(0xF0U | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80U | ((cp >> 12) & 0x3FU)));
+        out.push_back(static_cast<char>(0x80U | ((cp >> 6) & 0x3FU)));
+        out.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
+    }
+}
+
+inline bool is_json_number_char(char c) {
+    return (c >= '0' && c <= '9') || c == '.' || c == '+' || c == '-' || c == 'e' || c == 'E';
+}
+
+} // namespace detail
 
 inline std::string parse_json_string(std::string_view sv, size_t& i) {
     skip_whitespace(sv, i);
@@ -39,8 +88,29 @@ inline std::string parse_json_string(std::string_view sv, size_t& i) {
                 case 'r': res += '\r'; break;
                 case 't': res += '\t'; break;
                 case 'u': {
-                    // 跳过 4 个 hex 字符
-                    if (i + 4 <= sv.size()) i += 4;
+                    uint32_t unit = 0;
+                    if (!detail::parse_hex4(sv, i, unit)) {
+                        break;
+                    }
+                    i += 4;
+                    if (unit >= 0xD800U && unit <= 0xDBFFU) {
+                        uint32_t low = 0;
+                        if (i + 6 <= sv.size() && sv[i] == '\\' && sv[i + 1] == 'u' &&
+                            detail::parse_hex4(sv, i + 2, low) &&
+                            low >= 0xDC00U && low <= 0xDFFFU) {
+                            i += 6;
+                            const uint32_t cp = 0x10000U + (((unit - 0xD800U) << 10) | (low - 0xDC00U));
+                            detail::append_utf8(res, cp);
+                        } else {
+                            // 孤立高代理项：输出 U+FFFD，避免写出非法 UTF-8 代理字节序列
+                            detail::append_utf8(res, 0xFFFDU);
+                        }
+                    } else if (unit >= 0xDC00U && unit <= 0xDFFFU) {
+                        // 孤立低代理项：输出 U+FFFD
+                        detail::append_utf8(res, 0xFFFDU);
+                    } else {
+                        detail::append_utf8(res, unit);
+                    }
                     break;
                 }
                 default: res += esc; break;
@@ -72,16 +142,43 @@ inline std::vector<float> parse_float_array(std::string_view sv, size_t& i) {
 
     while (i < sv.size()) {
         skip_whitespace(sv, i);
-        if (i < sv.size() && sv[i] == ']') {
+        if (i >= sv.size()) break;
+        if (sv[i] == ']') {
             ++i;
             break;
         }
-        char* end = nullptr;
-        const char* start_ptr = sv.data() + i;
-        float val = std::strtof(start_ptr, &end);
-        if (end > start_ptr) {
-            res.push_back(val);
-            i += static_cast<size_t>(end - start_ptr);
+
+        // 先在 string_view 边界内扫描数字 token，再拷贝到 NUL 结尾缓冲供 strtof 解析：
+        // IPC 报文底层是无 NUL 结尾的 std::vector<uint8_t>，直接传 sv.data() + i
+        // 给 strtof 会在截断/畸形报文上触发堆越界读；同时避免依赖 GCC 10 sysroot
+        // 缺失的浮点 std::from_chars。
+        const size_t token_start = i;
+        size_t token_end = token_start;
+        while (token_end < sv.size() && detail::is_json_number_char(sv[token_end])) {
+            ++token_end;
+        }
+        const size_t token_len = token_end - token_start;
+        if (token_len > 0) {
+            char stack_buf[64];
+            std::string heap_buf;
+            const char* token_ptr = nullptr;
+            if (token_len < sizeof(stack_buf)) {
+                std::memcpy(stack_buf, sv.data() + token_start, token_len);
+                stack_buf[token_len] = '\0';
+                token_ptr = stack_buf;
+            } else {
+                heap_buf.assign(sv.data() + token_start, token_len);
+                token_ptr = heap_buf.c_str();
+            }
+
+            char* end = nullptr;
+            float val = std::strtof(token_ptr, &end);
+            if (end > token_ptr) {
+                res.push_back(val);
+                i = token_start + static_cast<size_t>(end - token_ptr);
+            } else {
+                ++i; // 防止死循环
+            }
         } else {
             ++i; // 防止死循环
         }

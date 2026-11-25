@@ -155,3 +155,83 @@ exit 0
 		t.Errorf("expected 400 for empty multipart, got %d", wEmpty.Code)
 	}
 }
+
+func TestHandlerTrial_SceneStructureIncludesFacesJSON(t *testing.T) {
+	router, _, store, algoDir := setupTrialHandlerTest(t)
+	ctx := context.Background()
+
+	algoID := "face_scene_trial"
+	version := "1.1.0"
+	pkgDir := filepath.Join(algoDir, algoID, version)
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatalf("create pkgDir: %v", err)
+	}
+
+	scriptPath := filepath.Join(pkgDir, algoID)
+	scriptContent := `#!/bin/sh
+printf '%s\n' '{"status":"passed","sample":"mock.ppm","sample_decoded":true,"width":320,"height":240,"result_type":5,"count":2,"cost_ms":19,"result":{"task_type":"scene_structure","detections":[],"classifications":[],"vehicles":[],"persons":[{"track_id":0,"body_box":[0.1,0.1,0.5,0.9],"body_score":0.9,"faces":[]}],"faces":[{"box":[0.2,0.15,0.35,0.35],"quality":0.85,"landmarks":[[0.22,0.20]],"matched":true,"similarity":0.79,"person_index":0,"person_id":"p1","person_name":"Bob","matched_face_id":"f1"}]}}'
+exit 0
+`
+	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0o755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	algo := &algorithm.Algorithm{
+		ID:           algoID,
+		Name:         "Face Scene Trial",
+		Version:      version,
+		TaskType:     algorithm.TaskTypePersonStructure,
+		Category:     algorithm.CategorySafety,
+		TargetArch:   "x86_64",
+		TargetDevice: "onnx",
+		ComputeCost:  30,
+		MemoryMB:     128,
+		Status:       algorithm.StatusDisabled,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateAlgorithm(ctx, algo); err != nil {
+		t.Fatalf("save algo: %v", err)
+	}
+
+	pngBytes := createTestPNGBytes(t, 320, 240)
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "face.png")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write(pngBytes); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/algorithms/"+algoID+"/trial", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var envelope struct {
+		Code string                           `json:"code"`
+		Data algorithm.AlgorithmTrialResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if envelope.Code != "OK" {
+		t.Fatalf("code = %q, want OK", envelope.Code)
+	}
+	if envelope.Data.Count != 2 || len(envelope.Data.Persons) != 1 || len(envelope.Data.Faces) != 1 {
+		t.Fatalf("unexpected trial payload: count=%d persons=%d faces=%d",
+			envelope.Data.Count, len(envelope.Data.Persons), len(envelope.Data.Faces))
+	}
+	if envelope.Data.Faces[0].PersonName != "Bob" || envelope.Data.Faces[0].PersonIndex != 0 {
+		t.Fatalf("unexpected face item: %+v", envelope.Data.Faces[0])
+	}
+}

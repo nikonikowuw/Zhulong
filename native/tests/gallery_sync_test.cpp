@@ -1,6 +1,7 @@
 #include "internal/gallery_index.hpp"
 #include "internal/gallery_parser.hpp"
 #include <cassert>
+#include <cmath>
 #include <iostream>
 #include <thread>
 #include <atomic>
@@ -277,9 +278,107 @@ void test_gallery_registry_concurrency() {
     std::cout << "[PASS] test_gallery_registry_concurrency (reads: " << read_count.load() << ")" << std::endl;
 }
 
+void test_gallery_parser_unicode_escapes() {
+    // 1. Go json.Marshal 默认转义的 HTML 字符（大小写 hex 均需解码）
+    {
+        std::string payload = R"({
+            "face_id": "f_html",
+            "person_id": "P\u00261",
+            "person_name": "A\u0026B \u003cC\u003e \u003CD\u003E",
+            "image_path": "img.jpg",
+            "features": [0.5]
+        })";
+        FaceTemplate item = parse_upsert_payload(
+            reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+        assert(item.face_id == "f_html");
+        assert(item.person_id == "P&1");
+        assert(item.person_name == "A&B <C> <D>");
+    }
+
+    // 2. 2 字节拉丁扩展、3 字节中文 BMP、4 字节 UTF-16 代理对
+    {
+        std::string payload = R"({
+            "face_id": "f_utf8",
+            "person_id": "p_utf8",
+            "person_name": "caf\u00e9-\u5f20\u4e09-\ud83d\ude00",
+            "features": [1.0]
+        })";
+        FaceTemplate item = parse_upsert_payload(
+            reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+        assert(item.person_name == std::string("caf\xC3\xA9-\xE5\xBC\xA0\xE4\xB8\x89-\xF0\x9F\x98\x80"));
+    }
+
+    // 3. 孤立高/低代理项输出 U+FFFD，不破坏后续字符；畸形/截断 \u 不越界不崩溃
+    {
+        size_t pos = 0;
+        const std::string s1 = R"("\ud83dX\ude00Y\ud83d\u0041")";
+        assert(parse_json_string(s1, pos) == std::string("\xEF\xBF\xBD" "X" "\xEF\xBF\xBD" "Y" "\xEF\xBF\xBD" "A"));
+
+        // 非 NUL 结尾的截断转义
+        const std::string backing = R"("abc\u12ZZZZ")";
+        size_t p2 = 0;
+        std::string_view truncated(backing.data(), 8); // `"abc\u12`
+        assert(parse_json_string(truncated, p2) == "abc12");
+
+        size_t p3 = 0;
+        const std::string bad_hex = R"("ok\uZZZZ!")";
+        assert(parse_json_string(bad_hex, p3) == "okZZZZ!");
+    }
+
+    std::cout << "[PASS] test_gallery_parser_unicode_escapes" << std::endl;
+}
+
+void test_gallery_parser_non_nul_truncated_floats() {
+    // 1. 截断数字紧跟非 NUL 尾随数字：不得越过 string_view 边界吞掉后继数字
+    {
+        const std::string backing = R"({"face_id":"f1","features":[0.5999999)";
+        const size_t prefix_len = backing.size() - 6; // 截断在 "0.5" 处，紧邻字节是 "999999"
+        FaceTemplate item = parse_upsert_payload(
+            reinterpret_cast<const uint8_t*>(backing.data()), prefix_len);
+        assert(item.face_id == "f1");
+        assert(item.features.size() == 1);
+        assert(std::fabs(item.features[0] - 0.5f) < 1e-6f);
+    }
+
+    // 2. 截断在指数符号 'e' 处，紧邻字节是 '5'：必须解析为 1.0 而非 1e5
+    {
+        const std::string backing = R"({"face_id":"f2","features":[1e5)";
+        const size_t prefix_len = backing.size() - 1; // 截断在 "1e"
+        FaceTemplate item = parse_upsert_payload(
+            reinterpret_cast<const uint8_t*>(backing.data()), prefix_len);
+        assert(item.features.size() == 1);
+        assert(std::fabs(item.features[0] - 1.0f) < 1e-6f);
+    }
+
+    // 3. 截断在数组内尾随空白处，紧邻字节是数字：不得越界读入尾随数字
+    {
+        const std::string backing = R"({"face_id":"f3","features":[0.25   99)";
+        const size_t prefix_len = backing.size() - 2; // 截断在 "0.25   "
+        FaceTemplate item = parse_upsert_payload(
+            reinterpret_cast<const uint8_t*>(backing.data()), prefix_len);
+        assert(item.features.size() == 1);
+        assert(std::fabs(item.features[0] - 0.25f) < 1e-6f);
+    }
+
+    // 4. 超长浮点字面量 (> 64 字符) 与畸形 token 不死循环、正确提取合法值
+    {
+        const std::string long_decimal = "0.25" + std::string(80, '0');
+        const std::string payload = R"({"face_id":"f4","features":[)" + long_decimal + R"(, "bad", +, -, ., e, -1.5e-1]})";
+        FaceTemplate item = parse_upsert_payload(
+            reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+        assert(item.features.size() == 2);
+        assert(std::fabs(item.features[0] - 0.25f) < 1e-6f);
+        assert(std::fabs(item.features[1] - (-0.15f)) < 1e-6f);
+    }
+
+    std::cout << "[PASS] test_gallery_parser_non_nul_truncated_floats" << std::endl;
+}
+
 int main() {
     test_gallery_index_basic();
     test_gallery_parser();
+    test_gallery_parser_unicode_escapes();
+    test_gallery_parser_non_nul_truncated_floats();
     test_sharded_sync_context();
     test_gallery_sync_shard_idempotent();
     test_gallery_sync_shard_index_out_of_range();

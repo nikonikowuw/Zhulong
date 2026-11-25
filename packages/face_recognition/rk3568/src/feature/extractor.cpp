@@ -1,6 +1,7 @@
 #include "extractor.hpp"
 
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 namespace zhulong::face {
@@ -9,6 +10,14 @@ namespace {
 
 /** @brief 单位化时的零范数保护下限 */
 constexpr float kMinimumFeatureNorm = 1e-6f;
+
+/** @brief 构造单元素输入列表，避免 `forward({tensor})` 经 `initializer_list` 触发两次深拷贝 */
+std::vector<zhulong::Tensor> copy_single_input(const zhulong::Tensor& tensor) {
+    std::vector<zhulong::Tensor> inputs;
+    inputs.reserve(1);
+    inputs.push_back(tensor);
+    return inputs;
+}
 
 } // namespace
 
@@ -25,7 +34,7 @@ std::vector<float> FaceFeatureExtractor::extract(
     }
 
     // RKNN 模型自带均值/方差归一化：HWC uint8 裁剪块直接作为输入
-    const std::vector<zhulong::Tensor> outputs = session.forward({patch_tensor});
+    const std::vector<zhulong::Tensor> outputs = session.forward(copy_single_input(patch_tensor));
     if (outputs.size() != 1 || outputs[0].dtype() != zhulong::DataType::FLOAT32 ||
         outputs[0].element_count() != kFeatureDimension) {
         return {};
@@ -36,15 +45,16 @@ std::vector<float> FaceFeatureExtractor::extract(
         return {};
     }
 
-    std::vector<float> features(src, src + kFeatureDimension);
+    std::vector<float> features(kFeatureDimension);
+    std::memcpy(features.data(), src, kFeatureDimension * sizeof(float));
 
     float norm_sq = 0.0f;
     for (const float value : features) {
         norm_sq += value * value;
     }
     const float norm = std::sqrt(norm_sq);
-    if (!(norm > kMinimumFeatureNorm)) {
-        // 零向量 / NaN 输出不能冒充「有效的单位特征」：登记进底库后会永远匹配不上，
+    if (!std::isfinite(norm) || !(norm > kMinimumFeatureNorm)) {
+        // 零向量 / NaN / Inf 输出不能冒充「有效的单位特征」：登记进底库后会永远匹配不上，
         // 而且错因看起来像「底库照片质量差」。宁可返回空让上层报错。
         return {};
     }

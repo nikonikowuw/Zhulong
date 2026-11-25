@@ -33,6 +33,7 @@ def main():
                         help="RGA 前缀（SDK 前缀的视觉后端是 rga 时必需：前缀会把"
                              "librga.so.2 传给消费方，交叉链接需要能解析它）")
     parser.add_argument("--onnxruntime-root", help="ONNX Runtime 前缀（交叉构建 onnx 档位时用）")
+    parser.add_argument("--extra-cmake-args", help="传递给底层 CMake 的额外参数")
     args = parser.parse_args()
 
     # 算法包根目录（即 scripts/ 的上一级，不受仓库层级影响，保持自包含）
@@ -195,6 +196,8 @@ def main():
             make_args.append("RGA_ROOT=" + str(rga_root))
         if args.onnxruntime_root:
             make_args.append("ONNXRUNTIME_ROOT=" + str(Path(args.onnxruntime_root).resolve()))
+        if args.extra_cmake_args:
+            make_args.append("EXTRA_CMAKE_ARGS=" + args.extra_cmake_args)
         res = subprocess.run(make_args)
         if res.returncode != 0:
             sys.exit("错误: 包可执行文件构建失败")

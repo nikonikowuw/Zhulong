@@ -186,12 +186,13 @@ type Client struct {
 	closeOnce  sync.Once
 }
 
-// proc is one running provider process plus the identity of the executable it was
-// started from.
+// proc is one running provider process plus the identity of the executable and
+// optional package .env file it was started from.
 type proc struct {
-	cmd    *algorunner.PinnedProcess
-	entry  string
-	finger fileFingerprint
+	cmd       *algorunner.PinnedProcess
+	entry     string
+	finger    fileFingerprint
+	envFinger fileFingerprint
 
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
@@ -313,8 +314,8 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// ensureProcess returns a live child that matches the current provider executable,
-// spawning (or re-spawning) as needed.
+// ensureProcess returns a live child that matches the current provider executable
+// and package .env file, spawning (or re-spawning) as needed.
 func (c *Client) ensureProcess(ctx context.Context) (*proc, error) {
 	entry, err := c.resolveEntry(ctx)
 	if err != nil {
@@ -324,12 +325,14 @@ func (c *Client) ensureProcess(ctx context.Context) (*proc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEntry, err)
 	}
+	envPath := filepath.Join(filepath.Dir(entry), algorunner.EnvFileName)
+	envFinger := optionalFingerprintOf(envPath)
 
-	if p := c.reuseProcessLocked(entry, finger); p != nil {
+	if p := c.reuseProcessLocked(entry, finger, envFinger); p != nil {
 		return p, nil
 	}
 
-	p, err := c.spawn(entry, finger)
+	p, err := c.spawn(entry, finger, envFinger)
 	if err != nil {
 		return nil, err
 	}
@@ -341,13 +344,17 @@ func (c *Client) ensureProcess(ctx context.Context) (*proc, error) {
 }
 
 // reuseProcessLocked returns c.proc if it is still alive and matches the current
-// executable; otherwise it discards any stale or exited process and returns nil.
-func (c *Client) reuseProcessLocked(entry string, finger fileFingerprint) *proc {
+// executable and .env file; otherwise it discards any stale or exited process and returns nil.
+func (c *Client) reuseProcessLocked(entry string, finger, envFinger fileFingerprint) *proc {
 	if c.proc == nil {
 		return nil
 	}
 	if c.proc.entry != entry || c.proc.finger != finger {
 		c.discardLocked(c.proc, "provider executable changed")
+		return nil
+	}
+	if c.proc.envFinger != envFinger {
+		c.discardLocked(c.proc, "provider env file changed")
 		return nil
 	}
 	select {
@@ -372,12 +379,22 @@ func (c *Client) resolveEntry(ctx context.Context) (string, error) {
 	return entry, nil
 }
 
-func (c *Client) spawn(entry string, finger fileFingerprint) (*proc, error) {
+func (c *Client) spawn(entry string, finger, envFinger fileFingerprint) (*proc, error) {
 	cmd := exec.Command(entry, "--extract-feature")
 	// The package resolves its models relative to its own executable, so the CWD is
 	// irrelevant — but it must not be the host's, or a stray models/ directory in
 	// the working directory could be picked up by a package that resolves loosely.
-	cmd.Dir = filepath.Dir(entry)
+	pkgDir := filepath.Dir(entry)
+	cmd.Dir = pkgDir
+	// Load the package directory's optional .env file with the same precedence and
+	// deduplication semantics as RunnerProcess, so enrollment tuning knobs
+	// (e.g. ZHULONG_ENABLE_ENROLL_FLIP_TTA, ZHULONG_MIN_FACE_QUALITY) reach
+	// `--extract-feature` consistently with the streaming runner.
+	cmd.Env = algorunner.BuildProcessEnviron(
+		filepath.Join(pkgDir, algorunner.EnvFileName),
+		nil,
+		c.log,
+	)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -405,11 +422,12 @@ func (c *Client) spawn(entry string, finger fileFingerprint) (*proc, error) {
 	)
 
 	return &proc{
-		cmd:    pinned,
-		entry:  entry,
-		finger: finger,
-		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
+		cmd:       pinned,
+		entry:     entry,
+		finger:    finger,
+		envFinger: envFinger,
+		stdin:     stdin,
+		stdout:    bufio.NewReader(stdout),
 	}, nil
 }
 
@@ -763,6 +781,16 @@ func validateFrame(f Frame) error {
 		)
 	}
 	return nil
+}
+
+// optionalFingerprintOf returns the fingerprint of an optional file (such as
+// package .env), returning the zero value when the file is absent or unreadable.
+func optionalFingerprintOf(path string) fileFingerprint {
+	finger, err := fingerprintOf(path)
+	if err != nil {
+		return fileFingerprint{}
+	}
+	return finger
 }
 
 func fingerprintOf(path string) (fileFingerprint, error) {

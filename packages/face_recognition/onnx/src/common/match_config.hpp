@@ -174,8 +174,14 @@ inline bool parse_env_double(const char* env_name, double& out_val) noexcept {
         errno = 0;
         const double parsed = std::strtod(val, &end);
         if (end != val && errno != ERANGE && std::isfinite(parsed)) {
-            out_val = parsed;
-            return true;
+            const char* tail = end;
+            while (*tail != '\0' && static_cast<unsigned char>(*tail) <= ' ') {
+                ++tail;
+            }
+            if (*tail == '\0') {
+                out_val = parsed;
+                return true;
+            }
         }
     }
     return false;
@@ -211,7 +217,7 @@ inline MatchParams load_match_params_from_env(MatchParams base = MatchParams{}) 
     bool bval = false;
 
     if (detail::parse_env_double("ZHULONG_FACE_MATCH_THRESHOLD", dval) &&
-        dval >= static_cast<double>(kMinMatchThreshold) && dval <= static_cast<double>(kMaxMatchThreshold)) {
+        within_float_bounds(dval, kMinMatchThreshold, kMaxMatchThreshold)) {
         p.threshold = static_cast<float>(dval);
     }
     if (detail::parse_env_double("ZHULONG_FACE_TOP_K", dval) &&
@@ -219,11 +225,11 @@ inline MatchParams load_match_params_from_env(MatchParams base = MatchParams{}) 
         p.top_k = static_cast<size_t>(std::lround(dval));
     }
     if (detail::parse_env_double("ZHULONG_FACE_DET_THRESHOLD", dval) &&
-        dval >= static_cast<double>(kMinFaceDetThreshold) && dval <= static_cast<double>(kMaxFaceDetThreshold)) {
+        within_float_bounds(dval, kMinFaceDetThreshold, kMaxFaceDetThreshold)) {
         p.face_det_threshold = static_cast<float>(dval);
     }
     if (detail::parse_env_double("ZHULONG_PERSON_DET_THRESHOLD", dval) &&
-        dval >= static_cast<double>(kMinPersonDetThreshold) && dval <= static_cast<double>(kMaxPersonDetThreshold)) {
+        within_float_bounds(dval, kMinPersonDetThreshold, kMaxPersonDetThreshold)) {
         p.person_det_threshold = static_cast<float>(dval);
     }
     if (detail::parse_env_double("ZHULONG_MIN_FACE_SIZE", dval) &&
@@ -231,7 +237,7 @@ inline MatchParams load_match_params_from_env(MatchParams base = MatchParams{}) 
         p.min_face_size = static_cast<int>(std::lround(dval));
     }
     if (detail::parse_env_double("ZHULONG_MIN_FACE_QUALITY", dval) &&
-        dval >= static_cast<double>(kMinFaceQualityBound) && dval <= static_cast<double>(kMaxFaceQualityBound)) {
+        within_float_bounds(dval, kMinFaceQualityBound, kMaxFaceQualityBound)) {
         p.min_face_quality = static_cast<float>(dval);
     }
     if (detail::parse_env_bool("ZHULONG_FILTER_UNMATCHED", bval)) {
@@ -289,15 +295,19 @@ inline MatchParams load_match_params_from_env(MatchParams base = MatchParams{}) 
         p.enable_enroll_image_enhance = bval;
     }
 
+    if (p.fusion_spatial_similarity_threshold > p.fusion_similarity_threshold) {
+        p.fusion_spatial_similarity_threshold = p.fusion_similarity_threshold;
+    }
+
     return p;
 }
 
 /**
- * @brief 在扁平 JSON 里定位某个成员名后的冒号位置
+ * @brief 在扁平 JSON 顶层对象里定位某个成员名后的冒号位置
  *
- * 只处理 `{"key": 1.5}` 这种形态（本项目的算法配置 schema 都是扁平数值），
- * 但键必须是**完整成员名**：引号包住的键名逐字相等，且前一个非空白字符是 `{` 或 `,`。
- * 按子串找 `"threshold"` 会命中 `"my_threshold"`，把别人的值当成自己的。
+ * 只匹配顶层 JSON 对象（`brace_depth == 1 && bracket_depth == 0`）的完整成员名：
+ * 正确跳过字符串字面量内的转义引号以及嵌套 `{}`/`[]`，并要求闭合引号与 `:` 之间
+ * 仅允许空白字符。避免数组元素、嵌套对象或字符串值里的同名片段被误当成顶层配置键。
  *
  * 实现刻意不拼 `"\"" + key + "\""` 的 needle：本函数每帧、每路流都会被调用十余次，
  * 每次一个堆分配纯属浪费（解析结果只是几个标量）。
@@ -306,36 +316,85 @@ inline MatchParams load_match_params_from_env(MatchParams base = MatchParams{}) 
  * @return 冒号位置；未找到返回 npos
  */
 inline size_t find_member_colon(std::string_view json, std::string_view key, size_t from = 0) {
-    for (size_t pos = json.find('"', from); pos != std::string_view::npos; pos = json.find('"', pos + 1)) {
-        const size_t name_begin = pos + 1;
-        if (name_begin >= json.size() || json.size() - name_begin < key.size() + 1) {
-            // 剩余长度连「键名 + 闭合引号」都放不下
-            break;
-        }
-        if (json.compare(name_begin, key.size(), key) != 0) {
+    bool started = false;
+    int brace_depth = 0;
+    int bracket_depth = 0;
+    char last_sig = '\0';
+    size_t i = 0;
+
+    while (i < json.size()) {
+        const char ch = json[i];
+        if (static_cast<unsigned char>(ch) <= ' ') {
+            ++i;
             continue;
         }
-        if (json[name_begin + key.size()] != '"') {
+        if (!started) {
+            if (ch != '{') {
+                return std::string_view::npos;
+            }
+            started = true;
+            brace_depth = 1;
+            last_sig = '{';
+            ++i;
+            continue;
+        }
+        if (ch == '"') {
+            const size_t str_begin = i + 1;
+            ++i;
+            bool escaped = false;
+            while (i < json.size()) {
+                if (escaped) {
+                    escaped = false;
+                } else if (json[i] == '\\') {
+                    escaped = true;
+                } else if (json[i] == '"') {
+                    break;
+                }
+                ++i;
+            }
+            if (i >= json.size()) {
+                return std::string_view::npos;
+            }
+            const size_t str_end = i;
+            ++i; // 跳过闭合引号
+
+            if (brace_depth == 1 && bracket_depth == 0 && (last_sig == '{' || last_sig == ',')) {
+                size_t colon = i;
+                while (colon < json.size() && static_cast<unsigned char>(json[colon]) <= ' ') {
+                    ++colon;
+                }
+                if (colon < json.size() && json[colon] == ':') {
+                    if (colon >= from &&
+                        str_end - str_begin == key.size() &&
+                        json.compare(str_begin, key.size(), key) == 0) {
+                        return colon;
+                    }
+                }
+            }
+            last_sig = '"';
             continue;
         }
 
-        size_t before = pos;
-        while (before > 0 && static_cast<unsigned char>(json[before - 1]) <= ' ') {
-            --before;
+        if (ch == '{') {
+            ++brace_depth;
+        } else if (ch == '}') {
+            if (brace_depth == 0) {
+                return std::string_view::npos;
+            }
+            --brace_depth;
+            if (brace_depth == 0) {
+                return std::string_view::npos;
+            }
+        } else if (ch == '[') {
+            ++bracket_depth;
+        } else if (ch == ']') {
+            if (bracket_depth == 0) {
+                return std::string_view::npos;
+            }
+            --bracket_depth;
         }
-        if (before == 0) {
-            continue;
-        }
-        const char preceding = json[before - 1];
-        if (preceding != '{' && preceding != ',') {
-            continue;
-        }
-
-        const size_t colon = json.find(':', name_begin + key.size() + 1);
-        if (colon == std::string_view::npos) {
-            continue;
-        }
-        return colon;
+        last_sig = ch;
+        ++i;
     }
     return std::string_view::npos;
 }
@@ -371,11 +430,15 @@ inline bool find_json_number(std::string_view json, std::string_view key, double
         if (value_end == value_start) {
             continue; // 该键不是数值（布尔/字符串/null）：继续找同名成员的其他出现
         }
+        if (value_end < json.size() && !is_json_delimiter(json[value_end])) {
+            continue; // 紧随非分隔字符（如 0.5abc）：非法数字 token
+        }
         try {
             size_t parsed = 0;
-            const double value = std::stod(std::string(json.substr(value_start, value_end - value_start)), &parsed);
-            if (parsed == 0 || !std::isfinite(value)) {
-                continue;
+            const std::string token(json.substr(value_start, value_end - value_start));
+            const double value = std::stod(token, &parsed);
+            if (parsed != token.size() || !std::isfinite(value)) {
+                continue; // 含未消费尾部（如 0.5.6 / 1e+）或非有限值：拒绝
             }
             out_value = value;
             return true;
@@ -432,18 +495,20 @@ inline bool find_json_bool(std::string_view json, std::string_view key, bool& ou
  *       包可能比宿主的 schema 新/旧（分开交付）。宁可退化也不能让插件拒绝工作。
  */
 inline MatchParams resolve_match_params(std::string_view task_json, MatchParams defaults) {
+    MatchParams resolved = defaults;
     if (task_json.empty()) {
-        return defaults;
+        if (resolved.fusion_spatial_similarity_threshold > resolved.fusion_similarity_threshold) {
+            resolved.fusion_spatial_similarity_threshold = resolved.fusion_similarity_threshold;
+        }
+        return resolved;
     }
 
-    MatchParams resolved = defaults;
     const std::string_view json = task_json;
 
     // 1. 比对阈值 (支持 threshold 与别名 match_threshold)
     double threshold = 0.0;
     if ((find_json_number(json, "threshold", threshold) || find_json_number(json, "match_threshold", threshold)) &&
-        threshold >= static_cast<double>(kMinMatchThreshold) &&
-        threshold <= static_cast<double>(kMaxMatchThreshold)) {
+        within_float_bounds(threshold, kMinMatchThreshold, kMaxMatchThreshold)) {
         resolved.threshold = static_cast<float>(threshold);
     }
 
@@ -457,16 +522,14 @@ inline MatchParams resolve_match_params(std::string_view task_json, MatchParams 
     // 3. 人脸检测置信度 (支持 face_det_threshold 与别名 det_threshold)
     double face_det = 0.0;
     if ((find_json_number(json, "face_det_threshold", face_det) || find_json_number(json, "det_threshold", face_det)) &&
-        face_det >= static_cast<double>(kMinFaceDetThreshold) &&
-        face_det <= static_cast<double>(kMaxFaceDetThreshold)) {
+        within_float_bounds(face_det, kMinFaceDetThreshold, kMaxFaceDetThreshold)) {
         resolved.face_det_threshold = static_cast<float>(face_det);
     }
 
     // 4. 人体检测置信度
     double person_det = 0.0;
     if (find_json_number(json, "person_det_threshold", person_det) &&
-        person_det >= static_cast<double>(kMinPersonDetThreshold) &&
-        person_det <= static_cast<double>(kMaxPersonDetThreshold)) {
+        within_float_bounds(person_det, kMinPersonDetThreshold, kMaxPersonDetThreshold)) {
         resolved.person_det_threshold = static_cast<float>(person_det);
     }
 
@@ -481,8 +544,7 @@ inline MatchParams resolve_match_params(std::string_view task_json, MatchParams 
     // 6. 人脸质量综合阈值 (支持 min_face_quality 与别名 face_quality_threshold)
     double min_face_quality = 0.0;
     if ((find_json_number(json, "min_face_quality", min_face_quality) || find_json_number(json, "face_quality_threshold", min_face_quality)) &&
-        min_face_quality >= static_cast<double>(kMinFaceQualityBound) &&
-        min_face_quality <= static_cast<double>(kMaxFaceQualityBound)) {
+        within_float_bounds(min_face_quality, kMinFaceQualityBound, kMaxFaceQualityBound)) {
         resolved.min_face_quality = static_cast<float>(min_face_quality);
     }
 
@@ -587,6 +649,11 @@ inline MatchParams resolve_match_params(std::string_view task_json, MatchParams 
     bool enable_enroll_image_enhance = true;
     if (find_json_bool(json, "enable_enroll_image_enhance", enable_enroll_image_enhance)) {
         resolved.enable_enroll_image_enhance = enable_enroll_image_enhance;
+    }
+
+    // 空间连续时的特征否决门槛不得高于纯特征门槛，否则空间连续轨迹反而被更严的门槛拦截
+    if (resolved.fusion_spatial_similarity_threshold > resolved.fusion_similarity_threshold) {
+        resolved.fusion_spatial_similarity_threshold = resolved.fusion_similarity_threshold;
     }
 
     return resolved;

@@ -74,6 +74,7 @@ target_link_libraries(face_recognition_devtest PRIVATE Zhulong::AlgoRuntime)
 add_executable(face_recognition_unittest EXCLUDE_FROM_ALL
     tests/aligner_matcher_test.cpp
     src/alignment/aligner.cpp
+    src/attribute/face_attribute.cpp
     src/matching/matcher.cpp
 )
 target_include_directories(face_recognition_unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

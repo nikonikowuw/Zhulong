@@ -433,6 +433,113 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestVerifierABIVersionConsistency(t *testing.T) {
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{})
+	ctx := context.Background()
+
+	cases := []struct {
+		name            string
+		manifestVersion string
+		stdoutLines     []string
+		wantErr         error
+	}{
+		{
+			name:            "matching abi_verified version passes",
+			manifestVersion: "1.1.0",
+			stdoutLines: []string{
+				`{"step":"abi_verified","name":"FaceRecognition","version":"1.1.0"}`,
+				`{"status":"passed","sample_decoded":false,"width":0,"height":0,"result_type":1,"count":0}`,
+			},
+		},
+		{
+			name:            "mismatched abi_verified version rejected",
+			manifestVersion: "1.1.0",
+			stdoutLines: []string{
+				`{"step":"abi_verified","name":"FaceRecognition","version":"1.0.0"}`,
+				`{"status":"passed","sample_decoded":false,"width":0,"height":0,"result_type":1,"count":0}`,
+			},
+			wantErr: algorithm.ErrVersionMismatch,
+		},
+		{
+			name:            "placeholder 0.0.0 abi_verified version rejected",
+			manifestVersion: "1.1.0",
+			stdoutLines: []string{
+				`{"step":"abi_verified","name":"FaceRecognition","version":"0.0.0"}`,
+				`{"status":"passed","sample_decoded":false,"width":0,"height":0,"result_type":1,"count":0}`,
+			},
+			wantErr: algorithm.ErrVersionMismatch,
+		},
+		{
+			name:            "absent abi_verified line passes",
+			manifestVersion: "1.1.0",
+			stdoutLines: []string{
+				`{"status":"passed","sample_decoded":false,"width":0,"height":0,"result_type":1,"count":0}`,
+			},
+		},
+		{
+			name:            "empty abi_verified version passes",
+			manifestVersion: "1.1.0",
+			stdoutLines: []string{
+				`{"step":"abi_verified","name":"FaceRecognition","version":""}`,
+				`{"status":"passed","sample_decoded":false,"width":0,"height":0,"result_type":1,"count":0}`,
+			},
+		},
+		{
+			name:            "vendor banner noise around abi_verified still enforces mismatch",
+			manifestVersion: "2.0.0",
+			stdoutLines: []string{
+				`rga_api version 1.10.1_[10]`,
+				`{"step":"abi_verified","name":"FaceRecognition","version":"1.9.0"}`,
+				`{"status":"passed","sample_decoded":false,"width":0,"height":0,"result_type":1,"count":0}`,
+				`librga cleanup done`,
+			},
+			wantErr: algorithm.ErrVersionMismatch,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			manifest := algorithm.Manifest{
+				ID:        "ver_check_pkg",
+				Version:   tc.manifestVersion,
+				Name:      "ver_check_pkg",
+				TaskType:  algorithm.TaskTypeDetection,
+				Category:  algorithm.CategorySafety,
+				Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
+				Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
+			}
+			raw, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatalf("marshal manifest: %v", err)
+			}
+			mustWriteFile(t, filepath.Join(dir, "manifest.json"), raw, 0o644)
+			mustWriteFile(t, filepath.Join(dir, "sample.jpg"), []byte("sample"), 0o644)
+
+			var script strings.Builder
+			script.WriteString("#!/bin/sh\n")
+			for _, line := range tc.stdoutLines {
+				script.WriteString("printf '%s\\n' '")
+				script.WriteString(line)
+				script.WriteString("'\n")
+			}
+			script.WriteString("exit 0\n")
+			mustWriteFile(t, filepath.Join(dir, manifest.ID), []byte(script.String()), 0o755)
+
+			_, verifyErr := verifier.VerifyDirectory(ctx, dir)
+			if tc.wantErr != nil {
+				if !errors.Is(verifyErr, tc.wantErr) {
+					t.Fatalf("VerifyDirectory error = %v, want %v", verifyErr, tc.wantErr)
+				}
+				return
+			}
+			if verifyErr != nil {
+				t.Fatalf("VerifyDirectory unexpected error: %v", verifyErr)
+			}
+		})
+	}
+}
+
 func TestStageAndVerifyEndToEnd(t *testing.T) {
 	manifest := algorithm.Manifest{
 		ID:        "installed_detector",

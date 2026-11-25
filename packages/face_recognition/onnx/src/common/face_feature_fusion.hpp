@@ -105,7 +105,14 @@ struct FusionFaceObservation {
 /** @brief 经跨帧状态池处理后的单张人脸输出 */
 struct FusedFaceOutput {
     std::array<float, kFusionFeatureDim> features{}; /**< 送入底库比对的 512 维特征向量 */
-    bool is_fused{false};                            /**< 是否融合了 >=2 帧同人特征 */
+    bool is_fused{false};                            /**< 是否实际融合了 >=2 帧正权重同人特征 */
+    /**
+     * @brief 输出特征是否来自已有轨迹历史（用于轨迹投票防重复计票）
+     *
+     * 即使本帧因零权重死帧未计入融合（`is_fused=false`），`features` 仍是历史锚点而非本帧单帧特征，
+     * 调用方做投票计票时仍必须使用本帧单帧特征，避免把历史锚点重复计票。
+     */
+    bool reused_history{false};
     /**
      * @brief 输入特征是否可用（非空、全有限、模长有效）
      *
@@ -333,11 +340,19 @@ public:
 
         std::vector<FusedFaceOutput> outputs(observations.size());
         const float feature_threshold = detail::sanitize_fusion_threshold(params.fusion_similarity_threshold);
-        const float spatial_threshold =
-            detail::sanitize_spatial_fusion_threshold(params.fusion_spatial_similarity_threshold);
+        const float spatial_threshold = std::min(
+            detail::sanitize_spatial_fusion_threshold(params.fusion_spatial_similarity_threshold),
+            feature_threshold);
         const double ttl_seconds = detail::sanitize_fusion_ttl_seconds(params.fusion_ttl_seconds);
 
         evict_expired_states(now, ttl_seconds);
+        // 融合保持开启但轨迹身份关闭时，立即清空各轨迹残余的身份锁定与投票窗口，
+        // 避免重新开启 enable_track_identity 时复活陈旧锁定。
+        if (!params.enable_track_identity) {
+            for (auto& state : states_) {
+                state.identity.reset();
+            }
+        }
         if (observations.empty()) {
             return outputs;
         }
@@ -426,7 +441,8 @@ public:
                 const float quality = detail::sanitize_observation_quality(observations[i].quality);
                 update_matched_state(state, unit_obs[i], quality, observations[i], now);
                 outputs[i].features = state.fused_features;
-                outputs[i].is_fused = (state.observation_count >= 2);
+                outputs[i].is_fused = (state.fused_frame_count >= 2);
+                outputs[i].reused_history = true;
                 outputs[i].track_key = state.key;
                 obs_paired[i] = true;
             }
@@ -478,6 +494,19 @@ public:
         return std::nullopt;
     }
 
+    /** @brief 重置指定轨迹的身份状态（底库删除已确认人员时解除僵尸锁定） */
+    void reset_identity(uint64_t track_key) noexcept {
+        if (track_key == 0) {
+            return;
+        }
+        for (auto& state : states_) {
+            if (state.key == track_key) {
+                state.identity.reset();
+                return;
+            }
+        }
+    }
+
     /** @brief 当前池内活跃状态数量（供单测与诊断使用） */
     size_t state_count() const noexcept { return states_.size(); }
 
@@ -501,6 +530,7 @@ private:
         std::array<float, 4> last_box{0.0f, 0.0f, 0.0f, 0.0f};
         bool has_box{false};
         uint32_t observation_count{0};
+        size_t fused_frame_count{1}; /**< 最近一次融合实际贡献正权重的帧数 */
         std::chrono::steady_clock::time_point last_seen{};
         TrackIdentityState identity{};
 
@@ -542,6 +572,7 @@ private:
         state.anchor_index = 0;
         state.fused_features = unit_feat;
         state.observation_count = 1;
+        state.fused_frame_count = 1;
         state.last_seen = now;
         record_box(state, observation);
         return state;
@@ -572,14 +603,21 @@ private:
     /**
      * @brief 把新帧放进 Top-K 帧库
      *
-     * 未满直接入库；满库时在**非锚点**帧里找效用最低者（等效用先淘汰更早入库的帧），新帧效用
-     * 不低于它才替换。按效用而不是按原始质量淘汰：锚点更换后与新锚点不一致的「死帧」权重
-     * 已经趋零，若仍按质量保留，就会长期占着名额却不贡献特征。
+     * 质量严格高于当前锚点的新帧始终允许入库（满库时替换最低效用非锚点帧）并由后续
+     * `refresh_anchor` 晋升为新锚点，打破「平庸旧锚点填满库后反过来拒绝高质量正脸」的死锁；
+     * 非锚点升级帧若相对当前锚点的效用 `<= 0`（零权重死帧）则直接跳过入库、只维持轨迹；
+     * 满库时在**非锚点**帧里找效用最低者（等效用先淘汰更早入库的帧），新帧效用不低于它才替换。
      */
     static void insert_into_bank(FusionTrackState& state,
                                  const std::array<float, kFusionFeatureDim>& unit_feat,
                                  float quality) noexcept {
         static_assert(kFusionTopFrames >= 2, "满库淘汰要求锚点之外至少还有一个候选槽位");
+        const bool upgrades_anchor = quality > state.bank[state.anchor_index].quality;
+        const double cand_utility = upgrades_anchor ? 0.0 : candidate_utility(state, unit_feat, quality);
+        if (!upgrades_anchor && !(cand_utility > 0.0)) {
+            return; // 零权重死帧只维持轨迹，不进入特征库
+        }
+
         size_t slot = state.bank_size;
         if (state.bank_size >= kFusionTopFrames) {
             size_t victim = state.bank_size;
@@ -595,7 +633,7 @@ private:
                     victim_utility = u;
                 }
             }
-            if (candidate_utility(state, unit_feat, quality) < victim_utility) {
+            if (!upgrades_anchor && cand_utility < victim_utility) {
                 return; // 效用不及库里最差的帧：只维持轨迹，不进入特征
             }
             slot = victim;
@@ -622,15 +660,18 @@ private:
     /**
      * @brief 以「相对质量 softmax × 锚点一致性」加权求和并 L2 归一化；数值相消退化时退回锚点帧
      *
-     * 锚点权重恒为 1，所以权重和恒 `>= 1`；退化分支只防御理论上的数值异常。
+     * 锚点权重恒为 1，所以权重和恒 `>= 1`；同时统计实际贡献正权重的帧数写入
+     * `fused_frame_count`，确保零权重死帧不会导致虚假 `is_fused = true`。
      */
     static void refresh_fused_features(FusionTrackState& state) noexcept {
         std::array<double, kFusionFeatureDim> acc{};
+        size_t contributing = 0;
         for (size_t k = 0; k < state.bank_size; ++k) {
             const double w = entry_utility(state, k);
             if (!(w > 0.0) || !std::isfinite(w)) {
                 continue;
             }
+            ++contributing;
             const auto& f = state.bank[k].features;
             for (size_t d = 0; d < kFusionFeatureDim; ++d) {
                 acc[d] += w * static_cast<double>(f[d]);
@@ -642,12 +683,14 @@ private:
         }
         if (!std::isfinite(sum_sq) || sum_sq <= kFusionNormEpsilon * kFusionNormEpsilon) {
             state.fused_features = state.bank[state.anchor_index].features;
+            state.fused_frame_count = 1;
             return;
         }
         const double inv_norm = 1.0 / std::sqrt(sum_sq);
         for (size_t d = 0; d < kFusionFeatureDim; ++d) {
             state.fused_features[d] = static_cast<float>(acc[d] * inv_norm);
         }
+        state.fused_frame_count = contributing;
     }
 
     static void update_matched_state(
@@ -765,6 +808,19 @@ public:
         }
         std::lock_guard<std::mutex> lock(entry->mutex);
         return entry->pool.observe_identity(track_key, strict, vote, params);
+    }
+
+    /** @brief 重置某路流某条轨迹的身份状态（不创建分桶） */
+    void reset_identity(uint64_t task_id, uint64_t track_key) {
+        if (track_key == 0) {
+            return;
+        }
+        const std::shared_ptr<TaskEntry> entry = find_entry(task_id);
+        if (!entry) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(entry->mutex);
+        entry->pool.reset_identity(track_key);
     }
 
     void clear_stream_if_present(uint64_t task_id) {

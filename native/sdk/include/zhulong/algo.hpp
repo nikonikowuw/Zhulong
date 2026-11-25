@@ -314,8 +314,24 @@ public:
             std::unique_ptr<SessionContext> ctx)
         : backend_(std::move(backend)), ctx_(std::move(ctx)) {}
 
+    /**
+     * @brief 创建不绑定推理后端的轻量会话（仅用于无模型骨架或测试夹具）
+     *
+     * 与默认构造的无效 `Session()`（用于表示会话创建失败）区分开：
+     * 本工厂产出的会话 `valid() == true` 且保留 `worker_id()`，
+     * 调用 `forward()` 时因无后端绑定直接返回空输出。
+     */
+    static Session detached(uint32_t worker_id = 0) {
+        auto ctx = std::make_unique<SessionContext>();
+        ctx->worker_id = worker_id;
+        Session session;
+        session.ctx_ = std::move(ctx);
+        session.detached_ = true;
+        return session;
+    }
+
     /** @brief 检查当前会话是否已成功初始化且可用 */
-    bool valid() const noexcept { return backend_ && ctx_; }
+    bool valid() const noexcept { return (backend_ && ctx_) || (detached_ && ctx_); }
 
     /** @brief 获取绑定该会话的 Worker 唯一标识 */
     uint32_t worker_id() const noexcept { return ctx_ ? ctx_->worker_id : 0; }
@@ -332,7 +348,7 @@ public:
      * @return std::vector<Tensor> 推理输出张量列表；失败时返回空 vector
      */
     std::vector<Tensor> forward(const std::vector<Tensor>& inputs) {
-        if (!valid()) return {};
+        if (!backend_ || !ctx_) return {};
         std::vector<Tensor> outputs;
         zhulong_status_t rc = backend_->forward(ctx_.get(), inputs, outputs);
         if (rc != ZHULONG_PLUGIN_OK) {
@@ -344,6 +360,7 @@ public:
 private:
     std::shared_ptr<IInferenceBackend> backend_;
     std::unique_ptr<SessionContext> ctx_;
+    bool detached_{false};
 };
 
 /**
@@ -480,6 +497,8 @@ static_assert(sizeof(zhulong_face_candidate) == 200, "zhulong_face_candidate mus
 static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
 static_assert(sizeof(zhulong_face_item) == 296, "zhulong_face_item must be 296 bytes");
 static_assert(sizeof(zhulong_face_item) % 8 == 0, "zhulong_face_item must be 8-byte aligned");
+static_assert(sizeof(zhulong_face_structure_item) == 304, "zhulong_face_structure_item must be 304 bytes");
+static_assert(sizeof(zhulong_face_structure_item) % 8 == 0, "zhulong_face_structure_item must be 8-byte aligned");
 static_assert(sizeof(zhulong_person_attribute) == 40, "zhulong_person_attribute must be 40 bytes");
 static_assert(sizeof(zhulong_person_attribute) % 8 == 0, "zhulong_person_attribute must be 8-byte aligned");
 static_assert(sizeof(zhulong_person_item) == 56, "zhulong_person_item must be 56 bytes");
@@ -1190,6 +1209,9 @@ struct PluginApi {
             auto worker = std::make_unique<WorkerContext>();
             worker->model_group = model_group;
             worker->session = model_group->plugin->create_session(worker_id);
+            if (!worker->session.valid()) {
+                return ZHULONG_PLUGIN_ERR_INTERNAL;
+            }
             *out_worker = reinterpret_cast<zhulong_worker_ctx_h>(worker.release());
             return ZHULONG_PLUGIN_OK;
         } catch (...) {

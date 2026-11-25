@@ -193,20 +193,61 @@ func (s *Supervisor) SetTaskConfig(provider TaskConfigProvider, broadcaster *Tas
 // that fails is logged and ignored — the package then falls back to its compiled
 // defaults, which is exactly the pre-existing behaviour.
 func (s *Supervisor) pushTaskConfigs(algoID string) {
+	s.pushTaskConfigsContext(context.Background(), algoID)
+}
+
+// pushTaskConfigsContext is the cancellable counterpart of pushTaskConfigs used on
+// respawn paths so a concurrent StopAlgorithm/StopAll aborts an in-flight lookup
+// instead of stalling shutdown for taskConfigPushTimeout.
+func (s *Supervisor) pushTaskConfigsContext(parent context.Context, algoID string) {
 	s.mu.RLock()
 	provider := s.taskConfigProvider
 	broadcaster := s.taskConfigCast
+	stopCh := s.stopCh
 	s.mu.RUnlock()
 	if provider == nil || broadcaster == nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), taskConfigPushTimeout)
+	if parent == nil {
+		parent = context.Background()
+	}
+	if parent.Err() != nil || isChanClosed(stopCh) {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(parent, taskConfigPushTimeout)
 	defer cancel()
+
+	// Cancel promptly if the supervisor is shutting down; stopCh may be nil in
+	// hand-constructed test supervisors, in which case only parent/timeout cancel ctx.
+	var stopDone chan struct{}
+	if stopCh != nil {
+		stopDone = make(chan struct{})
+		go func() {
+			defer close(stopDone)
+			select {
+			case <-stopCh:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		defer func() {
+			cancel()
+			<-stopDone
+		}()
+	}
+
+	aborted := func() bool {
+		return parent.Err() != nil || isChanClosed(stopCh)
+	}
 
 	if regions, ok := provider.(TaskRegionProvider); ok {
 		snapshots, err := regions.TaskRegionsFor(ctx, algoID)
 		if err != nil {
+			if aborted() {
+				return
+			}
 			// Resolve and push failures are logged apart: one names the lookup,
 			// the other the broadcast, and an operator acting on the message must
 			// not have to guess which side failed.
@@ -215,14 +256,23 @@ func (s *Supervisor) pushTaskConfigs(algoID string) {
 				zap.Error(err),
 			)
 		} else if err := broadcaster.BroadcastRegions(ctx, algoID, snapshots); err != nil {
+			if aborted() {
+				return
+			}
 			s.logger.Warn("failed to push task regions",
 				zap.String("id", algoID),
 				zap.Error(err),
 			)
 		}
 	}
+	if aborted() {
+		return
+	}
 	configs, err := provider.TaskConfigsFor(ctx, algoID)
 	if err != nil {
+		if aborted() {
+			return
+		}
 		s.logger.Warn("failed to resolve task configs for package",
 			zap.String("id", algoID),
 			zap.Error(err),
@@ -230,6 +280,9 @@ func (s *Supervisor) pushTaskConfigs(algoID string) {
 		return
 	}
 	if err := broadcaster.BroadcastAlgorithm(ctx, algoID, configs); err != nil {
+		if aborted() {
+			return
+		}
 		s.logger.Warn("failed to push task configs to brokers",
 			zap.String("id", algoID),
 			zap.Int("streams", len(configs)),
@@ -242,6 +295,18 @@ func (s *Supervisor) pushTaskConfigs(algoID string) {
 			zap.String("id", algoID),
 			zap.Int("streams", len(configs)),
 		)
+	}
+}
+
+func isChanClosed(ch <-chan struct{}) bool {
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
 }
 

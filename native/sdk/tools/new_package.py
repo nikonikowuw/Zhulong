@@ -243,9 +243,8 @@ zhulong_status_t {class_name}::init(const std::string& config_json) {{
 }}
 
 zhulong::Session {class_name}::create_session(uint32_t worker_id) {{
-    (void)worker_id;
-    // 骨架没有模型，返回空会话（宿主只检查非空句柄，见 plugin.h 约定）
-    return zhulong::Session{{}};
+    // 骨架没有模型，返回不绑定推理后端的轻量会话；换成真模型后改为 `return model_.create_session(worker_id);`
+    return zhulong::Session::detached(worker_id);
 }}
 
 std::vector<zhulong::Detection> {class_name}::detect(zhulong::Session& session, const zhulong::Image& image,

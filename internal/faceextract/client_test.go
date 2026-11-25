@@ -2,6 +2,7 @@ package faceextract_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,9 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/faceextract"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // All tests drive a *stub provider executable*, never a real algorithm package:
@@ -748,6 +752,223 @@ func TestCloseIsIdempotentAndStopsExtraction(t *testing.T) {
 	}
 	if got := countSpawns(t, spawns); got != 1 {
 		t.Fatalf("spawns = %d, want 1 (a closed client must not spawn)", got)
+	}
+}
+
+// envProbeProvider writes selected environment variables (and spawn count) to files
+// on every extraction so tests can verify package .env overrides end-to-end.
+func envProbeProvider(envOutPath, spawnsPath string, keys []string) string {
+	quotedKeys := make([]string, len(keys))
+	for i, k := range keys {
+		quotedKeys[i] = strconv.Quote(k)
+	}
+	return fmt.Sprintf(`#!/usr/bin/env python3
+import json, os, struct, sys
+
+with open(%s, "a") as sf:
+    sf.write("x")
+    sf.flush()
+
+keys = [%s]
+while True:
+    header = sys.stdin.buffer.read(28)
+    if len(header) < 28:
+        break
+    magic, request_id, width, height, stride, fmt_code, payload_len = struct.unpack("<7I", header)
+    payload = sys.stdin.buffer.read(payload_len)
+    if len(payload) != payload_len:
+        break
+    observed = {k: os.environ.get(k, "") for k in keys}
+    with open(%s, "w") as ef:
+        json.dump(observed, ef)
+    reply = {"request_id": request_id, "status": "passed", "feature_dim": 2, "features": [0.1, 0.2]}
+    sys.stdout.write(json.dumps(reply) + "\n")
+    sys.stdout.flush()
+`, strconv.Quote(spawnsPath), strings.Join(quotedKeys, ", "), strconv.Quote(envOutPath))
+}
+
+func readObservedEnv(t *testing.T, path string) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read env probe %s: %v", path, err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal env probe: %v", err)
+	}
+	return got
+}
+
+// TestExtractLoadsPackageDotEnv verifies that faceextract.Client loads the
+// package directory's .env file with the same precedence and failure-handling
+// semantics as algorunner.RunnerProcess.
+func TestExtractLoadsPackageDotEnv(t *testing.T) {
+	keys := []string{
+		"ZHULONG_ENABLE_ENROLL_FLIP_TTA",
+		"ZHULONG_MIN_FACE_QUALITY",
+		"ZHULONG_CUSTOM_QUOTED",
+	}
+
+	tests := []struct {
+		name           string
+		hostEnv        map[string]string
+		dotEnvContent  *string
+		wantEnv        map[string]string
+		wantWarnReason string
+	}{
+		{
+			name: "package dotenv values reach extractor child",
+			dotEnvContent: func() *string {
+				s := "# enrollment overrides\nZHULONG_ENABLE_ENROLL_FLIP_TTA=0\nZHULONG_MIN_FACE_QUALITY=0.15\nZHULONG_CUSTOM_QUOTED=\"hello world\"\n"
+				return &s
+			}(),
+			wantEnv: map[string]string{
+				"ZHULONG_ENABLE_ENROLL_FLIP_TTA": "0",
+				"ZHULONG_MIN_FACE_QUALITY":       "0.15",
+				"ZHULONG_CUSTOM_QUOTED":          "hello world",
+			},
+		},
+		{
+			name: "package dotenv overrides host env",
+			hostEnv: map[string]string{
+				"ZHULONG_MIN_FACE_QUALITY":       "0.28",
+				"ZHULONG_ENABLE_ENROLL_FLIP_TTA": "1",
+			},
+			dotEnvContent: func() *string {
+				s := "ZHULONG_MIN_FACE_QUALITY=0.12\n"
+				return &s
+			}(),
+			wantEnv: map[string]string{
+				"ZHULONG_ENABLE_ENROLL_FLIP_TTA": "1",
+				"ZHULONG_MIN_FACE_QUALITY":       "0.12",
+				"ZHULONG_CUSTOM_QUOTED":          "",
+			},
+		},
+		{
+			name: "missing dotenv inherits host env cleanly",
+			hostEnv: map[string]string{
+				"ZHULONG_MIN_FACE_QUALITY": "0.33",
+			},
+			wantEnv: map[string]string{
+				"ZHULONG_ENABLE_ENROLL_FLIP_TTA": "",
+				"ZHULONG_MIN_FACE_QUALITY":       "0.33",
+				"ZHULONG_CUSTOM_QUOTED":          "",
+			},
+		},
+		{
+			name: "oversized dotenv logs redacted warning and preserves parsed entries",
+			dotEnvContent: func() *string {
+				s := "ZHULONG_ENABLE_ENROLL_FLIP_TTA=0\nZHULONG_OVERSIZED=" + strings.Repeat("x", 70000) + "\n"
+				return &s
+			}(),
+			wantEnv: map[string]string{
+				"ZHULONG_ENABLE_ENROLL_FLIP_TTA": "0",
+				"ZHULONG_MIN_FACE_QUALITY":       "",
+				"ZHULONG_CUSTOM_QUOTED":          "",
+			},
+			wantWarnReason: "parse_error",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range keys {
+				t.Setenv(k, tc.hostEnv[k])
+			}
+
+			probeDir := t.TempDir()
+			envOut := filepath.Join(probeDir, "env.json")
+			spawns := filepath.Join(probeDir, "spawns")
+			entry := stubEntry(t, envProbeProvider(envOut, spawns, keys))
+			if tc.dotEnvContent != nil {
+				envPath := filepath.Join(filepath.Dir(entry), ".env")
+				if err := os.WriteFile(envPath, []byte(*tc.dotEnvContent), 0o644); err != nil {
+					t.Fatalf("write .env: %v", err)
+				}
+			}
+
+			core, observed := observer.New(zapcore.WarnLevel)
+			client := newClient(t, faceextract.Options{
+				Entry:  staticEntry(entry),
+				Logger: zap.New(core),
+			})
+
+			if _, err := client.Extract(context.Background(), validFrame()); err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+
+			got := readObservedEnv(t, envOut)
+			for k, want := range tc.wantEnv {
+				if got[k] != want {
+					t.Errorf("child env %s = %q, want %q", k, got[k], want)
+				}
+			}
+
+			if tc.wantWarnReason != "" {
+				var matched bool
+				for _, entry := range observed.All() {
+					fields := entry.ContextMap()
+					if fields["reason"] == tc.wantWarnReason {
+						matched = true
+						if _, hasPath := fields["path"]; hasPath {
+							t.Error("dotenv warning must not expose the package path")
+						}
+					}
+				}
+				if !matched {
+					t.Fatalf("expected warning with reason %q, observed: %+v", tc.wantWarnReason, observed.All())
+				}
+			}
+		})
+	}
+}
+
+// TestExtractRetiresProcessWhenDotEnvChanges ensures editing or adding a package
+// .env file retires the hot child so new overrides take effect immediately instead
+// of waiting out the idle timeout.
+func TestExtractRetiresProcessWhenDotEnvChanges(t *testing.T) {
+	keys := []string{"ZHULONG_MIN_FACE_QUALITY"}
+	t.Setenv("ZHULONG_MIN_FACE_QUALITY", "")
+
+	probeDir := t.TempDir()
+	envOut := filepath.Join(probeDir, "env.json")
+	spawns := filepath.Join(probeDir, "spawns")
+	entry := stubEntry(t, envProbeProvider(envOut, spawns, keys))
+	envPath := filepath.Join(filepath.Dir(entry), ".env")
+
+	writeEnv := func(val string, offset time.Duration) {
+		if err := os.WriteFile(envPath, []byte("ZHULONG_MIN_FACE_QUALITY="+val+"\n"), 0o644); err != nil {
+			t.Fatalf("write .env: %v", err)
+		}
+		ts := time.Now().Add(offset)
+		if err := os.Chtimes(envPath, ts, ts); err != nil {
+			t.Fatalf("chtimes .env: %v", err)
+		}
+	}
+
+	writeEnv("0.20", time.Millisecond)
+	client := newClient(t, faceextract.Options{Entry: staticEntry(entry)})
+
+	if _, err := client.Extract(context.Background(), validFrame()); err != nil {
+		t.Fatalf("first Extract: %v", err)
+	}
+	if got := readObservedEnv(t, envOut)["ZHULONG_MIN_FACE_QUALITY"]; got != "0.20" {
+		t.Fatalf("first child env = %q, want 0.20", got)
+	}
+	if got := countSpawns(t, spawns); got != 1 {
+		t.Fatalf("spawns after first extract = %d, want 1", got)
+	}
+
+	writeEnv("0.35", 10*time.Millisecond)
+	if _, err := client.Extract(context.Background(), validFrame()); err != nil {
+		t.Fatalf("second Extract after .env update: %v", err)
+	}
+	if got := readObservedEnv(t, envOut)["ZHULONG_MIN_FACE_QUALITY"]; got != "0.35" {
+		t.Fatalf("second child env = %q, want 0.35", got)
+	}
+	if got := countSpawns(t, spawns); got != 2 {
+		t.Fatalf("spawns after .env update = %d, want 2", got)
 	}
 }
 
