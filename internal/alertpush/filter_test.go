@@ -100,3 +100,27 @@ func TestDestinationFilterMatches(t *testing.T) {
 		})
 	}
 }
+
+func TestDestinationFilterNormalize(t *testing.T) {
+	f := &destinationFilter{
+		EventTypes:   []string{"face_recognition", " face ", "plate_recognition", "unknown_legacy"},
+		AlgorithmIDs: []string{" algo_1 ", "algo_1", ""},
+		CameraIDs:    []string{"cam_1", " cam_1 "},
+	}
+	mapped, unknown := f.normalize()
+	if !mapped {
+		t.Fatal("expected mapped=true for legacy event type names")
+	}
+	if len(unknown) != 1 || unknown[0] != "unknown_legacy" {
+		t.Fatalf("unknown = %v, want [unknown_legacy]", unknown)
+	}
+	if !f.Matches(EventTypeFace, "algo_1", "cam_1") {
+		t.Fatal("normalized filter should match face")
+	}
+	if !f.Matches(EventTypeVehicle, "algo_1", "cam_1") {
+		t.Fatal("normalized filter should match vehicle")
+	}
+	if f.Matches(EventTypeAlarm, "algo_1", "cam_1") {
+		t.Fatal("normalized filter should not match alarm")
+	}
+}

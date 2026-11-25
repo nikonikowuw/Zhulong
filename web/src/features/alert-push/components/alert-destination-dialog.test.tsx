@@ -1,7 +1,10 @@
+import { AxiosError, AxiosHeaders } from 'axios'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import { useAlgorithms } from '@/features/algorithms/contract'
+import { useAllCameras } from '@/features/cameras/contract'
 import { alertPushApi } from '../api/alert-push-api'
 import type { AlertDestination } from '../types'
 import { AlertDestinationDialog } from './alert-destination-dialog'
@@ -15,26 +18,55 @@ vi.mock('../api/alert-push-api', () => ({
   },
 }))
 
-vi.mock('@/features/algorithms/api/algorithms-api', () => ({
-  algorithmsApi: {
-    getAlgorithms: vi.fn().mockResolvedValue([
-      { id: 'algo-1', name: 'Intrusion Detection' },
-      { id: 'algo-2', name: 'Fire & Smoke' },
-    ]),
-  },
+vi.mock('@/features/algorithms/contract', () => ({
+  useAlgorithms: vi.fn(),
 }))
 
-vi.mock('@/features/cameras/api/cameras-api', () => ({
-  camerasApi: {
-    getAll: vi.fn().mockResolvedValue({
+vi.mock('@/features/cameras/contract', () => ({
+  useAllCameras: vi.fn(),
+}))
+
+function resetFilterOptionMocks() {
+  vi.mocked(useAlgorithms).mockReturnValue({
+    data: [
+      { id: 'algo-1', name: 'Intrusion Detection' },
+      { id: 'algo-2', name: 'Fire & Smoke' },
+    ],
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  } as unknown as ReturnType<typeof useAlgorithms>)
+
+  vi.mocked(useAllCameras).mockReturnValue({
+    data: {
       items: [
         { id: 'cam-1', name: 'Gate Camera' },
         { id: 'cam-2', name: 'Lobby Camera' },
       ],
       total: 2,
-    }),
-  },
-}))
+    },
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  } as unknown as ReturnType<typeof useAllCameras>)
+}
+
+function makeAxiosError(status: number, data: unknown) {
+  const headers = new AxiosHeaders()
+  return new AxiosError(
+    'Request failed',
+    'ERR_BAD_REQUEST',
+    { headers },
+    undefined,
+    {
+      status,
+      statusText: 'Error',
+      headers,
+      config: { headers },
+      data,
+    }
+  )
+}
 
 const mockDestination: AlertDestination = {
   id: 'dest-100',
@@ -57,6 +89,7 @@ const mockDestination: AlertDestination = {
     cameraIds: ['cam-1'],
   },
   secretSet: true,
+  signingSecretSet: false,
   headerNames: ['X-Custom-Token'],
   status: {
     consecutiveFailures: 0,
@@ -64,6 +97,8 @@ const mockDestination: AlertDestination = {
     dropped: 0,
     queueLength: 2,
     queueCapacity: 16,
+    lastAttemptAt: '2026-11-24T10:00:00Z',
+    lastSuccessAt: '2026-11-24T10:00:00Z',
     state: 'idle',
   },
 }
@@ -102,9 +137,10 @@ async function settledSheet(sheet: HTMLElement) {
 describe('AlertDestinationDialog & Table Capabilities', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetFilterOptionMocks()
   })
 
-  it('renders create dialog with connection, event push, and device liveness sections', async () => {
+  it('renders create dialog with connection, event push, and device liveness sections without eager filter queries', async () => {
     const queryClient = new QueryClient()
     const { getByRole, getByPlaceholder, getByText } = await render(
       <QueryClientProvider client={queryClient}>
@@ -119,6 +155,10 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
     await expect
       .element(getByRole('heading', { name: /新建推送目标/i }))
       .toBeInTheDocument()
+
+    // Filters section is collapsed initially -> do not fetch algorithms/cameras eagerly
+    expect(useAlgorithms).not.toHaveBeenCalled()
+    expect(useAllCameras).not.toHaveBeenCalled()
 
     await expect
       .element(getByText('HTTP Webhook', { exact: true }))
@@ -228,23 +268,31 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
     await expect.element(getByText(/独立存活接收 URL/)).toBeInTheDocument()
   })
 
-  it('seamlessly switches protocol fields and MQTT LWT options when MQTT card is selected', async () => {
+  it('switches protocol fields, updates drawer header icon, and keeps new MQTT broker empty by default', async () => {
     const queryClient = new QueryClient()
-    const { getByRole, getByText, getByPlaceholder } = await render(
-      <QueryClientProvider client={queryClient}>
-        <AlertDestinationDialog
-          open={true}
-          onOpenChange={vi.fn()}
-          onSuccess={vi.fn()}
-        />
-      </QueryClientProvider>
-    )
+    const { getByRole, getByText, getByPlaceholder, getByTestId } =
+      await render(
+        <QueryClientProvider client={queryClient}>
+          <AlertDestinationDialog
+            open={true}
+            onOpenChange={vi.fn()}
+            onSuccess={vi.fn()}
+          />
+        </QueryClientProvider>
+      )
+
+    await expect
+      .element(getByTestId('alert-destination-header-icon'))
+      .toHaveAttribute('data-channel-type', 'webhook')
 
     await userEvent.click(getByText('MQTT 消息总线', { exact: true }))
 
     await expect
-      .element(getByPlaceholder(/tcp:\/\/192.168.1.100:1883/i))
-      .toBeInTheDocument()
+      .element(getByTestId('alert-destination-header-icon'))
+      .toHaveAttribute('data-channel-type', 'mqtt')
+
+    const brokerInput = getByPlaceholder(/tcp:\/\/192.168.1.100:1883/i)
+    await expect.element(brokerInput).toHaveValue('')
     await expect
       .element(getByPlaceholder(/zhulong\/alarms/i))
       .toBeInTheDocument()
@@ -283,9 +331,9 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
     await expect.element(getByText(/内联图片上限/)).not.toBeInTheDocument()
   })
 
-  it('executes connection probe test directly in the footer without context switching', async () => {
+  it('validates form before running inline connection probe test and succeeds when valid', async () => {
     const queryClient = new QueryClient()
-    const { getByRole, getByText } = await render(
+    const { getByRole, getByPlaceholder, getByText } = await render(
       <QueryClientProvider client={queryClient}>
         <AlertDestinationDialog
           open={true}
@@ -298,11 +346,243 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
     const testBtn = getByRole('button', { name: /测试连通性/i })
     await userEvent.click(testBtn)
 
+    // Empty name & url must block test request and show field validation errors
+    await expect.element(getByText('请输入通道名称')).toBeInTheDocument()
+    await expect.element(getByText('请输入 Webhook URL')).toBeInTheDocument()
+    expect(alertPushApi.test).not.toHaveBeenCalled()
+
+    await userEvent.type(
+      getByRole('textbox', { name: /通道名称/i }),
+      'Probe Webhook'
+    )
+    await userEvent.type(
+      getByPlaceholder(/https:\/\/api.example.com\/alerts\/webhook/i),
+      'https://api.example.com/hook'
+    )
+    await userEvent.click(testBtn)
+
     await vi.waitFor(() => {
       expect(alertPushApi.test).toHaveBeenCalledTimes(1)
     })
-
     await expect.element(getByText(/探测成功 \(24ms\)/i)).toBeInTheDocument()
+  })
+
+  it('binds 422 VALIDATION_FAILED field details and shows specific reason on inline test failure', async () => {
+    vi.mocked(alertPushApi.test).mockRejectedValueOnce(
+      makeAxiosError(422, {
+        code: 'VALIDATION_FAILED',
+        message: '请求参数校验失败',
+        details: [
+          {
+            field: 'config.url',
+            code: 'ALERT_URL_BLOCKED',
+            message: '目标地址命中 SSRF 防护策略被拦截',
+          },
+        ],
+      })
+    )
+
+    const queryClient = new QueryClient()
+    const { getByRole, getByPlaceholder, getByText } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await userEvent.type(
+      getByRole('textbox', { name: /通道名称/i }),
+      'Loopback Webhook'
+    )
+    await userEvent.type(
+      getByPlaceholder(/https:\/\/api.example.com\/alerts\/webhook/i),
+      'http://127.0.0.1:8000/hook'
+    )
+    await userEvent.click(getByRole('button', { name: /测试连通性/i }))
+
+    // Specific field error is rendered on the url input AND surfaced in the test failure pill
+    await expect
+      .element(getByText('目标地址命中 SSRF 防护策略被拦截', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(
+        getByText('探测失败: 目标地址命中 SSRF 防护策略被拦截', { exact: true })
+      )
+      .toBeInTheDocument()
+  })
+
+  it('omits hidden heartbeat fields when heartbeatEnabled is turned off before saving', async () => {
+    const crossOriginHbDest: AlertDestination = {
+      ...mockDestination,
+      id: 'dest-hb-off',
+      headerNames: [],
+      config: {
+        url: 'https://api.example.com/alerts/webhook',
+        heartbeatUrl: 'https://other.example.org/heartbeat',
+        authType: 'none',
+        timeoutSeconds: 5,
+        heartbeatIntervalSeconds: 45,
+      },
+    }
+
+    const queryClient = new QueryClient()
+    const { getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={crossOriginHbDest}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    // Turn off Device Liveness Reporting
+    await userEvent.click(getByRole('switch', { name: '设备存活上报' }))
+    await userEvent.click(getByRole('button', { name: /保存目标/i }))
+
+    await vi.waitFor(() => {
+      expect(alertPushApi.update).toHaveBeenCalledTimes(1)
+    })
+    const [, submittedPayload] = vi.mocked(alertPushApi.update).mock.calls[0]
+    expect(submittedPayload.heartbeatEnabled).toBe(false)
+    expect(submittedPayload.config).not.toHaveProperty('heartbeatUrl')
+    expect(submittedPayload.config).not.toHaveProperty(
+      'heartbeatIntervalSeconds'
+    )
+  })
+
+  it('updates retained secret placeholder when switching Webhook authType in edit mode', async () => {
+    const bearerDest: AlertDestination = {
+      ...mockDestination,
+      id: 'dest-bearer-edit',
+      headerNames: [],
+      secretSet: true,
+      config: {
+        url: 'https://api.example.com/alerts/webhook',
+        authType: 'bearer',
+        timeoutSeconds: 5,
+        heartbeatIntervalSeconds: 60,
+      },
+    }
+
+    const queryClient = new QueryClient()
+    const { getByRole, getByPlaceholder } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={bearerDest}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    // Original bearer auth shows retained secret placeholder
+    await expect
+      .element(getByPlaceholder('凭据已保存，留空表示保持不变'))
+      .toBeInTheDocument()
+
+    // Switch authType to Basic -> placeholders must NOT claim secret is retained
+    const authTrigger = getByRole('combobox', { name: /鉴权方式/i })
+    await userEvent.click(authTrigger)
+    await userEvent.click(getByRole('option', { name: 'HTTP Basic Auth' }))
+
+    await expect.element(getByPlaceholder('用户名')).toBeInTheDocument()
+    await expect.element(getByPlaceholder('密码')).toBeInTheDocument()
+  })
+
+  it('supports explicitly clearing saved MQTT password and Webhook signingSecret', async () => {
+    const mqttWithPassword: AlertDestination = {
+      id: 'dest-mqtt-pass',
+      name: 'Auth MQTT',
+      channelType: 'mqtt',
+      enabled: true,
+      eventsEnabled: true,
+      heartbeatEnabled: false,
+      imageMode: 'base64',
+      config: {
+        broker: 'tcp://10.0.0.10:1883',
+        topic: 'zhulong/alarms',
+        username: 'edge',
+        qos: 0,
+        keepAliveSeconds: 30,
+        inlineMaxKb: 500,
+      },
+      filter: { eventTypes: [], algorithmIds: [], cameraIds: [] },
+      secretSet: true,
+      signingSecretSet: false,
+      status: {
+        consecutiveFailures: 0,
+        totalDispatched: 0,
+        dropped: 0,
+        queueLength: 0,
+        queueCapacity: 16,
+        state: 'idle',
+      },
+    }
+
+    const queryClient = new QueryClient()
+    const { getByRole, unmount } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={mqttWithPassword}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await userEvent.click(getByRole('checkbox', { name: '清除已保存密码' }))
+    await userEvent.click(getByRole('button', { name: /保存目标/i }))
+
+    await vi.waitFor(() => {
+      expect(alertPushApi.update).toHaveBeenCalledTimes(1)
+    })
+    expect(alertPushApi.update).toHaveBeenLastCalledWith(
+      'dest-mqtt-pass',
+      expect.objectContaining({
+        secret: expect.objectContaining({ password: '' }),
+      })
+    )
+    await unmount()
+
+    // Now test Webhook signingSecret clear
+    const webhookWithSigning: AlertDestination = {
+      ...mockDestination,
+      id: 'dest-wh-sign',
+      headerNames: [],
+      signingSecretSet: true,
+    }
+    const { getByRole: getByRoleWh } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={webhookWithSigning}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await userEvent.click(
+      getByRoleWh('checkbox', { name: '清除已保存签名密钥' })
+    )
+    await userEvent.click(getByRoleWh('button', { name: /保存目标/i }))
+
+    await vi.waitFor(() => {
+      expect(alertPushApi.update).toHaveBeenCalledTimes(2)
+    })
+    expect(alertPushApi.update).toHaveBeenLastCalledWith(
+      'dest-wh-sign',
+      expect.objectContaining({
+        secret: expect.objectContaining({ signingSecret: '' }),
+      })
+    )
   })
 
   it('populates fields and locks protocol type in edit mode', async () => {
@@ -382,6 +662,115 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
     expect(onOpenChange).toHaveBeenLastCalledWith(false)
   })
 
+  it('clears retained placeholder immediately when renaming an existing custom header key', async () => {
+    const queryClient = new QueryClient()
+    const { getByPlaceholder } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={mockDestination}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    const keyInput = getByPlaceholder('X-Custom-Header')
+    await expect.element(keyInput).toHaveValue('X-Custom-Token')
+    await expect
+      .element(getByPlaceholder('凭据已保存，留空表示保持不变'))
+      .toBeInTheDocument()
+
+    await userEvent.clear(keyInput)
+    await userEvent.type(keyInput, 'X-Renamed-Header')
+
+    await expect.element(getByPlaceholder('Header 对应值')).toBeInTheDocument()
+  })
+
+  it('maps 409 conflict banner and 422 VALIDATION_FAILED field details including collapsed advanced fields', async () => {
+    vi.mocked(alertPushApi.create)
+      .mockRejectedValueOnce(
+        makeAxiosError(409, {
+          code: 'ALERT_DESTINATION_NAME_CONFLICT',
+          message: '告警推送目标名称或 ClientID 已存在',
+        })
+      )
+      .mockRejectedValueOnce(
+        makeAxiosError(422, {
+          code: 'VALIDATION_FAILED',
+          message: 'Validation failed',
+          details: [
+            {
+              field: 'secret.signingSecret',
+              code: 'INVALID',
+              message: '签名密钥长度不足',
+            },
+          ],
+        })
+      )
+
+    const queryClient = new QueryClient()
+    const { getByRole, getByPlaceholder, getByText } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await userEvent.type(
+      getByRole('textbox', { name: /通道名称/i }),
+      'Conflict Webhook'
+    )
+    await userEvent.type(
+      getByPlaceholder(/https:\/\/api.example.com\/alerts\/webhook/i),
+      'https://api.example.com/hook'
+    )
+
+    // 1. 409 conflict banner
+    await userEvent.click(getByRole('button', { name: /保存目标/i }))
+    await expect
+      .element(getByText('告警推送目标名称或 ClientID 已存在'))
+      .toBeInTheDocument()
+
+    // 2. 422 field detail inside collapsed Webhook advanced section auto-expands and displays message
+    await userEvent.click(getByRole('button', { name: /保存目标/i }))
+    await expect.element(getByText('签名密钥长度不足')).toBeInTheDocument()
+  })
+
+  it('displays orphan filter IDs and allows removing them via keyboard-accessible buttons', async () => {
+    const destWithOrphan: AlertDestination = {
+      ...mockDestination,
+      id: 'dest-orphan',
+      filter: {
+        eventTypes: [],
+        algorithmIds: ['algo-1', 'algo-removed-99'],
+        cameraIds: [],
+      },
+    }
+
+    const queryClient = new QueryClient()
+    const { getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={destWithOrphan}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    const orphanBtn = getByRole('button', {
+      name: 'algo-removed-99 (已移除)',
+    })
+    await expect.element(orphanBtn).toBeInTheDocument()
+    await userEvent.click(orphanBtn)
+    await expect.element(orphanBtn).not.toBeInTheDocument()
+  })
+
   it('keeps the drawer footer pinned when custom headers grow', async () => {
     const queryClient = new QueryClient()
     const { getByRole } = await render(
@@ -448,7 +837,7 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
       .toBeInTheDocument()
   })
 
-  it('renders capability badges and em-dash queue cell for heartbeat-only rows in table', async () => {
+  it('renders capability badges, dispatched count, and em-dash queue cell for heartbeat-only rows in table', async () => {
     const heartbeatOnlyDest: AlertDestination = {
       ...mockDestination,
       id: 'dest-hb-only',
@@ -459,6 +848,11 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
         url: 'https://ops.example.com/heartbeat',
         authType: 'none',
         heartbeatIntervalSeconds: 30,
+      },
+      status: {
+        ...mockDestination.status,
+        totalDispatched: 0,
+        lastSuccessAt: undefined,
       },
     }
 
@@ -476,6 +870,8 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
     await expect.element(getByText('存活上报 · 45s')).toBeInTheDocument()
     await expect.element(getByText('存活上报 · 30s')).toBeInTheDocument()
     await expect.element(getByText('2 / 16')).toBeInTheDocument()
+    await expect.element(getByText('累计 10 条')).toBeInTheDocument()
+    await expect.element(getByText(/^成功 /)).toBeInTheDocument()
   })
 
   it('renders connecting status badge and dropped overflow indicator in table', async () => {

@@ -10,8 +10,13 @@
 - **设备身份与来源实时读取**：
   - `Dispatcher` 通过 `DeviceIDProvider` 与 `HeartbeatSnapshotProvider` 在每次发送/心跳时动态读取宿主身份与运行快照，**不在构造期缓存**，确保修改系统设备标识后无需重建目标即可生效；同时 `systeminfo.IdentityService` 在变更时经宿主注册的回调主动触发 `Dispatcher.RequestReload()`，立即刷新 MQTT LWT（心跳前仍保留 `hasStaleWillDeviceID` 兜底检查）。
   - 来源元数据通过消费侧接口 `SourceResolver`（由 `internal/app` 适配器注入，alertpush 不反向依赖 `camera` / `algorithm`）在发送时解析摄像头名称与算法信息（宿主适配器内置 15s 短 TTL 有界缓存以消除多目标 fan-out 重复查库，失败不缓存）；查找失败降级为省略名称字段，不得因元数据缺失丢弃事件。
-- **保留请求头、TLS 与跨源校验**：自定义 Webhook Header 禁止覆盖保留系统头（前后端统一：`accept`、`authorization`、`connection`、`content-length`、`content-type`、`host`、`transfer-encoding`、`user-agent` 及 `X-Zhulong-Event`、`X-Zhulong-Delivery`、`X-Zhulong-Schema`，`ErrReservedHeaderUsed`），系统路由头在自定义头之后写入；Webhook 与 MQTT 均支持按目标配置 `tlsSkipVerify`（用于内网自签名证书场景），且 Webhook `multipart` 单图读入受 `16 MiB` 硬上限保护（超限回退签名 URL）；若配置了认证凭据，心跳地址（`heartbeat_url`）必须与主推送 `url` 同源（`ErrCrossOriginHeartbeatURL`），防止凭据跨源泄露；HTTP 客户端拦截跨源重定向、超过 3 次重定向以及导致 POST 降级为 GET 的 301/302/303 重定向，且不重试。
-- **输入校验与草稿探测隔离**：Create/Update/Test 共享统一的字段校验规则（名称非空且 ≤64 字符、Webhook `authType` 白名单、`timeoutSeconds` 范围 `1..30`、鉴权凭据归一化与必填校验、MQTT Broker/Topic/QoS/KeepAlive/ClientID/InlineMaxKB 校验），越界或非法值一律返回 422 而非静默忽略；编辑态带未保存草稿覆写的 `/test` 仅返回探测结果，**不得**回写污染线上运行中目标的健康状态（仅无覆写的已保存目标快速探测才更新运行态）。
+- **保留请求头、SSRF 防护、TLS、出站签名与跨源校验**：
+  - 自定义 Webhook Header 禁止覆盖保留系统头（前后端统一：`accept`、`authorization`、`connection`、`content-length`、`content-type`、`host`、`transfer-encoding`、`user-agent` 及 `X-Zhulong-Event`、`X-Zhulong-Delivery`、`X-Zhulong-Schema`、`X-Zhulong-Timestamp`、`X-Zhulong-Signature`，`ErrReservedHeaderUsed`），系统路由头与签名头在自定义头之后写入。
+  - **SSRF 防护与协议白名单**：Webhook 与 MQTT 建连均在 Dial 前解析 DNS 并校验全部目标 IP（防 DNS Rebinding）：**保留 RFC1918 局域网私网**（`10/8`、`172.16/12`、`192.168/16`，适配边缘内网部署），**阻断回环地址**（`127.0.0.0/8`、`::1`、`localhost`）、**链路本地与云元数据地址**（`169.254.0.0/16`、`fe80::/10`）、未指定地址（`0.0.0.0/8`、`::`）及组播地址；MQTT Broker Scheme 白名单限定为 `tcp`/`ssl`/`tls`/`tcps`/`ws`/`wss`/`mqtt`/`mqtts`（大小写不敏感）。
+  - **Webhook 传输、重定向与出站 HMAC 签名**：Webhook 与 MQTT 均支持按目标配置 `tlsSkipVerify`（用于内网自签名证书场景）；Webhook `multipart` 单图读入受 `16 MiB` 硬上限、单事件总内存受 `24 MiB` 上限保护（超限图片回退签名 URL）；每次 Webhook 事件与心跳发送均附带 `X-Zhulong-Timestamp`（Unix 秒），配置了可选 `signingSecret` 时附加 `X-Zhulong-Signature: sha256=<hex>`（`HMAC-SHA256(signingSecret, timestamp + "." + rawBody)`，multipart 采用增量流式摘要计算，避免额外拷贝图片内存）；若配置了认证凭据，心跳地址（`heartbeat_url`）必须与主推送 `url` 同源（`ErrCrossOriginHeartbeatURL`）；HTTP 客户端拦截跨源携带凭据的重定向、**无论是否有凭据均禁止 `HTTPS → HTTP` 协议降级**、超过 3 次重定向以及导致 POST 降级为 GET 的 301/302/303 重定向，且不重试。
+- **输入校验、422 字段级契约与草稿探测凭据隔离**：
+  - Create/Update/Test 共享统一的字段校验规则（名称非空且 ≤64 字符、Webhook `authType` 白名单、`timeoutSeconds` 范围 `1..30`、鉴权凭据归一化与必填校验、MQTT Broker Scheme/Host/Topic/QoS/KeepAlive/ClientID UTF-8 字节长度/InlineMaxKB 校验），越界或非法值一律返回 HTTP 422（表单字段校验错误统一使用 `VALIDATION_FAILED` 并附带字段级 `details` 对齐前端 `fieldMap` 自动定位），绝不静默忽略。
+  - 编辑态带未保存草稿覆写的 `/test` 仅返回探测结果，**不得**回写污染线上运行中目标的健康状态（仅无覆写的已保存目标快速探测才更新运行态）；且当草稿覆写了目标地址（Webhook `url`/`heartbeatUrl` 与已保存目标不同源，或 MQTT `broker` 变更）时，**严禁**沿用数据库解密出的已保存凭据（Token/Basic/Header/SigningSecret/MQTT Password），必须清空或要求显式提交新凭据，防止通过 `/test` 换源外泄只写凭据。
 - **过滤器事件类型白名单**：`filter.event_types` 仅接受外部短名 `{alarm, face, vehicle}`（`ErrInvalidFilterEventType`），与 `record.EventType` 内部取值隔离并由 alertpush 映射（存量配置迁移见 `000040_alert_filter_event_type_v1`）。
 - **MQTT 局部更新、真实连接态与状态可观测性**：
   - `AlertDestinationConfigInfo` 的可选字段（`clientId`、`username`、`tlsSkipVerify`、`heartbeatTopic`、`heartbeatUrl` 等）使用指针区分「省略（保持原值）」与「显式清空/关闭」；局部更新不覆写自定义 `clientId`；安全连接按小写 scheme 识别 `ssl`/`tls`/`tcps`/`wss`/`mqtts` 并应用 TLS 配置；事件发布对瞬断/发布失败支持最多 3 次有界重试（建连超时与取消不重试），且 `ensureConnected` 透传 `ctx` 并以 `IsConnectionOpen()`（而非 `IsConnected()`）判断真实会话连通态，防止 Paho 重连期间 QoS 0 静默丢包与状态误绿；连通性探测禁用 `AutoReconnect`/`ConnectRetry` 以立即暴露真实建连/鉴权/TLS 错误。
@@ -47,13 +52,14 @@
 
 ## 4. 签名媒体访问（`/api/v1/media/signed/*path`）
 
-- **签名密钥隔离**：`URLSigner` 使用独立 32 字节密钥文件 `media_url.key`（权限 `0600`），构造函数保持纯内存创建（`NewEmptyURLSigner()`），密钥加载收敛在 `Start` 阶段。
+- **签名密钥隔离与安全校验**：`URLSigner` 使用独立 32 字节密钥文件 `media_url.key`（权限 `0600`），构造函数保持纯内存创建（`NewEmptyURLSigner()`），密钥加载收敛在 `Start` 阶段并校验常规文件（拒绝 symlink）与权限位（`perm & 0o077 == 0`）；密钥未就绪时签名端点返回 HTTP 503 而非 403。
 - **受控白名单路径**：`URLSigner.Sign` 与 `Verify` 仅放行 `snapshots/`（抓拍证据）及单层 `faces/<filename>`（人脸底库参考图），硬性拦截 `recordings/`、`exports/`、`maps/`、嵌套子目录或其他路径（`ErrPathNotAllowed`）。**严禁**将 `faces/` 并入 `mediafile` 白名单或经 `/api/v1/media/content/*` 暴露。
-- **无 Cookie 鉴权的公开端点限流**：`SignedMediaHandler` 挂载于 `public_routes`，必须叠加按 IP 限流中间件（默认 120 req/min，burst 8，可通过 `[alertpush].signed_media_rate_limit_per_min` / `signed_media_rate_limit_burst` 调优）；验签通过后，`snapshots/` 委托 `mediafile.Handler` 流式输出，`faces/<filename>` 经由 `filestore.Manager` 注入的隔离 `GalleryMedia` 适配器（同样走 `os.Root` 四层防护与 S3 预签名跳转）只读流式输出。
+- **无 Cookie 鉴权的公开端点独立限流与 S3 TTL 截断**：`SignedMediaHandler` 挂载于 `public_routes`，叠加按 IP 与按配置缩放的进程级限流中间件（默认单 IP 120 req/min、burst 8，可通过 `[alertpush].signed_media_rate_limit_per_min` / `signed_media_rate_limit_burst` 调优，`0` 表示使用默认），触发限流返回独立错误码 `MEDIA_URL_RATE_LIMITED`（不复用 `CLIENT_LOG_*`），并隔离无效签名请求防止单 IP 耗尽全局媒体 I/O 预算；验签通过后，`snapshots/` 委托 `mediafile.Handler`、`faces/<filename>` 经由隔离 `GalleryMedia` 适配器（`os.Root` 四层防护与 S3 预签名跳转）只读流式输出；**S3 `redirect` 预签名 TTL 必须按签名 URL 剩余有效期 `min(exp - now, defaultTTL)` 截断**，禁止续签延长原链接有效期。
 
 ---
 
-## 5. 生命周期依赖
+## 5. 生命周期依赖与停机窗口语义
 
-- `alertPush.Start` 为可降级启动，须在 `camera` 密钥与 `storage`/`mediafile` 就绪后启动；
-- 停机时 `alertPush.Stop` 必须先于 `record`、`snapshot` 与 `storage`（见 [dependency-injection.md](./dependency-injection.md)），防止推送 worker 在媒体根目录或记录库关闭后继续读取图片；`Dispatcher.Stop` 与 `reconcile` 并发停止退役 worker，且 `runEvents` 的在飞发送与排空共享 `retirementDrainTimeout`（3s）硬上界，防止慢重试击穿宿主 60s 停机预算。
+- `alertPush.Start` 为可降级启动，须在 `systemInfo`、`storage`/`fileStore` 与 `camera` 密钥就绪后、且在 `algorithm.Start` 拉起推理进程之前启动；即使 `Start` 返回错误（例如 `media_url.key` 异常导致降级上报），宿主仍须置位 `alertPushReady = true` 确保停机或启动失败回滚时执行 `alertPush.Stop` 释放已启动资源。
+- 停机时 `camera`（`StreamHub.Close` 等待所有在飞 `consumeAIResults` 协程退出）先停，随后 `alertPush.Stop` 必须先于 `record`、`snapshot`、`storage` 与 `fileStore`（见 [dependency-injection.md](./dependency-injection.md)），防止推送 worker 在媒体存储或记录库关闭后继续读取图片；`Dispatcher.Stop` 与 `reconcile` 并发停止退役 worker，且 `runEvents` 的在飞发送与排空共享 `retirementDrainTimeout`（3s）硬上界，防止慢重试击穿宿主 60s 停机预算。
+- **停机窗口丢弃权衡语义**：由于 `alertPush.Stop` 早于 `record.Stop` 与 `snapshot.Stop` 执行，停机瞬间已写入 SQLite 但仍在 `record.pendingAlarms` 中等待抓拍写盘的在飞事件，即使其抓拍任务随后在 `snapshot.Stop` 排空落盘，因推送调度器已先置非运行态且 `record.Service.Stop` 清空待关联队列，该极窄停机窗口内的未推事件按 best-effort 语义静默丢弃（记录与证据图仍完整保存在本地库与媒体存储中供事后追溯）。

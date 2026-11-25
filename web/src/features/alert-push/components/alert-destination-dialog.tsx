@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Globe, Radio } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -7,7 +8,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
-import type { AlertDestination } from '../types'
+import type { AlertDestination, ChannelType } from '../types'
 import { DestinationForm } from './form/destination-form'
 
 export interface AlertDestinationDialogProps {
@@ -25,17 +26,33 @@ export function AlertDestinationDialog({
 }: AlertDestinationDialogProps) {
   const { t } = useTranslation('alertPush')
   const isEdit = Boolean(destination)
+  const [draftChannelType, setDraftChannelType] =
+    useState<ChannelType>('webhook')
+
+  const headerChannelType: ChannelType =
+    destination?.channelType ?? draftChannelType
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      setDraftChannelType('webhook')
+    }
+    onOpenChange(nextOpen)
+  }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent
         side='right'
         className='flex h-full w-full flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl'
       >
         <SheetHeader className='shrink-0 border-b px-6 py-4 pe-14 text-start'>
           <div className='flex items-center gap-3'>
-            <div className='flex size-10 shrink-0 items-center justify-center rounded-xl border border-border/80 bg-muted/50 text-primary shadow-2xs'>
-              {destination?.channelType === 'mqtt' ? (
+            <div
+              data-testid='alert-destination-header-icon'
+              data-channel-type={headerChannelType}
+              className='flex size-10 shrink-0 items-center justify-center rounded-xl border border-border/80 bg-muted/50 text-primary shadow-2xs'
+            >
+              {headerChannelType === 'mqtt' ? (
                 <Radio className='size-5' />
               ) : (
                 <Globe className='size-5' />
@@ -55,10 +72,11 @@ export function AlertDestinationDialog({
         {open ? (
           <DestinationForm
             destination={destination}
-            onCancel={() => onOpenChange(false)}
+            onChannelTypeChange={setDraftChannelType}
+            onCancel={() => handleOpenChange(false)}
             onSuccess={() => {
               onSuccess()
-              onOpenChange(false)
+              handleOpenChange(false)
             }}
           />
         ) : null}

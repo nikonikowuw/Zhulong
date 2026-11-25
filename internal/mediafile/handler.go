@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -130,6 +131,12 @@ func (h *Handler) GetContent(c *gin.Context) {
 // delivery is enabled on a presignable remote backend) with Range and HEAD support.
 // It applies mediafile's four-layer path protection and deterministic content typing.
 func (h *Handler) ServeContent(c *gin.Context, relPath string) {
+	h.ServeContentWithMaxRedirectTTL(c, relPath, 0)
+}
+
+// ServeContentWithMaxRedirectTTL behaves like ServeContent while capping any
+// S3/MinIO redirect presign TTL to maxTTL when maxTTL > 0.
+func (h *Handler) ServeContentWithMaxRedirectTTL(c *gin.Context, relPath string, maxTTL time.Duration) {
 	// Every validation happens before writing headers or ServeContent. Once
 	// ServeContent starts, it owns status line and Content-Length.
 	//
@@ -137,7 +144,11 @@ func (h *Handler) ServeContent(c *gin.Context, relPath string) {
 	// S3 URL, which would fail signature validation if a client follows the redirect
 	// with HEAD.
 	if c.Request.Method != http.MethodHead {
-		redirectURL, shouldRedirect, err := h.service.ResolveRedirect(c.Request.Context(), relPath)
+		redirectURL, shouldRedirect, err := h.service.ResolveRedirectWithMaxTTL(
+			c.Request.Context(),
+			relPath,
+			maxTTL,
+		)
 		if err != nil {
 			writeMediaError(c, err)
 			return
@@ -207,6 +218,8 @@ func contentTypeForPath(name string) string {
 		return "image/jpeg"
 	case ".png":
 		return "image/png"
+	case ".webp":
+		return "image/webp"
 	default:
 		return "application/octet-stream"
 	}

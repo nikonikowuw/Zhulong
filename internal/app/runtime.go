@@ -490,9 +490,8 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	if r.alertPush != nil {
 		if err := r.alertPush.Start(ctx); err != nil {
 			r.degradedStart("alertpush", err)
-		} else {
-			r.alertPushReady = true
 		}
+		r.alertPushReady = true
 	}
 
 	// 算法管理必须在 native 引擎启动与 camera 初始化之后启动：

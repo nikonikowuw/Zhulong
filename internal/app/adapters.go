@@ -1274,7 +1274,7 @@ func (a *alertGalleryMediaAdapter) PresignMediaURL(
 			return "", false, nil
 		}
 	}
-	if ttl <= 0 {
+	if ttl <= 0 || ttl > a.defaultTTL {
 		ttl = a.defaultTTL
 	}
 	urlStr, err := presigner.PresignGet(ctx, cleanKey, ttl)

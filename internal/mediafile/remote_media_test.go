@@ -284,6 +284,28 @@ func TestHandler_S3ProxyRangeAndRedirectAndFallback(t *testing.T) {
 	if err != nil || handledFB {
 		t.Fatalf("expected handled=false for fallback key, got handled=%v err=%v", handledFB, err)
 	}
+
+	// ResolveRedirectWithMaxTTL / ServeContentWithMaxRedirectTTL caps S3 X-Amz-Expires to min(presignTTL, maxTTL).
+	shortURL, okShort, err := comp.Service.ResolveRedirectWithMaxTTL(ctx, "recordings/2026/remote.mp4", 30*time.Second)
+	if err != nil || !okShort || !strings.Contains(shortURL, "X-Amz-Expires=30") {
+		t.Fatalf("expected capped 30s presigned redirect, got url=%q ok=%v err=%v", shortURL, okShort, err)
+	}
+	// Larger maxTTL must not exceed configured s.presignTTL (5m = 300s).
+	cappedURL, okCap, err := comp.Service.ResolveRedirectWithMaxTTL(ctx, "recordings/2026/remote.mp4", 24*time.Hour)
+	if err != nil || !okCap || !strings.Contains(cappedURL, "X-Amz-Expires=300") {
+		t.Fatalf("expected default 300s ceiling, got url=%q ok=%v err=%v", cappedURL, okCap, err)
+	}
+
+	signedRouter := gin.New()
+	signedRouter.GET("/signed/*path", func(c *gin.Context) {
+		comp.Handler.ServeContentWithMaxRedirectTTL(c, strings.TrimPrefix(c.Param("path"), "/"), 25*time.Second)
+	})
+	capRec := httptest.NewRecorder()
+	signedRouter.ServeHTTP(capRec, httptest.NewRequest(http.MethodGet, "/signed/recordings/2026/remote.mp4", nil))
+	if capRec.Code != http.StatusFound || !strings.Contains(capRec.Header().Get("Location"), "X-Amz-Expires=25") {
+		t.Fatalf("ServeContentWithMaxRedirectTTL got %d loc=%q, want 302 with X-Amz-Expires=25",
+			capRec.Code, capRec.Header().Get("Location"))
+	}
 }
 
 func TestHandler_LocalManagerWithRedirectDeliveryFallsBackToProxy(t *testing.T) {

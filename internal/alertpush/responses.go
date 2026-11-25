@@ -12,6 +12,7 @@ type AlertDestinationResponse struct {
 	Config           AlertDestinationConfigInfo `json:"config"`
 	Filter           AlertDestinationFilterInfo `json:"filter"`
 	SecretSet        bool                       `json:"secretSet"`
+	SigningSecretSet bool                       `json:"signingSecretSet"`
 	HeaderNames      []string                   `json:"headerNames,omitempty"`
 	Status           AlertDestinationStatus     `json:"status"`
 }
@@ -23,17 +24,17 @@ type AlertDestinationListResponse struct {
 
 // AlertDestinationConfigInfo exposes non-sensitive configuration plus decrypted URLs for edit.
 //
-// Optional pointer fields distinguish "omitted (keep existing)" from explicit empty/false values
+// Pointer fields distinguish "omitted (keep existing)" from explicit empty/false values
 // during update and test requests.
 type AlertDestinationConfigInfo struct {
-	URL                      string  `json:"url,omitempty"`
+	URL                      *string `json:"url,omitempty"`
 	HeartbeatURL             *string `json:"heartbeatUrl,omitempty"`
-	AuthType                 string  `json:"authType,omitempty"`
+	AuthType                 *string `json:"authType,omitempty"`
 	TimeoutSeconds           *int    `json:"timeoutSeconds,omitempty"`
-	Broker                   string  `json:"broker,omitempty"`
+	Broker                   *string `json:"broker,omitempty"`
 	ClientID                 *string `json:"clientId,omitempty"`
 	Username                 *string `json:"username,omitempty"`
-	Topic                    string  `json:"topic,omitempty"`
+	Topic                    *string `json:"topic,omitempty"`
 	HeartbeatTopic           *string `json:"heartbeatTopic,omitempty"`
 	LWTEnabled               *bool   `json:"lwtEnabled,omitempty"`
 	QoS                      *uint8  `json:"qos,omitempty"`

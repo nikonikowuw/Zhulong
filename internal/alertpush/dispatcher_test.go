@@ -3,6 +3,8 @@ package alertpush
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -198,13 +200,14 @@ func TestDispatcherReconcilePreservesUnchangedWorker(t *testing.T) {
 	ctx := context.Background()
 
 	dest := &AlertDestination{
-		ID:          "dest_reconcile_test",
-		Name:        "Webhook 1",
-		ChannelType: ChannelTypeWebhook,
-		Enabled:     true,
-		ImageMode:   ImageModeURL,
-		ConfigJSON:  `{"auth_type":"none","timeout_seconds":5}`,
-		FilterJSON:  `{}`,
+		ID:            "dest_reconcile_test",
+		Name:          "Webhook 1",
+		ChannelType:   ChannelTypeWebhook,
+		Enabled:       true,
+		EventsEnabled: true,
+		ImageMode:     ImageModeURL,
+		ConfigJSON:    `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:    `{}`,
 	}
 	secBytes, err := store.EncryptSecret(dest.ID, &webhookSecret{URL: "http://127.0.0.1:9999/hook"})
 	if err != nil {
@@ -218,7 +221,7 @@ func TestDispatcherReconcilePreservesUnchangedWorker(t *testing.T) {
 	d := NewDispatcher(DispatcherOptions{
 		Store:  store,
 		Signer: NewEmptyURLSigner(),
-		Config: Config{PublicBaseURL: "http://127.0.0.1:8000"},
+		Config: Config{PublicBaseURL: "http://127.0.0.1:8000", AllowLoopback: true},
 		Logger: zap.NewNop(),
 	})
 	if err := d.Start(ctx); err != nil {
@@ -421,7 +424,8 @@ func TestDispatcherMQTTHotReloadNoSessionKickOrFalseOffline(t *testing.T) {
 	d := NewDispatcher(DispatcherOptions{
 		Store: store,
 		Config: Config{
-			DeviceID: identity,
+			DeviceID:      identity,
+			AllowLoopback: true,
 		},
 		Logger: zap.NewNop(),
 	})
@@ -634,13 +638,14 @@ func TestDispatcherMQTTConnectionCallbacksUpdateState(t *testing.T) {
 	defer cleanupBroker()
 
 	sender, err := NewMQTTSender(MQTTSenderOptions{
-		ID:        "mqtt-cb",
-		ImageMode: ImageModeBase64,
-		Broker:    brokerURL,
-		ClientID:  "zhulong-cb-test",
-		Topic:     "zhulong/events",
-		KeepAlive: 10 * time.Second,
-		Logger:    zap.NewNop(),
+		ID:            "mqtt-cb",
+		ImageMode:     ImageModeBase64,
+		Broker:        brokerURL,
+		ClientID:      "zhulong-cb-test",
+		Topic:         "zhulong/events",
+		KeepAlive:     10 * time.Second,
+		AllowLoopback: true,
+		Logger:        zap.NewNop(),
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -820,7 +825,7 @@ func TestDispatcherReconcilePreservesCumulativeStatusAndCapacity(t *testing.T) {
 	d := NewDispatcher(DispatcherOptions{
 		Store:  store,
 		Signer: NewEmptyURLSigner(),
-		Config: Config{PublicBaseURL: "http://127.0.0.1:8000"},
+		Config: Config{PublicBaseURL: "http://127.0.0.1:8000", AllowLoopback: true},
 		Logger: zap.NewNop(),
 	})
 	if err := d.Start(ctx); err != nil {
@@ -906,7 +911,7 @@ func TestDispatcherReconcileRecordsBuildSenderFailure(t *testing.T) {
 	d := NewDispatcher(DispatcherOptions{
 		Store:  store,
 		Signer: NewEmptyURLSigner(),
-		Config: Config{PublicBaseURL: ""},
+		Config: Config{PublicBaseURL: "", AllowLoopback: true},
 		Logger: zap.NewNop(),
 	})
 	if err := d.Start(ctx); err != nil {
@@ -924,5 +929,451 @@ func TestDispatcherReconcileRecordsBuildSenderFailure(t *testing.T) {
 	}
 	if st.ConsecutiveFailures < 1 || st.LastAttemptAt == nil || st.LastFailureAt == nil {
 		t.Fatalf("expected failure telemetry populated on build error, got %+v", st)
+	}
+}
+
+func TestDispatcherDeletePrunesStatsWithoutResurrection(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dest := &AlertDestination{
+		ID:               "dest_delete_prune",
+		Name:             "Delete Prune Target",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          true,
+		EventsEnabled:    true,
+		HeartbeatEnabled: false,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:       `{}`,
+	}
+	secBytes, err := store.EncryptSecret(dest.ID, &webhookSecret{URL: "http://127.0.0.1:9999/hook"})
+	if err != nil {
+		t.Fatalf("EncryptSecret: %v", err)
+	}
+	dest.SecretCiphertext = secBytes
+	if err := store.Create(ctx, dest); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+
+	d := NewDispatcher(DispatcherOptions{
+		Store:  store,
+		Signer: NewEmptyURLSigner(),
+		Config: Config{PublicBaseURL: "http://127.0.0.1:8000", AllowLoopback: true},
+		Logger: zap.NewNop(),
+	})
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		if stopErr := d.Stop(ctx); stopErr != nil {
+			t.Errorf("Stop: %v", stopErr)
+		}
+	}()
+
+	// Simulate Service.Delete ordering: delete DB row -> RemoveDestinationState -> reconcile.
+	if err := store.Delete(ctx, dest.ID); err != nil {
+		t.Fatalf("store.Delete: %v", err)
+	}
+	d.RemoveDestinationState(dest.ID)
+	d.reconcile()
+
+	d.statsMu.RLock()
+	_, hasStat := d.stats[dest.ID]
+	d.statsMu.RUnlock()
+	d.seqMu.Lock()
+	_, hasSeq := d.seqMap[dest.ID]
+	d.seqMu.Unlock()
+	if hasStat || hasSeq {
+		t.Fatalf("deleted destination state resurrected after reconcile: hasStat=%v hasSeq=%v", hasStat, hasSeq)
+	}
+}
+
+func TestDispatcherStaleWillKeepsHeartbeatAliveOnReconcileSkip(t *testing.T) {
+	brokerURL, cleanupBroker := startInProcessBroker(t)
+	defer cleanupBroker()
+
+	identity := &atomicIdentity{}
+	identity.val.Store("box-orig")
+
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:                "mqtt-stale-will",
+		ImageMode:         ImageModeURL,
+		SkipImageURLCheck: true,
+		Broker:            brokerURL,
+		ClientID:          "zhulong-stale-will",
+		Topic:             "zhulong/events/stale",
+		HeartbeatEnabled:  true,
+		HeartbeatTopic:    "zhulong/status/stale",
+		LWTEnabled:        true,
+		QoS:               0,
+		Identity:          identity,
+		AllowLoopback:     true,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+
+	var staleCalls atomic.Int32
+	w := newDestinationWorker(destinationWorkerOptions{
+		dest: &AlertDestination{
+			ID:               "mqtt-stale-will",
+			ChannelType:      ChannelTypeMQTT,
+			EventsEnabled:    false,
+			HeartbeatEnabled: true,
+		},
+		sender:            sender,
+		heartbeatInterval: 20 * time.Millisecond,
+		noJitter:          true,
+		onWillStale: func() {
+			if staleCalls.Add(1) == 1 {
+				// Simulate device_id reverting before reconcile runs (or reconcile skipping).
+				identity.val.Store("box-orig")
+			}
+		},
+		logger: zap.NewNop(),
+	})
+
+	// Flip device_id so first heartbeat tick observes stale will.
+	identity.val.Store("box-temp")
+	w.start()
+	defer w.stop()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for (staleCalls.Load() == 0 || w.getStatus().LastSuccessAt == nil) && time.Now().Before(deadline) {
+		time.Sleep(15 * time.Millisecond)
+	}
+	if staleCalls.Load() == 0 {
+		t.Fatal("expected onWillStale callback to be invoked")
+	}
+	if w.getStatus().LastSuccessAt == nil {
+		t.Fatal("runHeartbeats exited permanently after onWillStale instead of continuing")
+	}
+}
+
+func TestDispatcherCrossEventFailureBackoffAndImmediateRecovery(t *testing.T) {
+	var sendCalls atomic.Int32
+	var shouldFail atomic.Bool
+	shouldFail.Store(true)
+
+	sender := &callbackSender{
+		sendFn: func(_ context.Context, _ Delivery) error {
+			sendCalls.Add(1)
+			if shouldFail.Load() {
+				return errors.New("connection refused")
+			}
+			return nil
+		},
+	}
+
+	w := newDestinationWorker(destinationWorkerOptions{
+		dest: &AlertDestination{
+			ID:            "backoff-worker",
+			ChannelType:   ChannelTypeWebhook,
+			EventsEnabled: true,
+		},
+		sender:                  sender,
+		failureBackoffThreshold: 2,
+		failureBackoffBase:      120 * time.Millisecond,
+		failureBackoffMax:       500 * time.Millisecond,
+		logger:                  zap.NewNop(),
+	})
+	w.start()
+	defer w.stop()
+
+	// Enqueue 4 events while target is failing: first 2 run immediately, then 3rd waits >=120ms.
+	for i := range 4 {
+		w.enqueue(record.AlarmEvent{ID: fmt.Sprintf("ev-%d", i)})
+	}
+	time.Sleep(60 * time.Millisecond)
+	if got := sendCalls.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts before cooldown kicks in, got %d", got)
+	}
+
+	// Simulate external recovery (e.g. test push or heartbeat calling recordSuccess):
+	// cooldown must wake immediately without waiting full backoff.
+	shouldFail.Store(false)
+	w.recordSuccess()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for w.getStatus().TotalDispatched < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := w.getStatus().TotalDispatched; got < 2 {
+		t.Fatalf("expected immediate recovery after recordSuccess, dispatched=%d", got)
+	}
+}
+
+type callbackSender struct {
+	sendFn func(context.Context, Delivery) error
+}
+
+func (c *callbackSender) Send(ctx context.Context, d Delivery) error { return c.sendFn(ctx, d) }
+func (c *callbackSender) SendHeartbeat(context.Context, HeartbeatSnapshot, uint64) error {
+	return nil
+}
+func (c *callbackSender) Close() error { return nil }
+
+func TestDispatcherClassifyErrorEdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "mqtt connect timed out classifies as timeout",
+			err:  fmt.Errorf("%w: %w after 5s", ErrMQTTNotConnected, errMQTTConnectTimeout),
+			want: "timeout",
+		},
+		{
+			name: "port 4010 EOF must not misclassify as auth",
+			err:  errors.New(`Post "http://10.0.0.5:4010/hook": EOF`),
+			want: "unknown",
+		},
+		{
+			name: "port 4030 connection refused classifies as connection_refused not auth",
+			err:  errors.New(`Post "http://10.0.0.5:4030/hook": dial tcp 10.0.0.5:4030: connection refused`),
+			want: "connection_refused",
+		},
+		{
+			name: "HTTP status 401 classifies as auth",
+			err:  fmt.Errorf("%w: status 401", ErrWebhookHTTPStatusError),
+			want: "auth",
+		},
+		{
+			name: "HTTP status 403 classifies as auth",
+			err:  fmt.Errorf("%w: status 403", ErrWebhookHTTPStatusError),
+			want: "auth",
+		},
+		{
+			name: "SSRF blocked classifies as ssrf_blocked",
+			err:  fmt.Errorf("dial: %w", ErrSSRFBlocked),
+			want: "ssrf_blocked",
+		},
+		{
+			name: "HTTPS downgrade classifies as redirect_blocked",
+			err:  ErrWebhookHTTPSDowngrade,
+			want: "redirect_blocked",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyError(tc.err); got != tc.want {
+				t.Fatalf("classifyError(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDispatcherDrainTimeoutCountsDroppedAndStopRespectsContext(t *testing.T) {
+	// 1. drainQueuedEvents timeout increments w.dropped for remaining items.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := newDestinationWorker(destinationWorkerOptions{
+		dest:   &AlertDestination{ID: "drain-drop", ChannelType: ChannelTypeWebhook, EventsEnabled: true},
+		sender: &mockSender{},
+		logger: zap.NewNop(),
+	})
+	w.enqueue(record.AlarmEvent{ID: "q1"})
+	w.enqueue(record.AlarmEvent{ID: "q2"})
+	w.enqueue(record.AlarmEvent{ID: "q3"})
+	w.drainQueuedEvents(canceledCtx)
+	if got := w.dropped.Load(); got != 3 {
+		t.Fatalf("expected 3 dropped events on drain timeout, got %d", got)
+	}
+
+	// 2. Stop(ctx) returns context.DeadlineExceeded promptly when caller ctx expires before slow worker drains.
+	d := NewDispatcher(DispatcherOptions{Logger: zap.NewNop()})
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	startedCh := make(chan struct{})
+	slowW := newDestinationWorker(destinationWorkerOptions{
+		dest:        &AlertDestination{ID: "slow-stop-ctx", ChannelType: ChannelTypeWebhook, EventsEnabled: true},
+		sender:      &blockingBudgetSender{eventBudget: 10 * time.Second, startedCh: startedCh},
+		fingerprint: "fp-ctx",
+		logger:      zap.NewNop(),
+	})
+	d.mu.Lock()
+	d.workers[slowW.id] = slowW
+	d.mu.Unlock()
+	slowW.start()
+	d.Dispatch(record.AlarmEvent{ID: "block-me"})
+	<-startedCh
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer stopCancel()
+	start := time.Now()
+	err := d.Stop(stopCtx)
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop(shortCtx) = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("Stop ignored caller ctx deadline: took %v", elapsed)
+	}
+	// Wait for background worker retirement so test cleans up cleanly.
+	<-slowW.doneCh
+}
+
+func TestDispatcherHotReloadInheritsPostDrainDeliveries(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dest := &AlertDestination{
+		ID:               "dest_post_drain_inherit",
+		Name:             "Post Drain Inherit",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          true,
+		EventsEnabled:    true,
+		HeartbeatEnabled: false,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:       `{}`,
+	}
+	secBytes, err := store.EncryptSecret(dest.ID, &webhookSecret{URL: "http://127.0.0.1:9999/hook"})
+	if err != nil {
+		t.Fatalf("EncryptSecret: %v", err)
+	}
+	dest.SecretCiphertext = secBytes
+	if err := store.Create(ctx, dest); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+
+	d := NewDispatcher(DispatcherOptions{
+		Store:  store,
+		Signer: NewEmptyURLSigner(),
+		Config: Config{PublicBaseURL: "http://127.0.0.1:8000", AllowLoopback: true},
+		Logger: zap.NewNop(),
+	})
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		if stopErr := d.Stop(ctx); stopErr != nil {
+			t.Errorf("Stop: %v", stopErr)
+		}
+	}()
+
+	// Replace the initial worker with a gated sender whose queue holds 3 events ready to drain on reload.
+	d.mu.Lock()
+	initW := d.workers[dest.ID]
+	delete(d.workers, dest.ID)
+	d.mu.Unlock()
+	if initW != nil {
+		initW.stop()
+	}
+
+	gate := make(chan struct{})
+	gatedSender := &callbackSender{
+		sendFn: func(ctx context.Context, _ Delivery) error {
+			select {
+			case <-gate:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	oldW := newDestinationWorker(destinationWorkerOptions{
+		dest:        dest,
+		sender:      gatedSender,
+		fingerprint: "stale-fp",
+		logger:      zap.NewNop(),
+	})
+	oldW.totalDispatched.Store(4)
+	d.mu.Lock()
+	d.workers[dest.ID] = oldW
+	d.mu.Unlock()
+	oldW.start()
+
+	oldW.enqueue(record.AlarmEvent{ID: "d1"})
+	oldW.enqueue(record.AlarmEvent{ID: "d2"})
+	oldW.enqueue(record.AlarmEvent{ID: "d3"})
+
+	// Release gate right after reconcile starts retiring oldW so all 3 deliver during retirement drain.
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		close(gate)
+	}()
+
+	d.reconcile()
+
+	st := d.GetStatus(dest.ID, true)
+	if st.TotalDispatched != 7 {
+		t.Fatalf("expected replacement worker to inherit 4 + 3 drained = 7 totalDispatched, got %+v", st)
+	}
+}
+
+func TestDispatcherReconcilePreservesBuildFailureStatusAcrossReasons(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dest := &AlertDestination{
+		ID:               "dest_build_fail_ssrf",
+		Name:             "Running Target Switched To SSRF",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          true,
+		EventsEnabled:    true,
+		HeartbeatEnabled: false,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:       `{}`,
+	}
+	validSec, err := store.EncryptSecret(dest.ID, &webhookSecret{URL: "http://10.0.0.50:9000/hook"})
+	if err != nil {
+		t.Fatalf("EncryptSecret valid: %v", err)
+	}
+	dest.SecretCiphertext = validSec
+	if err := store.Create(ctx, dest); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+
+	d := NewDispatcher(DispatcherOptions{
+		Store:  store,
+		Signer: NewEmptyURLSigner(),
+		Config: Config{PublicBaseURL: "http://10.0.0.12:8000", AllowLoopback: false},
+		Logger: zap.NewNop(),
+	})
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		if stopErr := d.Stop(ctx); stopErr != nil {
+			t.Errorf("Stop: %v", stopErr)
+		}
+	}()
+
+	// Simulate an active healthy worker before config changes to an SSRF-blocked target.
+	d.mu.RLock()
+	runningW := d.workers[dest.ID]
+	d.mu.RUnlock()
+	if runningW == nil {
+		t.Fatal("expected initial running worker")
+	}
+	runningW.totalDispatched.Store(5)
+	runningW.recordSuccess()
+
+	blockedSec, err := store.EncryptSecret(dest.ID, &webhookSecret{URL: "http://169.254.169.254/latest/meta-data/"})
+	if err != nil {
+		t.Fatalf("EncryptSecret blocked: %v", err)
+	}
+	dest.SecretCiphertext = blockedSec
+	if err := store.Update(ctx, dest); err != nil {
+		t.Fatalf("store.Update: %v", err)
+	}
+
+	d.reconcile()
+
+	st := d.GetStatus(dest.ID, true)
+	if st.State != StateFailed || st.LastError != "ssrf_blocked" {
+		t.Fatalf("expected failed/ssrf_blocked status to be preserved (not overwritten by retired worker), got %+v", st)
+	}
+	if st.TotalDispatched != 5 || st.LastSuccessAt == nil || st.ConsecutiveFailures < 1 {
+		t.Fatalf("expected cumulative counts and failure telemetry preserved, got %+v", st)
 	}
 }

@@ -2,6 +2,7 @@ package alertpush
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -108,10 +109,12 @@ func NewComponents(opts Options) Components {
 }
 
 func (l *alertPushLifecycleImpl) Start(ctx context.Context) error {
+	var signerErr error
 	if l.signer != nil && l.dataDir != "" {
 		if err := initSignerFromDataDir(l.signer, l.dataDir); err != nil {
+			signerErr = err
 			l.logger.Warn(
-				"failed to load or create media signing key, signed URL feature may fail",
+				"failed to load or create media signing key, signed URL feature degraded",
 				zap.Error(err),
 			)
 		}
@@ -120,6 +123,9 @@ func (l *alertPushLifecycleImpl) Start(ctx context.Context) error {
 		if err := l.dispatcher.Start(ctx); err != nil {
 			return err
 		}
+	}
+	if signerErr != nil {
+		return fmt.Errorf("init media signing key: %w", signerErr)
 	}
 	l.logger.Info("alertpush dispatcher started")
 	return nil

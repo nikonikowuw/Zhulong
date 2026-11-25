@@ -199,7 +199,7 @@ func TestWebhookMultipartV1(t *testing.T) {
 			sender, err := NewWebhookSender(WebhookSenderOptions{
 				ID: "dest_mp", ImageMode: ImageModeMultipart, URL: server.URL,
 				PublicBaseURL: tt.publicBaseURL, Signer: signer, SignedURLTTL: time.Hour,
-				Media: tt.media,
+				Media: tt.media, AllowLoopback: true,
 			})
 			if err != nil {
 				t.Fatalf("NewWebhookSender: %v", err)
@@ -294,7 +294,7 @@ func TestWebhookRetryKeepsIDAndSeq(t *testing.T) {
 
 	sender, err := NewWebhookSender(WebhookSenderOptions{
 		ID: "dest_retry", ImageMode: ImageModeURL, PublicBaseURL: "http://10.0.0.12:8000",
-		URL: server.URL,
+		URL: server.URL, AllowLoopback: true,
 		// A stored custom header with a reserved name must not override envelope headers.
 		Headers: map[string]string{"X-Zhulong-Event": "spoofed"},
 	})
@@ -332,7 +332,13 @@ func TestWebhookRetryKeepsIDAndSeq(t *testing.T) {
 }
 
 func TestReservedEnvelopeHeadersRejected(t *testing.T) {
-	for _, name := range []string{"X-Zhulong-Event", "x-zhulong-delivery", "X-ZHULONG-SCHEMA"} {
+	for _, name := range []string{
+		"X-Zhulong-Event",
+		"x-zhulong-delivery",
+		"X-ZHULONG-SCHEMA",
+		"X-Zhulong-Timestamp",
+		"x-zhulong-signature",
+	} {
 		sec := &webhookSecret{}
 		err := applyWebhookSecretOverrides(sec, &AlertDestinationSecretInfo{
 			Headers: map[string]string{name: "x"},
@@ -381,10 +387,11 @@ func TestWebhookMultipartRetryReadsDiskOnce(t *testing.T) {
 	defer server.Close()
 
 	sender, err := NewWebhookSender(WebhookSenderOptions{
-		ID:        "dest_mp_retry",
-		ImageMode: ImageModeMultipart,
-		URL:       server.URL,
-		Media:     media,
+		ID:            "dest_mp_retry",
+		ImageMode:     ImageModeMultipart,
+		URL:           server.URL,
+		Media:         media,
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender: %v", err)

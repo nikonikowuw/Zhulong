@@ -36,6 +36,7 @@ export interface DestinationSecret {
   token?: string
   username?: string
   password?: string
+  signingSecret?: string
   headers?: Record<string, string>
 }
 
@@ -63,6 +64,7 @@ export interface WebhookAlertDestination {
   config: WebhookConfig
   filter: DestinationFilter
   secretSet: boolean
+  signingSecretSet?: boolean
   headerNames?: string[]
   status: DestinationStatus
 }
@@ -78,6 +80,7 @@ export interface MQTTAlertDestination {
   config: MQTTConfig
   filter: DestinationFilter
   secretSet: boolean
+  signingSecretSet?: boolean
   headerNames?: string[]
   status: DestinationStatus
 }

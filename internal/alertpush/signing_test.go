@@ -1,8 +1,11 @@
 package alertpush
 
 import (
+	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -113,4 +116,46 @@ func TestLoadOrCreateSigningKeyExistingDir(t *testing.T) {
 	if signer == nil {
 		t.Fatal("expected non-nil signer")
 	}
+}
+
+func TestURLSigner_VerifyWithExpiryRejectsForgedExpiredAsInvalid(t *testing.T) {
+	signer, err := NewURLSigner(bytes.Repeat([]byte{0x77}, 32))
+	if err != nil {
+		t.Fatalf("NewURLSigner: %v", err)
+	}
+	// Forged signature with expired timestamp must return ErrURLInvalid, not ErrURLExpired.
+	_, _, err = signer.VerifyWithExpiry("snapshots/cam_01/a.jpg", "1", "forged-sig")
+	if !errors.Is(err, ErrURLInvalid) {
+		t.Fatalf("VerifyWithExpiry forged expired = %v, want ErrURLInvalid", err)
+	}
+}
+
+func TestInitSignerFromDataDir_RejectsSymlinkAndPermissiveMode(t *testing.T) {
+	t.Run("rejects symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		realPath := filepath.Join(dir, "target.key")
+		if err := os.WriteFile(realPath, bytes.Repeat([]byte{0x11}, 32), 0o600); err != nil {
+			t.Fatalf("write target: %v", err)
+		}
+		if err := os.Symlink(realPath, filepath.Join(dir, signingKeyFileName)); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		if _, err := loadOrCreateSigningKey(dir); !errors.Is(err, ErrInsecureSignerKey) {
+			t.Fatalf("loadOrCreateSigningKey symlink = %v, want ErrInsecureSignerKey", err)
+		}
+	})
+
+	t.Run("rejects 0644 permissions", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("POSIX permission bits skipped on Windows")
+		}
+		dir := t.TempDir()
+		keyPath := filepath.Join(dir, signingKeyFileName)
+		if err := os.WriteFile(keyPath, bytes.Repeat([]byte{0x22}, 32), 0o644); err != nil {
+			t.Fatalf("write 0644 key: %v", err)
+		}
+		if _, err := loadOrCreateSigningKey(dir); !errors.Is(err, ErrInsecureSignerKeyPerm) {
+			t.Fatalf("loadOrCreateSigningKey 0644 = %v, want ErrInsecureSignerKeyPerm", err)
+		}
+	})
 }

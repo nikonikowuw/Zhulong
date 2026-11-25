@@ -17,6 +17,15 @@ import (
 
 func setupTestRouter(t *testing.T) (*gin.Engine, Components, func()) {
 	t.Helper()
+	return setupTestRouterWithConfig(t, Config{
+		PublicBaseURL: "http://10.0.0.12:8000",
+		SignedURLTTL:  1 * time.Hour,
+		AllowLoopback: true,
+	})
+}
+
+func setupTestRouterWithConfig(t *testing.T, cfg Config) (*gin.Engine, Components, func()) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	store, cleanup := setupTestStore(t)
@@ -26,11 +35,8 @@ func setupTestRouter(t *testing.T) (*gin.Engine, Components, func()) {
 		DBProvider: store.dbProvider,
 		Cipher:     fakeCipher{},
 		DataDir:    tempDir,
-		Config: Config{
-			PublicBaseURL: "http://10.0.0.12:8000",
-			SignedURLTTL:  1 * time.Hour,
-		},
-		Logger: zap.NewNop(),
+		Config:     cfg,
+		Logger:     zap.NewNop(),
 	})
 
 	router := gin.New()
@@ -59,8 +65,8 @@ func TestHandlerCRUDAndCacheControl(t *testing.T) {
 		ChannelType: ChannelTypeWebhook,
 		ImageMode:   ImageModeURL,
 		Config: AlertDestinationConfigInfo{
-			URL:      "https://example.com/webhook",
-			AuthType: AuthTypeBearer,
+			URL:      stringPtr("https://example.com/webhook"),
+			AuthType: stringPtr(AuthTypeBearer),
 		},
 		Secret: &AlertDestinationSecretInfo{
 			Token: stringPtr("bearer-token-123"),
@@ -189,8 +195,8 @@ func TestHandlerReservedHeaderForbidden(t *testing.T) {
 		ChannelType: ChannelTypeWebhook,
 		ImageMode:   ImageModeMultipart,
 		Config: AlertDestinationConfigInfo{
-			URL:      "https://example.com/webhook",
-			AuthType: AuthTypeNone,
+			URL:      stringPtr("https://example.com/webhook"),
+			AuthType: stringPtr(AuthTypeNone),
 		},
 		Secret: &AlertDestinationSecretInfo{
 			Headers: map[string]string{
@@ -214,6 +220,7 @@ func TestHandlerReservedHeaderForbidden(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for reserved header, got %d: %s", w.Code, w.Body.String())
 	}
+	assertValidationDetail(t, w, "secret.headers", CodeAlertHeaderReserved)
 }
 
 func stringPtr(s string) *string {
@@ -237,6 +244,26 @@ func mustMarshalJSON(t *testing.T, v any) []byte {
 	return b
 }
 
+func assertValidationDetail(t *testing.T, w *httptest.ResponseRecorder, wantField, wantCode string) {
+	t.Helper()
+	var env httputil.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v (%s)", err, w.Body.String())
+	}
+	if env.Code != "VALIDATION_FAILED" {
+		t.Fatalf("envelope code = %q, want VALIDATION_FAILED (body=%s)", env.Code, w.Body.String())
+	}
+	for _, d := range env.Details {
+		if d.Field == wantField && d.Code == wantCode {
+			if d.Message == "" {
+				t.Fatalf("detail %+v missing localized message", d)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing validation detail field=%q code=%q in %+v", wantField, wantCode, env.Details)
+}
+
 func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, cleanup := setupTestStore(t)
@@ -250,6 +277,7 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 		Config: Config{
 			PublicBaseURL: "",
 			SignedURLTTL:  1 * time.Hour,
+			AllowLoopback: true,
 		},
 		Logger: zap.NewNop(),
 	})
@@ -266,13 +294,13 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 	api := router.Group("/api/v1")
 	comp.ProtectedRoutes.RegisterRoutes(api)
 
-	// 1. Both capabilities disabled -> 422 ALERT_DESTINATION_CONFIG_INVALID
+	// 1. Both capabilities disabled -> 422 VALIDATION_FAILED (eventsEnabled)
 	bothOff := mustMarshalJSON(t, CreateAlertDestinationRequest{
 		Name:             "Both Off",
 		ChannelType:      ChannelTypeWebhook,
 		EventsEnabled:    boolPtr(false),
 		HeartbeatEnabled: boolPtr(false),
-		Config:           AlertDestinationConfigInfo{URL: "https://example.com/hook"},
+		Config:           AlertDestinationConfigInfo{URL: stringPtr("https://example.com/hook")},
 	})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/alert-destinations", bytes.NewReader(bothOff))
@@ -281,6 +309,7 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 when both capabilities disabled, got %d: %s", w.Code, w.Body.String())
 	}
+	assertValidationDetail(t, w, "eventsEnabled", CodeAlertCapabilityRequired)
 
 	// 2. Events enabled + URL mode without PublicBaseURL -> 422 ALERT_PUBLIC_BASE_URL_MISSING
 	eventsURLNoPublic := mustMarshalJSON(t, CreateAlertDestinationRequest{
@@ -289,7 +318,7 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 		EventsEnabled:    boolPtr(true),
 		HeartbeatEnabled: boolPtr(true),
 		ImageMode:        ImageModeURL,
-		Config:           AlertDestinationConfigInfo{URL: "https://example.com/hook"},
+		Config:           AlertDestinationConfigInfo{URL: stringPtr("https://example.com/hook")},
 	})
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(
@@ -310,9 +339,9 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 		EventsEnabled:    boolPtr(false),
 		HeartbeatEnabled: boolPtr(true),
 		Config: AlertDestinationConfigInfo{
-			URL:                      "https://example.com/events",
+			URL:                      stringPtr("https://example.com/events"),
 			HeartbeatURL:             stringPtr("https://example.com/heartbeat"),
-			AuthType:                 AuthTypeBearer,
+			AuthType:                 stringPtr(AuthTypeBearer),
 			HeartbeatIntervalSeconds: intPtr(30),
 		},
 		Secret: &AlertDestinationSecretInfo{
@@ -342,9 +371,9 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 		EventsEnabled:    boolPtr(false),
 		HeartbeatEnabled: boolPtr(true),
 		Config: AlertDestinationConfigInfo{
-			URL:          "https://api.example.com/events",
+			URL:          stringPtr("https://api.example.com/events"),
 			HeartbeatURL: stringPtr("https://evil.other.org/heartbeat"),
-			AuthType:     AuthTypeBearer,
+			AuthType:     stringPtr(AuthTypeBearer),
 		},
 		Secret: &AlertDestinationSecretInfo{
 			Token: stringPtr("tok-123"),
@@ -365,6 +394,7 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 			w.Body.String(),
 		)
 	}
+	assertValidationDetail(t, w, "config.heartbeatUrl", CodeAlertHeartbeatCrossOrigin)
 
 	// 5. Out-of-range heartbeatIntervalSeconds (<15s) -> 422!
 	badInterval := mustMarshalJSON(t, CreateAlertDestinationRequest{
@@ -373,7 +403,7 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 		EventsEnabled:    boolPtr(false),
 		HeartbeatEnabled: boolPtr(true),
 		Config: AlertDestinationConfigInfo{
-			URL:                      "https://example.com/hb",
+			URL:                      stringPtr("https://example.com/hb"),
 			HeartbeatIntervalSeconds: intPtr(5),
 		},
 	})
@@ -388,6 +418,7 @@ func TestHandlerCapabilitiesValidationAndHeartbeatOnlyBypass(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for heartbeatIntervalSeconds=5, got %d", w.Code)
 	}
+	assertValidationDetail(t, w, "config.heartbeatIntervalSeconds", "MIN_VALUE")
 }
 
 func TestHandlerTestEndpointHeartbeatOnlySendsHeartbeat(t *testing.T) {
@@ -415,7 +446,7 @@ func TestHandlerTestEndpointHeartbeatOnlySendsHeartbeat(t *testing.T) {
 		EventsEnabled:    boolPtr(false),
 		HeartbeatEnabled: boolPtr(true),
 		Config: AlertDestinationConfigInfo{
-			URL:          target.URL + "/unused-events",
+			URL:          stringPtr(target.URL + "/unused-events"),
 			HeartbeatURL: stringPtr(target.URL + "/hb-probe"),
 		},
 	})
@@ -466,7 +497,7 @@ func TestHandlerTestEndpointHeartbeatOnlySendsHeartbeat(t *testing.T) {
 		EventsEnabled:    boolPtr(false),
 		HeartbeatEnabled: boolPtr(true),
 		Config: AlertDestinationConfigInfo{
-			URL: "https://user:secret@example.com/hb",
+			URL: stringPtr("https://user:secret@example.com/hb"),
 		},
 	})
 	wUserinfo := httptest.NewRecorder()
@@ -484,6 +515,7 @@ func TestHandlerTestEndpointHeartbeatOnlySendsHeartbeat(t *testing.T) {
 			wUserinfo.Body.String(),
 		)
 	}
+	assertValidationDetail(t, wUserinfo, "config.url", CodeAlertURLUserinfoForbidden)
 }
 
 func TestHandlerResolveExistingMQTTTestTargetAppliesOverrides(t *testing.T) {
@@ -500,7 +532,7 @@ func TestHandlerResolveExistingMQTTTestTargetAppliesOverrides(t *testing.T) {
 	}
 	clientID := "zMQTTTEST0000000000001"
 	savedCfg := mustMarshalJSON(t, mqttConfig{
-		Broker:           "tcp://127.0.0.1:1883",
+		Broker:           "tcp://192.168.1.10:1883",
 		Topic:            "zhulong/old",
 		QoS:              0,
 		KeepAliveSeconds: 30,
@@ -525,13 +557,13 @@ func TestHandlerResolveExistingMQTTTestTargetAppliesOverrides(t *testing.T) {
 	h := NewHandler(nil, store, zap.NewNop())
 	var qos uint8 = 1
 	keepAlive := 45
-	dest, _, isDraft, err := h.resolveExistingTestTarget(ctx, TestAlertDestinationRequest{
+	dest, secRaw, isDraft, err := h.resolveExistingTestTarget(ctx, TestAlertDestinationRequest{
 		ID:               "01J8ZMQTTTEST0000000000001",
 		EventsEnabled:    boolPtr(false),
 		HeartbeatEnabled: boolPtr(true),
 		Config: AlertDestinationConfigInfo{
-			Broker:           "ssl://127.0.0.1:8883",
-			Topic:            "zhulong/events",
+			Broker:           stringPtr("ssl://192.168.1.11:8883"),
+			Topic:            stringPtr("zhulong/events"),
 			HeartbeatTopic:   stringPtr("zhulong/status"),
 			QoS:              &qos,
 			KeepAliveSeconds: &keepAlive,
@@ -544,6 +576,10 @@ func TestHandlerResolveExistingMQTTTestTargetAppliesOverrides(t *testing.T) {
 	}
 	if !isDraft {
 		t.Fatal("expected overridden existing test target to be classified as draft")
+	}
+	mqttSec, ok := secRaw.(*mqttSecret)
+	if !ok || mqttSec.Password != "" {
+		t.Fatalf("expected stored MQTT password to be cleared when overriding broker, got %+v", secRaw)
 	}
 
 	var merged mqttConfig

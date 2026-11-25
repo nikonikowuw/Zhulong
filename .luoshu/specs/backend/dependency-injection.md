@@ -18,8 +18,8 @@
 
 | 阶段 | 当前顺序 |
 | --- | --- |
-| **启动 (`lifecycleRuntime.Start`)** | 日志输出准备 ➔ 数据库打开与迁移（失败阻断）➔ 区域配置缓存重载与事件录像策略缓存重载（失败仅告警）➔ Audit（失败阻断并关库）➔ Network ➔ SystemTime ➔ SystemInfo ➔ Storage（注册写阻断观察者后启动）➔ Person ➔ AsyncJobs（须在 Person 清理 stale staging 之后）➔ Spatial（创建 `<data-dir>/maps`）➔ Recording（启动修复与轮询/清理协程）➔ Snapshot worker ➔ Record ➔ native 日志队列启动与回调注册 ➔ Native Engine ➔ Camera 密钥初始化与健康调度器 ➔ GB28181 ➔ AlertPush ➔ Algorithm ➔ TLS 配置、TCP listener 与 HTTP Serve ➔ 可选日志级别热重载器。其中数据库、Audit、Native/日志回调、Camera 与 HTTP listener 为关键阻断项（失败回滚）；其余可选域及策略缓存失败调用 `degradedStart` 后继续启动。 |
-| **停止 (`lifecycleRuntime.Stop`)** | 停止日志级别热重载器 ➔ HTTP 优雅关闭并等待 Serve ➔ 遍历 `stopSequence()`：`gb28181` ➔ `camera`（释放 AI 流时同步 flush 原生录像）➔ `asyncJobs` ➔ `algorithm` ➔ `person` ➔ `spatial` ➔ `alertPush` ➔ `record` + `snapshot`（`record.Stop` 先于 `snapshot` worker 排空）➔ `recording`（停止轮询前做最终 `PollOnce`）➔ `storage` ➔ `systemInfo` ➔ `systemTime` ➔ `network` ➔ `audit` ➔ `apiToken` ➔ `native`（Engine + 日志回调）➔ `database` ➔ 同步并关闭应用日志资源。 |
+| **启动 (`lifecycleRuntime.Start`)** | 日志输出准备 ➔ 数据库打开与迁移（失败阻断）➔ 区域配置缓存重载与事件录像策略缓存重载（失败仅告警）➔ Audit（失败阻断并关库）➔ Network ➔ SystemTime ➔ SystemInfo ➔ FileStore（标记就绪）➔ Storage（注册写阻断观察者后启动）➔ Person ➔ AsyncJobs（须在 Person 清理 stale staging 之后）➔ Spatial（创建 `<data-dir>/maps`）➔ Recording（启动修复与轮询/清理协程）➔ Snapshot worker ➔ Record ➔ native 日志队列启动与回调注册 ➔ Native Engine ➔ Camera 密钥初始化（解锁后同步 `storage.SyncStore` 远端存储并恢复待上传录像）与健康调度器 ➔ GB28181 ➔ AlertPush ➔ Algorithm ➔ TLS 配置、TCP listener 与 HTTP Serve ➔ 可选日志级别热重载器。其中数据库、Audit、Native/日志回调、Camera 与 HTTP listener 为关键阻断项（失败回滚）；其余可选域及策略缓存失败调用 `degradedStart` 后继续启动。 |
+| **停止 (`lifecycleRuntime.Stop`)** | 停止日志级别热重载器 ➔ HTTP 优雅关闭并等待 Serve ➔ 遍历 `stopSequence()`：`gb28181` ➔ `camera`（释放 AI 流并等待在飞 `consumeAIResults` 退出、同步 flush 原生录像）➔ `asyncJobs` ➔ `algorithm` ➔ `person` ➔ `spatial` ➔ `alertPush` ➔ `record` + `snapshot`（`record.Stop` 先于 `snapshot` worker 排空）➔ `recording`（停止轮询前做最终 `PollOnce`）➔ `storage` ➔ `fileStore` ➔ `systemInfo` ➔ `systemTime` ➔ `network` ➔ `audit` ➔ `apiToken` ➔ `native`（Engine + 日志回调）➔ `database` ➔ 同步并关闭应用日志资源。 |
 
 ⚠️ **停机顺序只有一份**：`Stop` 与 `Start` 失败回滚都遍历 `lifecycleRuntime.stopSequence()` 返回的同一个函数切片。两者曾经是两份手写清单，一次 listen 失败会把 `algorithm` 排在 `camera` 之前释放，而正常停机的顺序正好相反。新增或调整阶段时**只改 `stopSequence()`**，`internal/app/runtime_test.go` 的 `TestStartupRollbackSharesShutdownOrder` 会比对两条路径的事件轨迹是否一致。
 
@@ -30,7 +30,7 @@
 - `camera.Stop` 先于 `algorithm.Stop`：`camera.Stop` 会释放最后一个 AI 消费者，native 侧随之 `broker->stop()`；runner 的 `recv` 立刻拿到 EOF/POLLHUP，走 `broker_disconnected` 分支自行干净退出（`native/sdk/src/algo_main.cpp` 的退出门禁），随后的 `StopAll` 只是收尸。反向顺序也能跑通（先 SIGTERM 再拆流），但把 runner 推到信号退出路径上：每个进程最多等 3s 才强杀。这是本仓库选定的约定，由 `TestAIShutdownOrderPrecedesNativeClose` 固化；它**不是**“生产者必须先死”的一般律——runner 先停同样不会碰 native 内存。
 - `asyncJobs.Stop` 先于 `person.Stop` 与 `native.Close`：后台任务 worker 可能调用 `person` 或 `faceextract` / native 能力，必须先排空停止。
 - `algorithm.Stop` 先于 `native.Close`：runner 作为 broker 客户端必须先消失，才能销毁 broker 宿主。
-- `alertPush.Stop` 先于 `record` / `storage` 停机：确保推送 worker 停止后再拆媒体与记录支撑。
+- `alertPush.Stop` 先于 `record` / `snapshot` / `storage` / `fileStore` 停机：确保推送 worker 停止后再拆媒体存储与记录支撑。
 - `record.Stop` 先于 `snapshot` worker 停止，`snapshot` worker 必须在 `storage` 与 `native` 仍可用时排空。
 - `spatial.Start` 负责创建 `<data-dir>/maps`，**构造函数不碰文件系统**；因此底图目录只能在 Start 之后才存在，
   上传与读图都假定它已经就绪。
@@ -103,7 +103,7 @@ func TestAppDependencyGraph(t *testing.T) {
    - 业务 Store（如 `auth`、`camera`、`audit`）禁止接收松散的裸闭包 `func() *gorm.DB`，统一依赖 `database.DBProvider` 接口（`DB() *gorm.DB`）。
    - `*database.Store` 原生实现 `DBProvider`，在构造期仅做类型绑定，保证构造无副作用并在执行 SQL 时完成动态判空。
 2. **细粒度领域 `fx.Module` 组装**：
-   - `internal/app/app.go` 彻底摒弃单体上帝装配函数，按领域划分为独立的 `fx.Module`（`databaseModule`、`engineModule`、`nativeLogModule`、`auditModule`、`authModule`、`cameraModule`、`gb28181Module`、`networkModule`、`systemTimeModule`、`systemInfoModule`、`storageModule`、`mediaFileModule`、`algorithmModule`、`taskModule`、`personModule`、`asyncJobModule`、`clientLogModule`、`recordModule`、`spatialModule`、`apiTokenModule`、`openAPIModule`、`alertPushModule`、`httpModule`、`runtimeModule`）。
+   - `internal/app/app.go` 彻底摒弃单体上帝装配函数，按领域划分为独立的 `fx.Module`（`databaseModule`、`engineModule`、`nativeLogModule`、`auditModule`、`authModule`、`cameraModule`、`gb28181Module`、`networkModule`、`systemTimeModule`、`systemInfoModule`、`storageModule`、`mediaFileModule`、`algorithmModule`、`taskModule`、`personModule`、`asyncJobModule`、`clientLogModule`、`recordingModule`、`recordModule`、`spatialModule`、`apiTokenModule`、`statusSnapshotModule`、`openAPIModule`、`alertPushModule`、`httpModule`、`runtimeModule`）。其中 `statusSnapshotModule` 作为共享状态快照提供者，分别被 `openAPIModule` 与 `alertPushModule` 消费，避免业务域间隐式耦合。
    - `lifecycleRuntime` 使用 `runtimeParams (fx.In)` 声明依赖，实现与上层具体实现类的松耦合。
 
 

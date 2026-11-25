@@ -3,6 +3,9 @@ package alertpush
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -87,6 +91,7 @@ func TestWebhookSenderURLMode(t *testing.T) {
 		AuthType:      AuthTypeBearer,
 		Token:         "secret-token",
 		Identity:      identity,
+		AllowLoopback: true,
 		Headers: map[string]string{
 			"X-Custom-Key":  "val-123",
 			"Authorization": "should-be-ignored",
@@ -169,6 +174,7 @@ func TestWebhookSenderRetryOn500(t *testing.T) {
 		ImageMode:     ImageModeURL,
 		PublicBaseURL: "http://10.0.0.12:8000",
 		URL:           server.URL,
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender: %v", err)
@@ -202,6 +208,7 @@ func TestWebhookSenderNoRetryOn400(t *testing.T) {
 		ImageMode:     ImageModeURL,
 		PublicBaseURL: "http://10.0.0.12:8000",
 		URL:           server.URL,
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender: %v", err)
@@ -262,6 +269,7 @@ func TestWebhookSenderHeartbeatRouteSplitAndSingleShot(t *testing.T) {
 		AuthType:          AuthTypeBearer,
 		Token:             "shared-token-xyz",
 		Identity:          &fakeIdentity{value: "edge-box-09"},
+		AllowLoopback:     true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender (heartbeat-only without PublicBaseURL): %v", err)
@@ -327,6 +335,7 @@ func TestWebhookSenderHeartbeatRouteSplitAndSingleShot(t *testing.T) {
 		SkipImageURLCheck: true,
 		URL:               server.URL + "/events",
 		HeartbeatURL:      server.URL + "/heartbeat-500",
+		AllowLoopback:     true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender failSender: %v", err)
@@ -369,6 +378,7 @@ func TestWebhookSenderBlocksCrossOriginRedirectWithCredentials(t *testing.T) {
 		SkipImageURLCheck: true,
 		URL:               originServer.URL + "/hb",
 		Headers:           map[string]string{"X-Api-Secret": "top-secret"},
+		AllowLoopback:     true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender: %v", err)
@@ -517,6 +527,7 @@ func TestWebhookSenderCrossOriginRedirectDoesNotRetry(t *testing.T) {
 		URL:           originServer.URL + "/events",
 		AuthType:      AuthTypeBearer,
 		Token:         "secret-tok",
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender: %v", err)
@@ -583,9 +594,10 @@ func TestWebhookSenderBlocks302AndPreservesMultipartOn307(t *testing.T) {
 
 	// 1. 302 downgrade must be rejected on first attempt without retrying.
 	downgradeSender, err := NewWebhookSender(WebhookSenderOptions{
-		ID:        "dest_302",
-		ImageMode: ImageModeMultipart,
-		URL:       server.URL + "/downgrade",
+		ID:            "dest_302",
+		ImageMode:     ImageModeMultipart,
+		URL:           server.URL + "/downgrade",
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender 302: %v", err)
@@ -609,10 +621,11 @@ func TestWebhookSenderBlocks302AndPreservesMultipartOn307(t *testing.T) {
 	// 2. Same-origin 307 must replay multipart body cleanly via req.GetBody.
 	sceneKey := "snapshots/cam_01/2026-11-24/redir.jpg"
 	redirSender, err := NewWebhookSender(WebhookSenderOptions{
-		ID:        "dest_307",
-		ImageMode: ImageModeMultipart,
-		URL:       server.URL + "/temp-redirect",
-		Media:     &fakeMediaService{files: map[string][]byte{sceneKey: []byte("jpeg-307-bytes")}},
+		ID:            "dest_307",
+		ImageMode:     ImageModeMultipart,
+		URL:           server.URL + "/temp-redirect",
+		Media:         &fakeMediaService{files: map[string][]byte{sceneKey: []byte("jpeg-307-bytes")}},
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender 307: %v", err)
@@ -676,6 +689,7 @@ func TestWebhookSenderMultipartSizeCapFallsBackToURL(t *testing.T) {
 		Media:                  media,
 		URL:                    server.URL,
 		MaxMultipartImageBytes: 1024,
+		AllowLoopback:          true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender: %v", err)
@@ -720,10 +734,11 @@ func TestWebhookSenderTLSSkipVerify(t *testing.T) {
 	ev := record.AlarmEvent{ID: "01TLSTEST", CameraID: "cam_1", CapturedAt: time.Now().UTC()}
 
 	strictSender, err := NewWebhookSender(WebhookSenderOptions{
-		ID:        "dest_tls_strict",
-		ImageMode: ImageModeMultipart,
-		URL:       server.URL,
-		Timeout:   2 * time.Second,
+		ID:            "dest_tls_strict",
+		ImageMode:     ImageModeMultipart,
+		URL:           server.URL,
+		Timeout:       2 * time.Second,
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender strict: %v", err)
@@ -746,6 +761,7 @@ func TestWebhookSenderTLSSkipVerify(t *testing.T) {
 		URL:           server.URL,
 		Timeout:       2 * time.Second,
 		TLSSkipVerify: true,
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookSender skip verify: %v", err)
@@ -758,5 +774,205 @@ func TestWebhookSenderTLSSkipVerify(t *testing.T) {
 
 	if sendErr := insecureSender.Send(context.Background(), Delivery{Event: ev}); sendErr != nil {
 		t.Fatalf("expected self-signed webhook delivery to succeed with TLSSkipVerify=true, got %v", sendErr)
+	}
+}
+
+func TestWebhookSenderOutboundHMACSignatureJSONHeartbeatAndMultipart(t *testing.T) {
+	const signingSecret = "whsec_test_secret_12345"
+
+	type capturedReq struct {
+		body []byte
+		ts   string
+		sig  string
+	}
+	var last capturedReq
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		last = capturedReq{
+			body: raw,
+			ts:   r.Header.Get(headerZhulongTimestamp),
+			sig:  r.Header.Get(headerZhulongSignature),
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	verifySig := func(t *testing.T, label string, c capturedReq) {
+		t.Helper()
+		if _, err := strconv.ParseInt(c.ts, 10, 64); err != nil {
+			t.Fatalf("%s: invalid X-Zhulong-Timestamp %q: %v", label, c.ts, err)
+		}
+		mac := hmac.New(sha256.New, []byte(signingSecret))
+		mac.Write([]byte(c.ts + "."))
+		mac.Write(c.body)
+		want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+		if c.sig != want {
+			t.Fatalf("%s: signature = %q, want %q", label, c.sig, want)
+		}
+	}
+
+	// 1. JSON event + Heartbeat.
+	jsonSender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:                "dest_hmac_json",
+		ImageMode:         ImageModeURL,
+		SkipImageURLCheck: true,
+		URL:               server.URL + "/events",
+		SigningSecret:     signingSecret,
+		Headers: map[string]string{
+			"X-Zhulong-Signature": "sha256=spoofed",
+			"X-Zhulong-Timestamp": "0",
+		},
+		AllowLoopback: true,
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender json: %v", err)
+	}
+	defer func() {
+		if closeErr := jsonSender.Close(); closeErr != nil {
+			t.Errorf("Close json: %v", closeErr)
+		}
+	}()
+
+	ev := record.AlarmEvent{ID: "01HMACJSON", CameraID: "cam_1", CapturedAt: time.Now().UTC()}
+	if err := jsonSender.Send(context.Background(), Delivery{Event: ev, Seq: 1}); err != nil {
+		t.Fatalf("Send json: %v", err)
+	}
+	verifySig(t, "json-event", last)
+
+	if err := jsonSender.SendHeartbeat(context.Background(), HeartbeatSnapshot{Status: "ready"}, 2); err != nil {
+		t.Fatalf("SendHeartbeat: %v", err)
+	}
+	verifySig(t, "heartbeat", last)
+
+	// 2. Multipart event (streaming incremental HMAC matches wire bytes exactly).
+	sceneKey := "snapshots/cam_1/2026-11-25/hmac_scene.jpg"
+	mpSender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:            "dest_hmac_mp",
+		ImageMode:     ImageModeMultipart,
+		URL:           server.URL + "/mp",
+		SigningSecret: signingSecret,
+		Media:         &fakeMediaService{files: map[string][]byte{sceneKey: []byte("fake-jpeg-binary-data")}},
+		AllowLoopback: true,
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender multipart: %v", err)
+	}
+	defer func() {
+		if closeErr := mpSender.Close(); closeErr != nil {
+			t.Errorf("Close mp: %v", closeErr)
+		}
+	}()
+
+	evMP := record.AlarmEvent{
+		ID: "01HMACMP", CameraID: "cam_1", CapturedAt: time.Now().UTC(),
+		ImagePath: sceneKey, ImageReady: true,
+	}
+	if err := mpSender.Send(context.Background(), Delivery{Event: evMP, Seq: 3}); err != nil {
+		t.Fatalf("Send multipart: %v", err)
+	}
+	verifySig(t, "multipart-event", last)
+}
+
+func TestWebhookSenderMultipartTotalBudgetFallbackPreservesSizeAndTransportDefaults(t *testing.T) {
+	var payloadJSON []byte
+	var hasScenePart, hasObjectPart bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		payloadJSON = []byte(r.FormValue("payload"))
+		_, _, errScene := r.FormFile("image_scene")
+		hasScenePart = errScene == nil
+		_, _, errObj := r.FormFile("image_object")
+		hasObjectPart = errObj == nil
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	signer, err := NewURLSigner(make([]byte, 32))
+	if err != nil {
+		t.Fatalf("NewURLSigner: %v", err)
+	}
+
+	const (
+		sceneKey = "snapshots/cam_1/2026-11-25/s.jpg"
+		cropKey  = "snapshots/cam_1/2026-11-25/c.jpg"
+		refKey   = "faces/empty.jpg"
+	)
+	media := &fakeMediaService{
+		files: map[string][]byte{
+			sceneKey: bytes.Repeat([]byte{0x11}, 900),
+			cropKey:  bytes.Repeat([]byte{0x22}, 500),
+			refKey:   {}, // 0-byte corrupted image must be omitted
+		},
+	}
+
+	sender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:                     "dest_total_cap",
+		ImageMode:              ImageModeMultipart,
+		PublicBaseURL:          "http://10.0.0.12:8000",
+		SignedURLTTL:           time.Hour,
+		Signer:                 signer,
+		Media:                  media,
+		URL:                    server.URL,
+		MaxMultipartImageBytes: 1000,
+		MaxMultipartTotalBytes: 1000, // Scene (900B) fits, crop (500B) exceeds remaining 100B -> falls back to URL with SizeBytes=500.
+		AllowLoopback:          true,
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	// Verify transport inherits http.DefaultTransport defaults (Proxy, TLSHandshakeTimeout, HTTP/2).
+	tr, ok := sender.client.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		t.Fatalf("expected *http.Transport, got %T", sender.client.Transport)
+	}
+	if tr.Proxy == nil || tr.TLSHandshakeTimeout == 0 || !tr.ForceAttemptHTTP2 {
+		t.Fatalf("transport missing DefaultTransport properties: proxy=%v tlsHandshake=%v h2=%v",
+			tr.Proxy != nil, tr.TLSHandshakeTimeout, tr.ForceAttemptHTTP2)
+	}
+
+	ev := record.AlarmEvent{
+		ID:         "01TOTCAP",
+		EventType:  record.EventTypeFaceRecognition,
+		CameraID:   "cam_1",
+		CapturedAt: time.Now().UTC(),
+		ImagePath:  sceneKey,
+		ImageReady: true,
+		CropPath:   cropKey,
+		CropReady:  true,
+		Face:       &record.FaceEventData{Matched: true, GalleryImagePath: refKey},
+	}
+	if err := sender.Send(context.Background(), Delivery{Event: ev, Seq: 1}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if !hasScenePart || hasObjectPart {
+		t.Fatalf("parts: scene=%v object=%v, want scene=true object=false", hasScenePart, hasObjectPart)
+	}
+
+	var payload EventPayload
+	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.Images == nil || payload.Images.Object == nil || payload.Images.Object.URL == "" {
+		t.Fatalf("expected crop to fall back to URL, got %+v", payload.Images)
+	}
+	if payload.Images.Object.SizeBytes == nil || *payload.Images.Object.SizeBytes != 500 {
+		t.Fatalf("expected fallback crop to preserve SizeBytes=500, got %v", payload.Images.Object.SizeBytes)
+	}
+	if payload.Images.Reference != nil {
+		t.Fatalf("0-byte empty reference image must be omitted, got %+v", payload.Images.Reference)
 	}
 }

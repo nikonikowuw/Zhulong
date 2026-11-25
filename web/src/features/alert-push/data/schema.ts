@@ -11,16 +11,32 @@ export const RESERVED_HEADERS = [
   'host',
   'transfer-encoding',
   'user-agent',
-  // 推送载荷 v1 的信封标头由宿主写入，自定义标头不可覆盖
+  // 推送载荷 v1 的信封标头与 HMAC 签名标头由宿主写入，自定义标头不可覆盖
   'x-zhulong-event',
   'x-zhulong-delivery',
   'x-zhulong-schema',
+  'x-zhulong-timestamp',
+  'x-zhulong-signature',
+] as const
+
+export const RESERVED_WEBHOOK_HEADERS = RESERVED_HEADERS
+
+export const ALLOWED_MQTT_SCHEMES = [
+  'tcp:',
+  'ssl:',
+  'tls:',
+  'tcps:',
+  'ws:',
+  'wss:',
+  'mqtt:',
+  'mqtts:',
 ] as const
 
 /** MQTT base64 模式内联图片原始字节预算（KB），与后端 inline_max_kb 范围一致 */
 export const INLINE_MAX_KB_MIN = 64
 export const INLINE_MAX_KB_MAX = 8192
 export const INLINE_MAX_KB_DEFAULT = 500
+export const MAX_MQTT_CLIENT_ID_BYTES = 23
 
 export interface HeaderEntry {
   key: string
@@ -42,10 +58,13 @@ export function areHeadersUntouched(
 function isValidHttpUrlWithoutUserinfo(raw: string): boolean {
   try {
     const parsed = new URL(raw)
+    const authorityMatch = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^/?#]*)/.exec(raw)
+    const hasAtInAuthority = Boolean(authorityMatch?.[1].includes('@'))
     return (
       (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
       !parsed.username &&
       !parsed.password &&
+      !hasAtInAuthority &&
       Boolean(parsed.hostname)
     )
   } catch {
@@ -74,6 +93,10 @@ export function isSameHttpOrigin(rawA: string, rawB: string): boolean {
   }
 }
 
+export function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length
+}
+
 /**
  * 告警推送目标表单校验 Schema 工厂
  */
@@ -82,7 +105,8 @@ export function createAlertDestinationFormSchema(
   isEdit = false,
   secretRetained = false,
   originalAuthType?: AuthType,
-  originalHeaderNames: string[] = []
+  originalHeaderNames: string[] = [],
+  signingSecretRetained = false
 ) {
   const msg = {
     nameRequired: t ? t('validation.nameRequired') : '请输入通道名称',
@@ -104,7 +128,7 @@ export function createAlertDestinationFormSchema(
       : `内联图片上限必须在 ${INLINE_MAX_KB_MIN} 到 ${INLINE_MAX_KB_MAX} KB 之间`,
     heartbeatCrossOrigin: t
       ? t('validation.heartbeatCrossOrigin')
-      : '配置了鉴权凭据或自定义标头时，独立存活 URL 必须与主 Webhook URL 同源',
+      : '配置了鉴权凭据、签名密钥或自定义标头时，独立存活 URL 必须与主 Webhook URL 同源',
     urlRequired: t ? t('validation.urlRequired') : '请输入 Webhook URL',
     urlInvalid: t
       ? t('validation.urlInvalid')
@@ -122,13 +146,16 @@ export function createAlertDestinationFormSchema(
     brokerInvalid: t
       ? t('validation.brokerInvalid')
       : 'Broker 地址不能包含账号凭证（如 user:pass@）',
+    brokerUrlInvalid: t
+      ? t('validation.brokerUrlInvalid')
+      : 'Broker 地址必须包含合法协议（tcp/ssl/tls/tcps/ws/wss/mqtt/mqtts）与主机名',
     topicRequired: t ? t('validation.topicRequired') : '请输入发布 Topic',
     topicNoWildcards: t
       ? t('validation.topicNoWildcards')
       : '发布主题不能包含通配符（+ 或 #）',
     clientIdMax: t
       ? t('validation.clientIdMax')
-      : 'Client ID 长度不能超过 23 个字符',
+      : 'Client ID 长度不能超过 23 个字节（UTF-8）',
     headerKeyRequired: t ? t('validation.headerKeyRequired') : '请输入标头名称',
     headerValueRequired: t
       ? t('validation.headerValueRequired')
@@ -140,6 +167,13 @@ export function createAlertDestinationFormSchema(
       t
         ? t('validation.reservedHeader', { key: header })
         : `标头 "${header}" 为系统保留标头，禁止自定义`,
+    duplicateHeader: (header: string) =>
+      t
+        ? t('validation.duplicateHeader', { key: header })
+        : `标头 "${header}" 重复，请移除或合并同名标头`,
+    imageModeUnsupported: t
+      ? t('validation.imageModeUnsupported')
+      : '当前推送协议不支持所选的图片模式',
   }
 
   const headerItemSchema = z.object({
@@ -163,13 +197,14 @@ export function createAlertDestinationFormSchema(
       token: z.string(),
       basicUser: z.string(),
       basicPass: z.string(),
+      signingSecret: z.string(),
       headers: z.array(headerItemSchema),
       // MQTT
       broker: z.string(),
       topic: z.string(),
       heartbeatTopic: z.string(),
       lwtEnabled: z.boolean(),
-      clientId: z.string().max(23, msg.clientIdMax),
+      clientId: z.string(),
       qos: z.number().min(0).max(2),
       keepAliveSeconds: z.number({ error: msg.keepAliveRange }),
       inlineMaxKb: z.number({ error: msg.inlineMaxKbRange }),
@@ -206,8 +241,16 @@ export function createAlertDestinationFormSchema(
 
       // 1. Webhook 协议校验
       if (data.channelType === 'webhook') {
+        if (data.eventsEnabled && data.imageMode === 'base64') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['imageMode'],
+            message: msg.imageModeUnsupported,
+          })
+        }
+
         if (
-          !Number.isFinite(data.timeoutSeconds) ||
+          !Number.isInteger(data.timeoutSeconds) ||
           data.timeoutSeconds < 1 ||
           data.timeoutSeconds > 30
         ) {
@@ -246,7 +289,9 @@ export function createAlertDestinationFormSchema(
           } else {
             const hasCredentialsOrHeaders =
               data.authType !== 'none' ||
-              data.headers.some((h) => h.key.trim() !== '')
+              data.headers.some((h) => h.key.trim() !== '') ||
+              data.signingSecret !== '' ||
+              (isEdit && signingSecretRetained)
             if (
               hasCredentialsOrHeaders &&
               mainUrlValid &&
@@ -294,6 +339,7 @@ export function createAlertDestinationFormSchema(
         // Webhook Headers
         const headersUntouched =
           isEdit && areHeadersUntouched(data.headers, originalHeaderNames)
+        const seenHeaderKeys = new Set<string>()
 
         data.headers.forEach((h, idx) => {
           const trimmedKey = h.key.trim()
@@ -314,6 +360,14 @@ export function createAlertDestinationFormSchema(
               path: ['headers', idx, 'key'],
               message: msg.reservedHeader(h.key),
             })
+          } else if (seenHeaderKeys.has(lowerKey)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['headers', idx, 'key'],
+              message: msg.duplicateHeader(trimmedKey),
+            })
+          } else {
+            seenHeaderKeys.add(lowerKey)
           }
 
           if (!headersUntouched && !h.value) {
@@ -332,8 +386,25 @@ export function createAlertDestinationFormSchema(
 
       // 2. MQTT 协议校验
       if (data.channelType === 'mqtt') {
+        if (data.eventsEnabled && data.imageMode === 'multipart') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['imageMode'],
+            message: msg.imageModeUnsupported,
+          })
+        }
+
+        const trimmedClientId = data.clientId.trim()
+        if (utf8ByteLength(trimmedClientId) > MAX_MQTT_CLIENT_ID_BYTES) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['clientId'],
+            message: msg.clientIdMax,
+          })
+        }
+
         if (
-          !Number.isFinite(data.keepAliveSeconds) ||
+          !Number.isInteger(data.keepAliveSeconds) ||
           data.keepAliveSeconds < 5 ||
           data.keepAliveSeconds > 300
         ) {
@@ -367,21 +438,34 @@ export function createAlertDestinationFormSchema(
         } else {
           try {
             const parsed = new URL(trimmedBroker)
-            if (parsed.username || parsed.password) {
+            const authorityMatch =
+              /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^/?#]*)/.exec(trimmedBroker)
+            const hasAtInAuthority = Boolean(authorityMatch?.[1].includes('@'))
+            const protocolAllowed = ALLOWED_MQTT_SCHEMES.includes(
+              parsed.protocol.toLowerCase() as (typeof ALLOWED_MQTT_SCHEMES)[number]
+            )
+
+            if (parsed.username || parsed.password || hasAtInAuthority) {
               ctx.addIssue({
                 code: z.ZodIssueCode.custom,
                 path: ['broker'],
                 message: msg.brokerInvalid,
+              })
+            } else if (!protocolAllowed || !parsed.hostname) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['broker'],
+                message: msg.brokerUrlInvalid,
               })
             }
           } catch {
-            if (trimmedBroker.includes('@')) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: ['broker'],
-                message: msg.brokerInvalid,
-              })
-            }
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['broker'],
+              message: trimmedBroker.includes('@')
+                ? msg.brokerInvalid
+                : msg.brokerUrlInvalid,
+            })
           }
         }
 

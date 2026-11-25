@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { algorithmsApi } from '@/features/algorithms/api/algorithms-api'
-import { camerasApi } from '@/features/cameras/api/cameras-api'
+import { useAlgorithms } from '@/features/algorithms/contract'
+import { useAllCameras } from '@/features/cameras/contract'
 
 export interface FilterOption {
   id: string
@@ -9,17 +8,8 @@ export interface FilterOption {
 }
 
 export function useDestinationFilterOptions() {
-  const algosQuery = useQuery({
-    queryKey: ['algorithms'],
-    queryFn: () => algorithmsApi.getAlgorithms(),
-    staleTime: 5 * 60 * 1000,
-  })
-
-  const camerasQuery = useQuery({
-    queryKey: ['cameras', 'filter-options'],
-    queryFn: () => camerasApi.getAll(),
-    staleTime: 5 * 60 * 1000,
-  })
+  const algosQuery = useAlgorithms()
+  const camerasQuery = useAllCameras()
 
   const algorithms = useMemo<FilterOption[]>(
     () => algosQuery.data?.map((a) => ({ id: a.id, name: a.name })) ?? [],
@@ -36,5 +26,12 @@ export function useDestinationFilterOptions() {
     algorithms,
     cameras,
     isLoading: algosQuery.isLoading || camerasQuery.isLoading,
+    isAlgosLoading: algosQuery.isLoading,
+    isCamerasLoading: camerasQuery.isLoading,
+    isError: algosQuery.isError || camerasQuery.isError,
+    isAlgosError: algosQuery.isError,
+    isCamerasError: camerasQuery.isError,
+    refetchAlgorithms: algosQuery.refetch,
+    refetchCameras: camerasQuery.refetch,
   }
 }

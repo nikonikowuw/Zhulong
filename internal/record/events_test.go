@@ -227,3 +227,63 @@ func TestAlarmListenerSweeperTimeoutFallback(t *testing.T) {
 			ev.ImageReady, ev.CropReady)
 	}
 }
+
+func TestAlarmListenerFallbackClearsPathsWhenSnapshotEnqueueRejected(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	svc := record.NewService(store, zap.NewNop())
+	collector := &recordAlarmCollector{}
+	svc.SetAlarmListener(collector)
+	// 刻意不调用 svc.Start(ctx)，使 s.accepting == false，触发 dispatchOrEnqueueEvent 的降级分支。
+
+	snapshots := record.NewSnapshotStore(
+		&fakeSnapshotProvider{},
+		&fakeMediaRoot{root: t.TempDir()},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
+	// 停止 SnapshotStore，使 Available() 为 true 但 Enqueue() 返回 false。
+	snapshots.Stop()
+	svc.SetSnapshotStore(snapshots)
+
+	res := aitypes.InferenceResult{
+		CameraID:    "cam_01",
+		AlgorithmID: "algo_01",
+		PTS:         4000,
+		Timestamp:   time.Date(2026, 11, 3, 13, 0, 0, 0, time.UTC),
+		TaskType:    aitypes.TaskTypeDetection,
+		Detections: []aitypes.DetectionItem{
+			{Box: [4]float64{0.1, 0.2, 0.3, 0.4}, Label: "no_helmet_alarm", Score: 0.95},
+		},
+	}
+
+	if err := svc.ProcessInferenceResult(ctx, res); err != nil {
+		t.Fatalf("ProcessInferenceResult: %v", err)
+	}
+
+	if collector.count() != 1 {
+		t.Fatalf("expected 1 alarm event, got %d", collector.count())
+	}
+	ev := collector.get(0)
+	if ev.ImageReady || ev.CropReady || ev.ImagePath != "" || ev.CropPath != "" {
+		t.Fatalf("expected event without evidence on fallback rejection, got %+v", ev)
+	}
+
+	persisted, err := store.GetAlarmByID(ctx, ev.ID)
+	if err != nil {
+		t.Fatalf("GetAlarmByID(%q): %v", ev.ID, err)
+	}
+	if persisted == nil {
+		t.Fatalf("expected persisted alarm row %q", ev.ID)
+	}
+	if persisted.ImagePath != "" || persisted.CropPath != "" {
+		t.Fatalf(
+			"expected snapshot paths cleared in DB when fallback enqueue rejected, got image=%q crop=%q",
+			persisted.ImagePath,
+			persisted.CropPath,
+		)
+	}
+}

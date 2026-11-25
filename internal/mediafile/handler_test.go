@@ -610,6 +610,8 @@ func TestHandler_ContentTypeForPath(t *testing.T) {
 		"a.jpeg":    "image/jpeg",
 		"a.JPEG":    "image/jpeg",
 		"a.png":     "image/png",
+		"a.webp":    "image/webp",
+		"a.WEBP":    "image/webp",
 		"a.txt":     "application/octet-stream",
 		"noext":     "application/octet-stream",
 		"a.mp4.exe": "application/octet-stream",

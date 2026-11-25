@@ -51,6 +51,9 @@ type Config struct {
 	// Source resolves camera / algorithm display metadata per delivery. Nil leaves the
 	// names null; the payload still carries the raw IDs.
 	Source SourceResolver
+	// AllowLoopback permits outbound Webhook/MQTT connections to loopback hosts (127.0.0.1/::1/localhost).
+	// Production defaults to false; unit tests opt in explicitly.
+	AllowLoopback bool
 }
 
 const (
@@ -59,6 +62,10 @@ const (
 	sourceResolveTimeout   = 2 * time.Second
 	workerQueueCapacity    = 16
 	retirementDrainTimeout = 3 * time.Second
+
+	defaultFailureBackoffThreshold = 3
+	defaultFailureBackoffBase      = 1 * time.Second
+	defaultFailureBackoffMax       = 30 * time.Second
 )
 
 // queuedEvent pairs an event with the sequence number assigned at enqueue time.
@@ -133,8 +140,13 @@ func (d *Dispatcher) counterFor(destID string) *atomic.Uint64 {
 
 // Start begins background reconciliation loop and loads initial destinations.
 func (d *Dispatcher) Start(ctx context.Context) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	d.running.Store(true)
-	d.reconcile()
+	d.reconcileWithContext(ctx)
 
 	d.wg.Add(1)
 	go func() {
@@ -151,29 +163,55 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop cleanly drains workers concurrently and terminates dispatcher.
+// Stop cleanly drains workers concurrently and terminates dispatcher, respecting ctx cancellation.
 func (d *Dispatcher) Stop(ctx context.Context) error {
 	if !d.running.CompareAndSwap(true, false) {
 		return nil
 	}
 	close(d.stopCh)
-	d.wg.Wait()
+
+	reconcileDone := make(chan struct{})
+	go func() {
+		defer close(reconcileDone)
+		d.wg.Wait()
+	}()
+	if err := waitWithContext(ctx, reconcileDone); err != nil {
+		return err
+	}
 
 	d.mu.Lock()
 	workers := d.workers
 	d.workers = make(map[string]*destinationWorker)
 	d.mu.Unlock()
 
-	var stopWg sync.WaitGroup
-	for _, w := range workers {
-		stopWg.Add(1)
-		go func(worker *destinationWorker) {
-			defer stopWg.Done()
-			worker.stop()
-		}(w)
+	workersDone := make(chan struct{})
+	go func() {
+		defer close(workersDone)
+		var stopWg sync.WaitGroup
+		for _, w := range workers {
+			stopWg.Add(1)
+			go func(worker *destinationWorker) {
+				defer stopWg.Done()
+				worker.stop()
+			}(w)
+		}
+		stopWg.Wait()
+	}()
+
+	return waitWithContext(ctx, workersDone)
+}
+
+func waitWithContext(ctx context.Context, done <-chan struct{}) error {
+	if ctx == nil {
+		<-done
+		return nil
 	}
-	stopWg.Wait()
-	return nil
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // RemoveDestinationState drops cached status and sequence counter entries for a deleted destination.
@@ -290,23 +328,42 @@ func (d *Dispatcher) UpdateTestResult(id string, success bool, reason string) {
 }
 
 func (d *Dispatcher) reconcile() {
+	d.reconcileWithContext(context.Background())
+}
+
+func (d *Dispatcher) reconcileWithContext(parent context.Context) {
 	if d.store == nil {
 		return
 	}
+	if parent == nil {
+		parent = context.Background()
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 
-	enabledDestinations, err := d.store.ListEnabled(ctx)
+	allDestinations, err := d.store.List(ctx)
 	if err != nil {
-		d.logger.Error("reconcile list enabled destinations failed", zap.Error(err))
+		d.logger.Error("reconcile list destinations failed", zap.Error(err))
 		return
+	}
+
+	existingIDs := make(map[string]struct{}, len(allDestinations))
+	enabledDestinations := make([]*AlertDestination, 0, len(allDestinations))
+	for _, dest := range allDestinations {
+		existingIDs[dest.ID] = struct{}{}
+		if dest.Enabled {
+			enabledDestinations = append(enabledDestinations, dest)
+		}
 	}
 
 	currentDeviceID := resolveDeviceID(d.config.DeviceID)
 	activeIDs := make(map[string]struct{}, len(enabledDestinations))
 	toRetireReload := []*destinationWorker{}
 	toRetireOffline := []*destinationWorker{}
+	retiredWorkers := []*destinationWorker{}
+	replacedBy := make(map[string]*destinationWorker)
+	buildFailedIDs := make(map[string]struct{})
 	toStart := []*destinationWorker{}
 
 	d.mu.Lock()
@@ -323,6 +380,7 @@ func (d *Dispatcher) reconcile() {
 		// Destination is new or updated, build replacement sender before retiring
 		sender, filter, hbInterval, err := d.buildSender(dest)
 		if err != nil {
+			buildFailedIDs[dest.ID] = struct{}{}
 			reason := classifyError(err)
 			d.logger.Warn("failed to build sender for destination, marking failed",
 				zap.String("id", dest.ID),
@@ -333,6 +391,7 @@ func (d *Dispatcher) reconcile() {
 			var st AlertDestinationStatus
 			if exists {
 				toRetireOffline = append(toRetireOffline, currentWorker)
+				retiredWorkers = append(retiredWorkers, currentWorker)
 				delete(d.workers, dest.ID)
 				st = currentWorker.getStatus()
 			} else {
@@ -360,12 +419,8 @@ func (d *Dispatcher) reconcile() {
 			} else {
 				toRetireOffline = append(toRetireOffline, currentWorker)
 			}
+			retiredWorkers = append(retiredWorkers, currentWorker)
 			delete(d.workers, dest.ID)
-			snap := currentWorker.getStatus()
-			prevStatus = &snap
-			d.statsMu.Lock()
-			d.stats[dest.ID] = snap
-			d.statsMu.Unlock()
 		} else {
 			d.statsMu.RLock()
 			if snap, found := d.stats[dest.ID]; found {
@@ -390,6 +445,9 @@ func (d *Dispatcher) reconcile() {
 			logger:            d.logger,
 		})
 		d.workers[dest.ID] = w
+		if exists {
+			replacedBy[dest.ID] = w
+		}
 		toStart = append(toStart, w)
 	}
 
@@ -397,10 +455,8 @@ func (d *Dispatcher) reconcile() {
 	for id, w := range d.workers {
 		if _, active := activeIDs[id]; !active {
 			toRetireOffline = append(toRetireOffline, w)
+			retiredWorkers = append(retiredWorkers, w)
 			delete(d.workers, id)
-			d.statsMu.Lock()
-			d.stats[id] = w.getStatus()
-			d.statsMu.Unlock()
 		}
 	}
 	d.mu.Unlock()
@@ -424,6 +480,49 @@ func (d *Dispatcher) reconcile() {
 		}(w)
 	}
 	retireWg.Wait()
+
+	// Snapshot post-drain cumulative telemetry after retirement finishes so drained
+	// deliveries are preserved across reloads, and prune deleted destinations permanently.
+	d.statsMu.Lock()
+	for _, oldW := range retiredWorkers {
+		if _, stillExists := existingIDs[oldW.id]; !stillExists {
+			delete(d.stats, oldW.id)
+			continue
+		}
+		snap := oldW.getStatus()
+		if newW, replaced := replacedBy[oldW.id]; replaced {
+			newW.inheritStatus(snap)
+			d.stats[oldW.id] = snap
+		} else if _, buildFailed := buildFailedIDs[oldW.id]; buildFailed {
+			// Preserve build-failure status recorded earlier in this reconcile pass (regardless of
+			// reason: config_invalid, ssrf_blocked, unsupported_channel, etc.) while merging drained counts.
+			existing := d.stats[oldW.id]
+			existing.TotalDispatched = snap.TotalDispatched
+			existing.Dropped = snap.Dropped
+			if snap.LastSuccessAt != nil && (existing.LastSuccessAt == nil || snap.LastSuccessAt.After(*existing.LastSuccessAt)) {
+				t := *snap.LastSuccessAt
+				existing.LastSuccessAt = &t
+			}
+			d.stats[oldW.id] = existing
+		} else {
+			d.stats[oldW.id] = snap
+		}
+	}
+	for id := range d.stats {
+		if _, stillExists := existingIDs[id]; !stillExists {
+			delete(d.stats, id)
+		}
+	}
+	d.statsMu.Unlock()
+
+	d.seqMu.Lock()
+	for id := range d.seqMap {
+		if _, stillExists := existingIDs[id]; !stillExists {
+			delete(d.seqMap, id)
+		}
+	}
+	d.seqMu.Unlock()
+
 	for _, w := range toStart {
 		w.start()
 	}
@@ -437,6 +536,13 @@ func (d *Dispatcher) buildSender(
 		if err := json.Unmarshal([]byte(dest.FilterJSON), &filter); err != nil {
 			return nil, filter, 0, fmt.Errorf("unmarshal destination filter: %w", err)
 		}
+	}
+	if mappedLegacy, unknown := filter.normalize(); mappedLegacy || len(unknown) > 0 {
+		d.logger.Warn("normalized persisted destination filter",
+			zap.String("destination_id", dest.ID),
+			zap.Bool("mapped_legacy_event_types", mappedLegacy),
+			zap.Strings("unknown_event_types", unknown),
+		)
 	}
 
 	switch dest.ChannelType {
@@ -480,9 +586,11 @@ func (d *Dispatcher) buildWebhookSender(dest *AlertDestination) (Sender, time.Du
 		Token:             secret.Token,
 		Username:          secret.Username,
 		Password:          secret.Password,
+		SigningSecret:     secret.SigningSecret,
 		Headers:           secret.Headers,
 		Timeout:           time.Duration(cfg.TimeoutSeconds) * time.Second,
 		TLSSkipVerify:     cfg.TLSSkipVerify,
+		AllowLoopback:     d.config.AllowLoopback,
 		Identity:          d.config.DeviceID,
 		Logger:            d.logger,
 	})
@@ -529,6 +637,7 @@ func (d *Dispatcher) buildMQTTSender(dest *AlertDestination) (Sender, time.Durat
 		QoS:               cfg.QoS,
 		KeepAlive:         time.Duration(cfg.KeepAliveSeconds) * time.Second,
 		TLSSkipVerify:     cfg.TLSSkipVerify,
+		AllowLoopback:     d.config.AllowLoopback,
 		InlineMaxBytes:    int64(normalizeInlineMaxKB(cfg.InlineMaxKB)) * 1024,
 		NextSeq:           func() uint64 { return counter.Add(1) },
 		Identity:          d.config.DeviceID,
@@ -541,37 +650,44 @@ func (d *Dispatcher) buildMQTTSender(dest *AlertDestination) (Sender, time.Durat
 }
 
 type destinationWorkerOptions struct {
-	dest              *AlertDestination
-	sender            Sender
-	filter            destinationFilter
-	fingerprint       string
-	heartbeatInterval time.Duration
-	noJitter          bool
-	snapshotProvider  HeartbeatSnapshotProvider
-	publicBaseURL     string
-	seqCounter        *atomic.Uint64
-	sourceResolver    SourceResolver
-	onWillStale       func()
-	initialStatus     *AlertDestinationStatus
-	logger            *zap.Logger
+	dest                    *AlertDestination
+	sender                  Sender
+	filter                  destinationFilter
+	fingerprint             string
+	heartbeatInterval       time.Duration
+	noJitter                bool
+	failureBackoffThreshold int64
+	failureBackoffBase      time.Duration
+	failureBackoffMax       time.Duration
+	snapshotProvider        HeartbeatSnapshotProvider
+	publicBaseURL           string
+	seqCounter              *atomic.Uint64
+	sourceResolver          SourceResolver
+	onWillStale             func()
+	initialStatus           *AlertDestinationStatus
+	logger                  *zap.Logger
 }
 
 type destinationWorker struct {
-	id                string
-	name              string
-	channelType       string
-	eventsEnabled     bool
-	heartbeatEnabled  bool
-	heartbeatInterval time.Duration
-	noJitter          bool
-	snapshotProvider  HeartbeatSnapshotProvider
-	publicBaseURL     string
-	seqCounter        *atomic.Uint64
-	sourceResolver    SourceResolver
-	onWillStale       func()
-	filter            destinationFilter
-	sender            Sender
-	queue             chan queuedEvent
+	id                      string
+	name                    string
+	channelType             string
+	eventsEnabled           bool
+	heartbeatEnabled        bool
+	heartbeatInterval       time.Duration
+	noJitter                bool
+	failureBackoffThreshold int64
+	failureBackoffBase      time.Duration
+	failureBackoffMax       time.Duration
+	snapshotProvider        HeartbeatSnapshotProvider
+	publicBaseURL           string
+	seqCounter              *atomic.Uint64
+	sourceResolver          SourceResolver
+	onWillStale             func()
+	filter                  destinationFilter
+	sender                  Sender
+	queue                   chan queuedEvent
+	backoffResetCh          chan struct{}
 	// enqueueMu makes seq assignment and enqueue one step, so concurrent Dispatch calls
 	// cannot reorder sequence numbers inside the queue.
 	enqueueMu           sync.Mutex
@@ -611,26 +727,43 @@ func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
 		seqCounter = &atomic.Uint64{}
 	}
 
+	backoffThreshold := opts.failureBackoffThreshold
+	if backoffThreshold <= 0 {
+		backoffThreshold = defaultFailureBackoffThreshold
+	}
+	backoffBase := opts.failureBackoffBase
+	if backoffBase <= 0 {
+		backoffBase = defaultFailureBackoffBase
+	}
+	backoffMax := opts.failureBackoffMax
+	if backoffMax <= 0 {
+		backoffMax = defaultFailureBackoffMax
+	}
+
 	w := &destinationWorker{
-		id:                opts.dest.ID,
-		name:              opts.dest.Name,
-		channelType:       opts.dest.ChannelType,
-		eventsEnabled:     eventsEnabled,
-		heartbeatEnabled:  heartbeatEnabled,
-		heartbeatInterval: hbInterval,
-		noJitter:          opts.noJitter,
-		snapshotProvider:  opts.snapshotProvider,
-		publicBaseURL:     opts.publicBaseURL,
-		seqCounter:        seqCounter,
-		sourceResolver:    opts.sourceResolver,
-		onWillStale:       opts.onWillStale,
-		filter:            opts.filter,
-		sender:            opts.sender,
-		queue:             make(chan queuedEvent, workerQueueCapacity),
-		fingerprint:       opts.fingerprint,
-		stopCh:            make(chan struct{}),
-		doneCh:            make(chan struct{}),
-		logger:            opts.logger.With(zap.String("destination_id", opts.dest.ID)),
+		id:                      opts.dest.ID,
+		name:                    opts.dest.Name,
+		channelType:             opts.dest.ChannelType,
+		eventsEnabled:           eventsEnabled,
+		heartbeatEnabled:        heartbeatEnabled,
+		heartbeatInterval:       hbInterval,
+		noJitter:                opts.noJitter,
+		failureBackoffThreshold: backoffThreshold,
+		failureBackoffBase:      backoffBase,
+		failureBackoffMax:       backoffMax,
+		snapshotProvider:        opts.snapshotProvider,
+		publicBaseURL:           opts.publicBaseURL,
+		seqCounter:              seqCounter,
+		sourceResolver:          opts.sourceResolver,
+		onWillStale:             opts.onWillStale,
+		filter:                  opts.filter,
+		sender:                  opts.sender,
+		queue:                   make(chan queuedEvent, workerQueueCapacity),
+		backoffResetCh:          make(chan struct{}, 1),
+		fingerprint:             opts.fingerprint,
+		stopCh:                  make(chan struct{}),
+		doneCh:                  make(chan struct{}),
+		logger:                  opts.logger.With(zap.String("destination_id", opts.dest.ID)),
 	}
 
 	initialState := StateUnverified
@@ -643,22 +776,33 @@ func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
 	// Carry forward cumulative counters and historical timestamps across hot-reloads
 	// while resetting health state so updated config is evaluated cleanly.
 	if st := opts.initialStatus; st != nil {
-		w.totalDispatched.Store(st.TotalDispatched)
-		w.dropped.Store(st.Dropped)
-		if st.LastAttemptAt != nil {
-			t := *st.LastAttemptAt
-			w.lastAttemptAt.Store(&t)
-		}
-		if st.LastSuccessAt != nil {
-			t := *st.LastSuccessAt
-			w.lastSuccessAt.Store(&t)
-		}
-		if st.LastFailureAt != nil {
-			t := *st.LastFailureAt
-			w.lastFailureAt.Store(&t)
-		}
+		w.inheritStatus(*st)
 	}
 	return w
+}
+
+// inheritStatus merges cumulative counters and historical timestamps from a retired
+// worker (after its drain completes) without clobbering any drops already accrued while
+// the replacement worker waited to start.
+func (w *destinationWorker) inheritStatus(st AlertDestinationStatus) {
+	if st.TotalDispatched > 0 {
+		w.totalDispatched.Add(st.TotalDispatched)
+	}
+	if st.Dropped > 0 {
+		w.dropped.Add(st.Dropped)
+	}
+	if st.LastAttemptAt != nil && w.lastAttemptAt.Load() == nil {
+		t := *st.LastAttemptAt
+		w.lastAttemptAt.Store(&t)
+	}
+	if st.LastSuccessAt != nil && w.lastSuccessAt.Load() == nil {
+		t := *st.LastSuccessAt
+		w.lastSuccessAt.Store(&t)
+	}
+	if st.LastFailureAt != nil && w.lastFailureAt.Load() == nil {
+		t := *st.LastFailureAt
+		w.lastFailureAt.Store(&t)
+	}
 }
 
 func (w *destinationWorker) start() {
@@ -701,16 +845,14 @@ func (w *destinationWorker) start() {
 func (w *destinationWorker) initMQTTConnection(stopCtx context.Context, mqttSender *MQTTSender) {
 	mqttSender.SetConnectionHooks(
 		func() {
-			w.state.Store(StateConnected)
-			w.lastError.Store("")
+			w.recordSuccess()
 		},
 		func(lostErr error) {
 			reason := classifyError(lostErr)
 			if reason == "" {
 				reason = "not_connected"
 			}
-			w.state.Store(StateFailed)
-			w.lastError.Store(reason)
+			w.recordFailure(reason)
 			w.logger.Warn("mqtt broker connection lost",
 				zap.String("reason", reason),
 				zap.Error(lostErr),
@@ -719,8 +861,7 @@ func (w *destinationWorker) initMQTTConnection(stopCtx context.Context, mqttSend
 	)
 
 	if mqttSender.IsConnected() {
-		w.state.Store(StateConnected)
-		w.lastError.Store("")
+		w.recordSuccess()
 		return
 	}
 	w.wg.Add(1)
@@ -731,8 +872,7 @@ func (w *destinationWorker) initMQTTConnection(stopCtx context.Context, mqttSend
 				return
 			}
 			reason := classifyError(connectErr)
-			w.state.Store(StateFailed)
-			w.lastError.Store(reason)
+			w.recordFailure(reason)
 			w.logger.Debug("initial mqtt connect attempt failed", zap.Error(connectErr))
 		}
 	}()
@@ -766,6 +906,19 @@ func (w *destinationWorker) runEvents() {
 	}()
 
 	for {
+		if cooldown := w.failureCooldownDuration(); cooldown > 0 {
+			timer := time.NewTimer(cooldown)
+			select {
+			case <-w.stopCh:
+				timer.Stop()
+				w.drainQueuedEvents(eventCtx)
+				return
+			case <-w.backoffResetCh:
+				timer.Stop()
+			case <-timer.C:
+			}
+		}
+
 		select {
 		case <-w.stopCh:
 			w.drainQueuedEvents(eventCtx)
@@ -790,11 +943,28 @@ func (w *destinationWorker) runEvents() {
 	}
 }
 
+func (w *destinationWorker) failureCooldownDuration() time.Duration {
+	failures := w.consecutiveFailures.Load()
+	if failures < w.failureBackoffThreshold {
+		return 0
+	}
+	shift := failures - w.failureBackoffThreshold
+	if shift > 10 {
+		shift = 10
+	}
+	delay := w.failureBackoffBase << shift
+	if delay <= 0 || delay > w.failureBackoffMax {
+		return w.failureBackoffMax
+	}
+	return delay
+}
+
 func (w *destinationWorker) drainQueuedEvents(eventCtx context.Context) {
 	drainCtx, cancel := context.WithTimeout(eventCtx, retirementDrainTimeout)
 	defer cancel()
 	for {
 		if drainCtx.Err() != nil {
+			w.discardRemainingQueueOnTimeout()
 			return
 		}
 		select {
@@ -805,8 +975,27 @@ func (w *destinationWorker) drainQueuedEvents(eventCtx context.Context) {
 				w.totalDispatched.Add(1)
 			}
 		case <-drainCtx.Done():
+			w.discardRemainingQueueOnTimeout()
 			return
 		default:
+			return
+		}
+	}
+}
+
+func (w *destinationWorker) discardRemainingQueueOnTimeout() {
+	var discarded int64
+	for {
+		select {
+		case <-w.queue:
+			discarded++
+		default:
+			if discarded > 0 {
+				w.dropped.Add(discarded)
+				w.logger.Warn("dropped queued events after retirement drain timeout",
+					zap.Int64("dropped_count", discarded),
+				)
+			}
 			return
 		}
 	}
@@ -865,7 +1054,8 @@ func (w *destinationWorker) runHeartbeats(stopCtx context.Context) {
 			if mqttSender, ok := w.sender.(*MQTTSender); ok && mqttSender.hasStaleWillDeviceID() {
 				if w.onWillStale != nil {
 					w.onWillStale()
-					return
+					timer.Reset(min(5*time.Second, w.nextHeartbeatDelay()))
+					continue
 				}
 			}
 
@@ -917,6 +1107,10 @@ func (w *destinationWorker) recordSuccess() {
 	w.consecutiveFailures.Store(0)
 	w.lastAttemptAt.Store(&now)
 	w.lastSuccessAt.Store(&now)
+	select {
+	case w.backoffResetCh <- struct{}{}:
+	default:
+	}
 }
 
 func (w *destinationWorker) recordFailure(reason string) {
@@ -1067,12 +1261,15 @@ func classifyError(err error) string {
 
 	var dnsErr *net.DNSError
 	isDNS := errors.As(err, &dnsErr) || strings.Contains(errStr, "no such host")
-	isTimeout := strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded")
+	isTimeout := errors.Is(err, errMQTTConnectTimeout) ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "timed out") ||
+		strings.Contains(errStr, "deadline exceeded")
 	isTLS := strings.Contains(errStr, "certificate") ||
 		strings.Contains(errStr, "tls") ||
 		strings.Contains(errStr, "x509")
-	isAuth := strings.Contains(errStr, "401") ||
-		strings.Contains(errStr, "403") ||
+	isAuth := strings.Contains(errStr, "status 401") ||
+		strings.Contains(errStr, "status 403") ||
 		strings.Contains(errStr, "not authorized") ||
 		strings.Contains(errStr, "bad user name or password")
 	isNotConnected := errors.Is(err, ErrMQTTNotConnected) || strings.Contains(errStr, "not connected")
@@ -1083,17 +1280,22 @@ func classifyError(err error) string {
 		errors.Is(err, ErrMQTTBrokerMissing) ||
 		errors.Is(err, ErrMQTTTopicMissing) ||
 		errors.Is(err, ErrMQTTWildcardTopic) ||
+		errors.Is(err, ErrInvalidMQTTScheme) ||
 		errors.Is(err, ErrInvalidConfig) ||
 		errors.Is(err, ErrInvalidImageMode)
 
 	switch {
 	case errors.Is(err, ErrInvalidChannelType):
 		return "unsupported_channel"
+	case errors.Is(err, ErrSSRFBlocked):
+		return "ssrf_blocked"
 	case isConfigInvalid:
 		return "config_invalid"
 	case errors.Is(err, ErrCrossOriginRedirect):
 		return "cross_origin_redirect"
-	case errors.Is(err, ErrWebhookRedirectMethodChanged), errors.Is(err, ErrWebhookTooManyRedirects):
+	case errors.Is(err, ErrWebhookRedirectMethodChanged),
+		errors.Is(err, ErrWebhookTooManyRedirects),
+		errors.Is(err, ErrWebhookHTTPSDowngrade):
 		return "redirect_blocked"
 	case isDNS:
 		return "dns"

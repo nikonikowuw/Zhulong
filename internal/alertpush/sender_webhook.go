@@ -3,14 +3,19 @@ package alertpush
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +26,10 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/record"
 )
 
-const defaultMaxWebhookMultipartImageBytes = 16 * 1024 * 1024 // 16 MiB per image part
+const (
+	defaultMaxWebhookMultipartImageBytes = 16 * 1024 * 1024 // 16 MiB per image part
+	defaultMaxWebhookMultipartTotalBytes = 24 * 1024 * 1024 // 24 MiB total across all parts per event
+)
 
 var (
 	ErrWebhookURLMissing            = errors.New("webhook url is missing")
@@ -29,10 +37,12 @@ var (
 	ErrWebhookHTTPStatusError       = errors.New("webhook target returned non-success http status")
 	ErrWebhookTooManyRedirects      = errors.New("stopped after 3 redirects")
 	ErrWebhookRedirectMethodChanged = errors.New("refusing redirect that changes POST method")
+	ErrWebhookHTTPSDowngrade        = errors.New("refusing redirect that downgrades https to http")
 	ErrCrossOriginRedirect          = errors.New(
 		"refusing cross-origin redirect when credentials are configured",
 	)
 	errWebhookImageTooLarge = errors.New("image exceeds maximum webhook multipart size")
+	errWebhookImageEmpty    = errors.New("image is empty")
 )
 
 // WebhookSenderOptions contains configuration for constructing a WebhookSender.
@@ -52,12 +62,21 @@ type WebhookSenderOptions struct {
 	Token             string
 	Username          string
 	Password          string
-	Headers           map[string]string
-	Timeout           time.Duration
-	TLSSkipVerify     bool
+	// SigningSecret, when non-empty, signs every outbound request body using
+	// HMAC-SHA256(SigningSecret, timestamp + "." + rawBody) in X-Zhulong-Signature.
+	SigningSecret string
+	Headers       map[string]string
+	Timeout       time.Duration
+	TLSSkipVerify bool
+	// AllowLoopback permits connecting to loopback hosts (127.0.0.1 / ::1 / localhost).
+	// Production defaults to false; unit tests talking to httptest servers opt in explicitly.
+	AllowLoopback bool
 	// MaxMultipartImageBytes caps raw bytes read per image part in multipart mode.
 	// Zero or negative uses defaultMaxWebhookMultipartImageBytes (16 MiB).
 	MaxMultipartImageBytes int64
+	// MaxMultipartTotalBytes caps total raw bytes read across all image parts in one event.
+	// Zero or negative uses defaultMaxWebhookMultipartTotalBytes (24 MiB).
+	MaxMultipartTotalBytes int64
 	// Identity supplies the host device_id stamped onto every payload. Nil omits it.
 	Identity DeviceIDProvider
 	Logger   *zap.Logger
@@ -72,9 +91,29 @@ type WebhookSender struct {
 
 // NewWebhookSender constructs a WebhookSender instance.
 func NewWebhookSender(opts WebhookSenderOptions) (*WebhookSender, error) {
-	if strings.TrimSpace(opts.URL) == "" {
+	trimmedURL := strings.TrimSpace(opts.URL)
+	if trimmedURL == "" {
 		return nil, ErrWebhookURLMissing
 	}
+	parsedURL, err := url.Parse(trimmedURL)
+	if err != nil || parsedURL.Host == "" ||
+		(parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return nil, fmt.Errorf("%w: invalid webhook url", ErrWebhookURLMissing)
+	}
+	if err := validateWebhookTargetHost(parsedURL.Host, opts.AllowLoopback); err != nil {
+		return nil, err
+	}
+	if hbURL := strings.TrimSpace(opts.HeartbeatURL); hbURL != "" {
+		parsedHB, hbErr := url.Parse(hbURL)
+		if hbErr != nil || parsedHB.Host == "" ||
+			(parsedHB.Scheme != "http" && parsedHB.Scheme != "https") {
+			return nil, fmt.Errorf("%w: invalid webhook heartbeat url", ErrWebhookURLMissing)
+		}
+		if err := validateWebhookTargetHost(parsedHB.Host, opts.AllowLoopback); err != nil {
+			return nil, err
+		}
+	}
+
 	needsPublicBaseURL := !opts.SkipImageURLCheck && opts.ImageMode == ImageModeURL
 	if needsPublicBaseURL && strings.TrimSpace(opts.PublicBaseURL) == "" {
 		return nil, ErrPublicBaseURLMissing
@@ -88,18 +127,11 @@ func NewWebhookSender(opts WebhookSenderOptions) (*WebhookSender, error) {
 		logger = zap.NewNop()
 	}
 
-	transport := &http.Transport{
-		MaxIdleConns:        4,
-		MaxIdleConnsPerHost: 4,
-		IdleConnTimeout:     30 * time.Second,
-	}
-	if opts.TLSSkipVerify {
-		transport.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
-		}
-	}
+	transport := newWebhookTransport(timeout, opts.TLSSkipVerify, opts.AllowLoopback)
 
-	hasCredentials := (opts.AuthType != "" && opts.AuthType != AuthTypeNone) || len(opts.Headers) > 0
+	hasCredentials := (opts.AuthType != "" && opts.AuthType != AuthTypeNone) ||
+		len(opts.Headers) > 0 ||
+		opts.SigningSecret != ""
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   timeout,
@@ -111,6 +143,18 @@ func NewWebhookSender(opts WebhookSenderOptions) (*WebhookSender, error) {
 			if len(via) > 0 && via[0].Method == http.MethodPost && req.Method != http.MethodPost {
 				return ErrWebhookRedirectMethodChanged
 			}
+			// Always refuse HTTPS -> HTTP scheme downgrades and non-HTTP schemes regardless of auth.
+			reqScheme := strings.ToLower(req.URL.Scheme)
+			if reqScheme != "http" && reqScheme != "https" {
+				return ErrSSRFBlocked
+			}
+			if len(via) > 0 && strings.EqualFold(via[len(via)-1].URL.Scheme, "https") &&
+				reqScheme != "https" {
+				return ErrWebhookHTTPSDowngrade
+			}
+			if err := validateWebhookTargetHost(req.URL.Host, opts.AllowLoopback); err != nil {
+				return err
+			}
 			mustGuardOrigin := hasCredentials && len(via) > 0
 			if mustGuardOrigin && !sameOrigin(via[0].URL.String(), req.URL.String()) {
 				return ErrCrossOriginRedirect
@@ -119,11 +163,43 @@ func NewWebhookSender(opts WebhookSenderOptions) (*WebhookSender, error) {
 		},
 	}
 
+	opts.URL = trimmedURL
 	return &WebhookSender{
 		opts:   opts,
 		client: client,
 		logger: logger.Named("alertpush.webhook").With(zap.String("destination_id", opts.ID)),
 	}, nil
+}
+
+func newWebhookTransport(timeout time.Duration, tlsSkipVerify, allowLoopback bool) *http.Transport {
+	var transport *http.Transport
+	if dt, ok := http.DefaultTransport.(*http.Transport); ok && dt != nil {
+		transport = dt.Clone()
+	} else {
+		transport = &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ForceAttemptHTTP2:     true,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+	}
+	transport.MaxIdleConns = 4
+	transport.MaxIdleConnsPerHost = 4
+	transport.IdleConnTimeout = 30 * time.Second
+	dialTimeout := min(timeout, 10*time.Second)
+	transport.DialContext = newSSRFSafeDialContext(&net.Dialer{
+		Timeout:   dialTimeout,
+		KeepAlive: 30 * time.Second,
+	}, allowLoopback)
+	if tlsSkipVerify {
+		if transport.TLSClientConfig == nil {
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		} else {
+			transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+			transport.TLSClientConfig.InsecureSkipVerify = true
+		}
+	}
+	return transport
 }
 
 // Close releases idle connections in the transport pool.
@@ -215,11 +291,12 @@ func (s *WebhookSender) SendHeartbeat(
 		targetURL = s.opts.URL
 	}
 
+	now := time.Now()
 	payload := buildHeartbeatPayload(
 		snap,
 		resolveDeviceID(s.opts.Identity),
 		seq,
-		time.Now(),
+		now,
 	)
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -232,7 +309,7 @@ func (s *WebhookSender) SendHeartbeat(
 	}
 	req.Header.Set("Content-Type", "application/json")
 	s.applyAuthAndHeaders(req)
-	setEnvelopeHeaders(req, payload.EventType, payload.ID, payload.SchemaVersion)
+	s.setEnvelopeAndSignatureHeaders(req, payload.EventType, payload.ID, payload.SchemaVersion, now, bodyBytes)
 
 	_, err = s.executeRequest(ctx, req, targetURL)
 	return err
@@ -261,10 +338,12 @@ func (s *WebhookSender) executeRequest(
 			zap.String("target_url", logsafe.URL(targetURL)),
 			zap.Error(err),
 		)
-		nonRetryableRedirect := errors.Is(err, ErrCrossOriginRedirect) ||
+		nonRetryablePolicy := errors.Is(err, ErrCrossOriginRedirect) ||
 			errors.Is(err, ErrWebhookRedirectMethodChanged) ||
-			errors.Is(err, ErrWebhookTooManyRedirects)
-		if nonRetryableRedirect || ctx.Err() != nil {
+			errors.Is(err, ErrWebhookTooManyRedirects) ||
+			errors.Is(err, ErrWebhookHTTPSDowngrade) ||
+			errors.Is(err, ErrSSRFBlocked)
+		if nonRetryablePolicy || ctx.Err() != nil {
 			return false, err
 		}
 		return true, err
@@ -308,13 +387,14 @@ func (s *WebhookSender) buildRequest(
 	d Delivery,
 	prepared preparedWebhookImages,
 ) (*http.Request, error) {
-	payload := buildEventPayload(d, resolveDeviceID(s.opts.Identity), time.Now())
+	now := time.Now()
+	payload := buildEventPayload(d, resolveDeviceID(s.opts.Identity), now)
 	payload.Images = prepared.images
 
 	if s.opts.ImageMode == ImageModeMultipart {
-		return s.buildMultipartRequest(payload, prepared.parts)
+		return s.buildMultipartRequest(payload, prepared.parts, now)
 	}
-	return s.buildJSONRequest(payload)
+	return s.buildJSONRequest(payload, now)
 }
 
 func (s *WebhookSender) imageURLParams() imageURLParams {
@@ -327,7 +407,7 @@ func (s *WebhookSender) imageURLParams() imageURLParams {
 	}
 }
 
-func (s *WebhookSender) buildJSONRequest(payload EventPayload) (*http.Request, error) {
+func (s *WebhookSender) buildJSONRequest(payload EventPayload, now time.Time) (*http.Request, error) {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal json payload: %w", err)
@@ -339,12 +419,13 @@ func (s *WebhookSender) buildJSONRequest(payload EventPayload) (*http.Request, e
 	}
 	req.Header.Set("Content-Type", "application/json")
 	s.applyAuthAndHeaders(req)
-	setEnvelopeHeaders(req, payload.EventType, payload.ID, payload.SchemaVersion)
+	s.setEnvelopeAndSignatureHeaders(req, payload.EventType, payload.ID, payload.SchemaVersion, now, bodyBytes)
 	return req, nil
 }
 
 // loadMultipartImages reads every ready image once and closes file handles before any
-// network I/O begins. Images that cannot be read fall back to a URL when available.
+// network I/O begins. Per-image (16 MiB) and per-event total (24 MiB) caps bound memory;
+// images that exceed a cap or fail to read fall back to a URL when available.
 func (s *WebhookSender) loadMultipartImages(
 	ctx context.Context,
 	ev record.AlarmEvent,
@@ -352,15 +433,35 @@ func (s *WebhookSender) loadMultipartImages(
 	images := &EventImages{}
 	parts := []preparedMultipartImage{}
 	params := s.imageURLParams()
+	perImageLimit := s.maxMultipartImageBytes()
+	remainingTotal := s.maxMultipartTotalBytes()
 
 	for _, c := range imageCandidates(ev) {
 		info := newImageInfo(c.relPath)
-		data, readErr := s.readMediaBytes(ctx, c.role, c.relPath)
+		effectiveLimit := min(perImageLimit, remainingTotal)
+		var (
+			data    []byte
+			size    int64
+			readErr error
+		)
+		if effectiveLimit <= 0 {
+			size = s.probeSizeBestEffort(ctx, c.relPath)
+			readErr = errWebhookImageTooLarge
+			s.logger.Warn("webhook multipart total size cap reached; falling back to URL if configured",
+				zap.String("role", c.role),
+				zap.String("path", c.relPath),
+				zap.Int64("total_limit_bytes", s.maxMultipartTotalBytes()),
+			)
+		} else {
+			data, size, readErr = s.readMediaBytes(ctx, c.role, c.relPath, effectiveLimit)
+		}
+
 		if readErr == nil {
 			partName := "image_" + c.role
-			size := int64(len(data))
+			actualSize := int64(len(data))
 			info.Part = partName
-			info.SizeBytes = &size
+			info.SizeBytes = &actualSize
+			remainingTotal -= actualSize
 			parts = append(parts, preparedMultipartImage{
 				part: partName,
 				mime: info.MIME,
@@ -371,7 +472,12 @@ func (s *WebhookSender) loadMultipartImages(
 			continue
 		}
 
-		// Open/read failed: fall back to signed/presigned URL if configured.
+		// Missing or empty local file cannot produce a valid local signed URL; only fall back
+		// to URL when the image exists (oversized/transient read error) or has a presigner.
+		if isMediaMissingErr(readErr) || errors.Is(readErr, errWebhookImageEmpty) {
+			continue
+		}
+
 		signed, ok := mintImageURL(
 			ctx,
 			params,
@@ -383,12 +489,24 @@ func (s *WebhookSender) loadMultipartImages(
 		}
 		info.URL = signed.url
 		info.ExpiresAt = signed.expiresAt
+		if size > 0 {
+			knownSize := size
+			info.SizeBytes = &knownSize
+		}
 		images.set(c.role, info)
 	}
 	if images.Empty() {
 		return nil, parts
 	}
 	return images, parts
+}
+
+func (s *WebhookSender) probeSizeBestEffort(ctx context.Context, relPath string) int64 {
+	reader := mediaReaderForPath(s.opts.Media, s.opts.GalleryMedia, relPath)
+	if size, exists := statImageSize(ctx, reader, relPath); exists && size != nil {
+		return *size
+	}
+	return -1
 }
 
 func (s *WebhookSender) maxMultipartImageBytes() int64 {
@@ -398,10 +516,21 @@ func (s *WebhookSender) maxMultipartImageBytes() int64 {
 	return s.opts.MaxMultipartImageBytes
 }
 
-func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string) ([]byte, error) {
+func (s *WebhookSender) maxMultipartTotalBytes() int64 {
+	if s.opts.MaxMultipartTotalBytes <= 0 {
+		return defaultMaxWebhookMultipartTotalBytes
+	}
+	return s.opts.MaxMultipartTotalBytes
+}
+
+func (s *WebhookSender) readMediaBytes(
+	ctx context.Context,
+	role, relPath string,
+	limit int64,
+) ([]byte, int64, error) {
 	reader := mediaReaderForPath(s.opts.Media, s.opts.GalleryMedia, relPath)
 	if reader == nil {
-		return nil, errors.New("media reader is not configured")
+		return nil, -1, errors.New("media reader is not configured")
 	}
 	f, info, err := reader.OpenContent(ctx, relPath)
 	if err != nil {
@@ -410,7 +539,7 @@ func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string
 			zap.String("path", relPath),
 			zap.Error(err),
 		)
-		return nil, err
+		return nil, -1, err
 	}
 	defer func() {
 		if closeErr := f.Close(); closeErr != nil {
@@ -418,7 +547,6 @@ func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string
 		}
 	}()
 
-	limit := s.maxMultipartImageBytes()
 	if info.SizeBytes > limit {
 		s.logger.Warn("image exceeds webhook multipart size cap; falling back to URL if configured",
 			zap.String("role", role),
@@ -426,7 +554,7 @@ func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string
 			zap.Int64("size_bytes", info.SizeBytes),
 			zap.Int64("limit_bytes", limit),
 		)
-		return nil, errWebhookImageTooLarge
+		return nil, info.SizeBytes, errWebhookImageTooLarge
 	}
 
 	data, readErr := io.ReadAll(io.LimitReader(f, limit+1))
@@ -436,7 +564,7 @@ func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string
 			zap.String("path", relPath),
 			zap.Error(readErr),
 		)
-		return nil, readErr
+		return nil, info.SizeBytes, readErr
 	}
 	if int64(len(data)) > limit {
 		s.logger.Warn("image grew beyond webhook multipart size cap; falling back to URL if configured",
@@ -444,14 +572,22 @@ func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string
 			zap.String("path", relPath),
 			zap.Int64("limit_bytes", limit),
 		)
-		return nil, errWebhookImageTooLarge
+		return nil, info.SizeBytes, errWebhookImageTooLarge
 	}
-	return data, nil
+	if len(data) == 0 {
+		s.logger.Warn("image is empty for multipart payload; omitting",
+			zap.String("role", role),
+			zap.String("path", relPath),
+		)
+		return nil, 0, errWebhookImageEmpty
+	}
+	return data, int64(len(data)), nil
 }
 
 func (s *WebhookSender) buildMultipartRequest(
 	payload EventPayload,
 	parts []preparedMultipartImage,
+	now time.Time,
 ) (*http.Request, error) {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -459,7 +595,8 @@ func (s *WebhookSender) buildMultipartRequest(
 	}
 
 	boundary := multipart.NewWriter(io.Discard).Boundary()
-	body, contentLength := buildMultipartBody(boundary, payloadBytes, parts)
+	chunks, contentLength := multipartBodyChunks(boundary, payloadBytes, parts)
+	body := readerFromChunks(chunks)
 
 	req, err := http.NewRequest(http.MethodPost, s.opts.URL, body)
 	if err != nil {
@@ -468,25 +605,24 @@ func (s *WebhookSender) buildMultipartRequest(
 	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 	req.ContentLength = contentLength
 	req.GetBody = func() (io.ReadCloser, error) {
-		replayBody, _ := buildMultipartBody(boundary, payloadBytes, parts)
-		return replayBody, nil
+		return readerFromChunks(chunks), nil
 	}
 	s.applyAuthAndHeaders(req)
-	setEnvelopeHeaders(req, payload.EventType, payload.ID, payload.SchemaVersion)
+	s.setEnvelopeAndSignatureHeaders(req, payload.EventType, payload.ID, payload.SchemaVersion, now, chunks...)
 	return req, nil
 }
 
-// buildMultipartBody streams the JSON payload and cached image slices through io.MultiReader
-// with an exact Content-Length, avoiding a second full-size copy into bytes.Buffer.
-func buildMultipartBody(
+// multipartBodyChunks assembles the exact byte slices of a multipart body without copying
+// cached image buffers so both streaming upload and incremental HMAC signing share them.
+func multipartBodyChunks(
 	boundary string,
 	payloadBytes []byte,
 	parts []preparedMultipartImage,
-) (io.ReadCloser, int64) {
-	readers := make([]io.Reader, 0, 3+len(parts)*2)
+) ([][]byte, int64) {
+	chunks := make([][]byte, 0, 3+len(parts)*2)
 	var total int64
 	appendBytes := func(b []byte) {
-		readers = append(readers, bytes.NewReader(b))
+		chunks = append(chunks, b)
 		total += int64(len(b))
 	}
 
@@ -511,7 +647,42 @@ func buildMultipartBody(
 	}
 
 	appendBytes([]byte("\r\n--" + boundary + "--\r\n"))
-	return io.NopCloser(io.MultiReader(readers...)), total
+	return chunks, total
+}
+
+func readerFromChunks(chunks [][]byte) io.ReadCloser {
+	readers := make([]io.Reader, len(chunks))
+	for i, c := range chunks {
+		readers[i] = bytes.NewReader(c)
+	}
+	return io.NopCloser(io.MultiReader(readers...))
+}
+
+// setEnvelopeAndSignatureHeaders mirrors routing metadata and optional HMAC-SHA256 body
+// authenticity signature into reserved headers after custom headers so they can never be spoofed.
+func (s *WebhookSender) setEnvelopeAndSignatureHeaders(
+	req *http.Request,
+	eventType, deliveryID string,
+	schemaVersion int,
+	now time.Time,
+	bodyChunks ...[]byte,
+) {
+	setEnvelopeHeaders(req, eventType, deliveryID, schemaVersion)
+	ts := strconv.FormatInt(now.UTC().Unix(), 10)
+	req.Header.Set(headerZhulongTimestamp, ts)
+	if s.opts.SigningSecret != "" {
+		req.Header.Set(headerZhulongSignature, computeWebhookSignature(s.opts.SigningSecret, ts, bodyChunks...))
+	}
+}
+
+func computeWebhookSignature(secret, timestamp string, bodyChunks ...[]byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	for _, chunk := range bodyChunks {
+		mac.Write(chunk)
+	}
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 // setEnvelopeHeaders mirrors routing metadata into reserved headers so gateways can route

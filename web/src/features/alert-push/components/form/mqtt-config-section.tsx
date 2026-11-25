@@ -1,8 +1,8 @@
-import { useState } from 'react'
 import { useWatch, type Control } from 'react-hook-form'
 import { ChevronDown, Radio, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Collapsible,
   CollapsibleContent,
@@ -17,6 +17,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -31,7 +32,10 @@ interface MqttConfigSectionProps {
   control: Control<AlertDestinationFormValues>
   isEdit: boolean
   secretSet?: boolean
-  initialAdvancedOpen?: boolean
+  clearMqttPass?: boolean
+  onClearMqttPassChange?: (clear: boolean) => void
+  advancedOpen: boolean
+  onAdvancedOpenChange: (open: boolean) => void
 }
 
 /**
@@ -65,10 +69,12 @@ export function MqttConfigSection({
   control,
   isEdit,
   secretSet,
-  initialAdvancedOpen = false,
+  clearMqttPass = false,
+  onClearMqttPassChange,
+  advancedOpen,
+  onAdvancedOpenChange,
 }: MqttConfigSectionProps) {
   const { t } = useTranslation('alertPush')
-  const [advancedOpen, setAdvancedOpen] = useState(initialAdvancedOpen)
 
   return (
     <div className='space-y-3.5 rounded-xl border border-border/80 bg-card/60 p-4 shadow-2xs'>
@@ -159,15 +165,41 @@ export function MqttConfigSection({
                 <Input
                   {...field}
                   type='password'
+                  disabled={clearMqttPass}
+                  onChange={(e) => {
+                    if (clearMqttPass && e.target.value) {
+                      onClearMqttPassChange?.(false)
+                    }
+                    field.onChange(e)
+                  }}
                   placeholder={
-                    isEdit && secretSet
-                      ? t('fields.secretRetained')
-                      : t('fields.mqttPasswordPlaceholder')
+                    clearMqttPass
+                      ? t('fields.passwordWillClear')
+                      : isEdit && secretSet
+                        ? t('fields.secretRetained')
+                        : t('fields.mqttPasswordPlaceholder')
                   }
                   className='font-mono text-xs'
                   autoComplete='off'
                 />
               </FormControl>
+              {isEdit && secretSet ? (
+                <div className='flex items-center gap-2 pt-1'>
+                  <Checkbox
+                    id='clear-mqtt-password'
+                    checked={clearMqttPass}
+                    onCheckedChange={(checked) =>
+                      onClearMqttPassChange?.(checked === true)
+                    }
+                  />
+                  <Label
+                    htmlFor='clear-mqtt-password'
+                    className='cursor-pointer text-[11px] font-normal text-muted-foreground'
+                  >
+                    {t('fields.clearMqttPassword')}
+                  </Label>
+                </div>
+              ) : null}
               <FormMessage className='text-xs' />
             </FormItem>
           )}
@@ -177,7 +209,7 @@ export function MqttConfigSection({
       {/* 可折叠的 MQTT 高级选项 */}
       <Collapsible
         open={advancedOpen}
-        onOpenChange={setAdvancedOpen}
+        onOpenChange={onAdvancedOpenChange}
         className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3 transition-colors'
       >
         <div className='flex items-center justify-between'>
@@ -216,7 +248,6 @@ export function MqttConfigSection({
                   <FormControl>
                     <Input
                       {...field}
-                      maxLength={23}
                       placeholder={t('fields.mqttClientIdPlaceholder')}
                       className='bg-background font-mono text-xs'
                       autoComplete='off'
@@ -300,6 +331,7 @@ export function MqttConfigSection({
                   <Switch
                     checked={field.value}
                     onCheckedChange={field.onChange}
+                    aria-label={t('fields.tlsSkipVerify')}
                   />
                 </FormControl>
               </FormItem>

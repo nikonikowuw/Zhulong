@@ -2,10 +2,17 @@ package alertpush
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"sync"
 	"testing"
@@ -15,8 +22,31 @@ import (
 	mochi "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
+	"github.com/mochi-mqtt/server/v2/packets"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 )
+
+// closeMochiServerSafely works around a recursive RLock deadlock in mochi-mqtt v2.6.6's
+// Clients.GetByListener (which calls cl.Len() while holding cl.RLock()) when a client
+// concurrently disconnects and triggers Clients.Delete (cl.Lock()).
+func closeMochiServerSafely(t *testing.T, server *mochi.Server) {
+	t.Helper()
+	if server == nil {
+		return
+	}
+	for _, cl := range server.Clients.GetAll() {
+		if err := server.DisconnectClient(cl, packets.ErrServerShuttingDown); err != nil {
+			t.Logf("disconnect test broker client %s: %v", cl.ID, err)
+		}
+	}
+	deadline := time.Now().Add(time.Second)
+	for server.Clients.Len() > 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := server.Close(); err != nil {
+		t.Errorf("broker close failed: %v", err)
+	}
+}
 
 func startInProcessBroker(t *testing.T) (string, func()) {
 	t.Helper()
@@ -54,9 +84,7 @@ func startInProcessBroker(t *testing.T) (string, func()) {
 	time.Sleep(50 * time.Millisecond)
 
 	return "tcp://" + addr, func() {
-		if err := server.Close(); err != nil {
-			t.Errorf("broker close failed: %v", err)
-		}
+		closeMochiServerSafely(t, server)
 	}
 }
 
@@ -86,13 +114,14 @@ func TestMQTTSenderBase64AndURL(t *testing.T) {
 	}
 
 	sender, err := NewMQTTSender(MQTTSenderOptions{
-		ID:        "mqtt_01",
-		ImageMode: ImageModeBase64,
-		Broker:    brokerURL,
-		ClientID:  "zhulong-test-client-1",
-		Topic:     "zhulong/alerts/cam01",
-		QoS:       1,
-		Media:     fakeMedia,
+		ID:            "mqtt_01",
+		ImageMode:     ImageModeBase64,
+		Broker:        brokerURL,
+		ClientID:      "zhulong-test-client-1",
+		Topic:         "zhulong/alerts/cam01",
+		QoS:           1,
+		Media:         fakeMedia,
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -179,13 +208,14 @@ func TestMQTTSenderBase64OversizedFallback(t *testing.T) {
 	}
 
 	sender, err := NewMQTTSender(MQTTSenderOptions{
-		ID:        "mqtt_02",
-		ImageMode: ImageModeBase64,
-		Broker:    brokerURL,
-		ClientID:  "zhulong-test-client-2",
-		Topic:     "zhulong/alerts/cam02",
-		QoS:       0,
-		Media:     fakeMedia,
+		ID:            "mqtt_02",
+		ImageMode:     ImageModeBase64,
+		Broker:        brokerURL,
+		ClientID:      "zhulong-test-client-2",
+		Topic:         "zhulong/alerts/cam02",
+		QoS:           0,
+		Media:         fakeMedia,
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -230,8 +260,9 @@ func TestMQTTSenderBase64OversizedFallback(t *testing.T) {
 
 func TestMQTTSenderWildcardValidation(t *testing.T) {
 	_, err := NewMQTTSender(MQTTSenderOptions{
-		Broker: "tcp://127.0.0.1:1883",
-		Topic:  "alerts/+/wildcard",
+		Broker:        "tcp://127.0.0.1:1883",
+		Topic:         "alerts/+/wildcard",
+		AllowLoopback: true,
 	})
 	if err != ErrMQTTWildcardTopic {
 		t.Fatalf("expected ErrMQTTWildcardTopic, got %v", err)
@@ -243,10 +274,11 @@ func TestMQTTSenderRespectsContextCancel(t *testing.T) {
 	defer cleanup()
 
 	sender, err := NewMQTTSender(MQTTSenderOptions{
-		Broker:   brokerURL,
-		ClientID: "test-sender-cancel",
-		Topic:    "zhulong/alerts/cancel",
-		QoS:      1,
+		Broker:        brokerURL,
+		ClientID:      "test-sender-cancel",
+		Topic:         "zhulong/alerts/cancel",
+		QoS:           1,
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender failed: %v", err)
@@ -309,6 +341,7 @@ func TestMQTTSenderHeartbeatAndGracefulOffline(t *testing.T) {
 		QoS:               1,
 		NextSeq:           func() uint64 { return 99 },
 		Identity:          identity,
+		AllowLoopback:     true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -378,6 +411,7 @@ func TestMQTTSenderHeartbeatTopicWildcardRejected(t *testing.T) {
 		Topic:            "zhulong/events",
 		HeartbeatEnabled: true,
 		HeartbeatTopic:   "zhulong/status/#",
+		AllowLoopback:    true,
 	})
 	if err != ErrMQTTWildcardTopic {
 		t.Fatalf("expected ErrMQTTWildcardTopic for heartbeat_topic, got %v", err)
@@ -430,6 +464,7 @@ func TestMQTTSenderConnectTimeoutReturnsError(t *testing.T) {
 		ClientID:       "zhulong-timeout-1",
 		Topic:          "zhulong/alerts/timeout",
 		ConnectTimeout: 150 * time.Millisecond,
+		AllowLoopback:  true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -462,6 +497,7 @@ func TestMQTTSenderCloseUnblocksInFlightConnect(t *testing.T) {
 		ClientID:       "zhulong-close-1",
 		Topic:          "zhulong/alerts/close",
 		ConnectTimeout: 5 * time.Second,
+		AllowLoopback:  true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -503,6 +539,7 @@ func TestMQTTSenderEnsureConnectedRespectsContext(t *testing.T) {
 		ClientID:       "zhulong-ctx-conn-1",
 		Topic:          "zhulong/alerts/ctx",
 		ConnectTimeout: 5 * time.Second,
+		AllowLoopback:  true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -597,12 +634,13 @@ func (f *flakyMQTTClient) Publish(_ string, _ byte, _ bool, payload any) mqtt.To
 
 func TestMQTTSenderRetriesTransientPublishFailure(t *testing.T) {
 	sender, err := NewMQTTSender(MQTTSenderOptions{
-		ID:        "mqtt_retry",
-		ImageMode: ImageModeBase64,
-		Broker:    "tcp://127.0.0.1:1883",
-		ClientID:  "zhulong-retry-1",
-		Topic:     "zhulong/alerts/retry",
-		QoS:       1,
+		ID:            "mqtt_retry",
+		ImageMode:     ImageModeBase64,
+		Broker:        "tcp://127.0.0.1:1883",
+		ClientID:      "zhulong-retry-1",
+		Topic:         "zhulong/alerts/retry",
+		QoS:           1,
+		AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -650,6 +688,7 @@ func TestMQTTSenderDoesNotFalseSucceedWhileReconnectingQoS0(t *testing.T) {
 		QoS:              0,
 		KeepAlive:        10 * time.Second,
 		ConnectTimeout:   150 * time.Millisecond,
+		AllowLoopback:    true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -725,6 +764,7 @@ func TestMQTTSenderDisableReconnectSurfacesImmediateError(t *testing.T) {
 		Topic:            "zhulong/events/probe",
 		ConnectTimeout:   5 * time.Second,
 		DisableReconnect: true,
+		AllowLoopback:    true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)
@@ -748,5 +788,411 @@ func TestMQTTSenderDisableReconnectSurfacesImmediateError(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("DisableReconnect probe took %v, expected fast failure instead of connectTimeout wait", elapsed)
+	}
+}
+
+func TestMQTTSenderConcurrentConnectCoalescesAndCloseNoLeak(t *testing.T) {
+	brokerURL, cleanup := startInProcessBroker(t)
+	defer cleanup()
+
+	// 1. Concurrent ConnectContext calls coalesce onto a single Connect() without Paho status error.
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:            "mqtt_coalesce",
+		ImageMode:     ImageModeBase64,
+		Broker:        brokerURL,
+		ClientID:      "zhulong-coalesce-1",
+		Topic:         "zhulong/events/coalesce",
+		AllowLoopback: true,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- sender.ConnectContext(context.Background())
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for connectErr := range errs {
+		if connectErr != nil {
+			t.Fatalf("concurrent ConnectContext failed: %v", connectErr)
+		}
+	}
+
+	// 2. DisableReconnect probe canceled mid-connect must NOT leak an open session when broker responds late.
+	silentURL, cleanupSilent := startSilentTCPListener(t)
+	defer cleanupSilent()
+
+	probe, err := NewMQTTSender(MQTTSenderOptions{
+		ID:               "mqtt_probe_cancel_noleak",
+		ImageMode:        ImageModeBase64,
+		Broker:           silentURL,
+		ClientID:         "probe-cancel-noleak",
+		Topic:            "zhulong/events/probe",
+		ConnectTimeout:   2 * time.Second,
+		DisableReconnect: true,
+		AllowLoopback:    true,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender probe: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	if err := probe.ConnectContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatalf("probe.Close: %v", err)
+	}
+	if probe.IsConnected() {
+		t.Fatal("probe must not remain connected after Close")
+	}
+
+	// 3. Stress ConnectContext vs Close race: after Close returns, client must never stay connected.
+	for range 5 {
+		s, sErr := NewMQTTSender(MQTTSenderOptions{
+			ID:             "mqtt_race",
+			ImageMode:      ImageModeBase64,
+			Broker:         brokerURL,
+			ClientID:       "zhulong-race-1",
+			Topic:          "zhulong/events/race",
+			ConnectTimeout: 2 * time.Second,
+			AllowLoopback:  true,
+		})
+		if sErr != nil {
+			t.Fatalf("NewMQTTSender race: %v", sErr)
+		}
+		var rwg sync.WaitGroup
+		rwg.Add(2)
+		go func() {
+			defer rwg.Done()
+			if err := s.ConnectContext(context.Background()); err != nil {
+				// Expected when racing with Close().
+				return
+			}
+		}()
+		go func() {
+			defer rwg.Done()
+			if closeErr := s.Close(); closeErr != nil {
+				t.Errorf("Close in race: %v", closeErr)
+			}
+		}()
+		rwg.Wait()
+		// Allow any late connect finisher goroutine to run Disconnect(50).
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for s.IsConnected() && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if s.IsConnected() {
+			t.Fatal("leaked connected MQTT client after concurrent ConnectContext + Close")
+		}
+	}
+}
+
+func generateSelfSignedTLSConfig(t *testing.T) *tls.Config {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "127.0.0.1"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	cert := tls.Certificate{
+		Certificate: [][]byte{der},
+		PrivateKey:  priv,
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}}
+}
+
+func TestMQTTSenderAuthRejectionTLSAndEmptyImageOmitted(t *testing.T) {
+	// 1. Broker requiring username/password rejects wrong password deterministically (non-retryable, fast).
+	server := mochi.New(nil)
+	if err := server.AddHook(new(auth.Hook), &auth.Options{
+		Ledger: &auth.Ledger{
+			Auth: auth.AuthRules{
+				{Username: "ops", Password: "secret", Allow: true},
+			},
+			ACL: auth.ACLRules{
+				{Username: "ops", Filters: auth.Filters{"#": auth.ReadWrite}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("add auth hook: %v", err)
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick port: %v", err)
+	}
+	authAddr := l.Addr().String()
+	if err := l.Close(); err != nil {
+		t.Fatalf("close temp listener: %v", err)
+	}
+	if err := server.AddListener(listeners.NewTCP(listeners.Config{ID: "auth-tcp", Address: authAddr})); err != nil {
+		t.Fatalf("add auth tcp listener: %v", err)
+	}
+
+	lTLS, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick tls port: %v", err)
+	}
+	tlsAddr := lTLS.Addr().String()
+	if err := lTLS.Close(); err != nil {
+		t.Fatalf("close temp tls listener: %v", err)
+	}
+	if err := server.AddListener(listeners.NewTCP(listeners.Config{
+		ID:        "auth-tls",
+		Address:   tlsAddr,
+		TLSConfig: generateSelfSignedTLSConfig(t),
+	})); err != nil {
+		t.Fatalf("add tls listener: %v", err)
+	}
+
+	go func() {
+		if serveErr := server.Serve(); serveErr != nil {
+			return
+		}
+	}()
+	defer func() {
+		closeMochiServerSafely(t, server)
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	// Wrong credentials must fail fast (single attempt, no ~1s retry backoff) and classify as "auth".
+	badAuth, err := NewMQTTSender(MQTTSenderOptions{
+		ID:               "mqtt_bad_auth",
+		ImageMode:        ImageModeBase64,
+		Broker:           "tcp://" + authAddr,
+		ClientID:         "zhulong-bad-auth",
+		Username:         "ops",
+		Password:         "wrong",
+		Topic:            "zhulong/events",
+		DisableReconnect: true,
+		AllowLoopback:    true,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender bad auth: %v", err)
+	}
+	defer func() {
+		if closeErr := badAuth.Close(); closeErr != nil {
+			t.Errorf("close badAuth: %v", closeErr)
+		}
+	}()
+
+	start := time.Now()
+	authErr := badAuth.Send(context.Background(), Delivery{
+		Event: record.AlarmEvent{ID: "01AUTH", CapturedAt: time.Now().UTC()},
+	})
+	if authErr == nil {
+		t.Fatal("expected auth failure with wrong MQTT password")
+	}
+	if reason := classifyError(authErr); reason != "auth" {
+		t.Fatalf("classifyError(%v) = %q, want auth", authErr, reason)
+	}
+	if elapsed := time.Since(start); elapsed > 600*time.Millisecond {
+		t.Fatalf("deterministic auth error retried unnecessarily: took %v", elapsed)
+	}
+
+	// 2. TLS strict verification fails against self-signed cert; TLSSkipVerify=true succeeds with valid auth.
+	strictTLS, err := NewMQTTSender(MQTTSenderOptions{
+		ID:               "mqtt_tls_strict",
+		ImageMode:        ImageModeBase64,
+		Broker:           "tls://" + tlsAddr,
+		ClientID:         "zhulong-tls-strict",
+		Username:         "ops",
+		Password:         "secret",
+		Topic:            "zhulong/events",
+		ConnectTimeout:   2 * time.Second,
+		DisableReconnect: true,
+		TLSSkipVerify:    false,
+		AllowLoopback:    true,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender strict TLS: %v", err)
+	}
+	defer func() {
+		if closeErr := strictTLS.Close(); closeErr != nil {
+			t.Errorf("close strictTLS: %v", closeErr)
+		}
+	}()
+	if tlsErr := strictTLS.Connect(); tlsErr == nil {
+		t.Fatal("expected TLS verification error when TLSSkipVerify=false")
+	} else if reason := classifyError(tlsErr); reason != "tls" {
+		t.Fatalf("classifyError(%v) = %q, want tls", tlsErr, reason)
+	}
+
+	skipTLS, err := NewMQTTSender(MQTTSenderOptions{
+		ID:               "mqtt_tls_skip",
+		ImageMode:        ImageModeBase64,
+		Broker:           "tls://" + tlsAddr,
+		ClientID:         "zhulong-tls-skip",
+		Username:         "ops",
+		Password:         "secret",
+		Topic:            "zhulong/events",
+		ConnectTimeout:   2 * time.Second,
+		DisableReconnect: true,
+		TLSSkipVerify:    true,
+		AllowLoopback:    true,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender skip TLS: %v", err)
+	}
+	defer func() {
+		if closeErr := skipTLS.Close(); closeErr != nil {
+			t.Errorf("close skipTLS: %v", closeErr)
+		}
+	}()
+	if sendErr := skipTLS.Send(context.Background(), Delivery{
+		Event: record.AlarmEvent{ID: "01TLSOK", CapturedAt: time.Now().UTC()},
+	}); sendErr != nil {
+		t.Fatalf("expected TLS + auth publish to succeed with TLSSkipVerify=true, got %v", sendErr)
+	}
+
+	// 3. 0-byte corrupted image in base64 mode must be omitted instead of emitting empty ImageInfo.
+	emptySender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:            "mqtt_empty_img",
+		ImageMode:     ImageModeBase64,
+		Broker:        "tcp://127.0.0.1:1",
+		ClientID:      "zhulong-empty-img",
+		Topic:         "zhulong/events",
+		Media:         &fakeMediaService{files: map[string][]byte{"snapshots/cam/empty.jpg": {}}},
+		AllowLoopback: true,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender empty img: %v", err)
+	}
+	imgs := emptySender.inlineImages(context.Background(), record.AlarmEvent{
+		ID: "01EMPTY", CameraID: "cam", ImagePath: "snapshots/cam/empty.jpg", ImageReady: true,
+	})
+	if imgs != nil {
+		t.Fatalf("0-byte corrupted image must be omitted, got %+v", imgs)
+	}
+}
+
+func startInProcessBrokerAtAddr(t *testing.T, addr string) func() {
+	t.Helper()
+	server := mochi.New(nil)
+	if err := server.AddHook(new(auth.AllowHook), nil); err != nil {
+		t.Fatalf("add allow hook: %v", err)
+	}
+	if err := server.AddListener(listeners.NewTCP(listeners.Config{ID: "tcp-fixed", Address: addr})); err != nil {
+		t.Fatalf("add tcp listener: %v", err)
+	}
+	go func() {
+		if err := server.Serve(); err != nil {
+			return
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	return func() {
+		closeMochiServerSafely(t, server)
+	}
+}
+
+func TestMQTTSenderAutoReconnectRecovery(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick free port: %v", err)
+	}
+	addr := l.Addr().String()
+	if err := l.Close(); err != nil {
+		t.Fatalf("close temp listener: %v", err)
+	}
+
+	stopFirst := startInProcessBrokerAtAddr(t, addr)
+	var stopFirstOnce sync.Once
+	closeFirst := func() { stopFirstOnce.Do(stopFirst) }
+	defer closeFirst()
+
+	connectedCh := make(chan struct{}, 4)
+	lostCh := make(chan struct{}, 4)
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:             "mqtt_reconnect_recover",
+		ImageMode:      ImageModeBase64,
+		Broker:         "tcp://" + addr,
+		ClientID:       "zhulong-recover-1",
+		Topic:          "zhulong/events/recover",
+		QoS:            1,
+		KeepAlive:      5 * time.Second,
+		ConnectTimeout: 2 * time.Second,
+		AllowLoopback:  true,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+	sender.SetConnectionHooks(
+		func() {
+			select {
+			case connectedCh <- struct{}{}:
+			default:
+			}
+		},
+		func(error) {
+			select {
+			case lostCh <- struct{}{}:
+			default:
+			}
+		},
+	)
+
+	if err := sender.Connect(); err != nil {
+		t.Fatalf("initial Connect: %v", err)
+	}
+	select {
+	case <-connectedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial OnConnect")
+	}
+
+	// Bounce the broker on the same port and confirm Paho auto-reconnects and Send succeeds.
+	closeFirst()
+	select {
+	case <-lostCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ConnectionLost")
+	}
+
+	stopSecond := startInProcessBrokerAtAddr(t, addr)
+	defer stopSecond()
+
+	select {
+	case <-connectedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for auto-reconnect OnConnect after broker restart")
+	}
+
+	if err := sender.Send(context.Background(), Delivery{
+		Event: record.AlarmEvent{ID: "01RECOVERED", CameraID: "cam_1", CapturedAt: time.Now().UTC()},
+		Seq:   2,
+	}); err != nil {
+		t.Fatalf("Send after reconnect recovery failed: %v", err)
 	}
 }

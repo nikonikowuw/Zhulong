@@ -124,13 +124,26 @@ func (s *Service) OpenContent(ctx context.Context, relPath string) (io.ReadSeekC
 // or an unmigrated object exists only in local fallback, it returns ("", false, nil)
 // so ServeContent seamlessly falls back to streaming bytes via OpenContent.
 func (s *Service) ResolveRedirect(ctx context.Context, relPath string) (string, bool, error) {
-	urlStr, ok, err := s.presignMedia(
+	return s.ResolveRedirectWithMaxTTL(ctx, relPath, 0)
+}
+
+// ResolveRedirectWithMaxTTL behaves like ResolveRedirect while bounding the
+// presigned URL lifetime to min(s.presignTTL, maxTTL) when maxTTL > 0.
+func (s *Service) ResolveRedirectWithMaxTTL(
+	ctx context.Context,
+	relPath string,
+	maxTTL time.Duration,
+) (string, bool, error) {
+	ttl := s.presignTTL
+	if maxTTL > 0 && maxTTL < ttl {
+		ttl = maxTTL
+	}
+	return s.presignMedia(
 		ctx,
 		relPath,
-		s.presignTTL,
+		ttl,
 		true,
 	)
-	return urlStr, ok, err
 }
 
 // PresignMediaURL resolves an optional direct presigned URL for alert dispatchers

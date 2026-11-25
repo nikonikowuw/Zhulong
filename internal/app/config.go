@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -76,9 +77,9 @@ type Config struct {
 	AlertPushPublicBaseURL string
 	// AlertPushSignedURLTTL is the validity duration for signed media URLs (1m..168h).
 	AlertPushSignedURLTTL time.Duration
-	// AlertPushSignedMediaRateLimitPerMin tunes per-IP requests/min for /api/v1/media/signed/* (1..60000).
+	// AlertPushSignedMediaRateLimitPerMin tunes per-IP requests/min for /api/v1/media/signed/* (0 = default 120, or 1..60000).
 	AlertPushSignedMediaRateLimitPerMin int
-	// AlertPushSignedMediaRateLimitBurst tunes per-IP burst size for /api/v1/media/signed/* (1..1000).
+	// AlertPushSignedMediaRateLimitBurst tunes per-IP burst size for /api/v1/media/signed/* (0 = default 8, or 1..1000).
 	AlertPushSignedMediaRateLimitBurst int
 }
 
@@ -90,17 +91,18 @@ const (
 )
 
 // ValidateAlertPushRateLimit validates optional signed-media rate limit settings.
+// A zero value means unset and resolves to the host default (120 req/min, burst 8).
 func ValidateAlertPushRateLimit(perMin, burst int) (int, int, error) {
 	if perMin < 0 || perMin > maxAlertPushSignedMediaRateLimitPerMin {
 		return 0, 0, fmt.Errorf(
-			"alertpush.signed_media_rate_limit_per_min %d out of bounds (must be 1..%d)",
+			"alertpush.signed_media_rate_limit_per_min %d out of bounds (must be 0 for default, or 1..%d)",
 			perMin,
 			maxAlertPushSignedMediaRateLimitPerMin,
 		)
 	}
 	if burst < 0 || burst > maxAlertPushSignedMediaRateLimitBurst {
 		return 0, 0, fmt.Errorf(
-			"alertpush.signed_media_rate_limit_burst %d out of bounds (must be 1..%d)",
+			"alertpush.signed_media_rate_limit_burst %d out of bounds (must be 0 for default, or 1..%d)",
 			burst,
 			maxAlertPushSignedMediaRateLimitBurst,
 		)
@@ -116,14 +118,40 @@ func ValidateAlertPushRateLimit(perMin, burst int) (int, int, error) {
 
 // ValidateAlertPushConfig validates public_base_url and signed_url_ttl.
 func ValidateAlertPushConfig(rawBaseURL, rawTTL string) (string, time.Duration, error) {
-	baseURL := strings.TrimRight(strings.TrimSpace(rawBaseURL), "/")
-	if baseURL != "" {
-		if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+	trimmed := strings.TrimSpace(rawBaseURL)
+	baseURL := ""
+	if trimmed != "" {
+		if strings.ContainsAny(trimmed, " \t\r\n") {
+			return "", 0, fmt.Errorf(
+				"alertpush.public_base_url %q must not contain whitespace",
+				rawBaseURL,
+			)
+		}
+		parsed, err := url.Parse(trimmed)
+		if err != nil {
+			return "", 0, fmt.Errorf("invalid alertpush.public_base_url %q: %w", rawBaseURL, err)
+		}
+		scheme := strings.ToLower(parsed.Scheme)
+		if scheme != "http" && scheme != "https" {
 			return "", 0, fmt.Errorf(
 				"alertpush.public_base_url %q must have http:// or https:// scheme",
 				rawBaseURL,
 			)
 		}
+		if parsed.User != nil {
+			return "", 0, fmt.Errorf(
+				"alertpush.public_base_url %q must not contain userinfo",
+				rawBaseURL,
+			)
+		}
+		if parsed.Host == "" || parsed.Hostname() == "" {
+			return "", 0, fmt.Errorf(
+				"alertpush.public_base_url %q must include a non-empty host",
+				rawBaseURL,
+			)
+		}
+		parsed.Scheme = scheme
+		baseURL = strings.TrimRight(parsed.String(), "/")
 	}
 
 	ttlStr := strings.TrimSpace(rawTTL)

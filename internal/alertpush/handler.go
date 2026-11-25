@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/url"
 	"slices"
 	"strings"
 
@@ -14,29 +13,66 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
-	"github.com/nikonikowuw/Zhulong/internal/audit/http"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
+	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
+)
+
+const (
+	DefaultTestRateLimitPerMin = 30
+	DefaultTestRateLimitBurst  = 10
+
+	maxAuditTargetNameLen = 64
 )
 
 var errTestTargetStoreFailure = errors.New("load test destination from store")
 
 // Handler implements HTTP REST API for alert destinations.
 type Handler struct {
-	service *Service
-	store   *Store
-	logger  *zap.Logger
+	service     *Service
+	store       *Store
+	testLimiter *httpmiddleware.IPRateLimiter
+	logger      *zap.Logger
 }
 
-// NewHandler constructs a Handler.
+// NewHandler constructs a Handler with default connectivity-test rate limiting.
 func NewHandler(service *Service, store *Store, logger *zap.Logger) *Handler {
+	return NewHandlerWithTestLimiter(service, store, defaultTestRateLimiter(), logger)
+}
+
+// NewHandlerWithTestLimiter constructs a Handler with a caller-supplied test rate limiter.
+func NewHandlerWithTestLimiter(
+	service *Service,
+	store *Store,
+	testLimiter *httpmiddleware.IPRateLimiter,
+	logger *zap.Logger,
+) *Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Handler{
-		service: service,
-		store:   store,
-		logger:  logger.Named("alertpush.handler"),
+		service:     service,
+		store:       store,
+		testLimiter: testLimiter,
+		logger:      logger.Named("alertpush.handler"),
 	}
+}
+
+func defaultTestRateLimiter() *httpmiddleware.IPRateLimiter {
+	return httpmiddleware.NewIPRateLimiter(httpmiddleware.RateLimitConfig{
+		PerMinute:                DefaultTestRateLimitPerMin,
+		Burst:                    DefaultTestRateLimitBurst,
+		ProcessRequestsPerMinute: DefaultTestRateLimitPerMin * 4,
+		ProcessMaxInFlight:       16,
+		PerIPCode:                CodeAlertTestRateLimited,
+		BudgetExhaustedCode:      CodeAlertTestRateLimited,
+		ConcurrencyLimitCode:     CodeAlertTestRateLimited,
+		LogScope:                 "alert push test",
+	})
+}
+
+func (h *Handler) allowLoopback() bool {
+	return h.service != nil && h.service.config.AllowLoopback
 }
 
 // RegisterRoutes registers the protected CRUD routes.
@@ -49,7 +85,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.DELETE("/:id", h.Delete)
 		group.POST("/:id/enable", h.Enable)
 		group.POST("/:id/disable", h.Disable)
-		group.POST("/test", h.Test)
+		group.POST("/test", httpmiddleware.RateLimit(h.testLimiter, h.logger), h.Test)
 	}
 }
 
@@ -59,6 +95,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Tags         alertpush
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=AlertDestinationListResponse}
+// @Failure      401  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /alert-destinations [get]
 func (h *Handler) List(c *gin.Context) {
@@ -94,27 +131,31 @@ func (h *Handler) List(c *gin.Context) {
 // @Produce      json
 // @Param        payload  body      CreateAlertDestinationRequest  true  "Destination configuration"
 // @Success      200      {object}  httputil.Response{data=AlertDestinationResponse}
+// @Failure      400      {object}  httputil.Response
+// @Failure      401      {object}  httputil.Response
 // @Failure      409      {object}  httputil.Response
 // @Failure      422      {object}  httputil.Response
 // @Failure      500      {object}  httputil.Response
 // @Router       /alert-destinations [post]
 func (h *Handler) Create(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
-	var req CreateAlertDestinationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(
-			c,
-			apperr.Invalid(CodeAlertDestinationConfigInvalid, "Invalid request body", err),
-		)
-		return
-	}
-
 	audithttp.Tag(
 		c,
 		ActionAlertDestinationCreate,
-		"destination:"+req.Name,
-		"Create alert destination "+req.Name,
+		"destination:new",
+		"Create alert destination",
 	)
+
+	var req CreateAlertDestinationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
+
+	if safeName := sanitizeAuditName(req.Name); safeName != "" {
+		audithttp.TagTarget(c, "destination:"+safeName)
+		audithttp.TagDetail(c, "Create alert destination "+safeName)
+	}
 
 	ctx := c.Request.Context()
 	dest, secretRaw, err := h.parseCreateRequest(req)
@@ -124,10 +165,17 @@ func (h *Handler) Create(c *gin.Context) {
 	}
 
 	if err := h.service.Create(ctx, dest, secretRaw); err != nil {
-		if errors.Is(err, ErrDestinationNameConflict) || errors.Is(err, ErrClientIDConflict) {
+		if errors.Is(err, ErrDestinationNameConflict) {
 			httputil.WriteError(
 				c,
-				apperr.Conflict(CodeAlertDestinationNameConflict, "Name or MQTT ClientID conflict", err),
+				apperr.Conflict(CodeAlertDestinationNameConflict, "Destination name already exists", err),
+			)
+			return
+		}
+		if errors.Is(err, ErrClientIDConflict) {
+			httputil.WriteError(
+				c,
+				apperr.Conflict(CodeAlertDestinationClientIDConflict, "MQTT ClientID already exists", err),
 			)
 			return
 		}
@@ -135,7 +183,7 @@ func (h *Handler) Create(c *gin.Context) {
 			httputil.WriteError(
 				c,
 				apperr.Invalid(
-					CodeAlertDestinationConfigInvalid,
+					CodeAlertMaxDestinationsReached,
 					fmt.Sprintf("Maximum destination limit (%d) reached", MaxDestinations),
 					err,
 				),
@@ -145,6 +193,8 @@ func (h *Handler) Create(c *gin.Context) {
 		h.writeValidationError(c, err)
 		return
 	}
+
+	audithttp.TagTarget(c, "destination:"+dest.ID)
 
 	status := h.service.dispatcher.GetStatus(dest.ID, dest.Enabled)
 	resp, err := h.toResponse(dest, status)
@@ -164,6 +214,8 @@ func (h *Handler) Create(c *gin.Context) {
 // @Param        id       path      string                         true  "Destination ID"
 // @Param        payload  body      UpdateAlertDestinationRequest  true  "Update payload"
 // @Success      200      {object}  httputil.Response{data=AlertDestinationResponse}
+// @Failure      400      {object}  httputil.Response
+// @Failure      401      {object}  httputil.Response
 // @Failure      404      {object}  httputil.Response
 // @Failure      409      {object}  httputil.Response
 // @Failure      422      {object}  httputil.Response
@@ -172,21 +224,18 @@ func (h *Handler) Create(c *gin.Context) {
 func (h *Handler) Update(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	id := c.Param("id")
-	var req UpdateAlertDestinationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(
-			c,
-			apperr.Invalid(CodeAlertDestinationConfigInvalid, "Invalid request body", err),
-		)
-		return
-	}
-
 	audithttp.Tag(
 		c,
 		ActionAlertDestinationUpdate,
 		"destination:"+id,
 		"Update alert destination "+id,
 	)
+
+	var req UpdateAlertDestinationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
 
 	ctx := c.Request.Context()
 	existing, err := h.store.GetByID(ctx, id)
@@ -209,10 +258,17 @@ func (h *Handler) Update(c *gin.Context) {
 	}
 
 	if err := h.service.Update(ctx, existing, params); err != nil {
-		if errors.Is(err, ErrDestinationNameConflict) || errors.Is(err, ErrClientIDConflict) {
+		if errors.Is(err, ErrDestinationNameConflict) {
 			httputil.WriteError(
 				c,
-				apperr.Conflict(CodeAlertDestinationNameConflict, "Name or MQTT ClientID conflict", err),
+				apperr.Conflict(CodeAlertDestinationNameConflict, "Destination name already exists", err),
+			)
+			return
+		}
+		if errors.Is(err, ErrClientIDConflict) {
+			httputil.WriteError(
+				c,
+				apperr.Conflict(CodeAlertDestinationClientIDConflict, "MQTT ClientID already exists", err),
 			)
 			return
 		}
@@ -236,6 +292,7 @@ func (h *Handler) Update(c *gin.Context) {
 // @Produce      json
 // @Param        id   path      string  true  "Destination ID"
 // @Success      200  {object}  httputil.Response
+// @Failure      401  {object}  httputil.Response
 // @Failure      404  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /alert-destinations/{id} [delete]
@@ -269,7 +326,9 @@ func (h *Handler) Delete(c *gin.Context) {
 // @Produce      json
 // @Param        id   path      string  true  "Destination ID"
 // @Success      200  {object}  httputil.Response{data=AlertDestinationResponse}
+// @Failure      401  {object}  httputil.Response
 // @Failure      404  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
 // @Router       /alert-destinations/{id}/enable [post]
 func (h *Handler) Enable(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
@@ -291,7 +350,9 @@ func (h *Handler) Enable(c *gin.Context) {
 // @Produce      json
 // @Param        id   path      string  true  "Destination ID"
 // @Success      200  {object}  httputil.Response{data=AlertDestinationResponse}
+// @Failure      401  {object}  httputil.Response
 // @Failure      404  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
 // @Router       /alert-destinations/{id}/disable [post]
 func (h *Handler) Disable(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
@@ -345,24 +406,33 @@ func (h *Handler) setDestinationEnabled(c *gin.Context, id string, enabled bool)
 // @Produce      json
 // @Param        payload  body      TestAlertDestinationRequest  true  "Test parameters"
 // @Success      200      {object}  httputil.Response{data=TestAlertDestinationResponse}
+// @Failure      400      {object}  httputil.Response
+// @Failure      401      {object}  httputil.Response
+// @Failure      404      {object}  httputil.Response
 // @Failure      422      {object}  httputil.Response
+// @Failure      429      {object}  httputil.Response
+// @Failure      500      {object}  httputil.Response
 // @Router       /alert-destinations/test [post]
 func (h *Handler) Test(c *gin.Context) {
-	var req TestAlertDestinationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(
-			c,
-			apperr.Invalid(CodeAlertDestinationConfigInvalid, "Invalid request body", err),
-		)
-		return
-	}
-
+	c.Header("Cache-Control", "no-store")
 	audithttp.Tag(
 		c,
 		ActionAlertDestinationTest,
-		"test:"+req.ChannelType,
+		"test",
 		"Test alert destination connectivity",
 	)
+
+	var req TestAlertDestinationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
+
+	if req.ID != "" {
+		audithttp.TagTarget(c, "destination:"+req.ID)
+	} else if ch := strings.TrimSpace(req.ChannelType); ch != "" {
+		audithttp.TagTarget(c, "test:"+ch)
+	}
 
 	ctx := c.Request.Context()
 	dest, secretRaw, isDraft, err := h.resolveTestTarget(ctx, req)
@@ -386,6 +456,14 @@ func (h *Handler) Test(c *gin.Context) {
 	if err != nil {
 		h.writeValidationError(c, err)
 		return
+	}
+
+	if !res.OK {
+		reason := res.Reason
+		if reason == "" {
+			reason = "connectivity test failed"
+		}
+		audithttp.TagError(c, "ALERT_TEST_FAILED", reason)
 	}
 
 	httputil.Success(c, TestAlertDestinationResponse{
@@ -418,6 +496,15 @@ func (h *Handler) resolveExistingTestTarget(
 		return nil, nil, false, fmt.Errorf("%w: %w", errTestTargetStoreFailure, err)
 	}
 
+	if req.ChannelType != "" && strings.TrimSpace(req.ChannelType) != existing.ChannelType {
+		return nil, nil, false, newFieldError(
+			"channelType",
+			CodeAlertChannelTypeImmutable,
+			"channelType does not match existing destination",
+			ErrInvalidConfig,
+		)
+	}
+
 	origEvents := existing.EventsEnabled
 	origHeartbeat := existing.HeartbeatEnabled
 	origImageMode := existing.ImageMode
@@ -429,12 +516,14 @@ func (h *Handler) resolveExistingTestTarget(
 		existing.HeartbeatEnabled = *req.HeartbeatEnabled
 	}
 	if req.ImageMode != "" {
-		existing.ImageMode = req.ImageMode
+		existing.ImageMode = strings.TrimSpace(req.ImageMode)
 	}
 
 	capabilitiesChanged := existing.EventsEnabled != origEvents ||
 		existing.HeartbeatEnabled != origHeartbeat ||
 		existing.ImageMode != origImageMode
+
+	allowLoopback := h.allowLoopback()
 
 	switch existing.ChannelType {
 	case ChannelTypeWebhook:
@@ -445,26 +534,34 @@ func (h *Handler) resolveExistingTestTarget(
 			}
 		}
 		origCfg := cfg
-		if req.Config.AuthType != "" {
-			if !isValidWebhookAuthType(req.Config.AuthType) {
-				return nil, nil, false, fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
+		if req.Config.AuthType != nil {
+			authType := strings.TrimSpace(*req.Config.AuthType)
+			if authType == "" {
+				return nil, nil, false, newFieldError("config.authType", "REQUIRED", "authType is required", ErrInvalidConfig)
 			}
-			cfg.AuthType = req.Config.AuthType
+			if !isValidWebhookAuthType(authType) {
+				return nil, nil, false, newFieldError(
+					"config.authType",
+					"INVALID_VALUE",
+					fmt.Sprintf("unsupported webhook authType %q", authType),
+					ErrInvalidConfig,
+				)
+			}
+			cfg.AuthType = authType
 		}
 		if req.Config.TimeoutSeconds != nil {
-			if !isValidWebhookTimeout(*req.Config.TimeoutSeconds) {
-				return nil, nil, false, fmt.Errorf(
-					"timeoutSeconds must be between %d and %d",
-					MinWebhookTimeoutSeconds,
-					MaxWebhookTimeoutSeconds,
-				)
+			if err := validateWebhookTimeoutField(*req.Config.TimeoutSeconds); err != nil {
+				return nil, nil, false, err
 			}
 			cfg.TimeoutSeconds = *req.Config.TimeoutSeconds
 		}
 		if req.Config.TLSSkipVerify != nil {
 			cfg.TLSSkipVerify = *req.Config.TLSSkipVerify
 		}
-		if req.Config.HeartbeatIntervalSeconds != nil {
+		if existing.HeartbeatEnabled && req.Config.HeartbeatIntervalSeconds != nil {
+			if err := validateHeartbeatIntervalField(*req.Config.HeartbeatIntervalSeconds); err != nil {
+				return nil, nil, false, err
+			}
 			cfg.HeartbeatIntervalSeconds = *req.Config.HeartbeatIntervalSeconds
 		}
 		cfgBytes, err := json.Marshal(cfg)
@@ -478,32 +575,50 @@ func (h *Handler) resolveExistingTestTarget(
 			return nil, nil, false, err
 		}
 		origSec := cloneWebhookSecret(sec)
-		if err := applyWebhookSecretOverrides(sec, req.Secret, true); err != nil {
-			return nil, nil, false, err
-		}
-		if req.Config.URL != "" {
-			if err := validateWebhookURL(req.Config.URL); err != nil {
+
+		// Security (U2): overriding the saved URL with a different origin must never
+		// forward stored credentials, signing secrets, or custom headers to the new host.
+		if req.Config.URL != nil {
+			newURL := strings.TrimSpace(*req.Config.URL)
+			if err := validateWebhookURLField("config.url", newURL, allowLoopback); err != nil {
 				return nil, nil, false, err
 			}
-			sec.URL = req.Config.URL
+			if !sameOrigin(origSec.URL, newURL) {
+				sec.Token = ""
+				sec.Username = ""
+				sec.Password = ""
+				sec.SigningSecret = ""
+				sec.Headers = nil
+				sec.HeartbeatURL = ""
+			}
+			sec.URL = newURL
 		}
-		if req.Config.HeartbeatURL != nil {
+		if existing.HeartbeatEnabled && req.Config.HeartbeatURL != nil {
 			trimmed := strings.TrimSpace(*req.Config.HeartbeatURL)
 			if trimmed != "" {
-				if err := validateWebhookURL(trimmed); err != nil {
+				if err := validateWebhookURLField("config.heartbeatUrl", trimmed, allowLoopback); err != nil {
 					return nil, nil, false, err
 				}
 			}
 			sec.HeartbeatURL = trimmed
 		}
+		if err := applyWebhookSecretOverrides(sec, req.Secret, true); err != nil {
+			return nil, nil, false, err
+		}
 		normalizeWebhookAuthCredentials(cfg.AuthType, sec)
 		if err := validateWebhookAuthCredentials(cfg.AuthType, sec); err != nil {
 			return nil, nil, false, err
+		}
+		if existing.HeartbeatEnabled {
+			if err := validateWebhookHeartbeatOrigin(cfg.AuthType, sec, allowLoopback); err != nil {
+				return nil, nil, false, err
+			}
 		}
 		isDraft := capabilitiesChanged ||
 			!webhookConfigsEqual(origCfg, cfg) ||
 			!webhookSecretsEqual(origSec, sec)
 		return existing, sec, isDraft, nil
+
 	case ChannelTypeMQTT:
 		var cfg mqttConfig
 		if existing.ConfigJSON != "" {
@@ -514,35 +629,75 @@ func (h *Handler) resolveExistingTestTarget(
 		origCfg := cfg
 		origClientID := effectiveMQTTClientID(existing.ID, existing.MQTTClientID)
 
-		if req.Config.Broker != "" {
-			cfg.Broker = strings.TrimSpace(req.Config.Broker)
+		sec, err := h.store.DecryptMQTTSecret(existing.ID, existing.SecretCiphertext)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		origSec := *sec
+
+		// Security (U2): overriding the saved broker with a different broker must never
+		// forward the stored MQTT password to the new broker.
+		if req.Config.Broker != nil {
+			newBroker := strings.TrimSpace(*req.Config.Broker)
+			if err := validateMQTTBrokerField(newBroker, allowLoopback); err != nil {
+				return nil, nil, false, err
+			}
+			if !sameMQTTBroker(origCfg.Broker, newBroker) {
+				sec.Password = ""
+			}
+			cfg.Broker = newBroker
 		}
 		if req.Config.Username != nil {
 			cfg.Username = strings.TrimSpace(*req.Config.Username)
 		}
-		if req.Config.Topic != "" {
-			cfg.Topic = strings.TrimSpace(req.Config.Topic)
+		if req.Config.Topic != nil {
+			newTopic := strings.TrimSpace(*req.Config.Topic)
+			if newTopic == "" {
+				return nil, nil, false, newFieldError("config.topic", "REQUIRED", "topic is required for mqtt", ErrInvalidConfig)
+			}
+			if strings.ContainsAny(newTopic, "+#") {
+				return nil, nil, false, newFieldError(
+					"config.topic",
+					CodeAlertMQTTWildcardForbidden,
+					"mqtt publish topic must not contain wildcards",
+					ErrInvalidConfig,
+				)
+			}
+			cfg.Topic = newTopic
 		}
-		if req.Config.HeartbeatTopic != nil {
-			cfg.HeartbeatTopic = strings.TrimSpace(*req.Config.HeartbeatTopic)
-		}
-		if req.Config.HeartbeatIntervalSeconds != nil {
-			cfg.HeartbeatIntervalSeconds = *req.Config.HeartbeatIntervalSeconds
-		}
-		if req.Config.LWTEnabled != nil {
-			lwt := *req.Config.LWTEnabled
-			cfg.LWTEnabled = &lwt
+		if existing.HeartbeatEnabled {
+			if req.Config.HeartbeatTopic != nil {
+				trimmed := strings.TrimSpace(*req.Config.HeartbeatTopic)
+				if trimmed != "" && strings.ContainsAny(trimmed, "+#") {
+					return nil, nil, false, newFieldError(
+						"config.heartbeatTopic",
+						CodeAlertMQTTWildcardForbidden,
+						"mqtt heartbeat topic must not contain wildcards",
+						ErrInvalidConfig,
+					)
+				}
+				cfg.HeartbeatTopic = trimmed
+			}
+			if req.Config.HeartbeatIntervalSeconds != nil {
+				if err := validateHeartbeatIntervalField(*req.Config.HeartbeatIntervalSeconds); err != nil {
+					return nil, nil, false, err
+				}
+				cfg.HeartbeatIntervalSeconds = *req.Config.HeartbeatIntervalSeconds
+			}
+			if req.Config.LWTEnabled != nil {
+				lwt := *req.Config.LWTEnabled
+				cfg.LWTEnabled = &lwt
+			}
 		}
 		if req.Config.QoS != nil {
+			if !isValidMQTTQoS(*req.Config.QoS) {
+				return nil, nil, false, newFieldError("config.qos", "MAX_VALUE", "mqtt qos must be 0, 1 or 2", ErrInvalidConfig)
+			}
 			cfg.QoS = *req.Config.QoS
 		}
 		if req.Config.KeepAliveSeconds != nil {
-			if !isValidKeepAliveSeconds(*req.Config.KeepAliveSeconds) {
-				return nil, nil, false, fmt.Errorf(
-					"keepAliveSeconds must be between %d and %d",
-					MinKeepAliveSeconds,
-					MaxKeepAliveSeconds,
-				)
+			if err := validateKeepAliveField(*req.Config.KeepAliveSeconds); err != nil {
+				return nil, nil, false, err
 			}
 			cfg.KeepAliveSeconds = *req.Config.KeepAliveSeconds
 		}
@@ -550,6 +705,9 @@ func (h *Handler) resolveExistingTestTarget(
 			cfg.TLSSkipVerify = *req.Config.TLSSkipVerify
 		}
 		if req.Config.InlineMaxKB != nil {
+			if err := validateInlineMaxKBField(*req.Config.InlineMaxKB); err != nil {
+				return nil, nil, false, err
+			}
 			cfg.InlineMaxKB = *req.Config.InlineMaxKB
 		}
 		if req.Config.ClientID != nil {
@@ -569,11 +727,6 @@ func (h *Handler) resolveExistingTestTarget(
 		}
 		existing.ConfigJSON = string(cfgBytes)
 
-		sec, err := h.store.DecryptMQTTSecret(existing.ID, existing.SecretCiphertext)
-		if err != nil {
-			return nil, nil, false, err
-		}
-		origSec := *sec
 		if req.Secret != nil && req.Secret.Password != nil {
 			sec.Password = *req.Secret.Password
 		}
@@ -598,40 +751,53 @@ func (h *Handler) resolveDraftTestTarget(
 	if req.HeartbeatEnabled != nil {
 		heartbeatEnabled = *req.HeartbeatEnabled
 	}
-	imageMode := req.ImageMode
-	if !eventsEnabled && strings.TrimSpace(imageMode) == "" {
+	imageMode := strings.TrimSpace(req.ImageMode)
+	if !eventsEnabled && imageMode == "" {
 		imageMode = ImageModeURL
 	}
 
 	dest := &AlertDestination{
-		ChannelType:      req.ChannelType,
+		ChannelType:      strings.TrimSpace(req.ChannelType),
 		EventsEnabled:    eventsEnabled,
 		HeartbeatEnabled: heartbeatEnabled,
 		ImageMode:        imageMode,
 	}
 
-	switch req.ChannelType {
+	allowLoopback := h.allowLoopback()
+
+	switch dest.ChannelType {
 	case ChannelTypeWebhook:
+		rawURL := derefTrimmed(req.Config.URL)
+		if err := validateWebhookURLField("config.url", rawURL, allowLoopback); err != nil {
+			return nil, nil, err
+		}
 		timeout := DefaultWebhookTimeoutSec
 		if req.Config.TimeoutSeconds != nil {
-			if !isValidWebhookTimeout(*req.Config.TimeoutSeconds) {
-				return nil, nil, fmt.Errorf(
-					"timeoutSeconds must be between %d and %d",
-					MinWebhookTimeoutSeconds,
-					MaxWebhookTimeoutSeconds,
-				)
+			if err := validateWebhookTimeoutField(*req.Config.TimeoutSeconds); err != nil {
+				return nil, nil, err
 			}
 			timeout = *req.Config.TimeoutSeconds
 		}
 		authType := AuthTypeNone
-		if req.Config.AuthType != "" {
-			if !isValidWebhookAuthType(req.Config.AuthType) {
-				return nil, nil, fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
+		if req.Config.AuthType != nil {
+			at := strings.TrimSpace(*req.Config.AuthType)
+			if at != "" {
+				if !isValidWebhookAuthType(at) {
+					return nil, nil, newFieldError(
+						"config.authType",
+						"INVALID_VALUE",
+						fmt.Sprintf("unsupported webhook authType %q", at),
+						ErrInvalidConfig,
+					)
+				}
+				authType = at
 			}
-			authType = req.Config.AuthType
 		}
 		hbInterval := DefaultHeartbeatIntervalSeconds
-		if req.Config.HeartbeatIntervalSeconds != nil {
+		if heartbeatEnabled && req.Config.HeartbeatIntervalSeconds != nil {
+			if err := validateHeartbeatIntervalField(*req.Config.HeartbeatIntervalSeconds); err != nil {
+				return nil, nil, err
+			}
 			hbInterval = *req.Config.HeartbeatIntervalSeconds
 		}
 		var tlsSkipVerify bool
@@ -650,9 +816,9 @@ func (h *Handler) resolveDraftTestTarget(
 		dest.ConfigJSON = string(cfgJSON)
 
 		sec := &webhookSecret{
-			URL: req.Config.URL,
+			URL: rawURL,
 		}
-		if req.Config.HeartbeatURL != nil {
+		if heartbeatEnabled && req.Config.HeartbeatURL != nil {
 			sec.HeartbeatURL = strings.TrimSpace(*req.Config.HeartbeatURL)
 		}
 		if err := applyWebhookSecretOverrides(sec, req.Secret, true); err != nil {
@@ -662,30 +828,71 @@ func (h *Handler) resolveDraftTestTarget(
 		if err := validateWebhookAuthCredentials(authType, sec); err != nil {
 			return nil, nil, err
 		}
+		if heartbeatEnabled {
+			if err := validateWebhookHeartbeatOrigin(authType, sec, allowLoopback); err != nil {
+				return nil, nil, err
+			}
+		}
 		return dest, sec, nil
+
 	case ChannelTypeMQTT:
+		broker := derefTrimmed(req.Config.Broker)
+		if err := validateMQTTBrokerField(broker, allowLoopback); err != nil {
+			return nil, nil, err
+		}
+		topic := derefTrimmed(req.Config.Topic)
+		if topic == "" {
+			return nil, nil, newFieldError("config.topic", "REQUIRED", "topic is required for mqtt", ErrInvalidConfig)
+		}
+		if strings.ContainsAny(topic, "+#") {
+			return nil, nil, newFieldError(
+				"config.topic",
+				CodeAlertMQTTWildcardForbidden,
+				"mqtt publish topic must not contain wildcards",
+				ErrInvalidConfig,
+			)
+		}
 		var qos uint8
 		if req.Config.QoS != nil {
+			if !isValidMQTTQoS(*req.Config.QoS) {
+				return nil, nil, newFieldError("config.qos", "MAX_VALUE", "mqtt qos must be 0, 1 or 2", ErrInvalidConfig)
+			}
 			qos = *req.Config.QoS
 		}
 		keepAlive := 30
 		if req.Config.KeepAliveSeconds != nil {
-			if !isValidKeepAliveSeconds(*req.Config.KeepAliveSeconds) {
-				return nil, nil, fmt.Errorf(
-					"keepAliveSeconds must be between %d and %d",
-					MinKeepAliveSeconds,
-					MaxKeepAliveSeconds,
-				)
+			if err := validateKeepAliveField(*req.Config.KeepAliveSeconds); err != nil {
+				return nil, nil, err
 			}
 			keepAlive = *req.Config.KeepAliveSeconds
 		}
 		hbInterval := DefaultHeartbeatIntervalSeconds
-		if req.Config.HeartbeatIntervalSeconds != nil {
-			hbInterval = *req.Config.HeartbeatIntervalSeconds
-		}
 		var hbTopic string
-		if req.Config.HeartbeatTopic != nil {
-			hbTopic = strings.TrimSpace(*req.Config.HeartbeatTopic)
+		if heartbeatEnabled {
+			if req.Config.HeartbeatIntervalSeconds != nil {
+				if err := validateHeartbeatIntervalField(*req.Config.HeartbeatIntervalSeconds); err != nil {
+					return nil, nil, err
+				}
+				hbInterval = *req.Config.HeartbeatIntervalSeconds
+			}
+			if req.Config.HeartbeatTopic != nil {
+				hbTopic = strings.TrimSpace(*req.Config.HeartbeatTopic)
+				if hbTopic != "" && strings.ContainsAny(hbTopic, "+#") {
+					return nil, nil, newFieldError(
+						"config.heartbeatTopic",
+						CodeAlertMQTTWildcardForbidden,
+						"mqtt heartbeat topic must not contain wildcards",
+						ErrInvalidConfig,
+					)
+				}
+			}
+		}
+		var inlineMaxKB int
+		if req.Config.InlineMaxKB != nil {
+			if err := validateInlineMaxKBField(*req.Config.InlineMaxKB); err != nil {
+				return nil, nil, err
+			}
+			inlineMaxKB = *req.Config.InlineMaxKB
 		}
 		var username string
 		if req.Config.Username != nil {
@@ -696,23 +903,28 @@ func (h *Handler) resolveDraftTestTarget(
 			tlsSkipVerify = *req.Config.TLSSkipVerify
 		}
 		cfgJSON, err := json.Marshal(mqttConfig{
-			Broker:                   req.Config.Broker,
+			Broker:                   broker,
 			Username:                 username,
-			Topic:                    req.Config.Topic,
+			Topic:                    topic,
 			QoS:                      qos,
 			KeepAliveSeconds:         keepAlive,
 			TLSSkipVerify:            tlsSkipVerify,
 			HeartbeatIntervalSeconds: hbInterval,
 			HeartbeatTopic:           hbTopic,
-			InlineMaxKB:              inlineMaxKBFromInfo(req.Config.InlineMaxKB),
+			InlineMaxKB:              inlineMaxKB,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("marshal mqtt config: %w", err)
 		}
 		dest.ConfigJSON = string(cfgJSON)
-		if req.Config.ClientID != nil && strings.TrimSpace(*req.Config.ClientID) != "" {
+		if req.Config.ClientID != nil {
 			cID := strings.TrimSpace(*req.Config.ClientID)
-			dest.MQTTClientID = &cID
+			if err := validateMQTTClientID(cID); err != nil {
+				return nil, nil, err
+			}
+			if cID != "" {
+				dest.MQTTClientID = &cID
+			}
 		}
 		sec := &mqttSecret{}
 		if req.Secret != nil && req.Secret.Password != nil {
@@ -720,7 +932,12 @@ func (h *Handler) resolveDraftTestTarget(
 		}
 		return dest, sec, nil
 	default:
-		return nil, nil, ErrInvalidChannelType
+		return nil, nil, newFieldError(
+			"channelType",
+			"INVALID_VALUE",
+			fmt.Sprintf("unsupported channel type %q", dest.ChannelType),
+			ErrInvalidChannelType,
+		)
 	}
 }
 
@@ -736,7 +953,12 @@ func (h *Handler) parseCreateRequest(
 		heartbeatEnabled = *req.HeartbeatEnabled
 	}
 	if !eventsEnabled && !heartbeatEnabled {
-		return nil, nil, ErrInvalidConfig
+		return nil, nil, newFieldError(
+			"eventsEnabled",
+			CodeAlertCapabilityRequired,
+			"at least one of eventsEnabled or heartbeatEnabled must be true",
+			ErrInvalidConfig,
+		)
 	}
 
 	imageMode := strings.TrimSpace(req.ImageMode)
@@ -744,13 +966,18 @@ func (h *Handler) parseCreateRequest(
 		imageMode = ImageModeURL
 	}
 
+	channelType := strings.TrimSpace(req.ChannelType)
 	dest := &AlertDestination{
 		Name:             strings.TrimSpace(req.Name),
-		ChannelType:      req.ChannelType,
+		ChannelType:      channelType,
 		Enabled:          true,
 		EventsEnabled:    eventsEnabled,
 		HeartbeatEnabled: heartbeatEnabled,
 		ImageMode:        imageMode,
+	}
+
+	if err := validateDestinationName(dest.Name); err != nil {
+		return nil, nil, err
 	}
 
 	filterJSON, err := marshalFilterInfo(req.Filter)
@@ -759,7 +986,7 @@ func (h *Handler) parseCreateRequest(
 	}
 	dest.FilterJSON = filterJSON
 
-	switch req.ChannelType {
+	switch channelType {
 	case ChannelTypeWebhook:
 		sec, err := h.parseWebhookCreate(dest, req)
 		return dest, sec, err
@@ -767,7 +994,12 @@ func (h *Handler) parseCreateRequest(
 		sec, err := h.parseMQTTCreate(dest, req)
 		return dest, sec, err
 	default:
-		return nil, nil, ErrInvalidChannelType
+		return nil, nil, newFieldError(
+			"channelType",
+			"INVALID_VALUE",
+			fmt.Sprintf("unsupported channel type %q", channelType),
+			ErrInvalidChannelType,
+		)
 	}
 }
 
@@ -775,51 +1007,60 @@ func (h *Handler) parseWebhookCreate(
 	dest *AlertDestination,
 	req CreateAlertDestinationRequest,
 ) (*webhookSecret, error) {
-	if err := validateWebhookURL(req.Config.URL); err != nil {
+	allowLoopback := h.allowLoopback()
+	rawURL := derefTrimmed(req.Config.URL)
+	if err := validateWebhookURLField("config.url", rawURL, allowLoopback); err != nil {
 		return nil, err
 	}
 
 	timeout := DefaultWebhookTimeoutSec
 	if req.Config.TimeoutSeconds != nil {
-		if !isValidWebhookTimeout(*req.Config.TimeoutSeconds) {
-			return nil, fmt.Errorf(
-				"timeoutSeconds must be between %d and %d",
-				MinWebhookTimeoutSeconds,
-				MaxWebhookTimeoutSeconds,
-			)
+		if err := validateWebhookTimeoutField(*req.Config.TimeoutSeconds); err != nil {
+			return nil, err
 		}
 		timeout = *req.Config.TimeoutSeconds
 	}
 	authType := AuthTypeNone
-	if req.Config.AuthType != "" {
-		if !isValidWebhookAuthType(req.Config.AuthType) {
-			return nil, fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
+	if req.Config.AuthType != nil {
+		at := strings.TrimSpace(*req.Config.AuthType)
+		if at != "" {
+			if !isValidWebhookAuthType(at) {
+				return nil, newFieldError(
+					"config.authType",
+					"INVALID_VALUE",
+					fmt.Sprintf("unsupported webhook authType %q", at),
+					ErrInvalidConfig,
+				)
+			}
+			authType = at
 		}
-		authType = req.Config.AuthType
 	}
 
 	hbInterval := DefaultHeartbeatIntervalSeconds
-	if req.Config.HeartbeatIntervalSeconds != nil {
-		if !isValidHeartbeatInterval(*req.Config.HeartbeatIntervalSeconds) {
-			return nil, errors.New("heartbeatIntervalSeconds must be between 15 and 3600")
+	if dest.HeartbeatEnabled && req.Config.HeartbeatIntervalSeconds != nil {
+		if err := validateHeartbeatIntervalField(*req.Config.HeartbeatIntervalSeconds); err != nil {
+			return nil, err
 		}
 		hbInterval = *req.Config.HeartbeatIntervalSeconds
 	}
 
 	sec := &webhookSecret{
-		URL: req.Config.URL,
+		URL: rawURL,
 	}
-	if req.Config.HeartbeatURL != nil {
+	if dest.HeartbeatEnabled && req.Config.HeartbeatURL != nil {
 		sec.HeartbeatURL = strings.TrimSpace(*req.Config.HeartbeatURL)
 	}
 	if err := applyWebhookSecretOverrides(sec, req.Secret, true); err != nil {
 		return nil, err
 	}
+	normalizeWebhookAuthCredentials(authType, sec)
 	if err := validateWebhookAuthCredentials(authType, sec); err != nil {
 		return nil, err
 	}
-	if err := validateWebhookHeartbeatOrigin(authType, sec); err != nil {
-		return nil, err
+	if dest.HeartbeatEnabled {
+		if err := validateWebhookHeartbeatOrigin(authType, sec, allowLoopback); err != nil {
+			return nil, err
+		}
 	}
 
 	var tlsSkipVerify bool
@@ -844,35 +1085,48 @@ func (h *Handler) parseMQTTCreate(
 	dest *AlertDestination,
 	req CreateAlertDestinationRequest,
 ) (*mqttSecret, error) {
-	if err := validateMQTTBroker(req.Config.Broker); err != nil {
+	allowLoopback := h.allowLoopback()
+	broker := derefTrimmed(req.Config.Broker)
+	if err := validateMQTTBrokerField(broker, allowLoopback); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(req.Config.Topic) == "" {
-		return nil, errors.New("topic is required for mqtt")
+	topic := derefTrimmed(req.Config.Topic)
+	if topic == "" {
+		return nil, newFieldError("config.topic", "REQUIRED", "topic is required for mqtt", ErrInvalidConfig)
 	}
-	if strings.ContainsAny(req.Config.Topic, "+#") {
-		return nil, errors.New("mqtt publish topic must not contain wildcards")
+	if strings.ContainsAny(topic, "+#") {
+		return nil, newFieldError(
+			"config.topic",
+			CodeAlertMQTTWildcardForbidden,
+			"mqtt publish topic must not contain wildcards",
+			ErrInvalidConfig,
+		)
 	}
 
 	var hbTopic string
-	if req.Config.HeartbeatTopic != nil {
-		hbTopic = strings.TrimSpace(*req.Config.HeartbeatTopic)
-		if hbTopic != "" && strings.ContainsAny(hbTopic, "+#") {
-			return nil, errors.New("mqtt heartbeat topic must not contain wildcards")
-		}
-	}
-
 	hbInterval := DefaultHeartbeatIntervalSeconds
-	if req.Config.HeartbeatIntervalSeconds != nil {
-		if !isValidHeartbeatInterval(*req.Config.HeartbeatIntervalSeconds) {
-			return nil, errors.New("heartbeatIntervalSeconds must be between 15 and 3600")
-		}
-		hbInterval = *req.Config.HeartbeatIntervalSeconds
-	}
-
 	lwtEnabled := true
-	if req.Config.LWTEnabled != nil {
-		lwtEnabled = *req.Config.LWTEnabled
+	if dest.HeartbeatEnabled {
+		if req.Config.HeartbeatTopic != nil {
+			hbTopic = strings.TrimSpace(*req.Config.HeartbeatTopic)
+			if hbTopic != "" && strings.ContainsAny(hbTopic, "+#") {
+				return nil, newFieldError(
+					"config.heartbeatTopic",
+					CodeAlertMQTTWildcardForbidden,
+					"mqtt heartbeat topic must not contain wildcards",
+					ErrInvalidConfig,
+				)
+			}
+		}
+		if req.Config.HeartbeatIntervalSeconds != nil {
+			if err := validateHeartbeatIntervalField(*req.Config.HeartbeatIntervalSeconds); err != nil {
+				return nil, err
+			}
+			hbInterval = *req.Config.HeartbeatIntervalSeconds
+		}
+		if req.Config.LWTEnabled != nil {
+			lwtEnabled = *req.Config.LWTEnabled
+		}
 	}
 
 	if req.Config.ClientID != nil {
@@ -888,20 +1142,23 @@ func (h *Handler) parseMQTTCreate(
 	var qos uint8
 	if req.Config.QoS != nil {
 		if !isValidMQTTQoS(*req.Config.QoS) {
-			return nil, errors.New("mqtt qos must be 0, 1 or 2")
+			return nil, newFieldError("config.qos", "MAX_VALUE", "mqtt qos must be 0, 1 or 2", ErrInvalidConfig)
 		}
 		qos = *req.Config.QoS
 	}
 	keepAlive := 30
 	if req.Config.KeepAliveSeconds != nil {
-		if !isValidKeepAliveSeconds(*req.Config.KeepAliveSeconds) {
-			return nil, fmt.Errorf(
-				"keepAliveSeconds must be between %d and %d",
-				MinKeepAliveSeconds,
-				MaxKeepAliveSeconds,
-			)
+		if err := validateKeepAliveField(*req.Config.KeepAliveSeconds); err != nil {
+			return nil, err
 		}
 		keepAlive = *req.Config.KeepAliveSeconds
+	}
+	var inlineMaxKB int
+	if req.Config.InlineMaxKB != nil {
+		if err := validateInlineMaxKBField(*req.Config.InlineMaxKB); err != nil {
+			return nil, err
+		}
+		inlineMaxKB = *req.Config.InlineMaxKB
 	}
 	var username string
 	if req.Config.Username != nil {
@@ -913,16 +1170,16 @@ func (h *Handler) parseMQTTCreate(
 	}
 
 	cfgJSON, err := json.Marshal(mqttConfig{
-		Broker:                   strings.TrimSpace(req.Config.Broker),
+		Broker:                   broker,
 		Username:                 username,
-		Topic:                    strings.TrimSpace(req.Config.Topic),
+		Topic:                    topic,
 		QoS:                      qos,
 		KeepAliveSeconds:         keepAlive,
 		TLSSkipVerify:            tlsSkipVerify,
 		HeartbeatIntervalSeconds: hbInterval,
 		HeartbeatTopic:           hbTopic,
 		LWTEnabled:               &lwtEnabled,
-		InlineMaxKB:              inlineMaxKBFromInfo(req.Config.InlineMaxKB),
+		InlineMaxKB:              inlineMaxKB,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal mqtt config: %w", err)
@@ -940,6 +1197,22 @@ func (h *Handler) parseUpdateRequest(
 	existing *AlertDestination,
 	req UpdateAlertDestinationRequest,
 ) (UpdateParams, error) {
+	if req.ChannelType != nil {
+		requested := strings.TrimSpace(*req.ChannelType)
+		if requested != existing.ChannelType {
+			return UpdateParams{}, newFieldError(
+				"channelType",
+				CodeAlertChannelTypeImmutable,
+				"channelType cannot be modified after creation",
+				ErrInvalidConfig,
+			)
+		}
+	}
+
+	if req.ImageMode != nil && strings.TrimSpace(*req.ImageMode) == "" {
+		return UpdateParams{}, newFieldError("imageMode", "REQUIRED", "imageMode cannot be empty", ErrInvalidConfig)
+	}
+
 	params := UpdateParams{
 		Name:             req.Name,
 		EventsEnabled:    req.EventsEnabled,
@@ -955,13 +1228,18 @@ func (h *Handler) parseUpdateRequest(
 		params.FilterJSON = &fs
 	}
 
+	effectiveHeartbeat := existing.HeartbeatEnabled
+	if req.HeartbeatEnabled != nil {
+		effectiveHeartbeat = *req.HeartbeatEnabled
+	}
+
 	switch existing.ChannelType {
 	case ChannelTypeWebhook:
-		if err := h.applyWebhookUpdate(existing, req, &params); err != nil {
+		if err := h.applyWebhookUpdate(existing, req, effectiveHeartbeat, &params); err != nil {
 			return UpdateParams{}, err
 		}
 	case ChannelTypeMQTT:
-		if err := h.applyMQTTUpdate(existing, req, &params); err != nil {
+		if err := h.applyMQTTUpdate(existing, req, effectiveHeartbeat, &params); err != nil {
 			return UpdateParams{}, err
 		}
 	default:
@@ -974,6 +1252,7 @@ func (h *Handler) parseUpdateRequest(
 func (h *Handler) applyWebhookUpdate(
 	existing *AlertDestination,
 	req UpdateAlertDestinationRequest,
+	effectiveHeartbeat bool,
 	params *UpdateParams,
 ) error {
 	var curCfg webhookConfig
@@ -986,45 +1265,53 @@ func (h *Handler) applyWebhookUpdate(
 	if err != nil {
 		return fmt.Errorf("decrypt existing webhook secret: %w", err)
 	}
+	origSec := cloneWebhookSecret(curSec)
+	allowLoopback := h.allowLoopback()
 
 	if req.Config != nil {
-		if req.Config.URL != "" {
-			if err := validateWebhookURL(req.Config.URL); err != nil {
+		if req.Config.URL != nil {
+			newURL := strings.TrimSpace(*req.Config.URL)
+			if err := validateWebhookURLField("config.url", newURL, allowLoopback); err != nil {
 				return err
 			}
-			curSec.URL = req.Config.URL
+			curSec.URL = newURL
 		}
-		if req.Config.HeartbeatURL != nil {
+		if effectiveHeartbeat && req.Config.HeartbeatURL != nil {
 			trimmed := strings.TrimSpace(*req.Config.HeartbeatURL)
 			if trimmed != "" {
-				if err := validateWebhookURL(trimmed); err != nil {
+				if err := validateWebhookURLField("config.heartbeatUrl", trimmed, allowLoopback); err != nil {
 					return err
 				}
 			}
 			curSec.HeartbeatURL = trimmed
 		}
-		if req.Config.AuthType != "" {
-			if !isValidWebhookAuthType(req.Config.AuthType) {
-				return fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
+		if req.Config.AuthType != nil {
+			authType := strings.TrimSpace(*req.Config.AuthType)
+			if authType == "" {
+				return newFieldError("config.authType", "REQUIRED", "authType cannot be empty", ErrInvalidConfig)
 			}
-			curCfg.AuthType = req.Config.AuthType
+			if !isValidWebhookAuthType(authType) {
+				return newFieldError(
+					"config.authType",
+					"INVALID_VALUE",
+					fmt.Sprintf("unsupported webhook authType %q", authType),
+					ErrInvalidConfig,
+				)
+			}
+			curCfg.AuthType = authType
 		}
 		if req.Config.TimeoutSeconds != nil {
-			if !isValidWebhookTimeout(*req.Config.TimeoutSeconds) {
-				return fmt.Errorf(
-					"timeoutSeconds must be between %d and %d",
-					MinWebhookTimeoutSeconds,
-					MaxWebhookTimeoutSeconds,
-				)
+			if err := validateWebhookTimeoutField(*req.Config.TimeoutSeconds); err != nil {
+				return err
 			}
 			curCfg.TimeoutSeconds = *req.Config.TimeoutSeconds
 		}
 		if req.Config.TLSSkipVerify != nil {
 			curCfg.TLSSkipVerify = *req.Config.TLSSkipVerify
 		}
-		if req.Config.HeartbeatIntervalSeconds != nil {
-			if !isValidHeartbeatInterval(*req.Config.HeartbeatIntervalSeconds) {
-				return errors.New("heartbeatIntervalSeconds must be between 15 and 3600")
+		if effectiveHeartbeat && req.Config.HeartbeatIntervalSeconds != nil {
+			if err := validateHeartbeatIntervalField(*req.Config.HeartbeatIntervalSeconds); err != nil {
+				return err
 			}
 			curCfg.HeartbeatIntervalSeconds = *req.Config.HeartbeatIntervalSeconds
 		}
@@ -1039,23 +1326,30 @@ func (h *Handler) applyWebhookUpdate(
 	if err := validateWebhookAuthCredentials(curCfg.AuthType, curSec); err != nil {
 		return err
 	}
-	if err := validateWebhookHeartbeatOrigin(curCfg.AuthType, curSec); err != nil {
-		return err
+	if effectiveHeartbeat {
+		if err := validateWebhookHeartbeatOrigin(curCfg.AuthType, curSec, allowLoopback); err != nil {
+			return err
+		}
 	}
 
-	cb, err := json.Marshal(curCfg)
-	if err != nil {
-		return fmt.Errorf("marshal webhook config: %w", err)
+	if req.Config != nil {
+		cb, err := json.Marshal(curCfg)
+		if err != nil {
+			return fmt.Errorf("marshal webhook config: %w", err)
+		}
+		cs := string(cb)
+		params.ConfigJSON = &cs
 	}
-	cs := string(cb)
-	params.ConfigJSON = &cs
-	params.SecretRaw = curSec
+	if !webhookSecretsEqual(origSec, curSec) || len(existing.SecretCiphertext) == 0 {
+		params.SecretRaw = curSec
+	}
 	return nil
 }
 
 func (h *Handler) applyMQTTUpdate(
 	existing *AlertDestination,
 	req UpdateAlertDestinationRequest,
+	effectiveHeartbeat bool,
 	params *UpdateParams,
 ) error {
 	var curCfg mqttConfig
@@ -1068,53 +1362,68 @@ func (h *Handler) applyMQTTUpdate(
 	if err != nil {
 		return fmt.Errorf("decrypt existing mqtt secret: %w", err)
 	}
+	origSec := *curSec
+	allowLoopback := h.allowLoopback()
 
 	if req.Config != nil {
-		if req.Config.Broker != "" {
-			if err := validateMQTTBroker(req.Config.Broker); err != nil {
+		if req.Config.Broker != nil {
+			newBroker := strings.TrimSpace(*req.Config.Broker)
+			if err := validateMQTTBrokerField(newBroker, allowLoopback); err != nil {
 				return err
 			}
-			curCfg.Broker = strings.TrimSpace(req.Config.Broker)
+			curCfg.Broker = newBroker
 		}
 		if req.Config.Username != nil {
 			curCfg.Username = strings.TrimSpace(*req.Config.Username)
 		}
-		if req.Config.Topic != "" {
-			if strings.ContainsAny(req.Config.Topic, "+#") {
-				return errors.New("mqtt topic must not contain wildcards")
+		if req.Config.Topic != nil {
+			newTopic := strings.TrimSpace(*req.Config.Topic)
+			if newTopic == "" {
+				return newFieldError("config.topic", "REQUIRED", "topic is required for mqtt", ErrInvalidConfig)
 			}
-			curCfg.Topic = strings.TrimSpace(req.Config.Topic)
-		}
-		if req.Config.HeartbeatTopic != nil {
-			trimmed := strings.TrimSpace(*req.Config.HeartbeatTopic)
-			if trimmed != "" && strings.ContainsAny(trimmed, "+#") {
-				return errors.New("mqtt heartbeat topic must not contain wildcards")
+			if strings.ContainsAny(newTopic, "+#") {
+				return newFieldError(
+					"config.topic",
+					CodeAlertMQTTWildcardForbidden,
+					"mqtt topic must not contain wildcards",
+					ErrInvalidConfig,
+				)
 			}
-			curCfg.HeartbeatTopic = trimmed
+			curCfg.Topic = newTopic
 		}
-		if req.Config.HeartbeatIntervalSeconds != nil {
-			if !isValidHeartbeatInterval(*req.Config.HeartbeatIntervalSeconds) {
-				return errors.New("heartbeatIntervalSeconds must be between 15 and 3600")
+		if effectiveHeartbeat {
+			if req.Config.HeartbeatTopic != nil {
+				trimmed := strings.TrimSpace(*req.Config.HeartbeatTopic)
+				if trimmed != "" && strings.ContainsAny(trimmed, "+#") {
+					return newFieldError(
+						"config.heartbeatTopic",
+						CodeAlertMQTTWildcardForbidden,
+						"mqtt heartbeat topic must not contain wildcards",
+						ErrInvalidConfig,
+					)
+				}
+				curCfg.HeartbeatTopic = trimmed
 			}
-			curCfg.HeartbeatIntervalSeconds = *req.Config.HeartbeatIntervalSeconds
-		}
-		if req.Config.LWTEnabled != nil {
-			lwt := *req.Config.LWTEnabled
-			curCfg.LWTEnabled = &lwt
+			if req.Config.HeartbeatIntervalSeconds != nil {
+				if err := validateHeartbeatIntervalField(*req.Config.HeartbeatIntervalSeconds); err != nil {
+					return err
+				}
+				curCfg.HeartbeatIntervalSeconds = *req.Config.HeartbeatIntervalSeconds
+			}
+			if req.Config.LWTEnabled != nil {
+				lwt := *req.Config.LWTEnabled
+				curCfg.LWTEnabled = &lwt
+			}
 		}
 		if req.Config.QoS != nil {
 			if !isValidMQTTQoS(*req.Config.QoS) {
-				return errors.New("mqtt qos must be 0, 1 or 2")
+				return newFieldError("config.qos", "MAX_VALUE", "mqtt qos must be 0, 1 or 2", ErrInvalidConfig)
 			}
 			curCfg.QoS = *req.Config.QoS
 		}
 		if req.Config.KeepAliveSeconds != nil {
-			if !isValidKeepAliveSeconds(*req.Config.KeepAliveSeconds) {
-				return fmt.Errorf(
-					"keepAliveSeconds must be between %d and %d",
-					MinKeepAliveSeconds,
-					MaxKeepAliveSeconds,
-				)
+			if err := validateKeepAliveField(*req.Config.KeepAliveSeconds); err != nil {
+				return err
 			}
 			curCfg.KeepAliveSeconds = *req.Config.KeepAliveSeconds
 		}
@@ -1122,6 +1431,9 @@ func (h *Handler) applyMQTTUpdate(
 			curCfg.TLSSkipVerify = *req.Config.TLSSkipVerify
 		}
 		if req.Config.InlineMaxKB != nil {
+			if err := validateInlineMaxKBField(*req.Config.InlineMaxKB); err != nil {
+				return err
+			}
 			curCfg.InlineMaxKB = *req.Config.InlineMaxKB
 		}
 
@@ -1138,13 +1450,17 @@ func (h *Handler) applyMQTTUpdate(
 		curSec.Password = *req.Secret.Password
 	}
 
-	cb, err := json.Marshal(curCfg)
-	if err != nil {
-		return fmt.Errorf("marshal mqtt config: %w", err)
+	if req.Config != nil {
+		cb, err := json.Marshal(curCfg)
+		if err != nil {
+			return fmt.Errorf("marshal mqtt config: %w", err)
+		}
+		cs := string(cb)
+		params.ConfigJSON = &cs
 	}
-	cs := string(cb)
-	params.ConfigJSON = &cs
-	params.SecretRaw = curSec
+	if *curSec != origSec || len(existing.SecretCiphertext) == 0 {
+		params.SecretRaw = curSec
+	}
 	return nil
 }
 
@@ -1169,6 +1485,7 @@ func (h *Handler) toResponse(
 			return AlertDestinationResponse{}, fmt.Errorf("unmarshal filter json: %w", err)
 		}
 	}
+	filter.normalize()
 	resp.Filter = AlertDestinationFilterInfo{
 		EventTypes:   nonNilStrings(filter.EventTypes),
 		AlgorithmIDs: nonNilStrings(filter.AlgorithmIDs),
@@ -1185,19 +1502,32 @@ func (h *Handler) toResponse(
 		}
 		hbInterval := normalizeHeartbeatInterval(cfg.HeartbeatIntervalSeconds)
 		tlsSkip := cfg.TLSSkipVerify
-		resp.Config.AuthType = cfg.AuthType
+		if cfg.AuthType != "" {
+			at := cfg.AuthType
+			resp.Config.AuthType = &at
+		}
 		resp.Config.TimeoutSeconds = &cfg.TimeoutSeconds
 		resp.Config.TLSSkipVerify = &tlsSkip
 		resp.Config.HeartbeatIntervalSeconds = &hbInterval
 
 		sec, err := h.store.DecryptWebhookSecret(dest.ID, dest.SecretCiphertext)
-		if err == nil && sec != nil {
-			resp.Config.URL = sec.URL
+		if err != nil {
+			h.logger.Error(
+				"failed to decrypt webhook destination secret",
+				zap.String("destination_id", dest.ID),
+				zap.Error(err),
+			)
+		} else if sec != nil {
+			if sec.URL != "" {
+				u := sec.URL
+				resp.Config.URL = &u
+			}
 			if sec.HeartbeatURL != "" {
 				hbURL := sec.HeartbeatURL
 				resp.Config.HeartbeatURL = &hbURL
 			}
 			resp.SecretSet = sec.Token != "" || sec.Password != ""
+			resp.SigningSecretSet = sec.SigningSecret != ""
 			if len(sec.Headers) > 0 {
 				names := make([]string, 0, len(sec.Headers))
 				for k := range sec.Headers {
@@ -1217,12 +1547,18 @@ func (h *Handler) toResponse(
 		hbInterval := normalizeHeartbeatInterval(cfg.HeartbeatIntervalSeconds)
 		lwt := cfg.effectiveLWTEnabled()
 		tlsSkip := cfg.TLSSkipVerify
-		resp.Config.Broker = cfg.Broker
+		if cfg.Broker != "" {
+			b := cfg.Broker
+			resp.Config.Broker = &b
+		}
 		if cfg.Username != "" {
 			username := cfg.Username
 			resp.Config.Username = &username
 		}
-		resp.Config.Topic = cfg.Topic
+		if cfg.Topic != "" {
+			t := cfg.Topic
+			resp.Config.Topic = &t
+		}
 		if cfg.HeartbeatTopic != "" {
 			hbTopic := cfg.HeartbeatTopic
 			resp.Config.HeartbeatTopic = &hbTopic
@@ -1240,7 +1576,13 @@ func (h *Handler) toResponse(
 		}
 
 		sec, err := h.store.DecryptMQTTSecret(dest.ID, dest.SecretCiphertext)
-		if err == nil && sec != nil {
+		if err != nil {
+			h.logger.Error(
+				"failed to decrypt mqtt destination secret",
+				zap.String("destination_id", dest.ID),
+				zap.Error(err),
+			)
+		} else if sec != nil {
 			resp.SecretSet = sec.Password != ""
 		}
 	}
@@ -1261,6 +1603,19 @@ func (h *Handler) writeValidationError(c *gin.Context, err error) {
 		httputil.WriteError(c, apperr.Invalid(CodeAlertEventTypeInvalid, err.Error(), err))
 		return
 	}
+	var valErr *ValidationError
+	if errors.As(err, &valErr) && len(valErr.Details) > 0 {
+		details := make([]httputil.FieldDetail, len(valErr.Details))
+		for i, d := range valErr.Details {
+			details[i] = httputil.FieldDetail{
+				Field:   d.Field,
+				Code:    d.Code,
+				Message: d.Message,
+			}
+		}
+		httputil.WriteError(c, httputil.NewValidationError("Validation failed", details))
+		return
+	}
 	httputil.WriteError(c, apperr.Invalid(CodeAlertDestinationConfigInvalid, err.Error(), err))
 }
 
@@ -1271,9 +1626,9 @@ func marshalFilterInfo(info *AlertDestinationFilterInfo) (string, error) {
 		CameraIDs:    []string{},
 	}
 	if info != nil {
-		filter.EventTypes = nonNilStrings(info.EventTypes)
-		filter.AlgorithmIDs = nonNilStrings(info.AlgorithmIDs)
-		filter.CameraIDs = nonNilStrings(info.CameraIDs)
+		filter.EventTypes = dedupePreserveEmpty(info.EventTypes)
+		filter.AlgorithmIDs = nonNilStrings(dedupeTrimmed(info.AlgorithmIDs))
+		filter.CameraIDs = nonNilStrings(dedupeTrimmed(info.CameraIDs))
 	}
 	filterBytes, err := json.Marshal(filter)
 	if err != nil {
@@ -1289,16 +1644,29 @@ func nonNilStrings(s []string) []string {
 	return s
 }
 
-func validateWebhookURL(rawURL string) error {
-	if strings.TrimSpace(rawURL) == "" {
-		return errors.New("url is required for webhook")
+func derefTrimmed(s *string) string {
+	if s == nil {
+		return ""
 	}
-	u, err := url.Parse(rawURL)
-	isValidScheme := err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https")
-	if !isValidScheme || u.User != nil {
-		return errors.New("webhook url must be http or https without userinfo")
+	return strings.TrimSpace(*s)
+}
+
+func sanitizeAuditName(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
 	}
-	return nil
+	clean := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, trimmed)
+	runes := []rune(clean)
+	if len(runes) > maxAuditTargetNameLen {
+		return string(runes[:maxAuditTargetNameLen])
+	}
+	return clean
 }
 
 func normalizeWebhookAuthCredentials(authType string, sec *webhookSecret) {
@@ -1318,19 +1686,10 @@ func normalizeWebhookAuthCredentials(authType string, sec *webhookSecret) {
 	}
 }
 
-// inlineMaxKBFromInfo copies the optional API value verbatim; range checks live in
-// validateMQTTTarget so create, update and test share one rule. Absent means default (0).
-func inlineMaxKBFromInfo(v *int) int {
-	if v == nil {
-		return 0
-	}
-	return *v
-}
-
 func applyWebhookSecretOverrides(
 	sec *webhookSecret,
 	input *AlertDestinationSecretInfo,
-	checkReserved bool,
+	checkHeaders bool,
 ) error {
 	if input == nil {
 		return nil
@@ -1344,15 +1703,16 @@ func applyWebhookSecretOverrides(
 	if input.Password != nil {
 		sec.Password = *input.Password
 	}
+	if input.SigningSecret != nil {
+		sec.SigningSecret = *input.SigningSecret
+	}
 	if input.Headers != nil {
-		if checkReserved {
-			for hk := range input.Headers {
-				if isReservedHeader(hk) {
-					return ErrReservedHeaderUsed
-				}
+		if checkHeaders {
+			if err := validateWebhookHeaders(input.Headers); err != nil {
+				return err
 			}
 		}
-		sec.Headers = input.Headers
+		sec.Headers = maps.Clone(input.Headers)
 	}
 	return nil
 }
@@ -1361,13 +1721,26 @@ func validateWebhookAuthCredentials(authType string, sec *webhookSecret) error {
 	switch authType {
 	case AuthTypeBearer:
 		if strings.TrimSpace(sec.Token) == "" {
-			return errors.New("token is required for bearer auth")
+			return newFieldError("secret.token", "REQUIRED", "token is required for bearer auth", ErrInvalidConfig)
 		}
 	case AuthTypeBasic:
-		missingBasicCreds := strings.TrimSpace(sec.Username) == "" ||
-			strings.TrimSpace(sec.Password) == ""
-		if missingBasicCreds {
-			return errors.New("username and password are required for basic auth")
+		details := make([]FieldValidationError, 0, 2)
+		if strings.TrimSpace(sec.Username) == "" {
+			details = append(details, FieldValidationError{
+				Field:   "secret.username",
+				Code:    "REQUIRED",
+				Message: "username is required for basic auth",
+			})
+		}
+		if strings.TrimSpace(sec.Password) == "" {
+			details = append(details, FieldValidationError{
+				Field:   "secret.password",
+				Code:    "REQUIRED",
+				Message: "password is required for basic auth",
+			})
+		}
+		if len(details) > 0 {
+			return &ValidationError{Details: details, Cause: ErrInvalidConfig}
 		}
 	}
 	return nil
@@ -1378,12 +1751,13 @@ func cloneWebhookSecret(sec *webhookSecret) *webhookSecret {
 		return &webhookSecret{}
 	}
 	return &webhookSecret{
-		URL:          sec.URL,
-		HeartbeatURL: sec.HeartbeatURL,
-		Token:        sec.Token,
-		Username:     sec.Username,
-		Password:     sec.Password,
-		Headers:      maps.Clone(sec.Headers),
+		URL:           sec.URL,
+		HeartbeatURL:  sec.HeartbeatURL,
+		Token:         sec.Token,
+		Username:      sec.Username,
+		Password:      sec.Password,
+		SigningSecret: sec.SigningSecret,
+		Headers:       maps.Clone(sec.Headers),
 	}
 }
 
@@ -1407,6 +1781,7 @@ func webhookSecretsEqual(a, b *webhookSecret) bool {
 		a.Token == b.Token &&
 		a.Username == b.Username &&
 		a.Password == b.Password &&
+		a.SigningSecret == b.SigningSecret &&
 		maps.Equal(a.Headers, b.Headers)
 }
 

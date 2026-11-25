@@ -4,6 +4,7 @@ import {
   INLINE_MAX_KB_DEFAULT,
   isSameHttpOrigin,
   RESERVED_HEADERS,
+  RESERVED_WEBHOOK_HEADERS,
   type AlertDestinationFormValues,
 } from './schema'
 
@@ -24,6 +25,7 @@ function makeBaseWebhookValues(
     token: '',
     basicUser: '',
     basicPass: '',
+    signingSecret: '',
     headers: [],
     broker: '',
     topic: '',
@@ -104,6 +106,76 @@ describe('createAlertDestinationFormSchema', () => {
         crossOriginRes.error.issues.some((i) => i.path.includes('heartbeatUrl'))
       ).toBe(true)
     }
+
+    // Cross-origin with authType='none' + new signingSecret -> rejected
+    const crossOriginSigningRes = schema.safeParse(
+      makeBaseWebhookValues({
+        eventsEnabled: false,
+        heartbeatEnabled: true,
+        url: 'https://api.example.com/v1/events',
+        heartbeatUrl: 'https://evil.other.org/v1/heartbeat',
+        authType: 'none',
+        signingSecret: 'hmac-secret-key',
+      })
+    )
+    expect(crossOriginSigningRes.success).toBe(false)
+    if (!crossOriginSigningRes.success) {
+      expect(
+        crossOriginSigningRes.error.issues.some((i) =>
+          i.path.includes('heartbeatUrl')
+        )
+      ).toBe(true)
+    }
+
+    // Edit mode with retained signingSecretSet (not cleared) -> cross-origin rejected
+    const editRetainedSigningSchema = createAlertDestinationFormSchema(
+      undefined,
+      true,
+      false,
+      'none',
+      [],
+      true
+    )
+    const crossOriginRetainedSigning = editRetainedSigningSchema.safeParse(
+      makeBaseWebhookValues({
+        eventsEnabled: false,
+        heartbeatEnabled: true,
+        url: 'https://api.example.com/v1/events',
+        heartbeatUrl: 'https://evil.other.org/v1/heartbeat',
+        authType: 'none',
+        signingSecret: '',
+      })
+    )
+    expect(crossOriginRetainedSigning.success).toBe(false)
+    if (!crossOriginRetainedSigning.success) {
+      expect(
+        crossOriginRetainedSigning.error.issues.some((i) =>
+          i.path.includes('heartbeatUrl')
+        )
+      ).toBe(true)
+    }
+
+    // Edit mode with signingSecret cleared (signingSecretRetained=false) -> cross-origin allowed
+    const editClearedSigningSchema = createAlertDestinationFormSchema(
+      undefined,
+      true,
+      false,
+      'none',
+      [],
+      false
+    )
+    expect(
+      editClearedSigningSchema.safeParse(
+        makeBaseWebhookValues({
+          eventsEnabled: false,
+          heartbeatEnabled: true,
+          url: 'https://api.example.com/v1/events',
+          heartbeatUrl: 'https://other.example.org/v1/heartbeat',
+          authType: 'none',
+          signingSecret: '',
+        })
+      ).success
+    ).toBe(true)
   })
 
   it('rejects out-of-range heartbeatIntervalSeconds', () => {
@@ -137,7 +209,7 @@ describe('createAlertDestinationFormSchema', () => {
     }
   })
 
-  it('rejects reserved headers in webhook custom headers', () => {
+  it('rejects reserved headers and case-insensitive duplicate headers in webhook custom headers', () => {
     const schema = createAlertDestinationFormSchema()
     const res = schema.safeParse(
       makeBaseWebhookValues({
@@ -150,9 +222,24 @@ describe('createAlertDestinationFormSchema', () => {
         true
       )
     }
+
+    const dupRes = schema.safeParse(
+      makeBaseWebhookValues({
+        headers: [
+          { key: 'X-Tenant-Id', value: 't1' },
+          { key: 'x-tenant-id', value: 't2' },
+        ],
+      })
+    )
+    expect(dupRes.success).toBe(false)
+    if (!dupRes.success) {
+      expect(
+        dupRes.error.issues.some((i) => i.path.join('.') === 'headers.1.key')
+      ).toBe(true)
+    }
   })
 
-  it('validates mqtt destination and rejects wildcards in topic or heartbeatTopic', () => {
+  it('validates mqtt broker scheme/host/userinfo and rejects wildcards in topic or heartbeatTopic', () => {
     const schema = createAlertDestinationFormSchema()
     const validMqtt = makeBaseWebhookValues({
       name: 'IoT Gateway',
@@ -170,7 +257,36 @@ describe('createAlertDestinationFormSchema', () => {
       mqttPass: 'password',
     })
 
-    expect(schema.safeParse(validMqtt).success).toBe(true)
+    for (const allowedBroker of [
+      'tcp://10.0.0.1:1883',
+      'ssl://broker.local:8883',
+      'tls://broker.local:8883',
+      'tcps://broker.local:8883',
+      'ws://broker.local:8083/mqtt',
+      'wss://broker.local:8084/mqtt',
+      'mqtt://10.0.0.1:1883',
+      'mqtts://broker.local:8883',
+    ]) {
+      expect(
+        schema.safeParse({ ...validMqtt, broker: allowedBroker }).success
+      ).toBe(true)
+    }
+
+    for (const invalidBroker of [
+      '192.168.1.100:1883',
+      'http://10.0.0.1:1883',
+      'tcp://',
+      'tcp://user:pass@10.0.0.1:1883',
+      'tcp://:@10.0.0.1:1883',
+    ]) {
+      const bad = schema.safeParse({ ...validMqtt, broker: invalidBroker })
+      expect(bad.success).toBe(false)
+      if (!bad.success) {
+        expect(bad.error.issues.some((i) => i.path.includes('broker'))).toBe(
+          true
+        )
+      }
+    }
 
     const wildcardMain = schema.safeParse({
       ...validMqtt,
@@ -188,6 +304,34 @@ describe('createAlertDestinationFormSchema', () => {
         wildcardHeartbeat.error.issues.some((i) =>
           i.path.includes('heartbeatTopic')
         )
+      ).toBe(true)
+    }
+  })
+
+  it('enforces UTF-8 byte length (<=23 bytes after trim) on MQTT clientId', () => {
+    const schema = createAlertDestinationFormSchema()
+    const baseMqtt = makeBaseWebhookValues({
+      channelType: 'mqtt',
+      imageMode: 'base64',
+      url: '',
+      broker: 'tcp://10.0.0.1:1883',
+      topic: 'zhulong/alarms',
+    })
+
+    // 7 CJK chars = 21 UTF-8 bytes <= 23 (with surrounding spaces trimmed) -> valid
+    expect(
+      schema.safeParse({ ...baseMqtt, clientId: '  边缘设备一二三  ' }).success
+    ).toBe(true)
+
+    // 8 CJK chars = 24 UTF-8 bytes > 23 (even though JS .length === 8) -> rejected
+    const tooLongCjk = schema.safeParse({
+      ...baseMqtt,
+      clientId: '边缘设备一二三四',
+    })
+    expect(tooLongCjk.success).toBe(false)
+    if (!tooLongCjk.success) {
+      expect(
+        tooLongCjk.error.issues.some((i) => i.path.includes('clientId'))
       ).toBe(true)
     }
   })
@@ -291,35 +435,64 @@ describe('createAlertDestinationFormSchema', () => {
     expect(emptyCreateHeader.success).toBe(false)
   })
 
-  it('rejects NaN or out-of-range timeoutSeconds and keepAliveSeconds', () => {
+  it('rejects NaN, decimals, or out-of-range timeoutSeconds and keepAliveSeconds', () => {
     const schema = createAlertDestinationFormSchema()
 
-    const badTimeout = schema.safeParse(
-      makeBaseWebhookValues({ timeoutSeconds: Number.NaN })
-    )
-    expect(badTimeout.success).toBe(false)
-    if (!badTimeout.success) {
-      expect(
-        badTimeout.error.issues.some((i) => i.path.includes('timeoutSeconds'))
-      ).toBe(true)
+    for (const badVal of [Number.NaN, 5.5, 0, 31]) {
+      const badTimeout = schema.safeParse(
+        makeBaseWebhookValues({ timeoutSeconds: badVal })
+      )
+      expect(badTimeout.success).toBe(false)
+      if (!badTimeout.success) {
+        expect(
+          badTimeout.error.issues.some((i) => i.path.includes('timeoutSeconds'))
+        ).toBe(true)
+      }
     }
 
-    const badKeepAlive = schema.safeParse(
+    for (const badVal of [Number.NaN, 30.5, 2, 301]) {
+      const badKeepAlive = schema.safeParse(
+        makeBaseWebhookValues({
+          channelType: 'mqtt',
+          imageMode: 'base64',
+          broker: 'tcp://10.0.0.1:1883',
+          topic: 'zhulong/alarms',
+          keepAliveSeconds: badVal,
+        })
+      )
+      expect(badKeepAlive.success).toBe(false)
+      if (!badKeepAlive.success) {
+        expect(
+          badKeepAlive.error.issues.some((i) =>
+            i.path.includes('keepAliveSeconds')
+          )
+        ).toBe(true)
+      }
+    }
+  })
+
+  it('rejects incompatible protocol x imageMode combinations when events are enabled', () => {
+    const schema = createAlertDestinationFormSchema()
+
+    const webhookBase64 = schema.safeParse(
       makeBaseWebhookValues({
-        channelType: 'mqtt',
-        broker: 'tcp://10.0.0.1:1883',
-        topic: 'zhulong/alarms',
-        keepAliveSeconds: 2,
+        channelType: 'webhook',
+        eventsEnabled: true,
+        imageMode: 'base64',
       })
     )
-    expect(badKeepAlive.success).toBe(false)
-    if (!badKeepAlive.success) {
-      expect(
-        badKeepAlive.error.issues.some((i) =>
-          i.path.includes('keepAliveSeconds')
-        )
-      ).toBe(true)
-    }
+    expect(webhookBase64.success).toBe(false)
+
+    const mqttMultipart = schema.safeParse(
+      makeBaseWebhookValues({
+        channelType: 'mqtt',
+        eventsEnabled: true,
+        imageMode: 'multipart',
+        broker: 'tcp://10.0.0.1:1883',
+        topic: 'zhulong/alarms',
+      })
+    )
+    expect(mqttMultipart.success).toBe(false)
   })
 
   it('validates inlineMaxKb range only in MQTT base64 mode', () => {
@@ -355,7 +528,9 @@ describe('createAlertDestinationFormSchema', () => {
     expect(urlMode.success).toBe(true)
   })
 
-  it('reserves the v1 envelope and transport headers', () => {
+  it('reserves the 13 v1 envelope, HMAC signature, and transport headers', () => {
+    expect(RESERVED_WEBHOOK_HEADERS).toBe(RESERVED_HEADERS)
+    expect(RESERVED_HEADERS).toHaveLength(13)
     expect(RESERVED_HEADERS).toEqual(
       expect.arrayContaining([
         'accept',
@@ -369,14 +544,22 @@ describe('createAlertDestinationFormSchema', () => {
         'x-zhulong-event',
         'x-zhulong-delivery',
         'x-zhulong-schema',
+        'x-zhulong-timestamp',
+        'x-zhulong-signature',
       ])
     )
     const schema = createAlertDestinationFormSchema()
-    const res = schema.safeParse(
-      makeBaseWebhookValues({
-        headers: [{ key: 'Transfer-Encoding', value: 'chunked' }],
-      })
-    )
-    expect(res.success).toBe(false)
+    for (const key of [
+      'Transfer-Encoding',
+      'X-Zhulong-Timestamp',
+      'X-Zhulong-Signature',
+    ]) {
+      const res = schema.safeParse(
+        makeBaseWebhookValues({
+          headers: [{ key, value: 'tamper' }],
+        })
+      )
+      expect(res.success).toBe(false)
+    }
   })
 })

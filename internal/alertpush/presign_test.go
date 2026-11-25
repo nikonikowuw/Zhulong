@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 	"go.uber.org/zap"
 )
@@ -51,7 +56,9 @@ func TestWebhookSender_UsesPresignerWithHMACFallback(t *testing.T) {
 	}
 
 	media := &stubPresigningMediaReader{
-		fakeMediaService: &fakeMediaService{files: map[string][]byte{}},
+		fakeMediaService: &fakeMediaService{files: map[string][]byte{
+			"snapshots/cam-01/2026-11-22/evt_crop.jpg": []byte("local-crop-bytes"),
+		}},
 		presigned: map[string]string{
 			"snapshots/cam-01/2026-11-22/evt.jpg": "https://minio.local:9000/zhulong/snapshots/cam-01/2026-11-22/evt.jpg?X-Amz-Signature=abc",
 		},
@@ -66,6 +73,7 @@ func TestWebhookSender_UsesPresignerWithHMACFallback(t *testing.T) {
 		SignedURLTTL:      10 * time.Minute,
 		Signer:            signer,
 		Media:             media,
+		AllowLoopback:     true,
 		Logger:            zap.NewNop(),
 	})
 	if err != nil {
@@ -198,5 +206,93 @@ func TestResolveImageURLs(t *testing.T) {
 				tt.check(t, images)
 			}
 		})
+	}
+}
+
+type statterOnlyMediaReader struct {
+	*countingMediaReader
+	statCalls atomic.Int32
+	sizes     map[string]int64
+}
+
+func (s *statterOnlyMediaReader) GetEntry(_ context.Context, relPath string) (*mediafile.MediaEntry, error) {
+	s.statCalls.Add(1)
+	sz, ok := s.sizes[relPath]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return &mediafile.MediaEntry{Path: relPath, SizeBytes: sz}, nil
+}
+
+func TestResolveImageURLs_MediaStatterMissingFileUnmatchedFaceAndTTLSync(t *testing.T) {
+	t.Parallel()
+	signer, err := NewURLSigner(make([]byte, 32))
+	if err != nil {
+		t.Fatalf("NewURLSigner: %v", err)
+	}
+
+	const (
+		scenePath   = "snapshots/cam-01/2026-11-25/present.jpg"
+		missingPath = "snapshots/cam-01/2026-11-25/missing.jpg"
+	)
+
+	reader := &statterOnlyMediaReader{
+		countingMediaReader: &countingMediaReader{files: map[string][]byte{scenePath: []byte("abc")}},
+		sizes:               map[string]int64{scenePath: 4096},
+	}
+
+	ev := record.AlarmEvent{
+		ID:         "face-unmatched-missing-crop",
+		EventType:  record.EventTypeFaceRecognition,
+		CameraID:   "cam-01",
+		ImagePath:  scenePath,
+		ImageReady: true,
+		CropPath:   missingPath,
+		CropReady:  true,
+		Face: &record.FaceEventData{
+			Matched:          false, // Unmatched face must NOT attach GalleryImagePath.
+			GalleryImagePath: "alice.jpg",
+		},
+	}
+
+	// Pass TTL=0 to also verify zero-TTL fallback and exp == expires_at exact sync.
+	images := resolveImageURLs(context.Background(), imageURLParams{
+		PublicBaseURL: "https://edge.local",
+		Signer:        signer,
+		Media:         reader,
+		TTL:           0,
+	}, ev)
+	if images == nil || images.Scene == nil {
+		t.Fatalf("expected scene image, got %+v", images)
+	}
+	if images.Object != nil {
+		t.Fatalf("confirmed missing local crop must not mint 404 URL, got %+v", images.Object)
+	}
+	if images.Reference != nil {
+		t.Fatalf("unmatched face must not attach reference image, got %+v", images.Reference)
+	}
+	if reader.opens.Load() != 0 {
+		t.Fatalf("MediaStatter should avoid OpenContent, got opens=%d", reader.opens.Load())
+	}
+	if reader.statCalls.Load() != 2 {
+		t.Fatalf("expected 2 GetEntry calls, got %d", reader.statCalls.Load())
+	}
+	if images.Scene.SizeBytes == nil || *images.Scene.SizeBytes != 4096 {
+		t.Fatalf("scene size = %v, want 4096", images.Scene.SizeBytes)
+	}
+
+	parsed, err := url.Parse(images.Scene.URL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	expUnix, err := strconv.ParseInt(parsed.Query().Get("exp"), 10, 64)
+	if err != nil {
+		t.Fatalf("parse exp: %v", err)
+	}
+	if got := formatPayloadTime(time.Unix(expUnix, 0).UTC()); got != images.Scene.ExpiresAt {
+		t.Fatalf("exp (%s) != expires_at (%s)", got, images.Scene.ExpiresAt)
+	}
+	if expUnix <= time.Now().Unix()+3000 {
+		t.Fatalf("zero TTL should fall back to default (~1h), got exp=%d", expUnix)
 	}
 }

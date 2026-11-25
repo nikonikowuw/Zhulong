@@ -119,3 +119,75 @@ func TestAlertGalleryMediaAdapter_IsolatesContentEndpointAndServesSignedFace(t *
 		}
 	}
 }
+
+type stubGalleryPresignStore struct {
+	filestore.Store
+	lastKey string
+	lastTTL time.Duration
+}
+
+func (s *stubGalleryPresignStore) SupportsPresign() bool { return true }
+
+func (s *stubGalleryPresignStore) ExistsInSpool(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+func (s *stubGalleryPresignStore) ExistsInPrimary(context.Context, string) (bool, error) {
+	return true, nil
+}
+
+func (s *stubGalleryPresignStore) PresignGet(
+	_ context.Context,
+	key string,
+	ttl time.Duration,
+) (string, error) {
+	s.lastKey = key
+	s.lastTTL = ttl
+	return "https://s3.example.com/" + key + "?ttl=" + ttl.String(), nil
+}
+
+type stubRedirectDeliveryMode struct{}
+
+func (stubRedirectDeliveryMode) DeliveryMode(context.Context) string { return "redirect" }
+
+func TestAlertGalleryMediaAdapter_PresignMediaURLClampsTTL(t *testing.T) {
+	t.Parallel()
+
+	defaultTTL := 10 * time.Minute
+	tests := []struct {
+		name    string
+		reqTTL  time.Duration
+		wantTTL time.Duration
+	}{
+		{name: "zero falls back to default", reqTTL: 0, wantTTL: defaultTTL},
+		{name: "negative falls back to default", reqTTL: -5 * time.Second, wantTTL: defaultTTL},
+		{name: "shorter positive TTL preserved", reqTTL: 90 * time.Second, wantTTL: 90 * time.Second},
+		{name: "equal TTL preserved", reqTTL: defaultTTL, wantTTL: defaultTTL},
+		{name: "larger TTL clamped to default", reqTTL: 2 * time.Hour, wantTTL: defaultTTL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &stubGalleryPresignStore{}
+			adapter := newAlertGalleryMediaAdapter(store, stubRedirectDeliveryMode{}, defaultTTL)
+
+			presigned, ok, err := adapter.PresignMediaURL(
+				context.Background(),
+				"faces/person_alice_face_01.png",
+				tt.reqTTL,
+			)
+			if err != nil {
+				t.Fatalf("PresignMediaURL(%v) error = %v", tt.reqTTL, err)
+			}
+			if !ok || presigned == "" {
+				t.Fatalf("PresignMediaURL(%v) = (%q, %v), want presigned URL", tt.reqTTL, presigned, ok)
+			}
+			if store.lastKey != "faces/person_alice_face_01.png" {
+				t.Fatalf("PresignGet key = %q, want faces/person_alice_face_01.png", store.lastKey)
+			}
+			if store.lastTTL != tt.wantTTL {
+				t.Fatalf("PresignGet ttl = %v, want %v", store.lastTTL, tt.wantTTL)
+			}
+		})
+	}
+}

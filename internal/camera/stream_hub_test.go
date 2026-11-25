@@ -1647,6 +1647,98 @@ func TestStreamHub_ConsumeAIResults_BroadcastPrecedesSlowConsumer(t *testing.T) 
 	}
 }
 
+type closeWaitingAIConsumer struct {
+	entered      chan struct{}
+	ctxCancelled chan struct{}
+	release      chan struct{}
+	exited       chan struct{}
+}
+
+func (c *closeWaitingAIConsumer) ProcessInferenceResult(ctx context.Context, _ aitypes.InferenceResult) error {
+	close(c.entered)
+	<-ctx.Done()
+	close(c.ctxCancelled)
+	<-c.release
+	close(c.exited)
+	return ctx.Err()
+}
+
+func TestStreamHub_CloseWaitsForInFlightAIConsumer(t *testing.T) {
+	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	hub := NewStreamHub(mockEngine, store, lazyCipher, nil, nil, zap.NewNop())
+
+	consumer := &closeWaitingAIConsumer{
+		entered:      make(chan struct{}),
+		ctxCancelled: make(chan struct{}),
+		release:      make(chan struct{}),
+		exited:       make(chan struct{}),
+	}
+	hub.SetAIConsumer(consumer)
+
+	aiSub, feed := engine.NewAIResultSubscriptionForTest(16)
+	ctx := context.Background()
+	mockEngine.nextStream = &mockMediaStream{source: newMockPacketSource(16), aiSub: aiSub}
+
+	if _, err := hub.ResolveAIStreamBrokerPath(ctx, camID); err != nil {
+		t.Fatalf("resolve AI stream failed: %v", err)
+	}
+	hub.AttachAIStreamSubscriber(camID, "test_algo")
+
+	feed([]byte(`{
+		"stream_id":1,
+		"pts":7200,
+		"cost_ms":10,
+		"task_type":"detection",
+		"algorithm_id":"test_algo",
+		"detections":[{"box":[0.1,0.2,0.3,0.4],"label":"no_helmet_alarm","score":0.95}],
+		"classifications":[],
+		"persons":[]
+	}`))
+
+	select {
+	case <-consumer.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for AI consumer to enter")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- hub.Close()
+	}()
+
+	select {
+	case <-consumer.ctxCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("hub.Close did not cancel in-flight AI consumer context")
+	}
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("hub.Close returned before in-flight AI consumer exited: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	close(consumer.release)
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("hub.Close returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for hub.Close after releasing consumer")
+	}
+
+	select {
+	case <-consumer.exited:
+	default:
+		t.Fatal("expected in-flight AI consumer to have exited before hub.Close returned")
+	}
+}
+
 // 热保留必须有路数上限：看过的机位不能按浏览历史无限常驻。
 //
 // 每条热流都还在拉 RTSP、跑包泵、占着 4 MiB 的 GOP 缓存；边缘设备没有

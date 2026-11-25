@@ -1,10 +1,12 @@
-import { useMemo, useRef, useState } from 'react'
-import { useForm, useWatch } from 'react-hook-form'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { useForm, useWatch, type FieldErrors, type Path } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, CheckCircle2, Loader2, Play } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { handleFormError } from '@/lib/form-error'
+import { errorMessageOf } from '@/lib/handle-server-error'
 import { statusDotClass, statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -26,7 +28,9 @@ import {
 } from '../../data/schema'
 import type {
   AlertDestination,
+  ChannelType,
   CreateAlertDestinationInput,
+  DestinationSecret,
   TestDestinationResult,
   UpdateAlertDestinationInput,
 } from '../../types'
@@ -38,8 +42,54 @@ import { WebhookConfigSection } from './webhook-config-section'
 
 interface DestinationFormProps {
   destination?: AlertDestination | null
+  onChannelTypeChange?: (channelType: ChannelType) => void
   onCancel: () => void
   onSuccess: () => void
+}
+
+const WEBHOOK_ADVANCED_FIELDS = new Set([
+  'timeoutSeconds',
+  'tlsSkipVerify',
+  'signingSecret',
+  'headers',
+])
+const MQTT_ADVANCED_FIELDS = new Set([
+  'clientId',
+  'qos',
+  'keepAliveSeconds',
+  'tlsSkipVerify',
+])
+const FILTER_FIELDS = new Set(['eventTypes', 'algorithmIds', 'cameraIds'])
+
+function buildFormFieldMap(
+  channelType: ChannelType
+): Record<string, Path<AlertDestinationFormValues>> {
+  return {
+    name: 'name',
+    eventsEnabled: 'eventsEnabled',
+    heartbeatEnabled: 'heartbeatEnabled',
+    imageMode: 'imageMode',
+    'config.url': 'url',
+    'config.heartbeatUrl': 'heartbeatUrl',
+    'config.authType': 'authType',
+    'config.broker': 'broker',
+    'config.topic': 'topic',
+    'config.heartbeatTopic': 'heartbeatTopic',
+    'config.clientId': 'clientId',
+    'config.qos': 'qos',
+    'config.timeoutSeconds': 'timeoutSeconds',
+    'config.keepAliveSeconds': 'keepAliveSeconds',
+    'config.heartbeatIntervalSeconds': 'heartbeatIntervalSeconds',
+    'config.inlineMaxKb': 'inlineMaxKb',
+    'secret.token': 'token',
+    'secret.username': 'basicUser',
+    'secret.password': channelType === 'webhook' ? 'basicPass' : 'mqttPass',
+    'secret.signingSecret': 'signingSecret',
+    'secret.headers': 'headers',
+    'filter.eventTypes': 'eventTypes',
+    'filter.algorithmIds': 'algorithmIds',
+    'filter.cameraIds': 'cameraIds',
+  }
 }
 
 function buildWebhookHeadersSecret(
@@ -73,15 +123,21 @@ function buildWebhookHeadersSecret(
 
 export function DestinationForm({
   destination,
+  onChannelTypeChange,
   onCancel,
   onSuccess,
 }: DestinationFormProps) {
   const { t } = useTranslation('alertPush')
+  const queryClient = useQueryClient()
   const isEdit = Boolean(destination)
 
   // Top level errors
   const [conflictError, setConflictError] = useState<string | null>(null)
   const [unhandledError, setUnhandledError] = useState<string | null>(null)
+
+  // Explicit secret clearing toggles (edit mode)
+  const [clearMqttPass, setClearMqttPass] = useState(false)
+  const [clearSigningSecret, setClearSigningSecret] = useState(false)
 
   // Connection testing state
   const [testing, setTesting] = useState(false)
@@ -102,6 +158,7 @@ export function DestinationForm({
   // 初始折叠展开判定：编辑态下若存在对应协议的自定义高级项或过滤器，自动展开
   const hasCustomWebhookAdvanced = Boolean(
     originalHeaderNames.length > 0 ||
+    Boolean(destination?.signingSecretSet) ||
     (destination?.channelType === 'webhook' &&
       ((destination.config.timeoutSeconds ?? 5) !== 5 ||
         Boolean(destination.config.tlsSkipVerify)))
@@ -122,6 +179,14 @@ export function DestinationForm({
     (destination?.filter?.cameraIds && destination.filter.cameraIds.length > 0)
   )
 
+  const [webhookAdvancedOpen, setWebhookAdvancedOpen] = useState(
+    hasCustomWebhookAdvanced
+  )
+  const [mqttAdvancedOpen, setMqttAdvancedOpen] = useState(
+    hasCustomMqttAdvanced
+  )
+  const [filtersOpen, setFiltersOpen] = useState(hasCustomFilters)
+
   const schema = useMemo(
     () =>
       createAlertDestinationFormSchema(
@@ -129,9 +194,18 @@ export function DestinationForm({
         isEdit,
         Boolean(destination?.secretSet),
         originalAuthType,
-        originalHeaderNames
+        originalHeaderNames,
+        Boolean(destination?.signingSecretSet) && !clearSigningSecret
       ),
-    [t, isEdit, destination?.secretSet, originalAuthType, originalHeaderNames]
+    [
+      t,
+      isEdit,
+      destination?.secretSet,
+      destination?.signingSecretSet,
+      clearSigningSecret,
+      originalAuthType,
+      originalHeaderNames,
+    ]
   )
 
   const resolver = useMemo(() => zodResolver(schema), [schema])
@@ -158,13 +232,13 @@ export function DestinationForm({
       token: '',
       basicUser: '',
       basicPass: '',
+      signingSecret: '',
       headers: originalHeaderNames.map((k) => ({
         key: k,
         value: '',
       })),
-      // MQTT
-      broker:
-        (isMqtt ? destination.config.broker : '') || 'tcp://10.0.0.1:1883',
+      // MQTT（新建态 broker 留空，仅使用 placeholder 提示，避免误提交假地址）
+      broker: (isMqtt ? destination.config.broker : '') || '',
       topic: (isMqtt ? destination.config.topic : '') || 'zhulong/alarms',
       heartbeatTopic: (isMqtt ? destination.config.heartbeatTopic : '') || '',
       lwtEnabled: isMqtt ? (destination.config.lwtEnabled ?? true) : true,
@@ -201,26 +275,62 @@ export function DestinationForm({
     name: 'channelType',
   })
 
+  const expandSectionsForFields = useCallback(
+    (fields: string[], activeChannel: ChannelType) => {
+      for (const field of fields) {
+        const rootField = field.split('.')[0]
+        if (
+          activeChannel === 'webhook' &&
+          WEBHOOK_ADVANCED_FIELDS.has(rootField)
+        ) {
+          setWebhookAdvancedOpen(true)
+        }
+        if (activeChannel === 'mqtt' && MQTT_ADVANCED_FIELDS.has(rootField)) {
+          setMqttAdvancedOpen(true)
+        }
+        if (FILTER_FIELDS.has(rootField)) {
+          setFiltersOpen(true)
+        }
+      }
+    },
+    []
+  )
+
+  const handleInvalidSubmit = useCallback(
+    (errors: FieldErrors<AlertDestinationFormValues>) => {
+      expandSectionsForFields(
+        Object.keys(errors),
+        form.getValues('channelType')
+      )
+    },
+    [expandSectionsForFields, form]
+  )
+
   const buildProtocolConfig = (
     values: AlertDestinationFormValues,
     includeEmptyOverrideForClear: boolean
   ): Record<string, unknown> => {
     if (values.channelType === 'webhook') {
-      const hbUrl = values.heartbeatUrl.trim()
-      return {
+      const cfg: Record<string, unknown> = {
         url: values.url.trim(),
-        heartbeatUrl: includeEmptyOverrideForClear ? hbUrl : hbUrl || undefined,
         authType: values.authType,
         timeoutSeconds: values.timeoutSeconds,
         tlsSkipVerify: values.tlsSkipVerify,
-        heartbeatIntervalSeconds: values.heartbeatIntervalSeconds,
       }
+      // U5: 关闭设备存活上报时不携带隐藏心跳字段，避免陈旧/跨源值触发后端 422
+      if (values.heartbeatEnabled) {
+        const hbUrl = values.heartbeatUrl.trim()
+        cfg.heartbeatUrl = includeEmptyOverrideForClear
+          ? hbUrl
+          : hbUrl || undefined
+        cfg.heartbeatIntervalSeconds = values.heartbeatIntervalSeconds
+      }
+      return cfg
     }
 
-    const hbTopic = values.heartbeatTopic.trim()
     const trimmedClientId = values.clientId.trim()
     const trimmedMqttUser = values.mqttUser.trim()
-    return {
+    const cfg: Record<string, unknown> = {
       broker: values.broker.trim(),
       clientId: includeEmptyOverrideForClear
         ? trimmedClientId
@@ -229,29 +339,70 @@ export function DestinationForm({
         ? trimmedMqttUser
         : trimmedMqttUser || undefined,
       topic: values.topic.trim(),
-      heartbeatTopic: includeEmptyOverrideForClear
-        ? hbTopic
-        : hbTopic || undefined,
-      lwtEnabled: values.lwtEnabled,
       qos: values.qos,
       keepAliveSeconds: values.keepAliveSeconds,
       tlsSkipVerify: values.tlsSkipVerify,
       // 仅 base64 模式提交；其它模式不改动已保存的预算
       inlineMaxKb:
         values.imageMode === 'base64' ? values.inlineMaxKb : undefined,
-      heartbeatIntervalSeconds: values.heartbeatIntervalSeconds,
+    }
+    if (values.heartbeatEnabled) {
+      const hbTopic = values.heartbeatTopic.trim()
+      cfg.heartbeatTopic = includeEmptyOverrideForClear
+        ? hbTopic
+        : hbTopic || undefined
+      cfg.heartbeatIntervalSeconds = values.heartbeatIntervalSeconds
+      cfg.lwtEnabled = values.lwtEnabled
+    }
+    return cfg
+  }
+
+  const buildSecretPayload = (
+    values: AlertDestinationFormValues
+  ): DestinationSecret => {
+    if (values.channelType === 'webhook') {
+      const headersPayload = buildWebhookHeadersSecret(
+        values.headers || [],
+        isEdit,
+        originalHeaderNames
+      )
+      const signingSecret = clearSigningSecret
+        ? ''
+        : values.signingSecret
+          ? values.signingSecret
+          : undefined
+      return {
+        token: values.token ? values.token : undefined,
+        username: values.basicUser ? values.basicUser : undefined,
+        password: values.basicPass ? values.basicPass : undefined,
+        signingSecret,
+        headers: headersPayload,
+      }
+    }
+    const password = clearMqttPass
+      ? ''
+      : values.mqttPass
+        ? values.mqttPass
+        : undefined
+    return {
+      password,
     }
   }
 
-  // 连通性测试
+  // 连通性测试：先通过表单校验，再发送探测请求
   const handleRunTest = async () => {
+    const isValid = await form.trigger()
+    if (!isValid) {
+      expandSectionsForFields(
+        Object.keys(form.formState.errors),
+        form.getValues('channelType')
+      )
+      return
+    }
+
     const seq = ++testSeqRef.current
     const values = form.getValues()
-    const headersPayload = buildWebhookHeadersSecret(
-      values.headers || [],
-      isEdit,
-      originalHeaderNames
-    )
+    const isSavedDestination = Boolean(isEdit && destination)
 
     setTesting(true)
     setTestResult(null)
@@ -266,25 +417,32 @@ export function DestinationForm({
         heartbeatEnabled: values.heartbeatEnabled,
         imageMode: values.imageMode,
         config: buildProtocolConfig(values, isEdit),
-        secret:
-          values.channelType === 'webhook'
-            ? {
-                token: values.token ? values.token : undefined,
-                username: values.basicUser ? values.basicUser : undefined,
-                password: values.basicPass ? values.basicPass : undefined,
-                headers: headersPayload,
-              }
-            : {
-                password: values.mqttPass ? values.mqttPass : undefined,
-              },
+        secret: buildSecretPayload(values),
       })
       if (seq === testSeqRef.current) {
         setTestResult(res)
+        if (isSavedDestination) {
+          void queryClient.invalidateQueries({
+            queryKey: ['alert-destinations'],
+          })
+        }
       }
     } catch (err: unknown) {
       if (seq === testSeqRef.current) {
-        const msg = err instanceof Error ? err.message : String(err)
-        setTestResult({ ok: false, latencyMs: 0, reason: msg })
+        const fieldErrorResult = handleFormError(form, err, {
+          fieldMap: buildFormFieldMap(values.channelType),
+        })
+        if (fieldErrorResult.matchedFields.length > 0) {
+          expandSectionsForFields(
+            fieldErrorResult.matchedFields,
+            values.channelType
+          )
+        }
+        setTestResult({
+          ok: false,
+          latencyMs: 0,
+          reason: fieldErrorResult.details[0]?.message || errorMessageOf(err),
+        })
       }
     } finally {
       if (seq === testSeqRef.current) {
@@ -298,11 +456,7 @@ export function DestinationForm({
     setConflictError(null)
     setUnhandledError(null)
 
-    const headersPayload = buildWebhookHeadersSecret(
-      values.headers || [],
-      isEdit,
-      originalHeaderNames
-    )
+    const secretPayload = buildSecretPayload(values)
 
     try {
       if (isEdit && destination) {
@@ -317,17 +471,7 @@ export function DestinationForm({
             cameraIds: values.cameraIds,
           },
           config: buildProtocolConfig(values, true),
-          secret:
-            values.channelType === 'webhook'
-              ? {
-                  token: values.token ? values.token : undefined,
-                  username: values.basicUser ? values.basicUser : undefined,
-                  password: values.basicPass ? values.basicPass : undefined,
-                  headers: headersPayload,
-                }
-              : {
-                  password: values.mqttPass ? values.mqttPass : undefined,
-                },
+          secret: secretPayload,
         }
         await alertPushApi.update(destination.id, updatePayload)
         toast.success(t('toast.updated'))
@@ -344,17 +488,7 @@ export function DestinationForm({
             cameraIds: values.cameraIds,
           },
           config: buildProtocolConfig(values, false),
-          secret:
-            values.channelType === 'webhook'
-              ? {
-                  token: values.token ? values.token : undefined,
-                  username: values.basicUser ? values.basicUser : undefined,
-                  password: values.basicPass ? values.basicPass : undefined,
-                  headers: headersPayload,
-                }
-              : {
-                  password: values.mqttPass ? values.mqttPass : undefined,
-                },
+          secret: secretPayload,
         }
         await alertPushApi.create(createPayload)
         toast.success(t('toast.created'))
@@ -362,14 +496,7 @@ export function DestinationForm({
       onSuccess()
     } catch (err: unknown) {
       const result = handleFormError(form, err, {
-        fieldMap: {
-          'config.url': 'url',
-          'config.heartbeatUrl': 'heartbeatUrl',
-          'config.broker': 'broker',
-          'config.topic': 'topic',
-          'config.heartbeatTopic': 'heartbeatTopic',
-          'config.clientId': 'clientId',
-        },
+        fieldMap: buildFormFieldMap(values.channelType),
         onConflict: (_err, message) => {
           setConflictError(message || t('validation.conflictFallback'))
         },
@@ -377,6 +504,9 @@ export function DestinationForm({
           setUnhandledError(message)
         },
       })
+      if (result.matchedFields.length > 0) {
+        expandSectionsForFields(result.matchedFields, values.channelType)
+      }
       if (!result.isAxiosError) {
         setUnhandledError(result.serverMessage)
       }
@@ -389,7 +519,7 @@ export function DestinationForm({
     <Form {...form}>
       <form
         id='alert-destination-form'
-        onSubmit={form.handleSubmit(onSubmit)}
+        onSubmit={form.handleSubmit(onSubmit, handleInvalidSubmit)}
         className='flex min-h-0 flex-1 flex-col'
       >
         {/* 抽屉滚动区：横幅 + 全部分区，Footer 固定在抽屉底部 */}
@@ -428,6 +558,7 @@ export function DestinationForm({
             setValue={form.setValue}
             isEdit={isEdit}
             disabled={testing || isSubmitting}
+            onChannelTypeChange={onChannelTypeChange}
             onResetTestResult={() => {
               testSeqRef.current += 1
               setTestResult(null)
@@ -439,15 +570,33 @@ export function DestinationForm({
               control={form.control}
               isEdit={isEdit}
               secretSet={destination?.secretSet}
+              signingSecretSet={destination?.signingSecretSet}
+              originalAuthType={originalAuthType}
               originalHeaderNames={originalHeaderNames}
-              initialAdvancedOpen={hasCustomWebhookAdvanced}
+              clearSigningSecret={clearSigningSecret}
+              onClearSigningSecretChange={(clear) => {
+                setClearSigningSecret(clear)
+                if (clear) {
+                  form.setValue('signingSecret', '')
+                }
+              }}
+              advancedOpen={webhookAdvancedOpen}
+              onAdvancedOpenChange={setWebhookAdvancedOpen}
             />
           ) : (
             <MqttConfigSection
               control={form.control}
               isEdit={isEdit}
               secretSet={destination?.secretSet}
-              initialAdvancedOpen={hasCustomMqttAdvanced}
+              clearMqttPass={clearMqttPass}
+              onClearMqttPassChange={(clear) => {
+                setClearMqttPass(clear)
+                if (clear) {
+                  form.setValue('mqttPass', '')
+                }
+              }}
+              advancedOpen={mqttAdvancedOpen}
+              onAdvancedOpenChange={setMqttAdvancedOpen}
             />
           )}
 
@@ -455,7 +604,8 @@ export function DestinationForm({
           <DestinationFiltersSection
             control={form.control}
             setValue={form.setValue}
-            initialFiltersOpen={hasCustomFilters}
+            filtersOpen={filtersOpen}
+            onFiltersOpenChange={setFiltersOpen}
           />
 
           {/* 分区 3：设备存活上报能力（开关 + 上报间隔 + 分流路由/LWT） */}

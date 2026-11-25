@@ -359,3 +359,102 @@ func TestRateLimitMiddlewareRejectsWithEnvelope(t *testing.T) {
 		t.Fatalf("response body leaked client address: %q", body)
 	}
 }
+
+func TestIPRateLimiter_GlobalRejectionDoesNotDrainPerIPBucket(t *testing.T) {
+	clock := newFakeClock()
+	limiter := NewIPRateLimiter(RateLimitConfig{
+		PerMinute:                60,
+		Burst:                    1,
+		MaxKeys:                  16,
+		ProcessRequestsPerMinute: 1,
+		ProcessMaxInFlight:       1,
+		PerIPCode:                "CUSTOM_IP_LIMIT",
+		BudgetExhaustedCode:      "CUSTOM_BUDGET_LIMIT",
+		ConcurrencyLimitCode:     "CUSTOM_CONCURRENCY_LIMIT",
+		LogScope:                 "custom scope",
+		Now:                      clock.Now,
+	})
+
+	// Occupy the only in-flight slot and process request token with IP-A.
+	first := limiter.reserve("10.9.0.1")
+	if !first.allowed {
+		t.Fatal("first request should be admitted")
+	}
+
+	// IP-B is rejected by the global process budget; its per-IP bucket must stay untouched.
+	second := limiter.reserve("10.9.0.2")
+	if second.allowed || second.code != "CUSTOM_BUDGET_LIMIT" {
+		t.Fatalf("expected CUSTOM_BUDGET_LIMIT, got %+v", second)
+	}
+
+	// Release slot and advance 1 minute to refill global budget, then check in-flight rejection.
+	limiter.release(0)
+	clock.Advance(time.Minute)
+
+	// Re-occupy in-flight slot with IP-A, keeping process tokens > 0 by setting higher budget below.
+	limiter2 := NewIPRateLimiter(RateLimitConfig{
+		PerMinute:                60,
+		Burst:                    1,
+		ProcessRequestsPerMinute: 100,
+		ProcessMaxInFlight:       1,
+		ConcurrencyLimitCode:     "CUSTOM_CONCURRENCY_LIMIT",
+		Now:                      clock.Now,
+	})
+	if !limiter2.reserve("10.9.1.1").allowed {
+		t.Fatal("expected IP-1 admitted")
+	}
+	rejected := limiter2.reserve("10.9.1.2")
+	if rejected.allowed || rejected.code != "CUSTOM_CONCURRENCY_LIMIT" {
+		t.Fatalf("expected CUSTOM_CONCURRENCY_LIMIT, got %+v", rejected)
+	}
+	// Once IP-1 releases, IP-2 must immediately succeed without waiting for a per-IP refill.
+	limiter2.release(0)
+	if !limiter2.reserve("10.9.1.2").allowed {
+		t.Fatal("IP-2 per-IP bucket was erroneously drained by global concurrency rejection")
+	}
+}
+
+func TestIPRateLimiter_TwoStageAllowIPAndAcquireProcess(t *testing.T) {
+	clock := newFakeClock()
+	limiter := NewIPRateLimiter(RateLimitConfig{
+		PerMinute:                60,
+		Burst:                    2,
+		ProcessRequestsPerMinute: 2,
+		ProcessMaxInFlight:       1,
+		PerIPCode:                "MEDIA_URL_RATE_LIMITED",
+		BudgetExhaustedCode:      "MEDIA_URL_RATE_LIMITED",
+		ConcurrencyLimitCode:     "MEDIA_URL_RATE_LIMITED",
+		LogScope:                 "signed media",
+		Now:                      clock.Now,
+	})
+
+	if limiter.LogScope() != "signed media" {
+		t.Fatalf("LogScope = %q, want signed media", limiter.LogScope())
+	}
+
+	// Per-IP calls alone never touch the global process budget.
+	for range 2 {
+		if ok, _ := limiter.AllowIP("10.8.0.1"); !ok {
+			t.Fatal("expected AllowIP to succeed within burst")
+		}
+	}
+	if ok, code := limiter.AllowIP("10.8.0.1"); ok || code != "MEDIA_URL_RATE_LIMITED" {
+		t.Fatalf("expected per-IP rejection with custom code, got ok=%v code=%q", ok, code)
+	}
+
+	// Process budget still has its full 2 tokens and 1 concurrency slot.
+	if ok, _ := limiter.AcquireProcess(); !ok {
+		t.Fatal("expected first AcquireProcess to succeed")
+	}
+	if ok, code := limiter.AcquireProcess(); ok || code != "MEDIA_URL_RATE_LIMITED" {
+		t.Fatalf("expected concurrency rejection, got ok=%v code=%q", ok, code)
+	}
+	limiter.ReleaseProcess(0)
+	if ok, _ := limiter.AcquireProcess(); !ok {
+		t.Fatal("expected second AcquireProcess to succeed after release")
+	}
+	limiter.ReleaseProcess(0)
+	if ok, code := limiter.AcquireProcess(); ok || code != "MEDIA_URL_RATE_LIMITED" {
+		t.Fatalf("expected process budget exhaustion, got ok=%v code=%q", ok, code)
+	}
+}

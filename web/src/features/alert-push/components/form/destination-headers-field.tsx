@@ -1,5 +1,10 @@
 import { useMemo } from 'react'
-import { useFieldArray, type Control } from 'react-hook-form'
+import {
+  useFieldArray,
+  useFormState,
+  useWatch,
+  type Control,
+} from 'react-hook-form'
 import { Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -33,11 +38,19 @@ export function DestinationHeadersField({
     control,
     name: 'headers',
   })
+  // 监听实时 headers 值，避免改名已有标头键时读到 useFieldArray 的陈旧快照
+  const watchedHeaders = useWatch({ control, name: 'headers' })
+  const { errors } = useFormState({ control, name: 'headers' })
 
   const retainedKeySet = useMemo(
     () => new Set(originalHeaderNames),
     [originalHeaderNames]
   )
+
+  const topLevelHeadersError =
+    errors.headers && !Array.isArray(errors.headers)
+      ? errors.headers.message || errors.headers.root?.message
+      : undefined
 
   return (
     <div className='space-y-2.5 border-t border-border/50 pt-1'>
@@ -57,6 +70,12 @@ export function DestinationHeadersField({
         </Button>
       </div>
 
+      {topLevelHeadersError ? (
+        <p className='text-[11px] font-medium text-destructive'>
+          {topLevelHeadersError}
+        </p>
+      ) : null}
+
       {fields.length === 0 ? (
         <div className='flex h-12 items-center justify-center rounded-md border border-dashed border-border/70 text-xs text-muted-foreground'>
           {t('fields.noHeaders')}
@@ -64,8 +83,10 @@ export function DestinationHeadersField({
       ) : (
         <div className='space-y-2'>
           {fields.map((fieldItem, index) => {
-            const isRetainedKey =
-              isEdit && retainedKeySet.has(fieldItem.key.trim())
+            const liveKey = (
+              watchedHeaders?.[index]?.key ?? fieldItem.key
+            ).trim()
+            const isRetainedKey = isEdit && retainedKeySet.has(liveKey)
 
             return (
               <div key={fieldItem.id} className='flex items-start gap-2'>

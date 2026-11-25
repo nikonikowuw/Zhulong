@@ -72,6 +72,7 @@ type StreamHub struct {
 	streamReadyTimeout time.Duration
 	recoverySeq        uint64
 	nextConsumerID     atomic.Uint64
+	aiConsumerWG       sync.WaitGroup
 	mu                 sync.Mutex
 	closed             bool
 }
@@ -833,6 +834,10 @@ func (h *StreamHub) acquireAIStreamBrokerPath(
 		if h.registry != nil {
 			newState = h.registry.UpdateSessionState(cameraID, StreamRoleMain, SessionStateRunning)
 		}
+		if consumeCtx != nil {
+			// 在持有 h.mu 且确认 !h.closed 时登记 WaitGroup，防止与 Close() 中的 Wait() 并发竞态。
+			h.aiConsumerWG.Add(1)
+		}
 		h.mu.Unlock()
 
 		if newState != nil {
@@ -842,12 +847,15 @@ func (h *StreamHub) acquireAIStreamBrokerPath(
 		// 先注册再启动消费者：注册之前没有任何路径能拿到 ref，
 		// 消费者一跑起来就必须能读到正确的窗口快照。
 		if consumeCtx != nil {
-			go h.consumeAIResults(
-				consumeCtx,
-				cameraID,
-				ref,
-				aiSub,
-			)
+			go func() {
+				defer h.aiConsumerWG.Done()
+				h.consumeAIResults(
+					consumeCtx,
+					cameraID,
+					ref,
+					aiSub,
+				)
+			}()
 		}
 
 		// 若该相机有启用录像的任务，在 AI 流拉起后立即配置原生环形缓冲。
@@ -1231,6 +1239,10 @@ func (h *StreamHub) Close() error {
 				h.logger.Warn("close AI subscription on hub shutdown", zap.Error(closeErr))
 			}
 		}
+	}
+	// 无锁等待所有在飞 AI 消费协程退出，避免停机期间 consumer 并发访问下游或已关闭流。
+	h.aiConsumerWG.Wait()
+	for _, ref := range aiList {
 		clearCtx, clearCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		if recErr := ref.stream.ConfigureRecorder(clearCtx, engine.RecorderConfig{PreMs: 0}); recErr != nil &&
 			!errors.Is(recErr, engine.ErrNotFound) && !errors.Is(recErr, engine.ErrStreamNotReady) {

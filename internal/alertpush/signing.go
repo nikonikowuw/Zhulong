@@ -26,11 +26,13 @@ const (
 )
 
 var (
-	ErrInvalidSignerKey    = errors.New("invalid signing key length")
-	ErrSignerNotConfigured = errors.New("url signer key is not configured")
-	ErrPathNotAllowed      = errors.New("signed URL only supports snapshots and face gallery images")
-	ErrURLExpired          = errors.New("signed URL has expired")
-	ErrURLInvalid          = errors.New("signed URL signature is invalid")
+	ErrInvalidSignerKey      = errors.New("invalid signing key length")
+	ErrInsecureSignerKey     = errors.New("media signing key file is not a regular file")
+	ErrInsecureSignerKeyPerm = errors.New("media signing key file permissions are too permissive")
+	ErrSignerNotConfigured   = errors.New("url signer key is not configured")
+	ErrPathNotAllowed        = errors.New("signed URL only supports snapshots and face gallery images")
+	ErrURLExpired            = errors.New("signed URL has expired")
+	ErrURLInvalid            = errors.New("signed URL signature is invalid")
 
 	signedFaceNamespaces = map[string]bool{
 		filestore.NamespaceFaces: true,
@@ -113,54 +115,85 @@ func (s *URLSigner) Sign(relPath string, exp int64) (string, error) {
 
 // Verify validates whether the given signature is valid and not expired.
 func (s *URLSigner) Verify(relPath string, exp int64, sig string) error {
-	normPath := normalizeRelativePath(relPath)
+	_, _, err := s.VerifyWithExpiry(relPath, strconv.FormatInt(exp, 10), sig)
+	return err
+}
+
+// VerifyWithExpiry validates path allowlist, signer availability, HMAC signature,
+// and expiration timestamp in that strict order so forged signatures never leak
+// expiration timing oracles. Returns the normalized path and parsed UTC expiry.
+func (s *URLSigner) VerifyWithExpiry(rawPath, expStr, sig string) (string, time.Time, error) {
+	normPath := normalizeRelativePath(rawPath)
 	if !isAllowedSignedPath(normPath) {
-		return ErrPathNotAllowed
+		return "", time.Time{}, ErrPathNotAllowed
 	}
 
 	s.mu.RLock()
 	hasKey := len(s.key) > 0
 	s.mu.RUnlock()
 	if !hasKey {
-		return ErrSignerNotConfigured
+		return "", time.Time{}, ErrSignerNotConfigured
 	}
 
-	now := time.Now().Unix()
-	if exp < now {
-		return ErrURLExpired
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil {
+		return "", time.Time{}, ErrURLInvalid
 	}
 
 	expectedSig, err := s.Sign(normPath, exp)
 	if err != nil {
-		return err
+		return "", time.Time{}, err
 	}
 
 	providedBytes, err := base64.RawURLEncoding.DecodeString(sig)
 	if err != nil {
-		return ErrURLInvalid
+		return "", time.Time{}, ErrURLInvalid
 	}
 
 	expectedBytes, err := base64.RawURLEncoding.DecodeString(expectedSig)
 	if err != nil {
-		return ErrURLInvalid
+		return "", time.Time{}, ErrURLInvalid
 	}
 
 	if !hmac.Equal(providedBytes, expectedBytes) {
-		return ErrURLInvalid
+		return "", time.Time{}, ErrURLInvalid
 	}
-	return nil
+
+	now := time.Now().Unix()
+	if exp < now {
+		return "", time.Time{}, ErrURLExpired
+	}
+
+	return normPath, time.Unix(exp, 0).UTC(), nil
 }
 
 // initSignerFromDataDir loads media_url.key from dataDir or generates a new one
-// atomically, populating the signer.
+// atomically, populating the signer. Existing key files are verified via Lstat to
+// reject symlinks and overly permissive permissions (mirroring camera.key).
 func initSignerFromDataDir(signer *URLSigner, dataDir string) error {
 	keyPath := filepath.Join(dataDir, signingKeyFileName)
-	data, err := os.ReadFile(keyPath)
+	info, err := os.Lstat(keyPath)
 	if err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%w: %q", ErrInsecureSignerKey, keyPath)
+		}
+		if runtime.GOOS != "windows" {
+			if perm := info.Mode().Perm(); perm&0o077 != 0 {
+				return fmt.Errorf(
+					"%w: current perm is %04o, expected 0600",
+					ErrInsecureSignerKeyPerm,
+					perm,
+				)
+			}
+		}
+		data, readErr := os.ReadFile(keyPath)
+		if readErr != nil {
+			return fmt.Errorf("read signing key: %w", readErr)
+		}
 		return signer.SetKey(data)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read signing key: %w", err)
+		return fmt.Errorf("stat signing key: %w", err)
 	}
 
 	key := make([]byte, signingKeyLength)

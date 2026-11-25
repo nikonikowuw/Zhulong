@@ -11,55 +11,60 @@ vi.mock('@/lib/api-client', () => ({
   },
 }))
 
+const baseWebhookResponse = {
+  id: 'dest_01',
+  name: 'Webhook 1',
+  channelType: 'webhook' as const,
+  enabled: true,
+  eventsEnabled: true,
+  heartbeatEnabled: false,
+  imageMode: 'url' as const,
+  config: {
+    url: 'https://example.com/alerts',
+    authType: 'none' as const,
+    timeoutSeconds: 5,
+  },
+  filter: {
+    eventTypes: [],
+    algorithmIds: ['algo_1'],
+    cameraIds: [],
+  },
+  secretSet: false,
+  signingSecretSet: true,
+  headerNames: [],
+  status: {
+    consecutiveFailures: 0,
+    totalDispatched: 10,
+    queueLength: 0,
+    queueCapacity: 32,
+    state: 'idle' as const,
+  },
+}
+
 describe('alertPushApi', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('list() returns parsed destinations', async () => {
-    const mockData = {
-      code: 'OK',
+  it('list() returns parsed destinations including signingSecretSet', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
       data: {
-        items: [
-          {
-            id: 'dest_01',
-            name: 'Webhook 1',
-            channelType: 'webhook',
-            enabled: true,
-            imageMode: 'url',
-            config: {
-              url: 'https://example.com/alerts',
-              authType: 'none',
-              timeoutSeconds: 5,
-            },
-            filter: {
-              algorithmIds: ['algo_1'],
-              cameraIds: [],
-            },
-            secretSet: false,
-            headerNames: [],
-            status: {
-              consecutiveFailures: 0,
-              totalDispatched: 10,
-              queueLength: 0,
-              queueCapacity: 32,
-              state: 'idle',
-            },
-          },
-        ],
+        code: 'OK',
+        data: {
+          items: [baseWebhookResponse],
+        },
       },
-    }
-
-    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: mockData })
+    })
 
     const res = await alertPushApi.list()
     expect(res).toHaveLength(1)
     expect(res[0].id).toBe('dest_01')
     expect(res[0].name).toBe('Webhook 1')
+    expect(res[0].signingSecretSet).toBe(true)
     expect(apiClient.get).toHaveBeenCalledWith('/alert-destinations')
   })
 
-  it('create() posts input and returns created destination', async () => {
+  it('create() posts input and returns created destination with default signingSecretSet=false', async () => {
     const mockCreated = {
       code: 'OK',
       data: {
@@ -100,21 +105,82 @@ describe('alertPushApi', () => {
     })
 
     expect(res.id).toBe('dest_02')
+    expect(res.signingSecretSet).toBe(false)
     expect(apiClient.post).toHaveBeenCalledWith(
       '/alert-destinations',
       expect.objectContaining({ name: 'MQTT 1' })
     )
   })
 
-  it('delete() calls DELETE endpoint', async () => {
+  it('update() puts payload and returns parsed destination', async () => {
+    vi.mocked(apiClient.put).mockResolvedValueOnce({
+      data: {
+        code: 'OK',
+        data: {
+          ...baseWebhookResponse,
+          name: 'Webhook Renamed',
+          signingSecretSet: false,
+        },
+      },
+    })
+
+    const res = await alertPushApi.update('dest_01', {
+      name: 'Webhook Renamed',
+      secret: { signingSecret: '' },
+    })
+
+    expect(res.name).toBe('Webhook Renamed')
+    expect(res.signingSecretSet).toBe(false)
+    expect(apiClient.put).toHaveBeenCalledWith('/alert-destinations/dest_01', {
+      name: 'Webhook Renamed',
+      secret: { signingSecret: '' },
+    })
+  })
+
+  it('enable() and disable() post to lifecycle endpoints and parse updated destination', async () => {
+    vi.mocked(apiClient.post)
+      .mockResolvedValueOnce({
+        data: {
+          code: 'OK',
+          data: { ...baseWebhookResponse, enabled: true },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          code: 'OK',
+          data: { ...baseWebhookResponse, enabled: false },
+        },
+      })
+
+    const enabled = await alertPushApi.enable('dest_01')
+    expect(enabled.enabled).toBe(true)
+    expect(apiClient.post).toHaveBeenNthCalledWith(
+      1,
+      '/alert-destinations/dest_01/enable'
+    )
+
+    const disabled = await alertPushApi.disable('dest_01')
+    expect(disabled.enabled).toBe(false)
+    expect(apiClient.post).toHaveBeenNthCalledWith(
+      2,
+      '/alert-destinations/dest_01/disable'
+    )
+  })
+
+  it('delete() validates OK envelope and rejects non-OK response', async () => {
     vi.mocked(apiClient.delete).mockResolvedValueOnce({
       data: { code: 'OK', data: null },
     })
     await alertPushApi.delete('dest_01')
     expect(apiClient.delete).toHaveBeenCalledWith('/alert-destinations/dest_01')
+
+    vi.mocked(apiClient.delete).mockResolvedValueOnce({
+      data: { code: 'INTERNAL_ERROR', data: null },
+    })
+    await expect(alertPushApi.delete('dest_01')).rejects.toThrow()
   })
 
-  it('test() posts test payload and returns result', async () => {
+  it('test() posts test payload with channelType and returns result', async () => {
     vi.mocked(apiClient.post).mockResolvedValueOnce({
       data: {
         code: 'OK',
@@ -125,11 +191,15 @@ describe('alertPushApi', () => {
       },
     })
 
-    const res = await alertPushApi.test({ id: 'dest_01' })
+    const res = await alertPushApi.test({
+      id: 'dest_01',
+      channelType: 'webhook',
+    })
     expect(res.ok).toBe(true)
     expect(res.latencyMs).toBe(45)
     expect(apiClient.post).toHaveBeenCalledWith('/alert-destinations/test', {
       id: 'dest_01',
+      channelType: 'webhook',
     })
   })
 
@@ -163,7 +233,8 @@ describe('alertPushApi', () => {
               status: {
                 state: 'connected',
                 lastError: '',
-                lastSuccessAt: null,
+                lastSuccessAt: '2026-11-24T09:59:00Z',
+                totalDispatched: 42,
                 dropped: 0,
                 queued: 0,
               },
@@ -180,6 +251,8 @@ describe('alertPushApi', () => {
     expect(res[0].status.state).toBe('running')
     expect(res[0].status.queueLength).toBe(0)
     expect(res[0].status.dropped).toBe(0)
+    expect(res[0].status.totalDispatched).toBe(42)
+    expect(res[0].status.lastSuccessAt).toBe('2026-11-24T09:59:00Z')
   })
 
   it('preserves connecting state, failure telemetry, and dropped counts from Go status payload', async () => {

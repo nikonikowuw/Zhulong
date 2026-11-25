@@ -63,6 +63,7 @@ const (
 
 	MaxDestinations          = 32
 	MaxDestinationNameLength = 64
+	MaxCustomHeaders         = 32
 	MinWebhookTimeoutSeconds = 1
 	MaxWebhookTimeoutSeconds = 30
 	DefaultWebhookTimeoutSec = 5
@@ -187,12 +188,13 @@ type destinationSecret interface {
 
 // webhookSecret is the sensitive data encrypted in secret_ciphertext.
 type webhookSecret struct {
-	URL          string            `json:"url"`
-	HeartbeatURL string            `json:"heartbeat_url,omitempty"`
-	Token        string            `json:"token,omitempty"`
-	Username     string            `json:"username,omitempty"`
-	Password     string            `json:"password,omitempty"`
-	Headers      map[string]string `json:"headers,omitempty"`
+	URL           string            `json:"url"`
+	HeartbeatURL  string            `json:"heartbeat_url,omitempty"`
+	Token         string            `json:"token,omitempty"`
+	Username      string            `json:"username,omitempty"`
+	Password      string            `json:"password,omitempty"`
+	SigningSecret string            `json:"signing_secret,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
 }
 
 func (*webhookSecret) isDestinationSecret() {}

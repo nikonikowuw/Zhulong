@@ -18,16 +18,22 @@ vi.mock('../api/alert-push-api', () => ({
   },
 }))
 
-vi.mock('@/features/algorithms/api/algorithms-api', () => ({
-  algorithmsApi: {
-    getAlgorithms: vi.fn().mockResolvedValue([]),
-  },
+vi.mock('@/features/algorithms/contract', () => ({
+  useAlgorithms: vi.fn(() => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  })),
 }))
 
-vi.mock('@/features/cameras/api/cameras-api', () => ({
-  camerasApi: {
-    getAll: vi.fn().mockResolvedValue({ items: [], total: 0 }),
-  },
+vi.mock('@/features/cameras/contract', () => ({
+  useAllCameras: vi.fn(() => ({
+    data: { items: [], total: 0 },
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  })),
 }))
 
 const sampleDest: AlertDestination = {
@@ -39,7 +45,7 @@ const sampleDest: AlertDestination = {
   heartbeatEnabled: false,
   imageMode: 'multipart',
   config: {
-    url: 'https://soc.example.com/hook',
+    url: 'https://soc.example.com/hook?access_token=secret123',
     authType: 'none',
     timeoutSeconds: 5,
     heartbeatIntervalSeconds: 60,
@@ -50,12 +56,15 @@ const sampleDest: AlertDestination = {
     cameraIds: [],
   },
   secretSet: false,
+  signingSecretSet: false,
   status: {
     consecutiveFailures: 0,
     totalDispatched: 5,
     dropped: 0,
     queueLength: 0,
     queueCapacity: 16,
+    lastAttemptAt: '2026-11-24T10:00:00Z',
+    lastSuccessAt: '2026-11-24T10:00:00Z',
     state: 'running',
   },
 }
@@ -110,7 +119,7 @@ describe('AlertPushPage', () => {
     await expect.element(getByText('暂无配置告警推送目标')).toBeInTheDocument()
   })
 
-  it('handles delete confirmation dialog with localized actions and quick test flow', async () => {
+  it('handles quick test with channelType, masks webhook query params, and deletes with confirmation', async () => {
     vi.mocked(alertPushApi.list).mockResolvedValue([sampleDest])
     vi.mocked(alertPushApi.delete).mockResolvedValueOnce(undefined)
     vi.mocked(alertPushApi.test).mockResolvedValueOnce({
@@ -126,11 +135,21 @@ describe('AlertPushPage', () => {
     )
 
     await expect.element(getByText('SOC Webhook')).toBeInTheDocument()
+    // Webhook URL query string is masked in table subtitle
+    await expect
+      .element(getByText('https://soc.example.com/hook?...'))
+      .toBeInTheDocument()
+    // Dispatched count telemetry is rendered
+    await expect.element(getByText('累计 5 条')).toBeInTheDocument()
 
-    // Open row actions -> Test Connection
+    // Open row actions -> Test Connection (must include channelType for audit target)
     await userEvent.click(getByRole('button', { name: '操作' }))
     await userEvent.click(getByRole('menuitem', { name: '测试连通性' }))
 
+    expect(alertPushApi.test).toHaveBeenCalledWith({
+      id: 'dest-1',
+      channelType: 'webhook',
+    })
     await expect.element(getByText('探测成功 (18ms)')).toBeInTheDocument()
     await userEvent.click(getByRole('button', { name: '关闭' }))
 
@@ -148,5 +167,33 @@ describe('AlertPushPage', () => {
     await vi.waitFor(() => {
       expect(alertPushApi.delete).toHaveBeenCalledWith('dest-1')
     })
+  })
+
+  it('disables toggle switch while enable/disable mutation is pending', async () => {
+    let resolveDisable!: (dest: AlertDestination) => void
+    const pendingDisable = new Promise<AlertDestination>((resolve) => {
+      resolveDisable = resolve
+    })
+
+    vi.mocked(alertPushApi.list).mockResolvedValue([sampleDest])
+    vi.mocked(alertPushApi.disable).mockReturnValueOnce(pendingDisable)
+
+    const queryClient = createTestQueryClient()
+    const { getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertPushPage />
+      </QueryClientProvider>
+    )
+
+    const toggleSwitch = getByRole('switch', { name: 'SOC Webhook' })
+    await expect.element(toggleSwitch).toBeEnabled()
+
+    await userEvent.click(toggleSwitch)
+
+    await expect.element(toggleSwitch).toBeDisabled()
+    expect(alertPushApi.disable).toHaveBeenCalledWith('dest-1')
+
+    resolveDisable({ ...sampleDest, enabled: false })
+    await expect.element(toggleSwitch).toBeEnabled()
   })
 })

@@ -46,6 +46,19 @@ type RateLimitConfig struct {
 	ProcessBytesPerMinute int
 	// ProcessMaxInFlight bounds concurrently executing handlers.
 	ProcessMaxInFlight int
+	// PerIPCode overrides the error code when a single IP exhausts its bucket.
+	// Empty defaults to "TOO_MANY_REQUESTS".
+	PerIPCode string
+	// BudgetExhaustedCode overrides the error code when the process-wide request
+	// budget is exhausted. Empty defaults to "CLIENT_LOG_BUDGET_EXHAUSTED".
+	BudgetExhaustedCode string
+	// ConcurrencyLimitCode overrides the error code when the process-wide
+	// in-flight concurrency cap is reached. Empty defaults to
+	// "CLIENT_LOG_CONCURRENCY_LIMIT".
+	ConcurrencyLimitCode string
+	// LogScope labels the rate-limit rejection warning message (e.g. "signed media").
+	// Empty defaults to "client log".
+	LogScope string
 	// Now defaults to time.Now. Tests inject a fake clock.
 	Now func() time.Time
 }
@@ -68,6 +81,18 @@ func (c RateLimitConfig) normalize() RateLimitConfig {
 	}
 	if c.ProcessMaxInFlight <= 0 {
 		c.ProcessMaxInFlight = DefaultProcessMaxInFlight
+	}
+	if c.PerIPCode == "" {
+		c.PerIPCode = rateLimitCodePerIP
+	}
+	if c.BudgetExhaustedCode == "" {
+		c.BudgetExhaustedCode = rateLimitCodeProcessRequests
+	}
+	if c.ConcurrencyLimitCode == "" {
+		c.ConcurrencyLimitCode = rateLimitCodeProcessInFlight
+	}
+	if c.LogScope == "" {
+		c.LogScope = "client log"
 	}
 	if c.Now == nil {
 		c.Now = time.Now
@@ -153,6 +178,19 @@ func refill(bucket *tokenBucket, now time.Time, perMinute float64, capacity floa
 	bucket.last = now
 }
 
+// canAllowIPLocked checks whether the per-IP bucket has at least one token available
+// without mutating bucket state or evicting LRU entries. Must be called with l.mu held.
+func (l *IPRateLimiter) canAllowIPLocked(key string, now time.Time) bool {
+	capacity := float64(l.config.Burst)
+	if element, ok := l.buckets[key]; ok {
+		entry := element.Value.(*bucketEntry)
+		probe := entry.bucket
+		refill(&probe, now, float64(l.config.PerMinute), capacity)
+		return probe.tokens >= 1
+	}
+	return capacity >= 1
+}
+
 // allowIPLocked applies the per-IP budget. It must be called with l.mu held.
 func (l *IPRateLimiter) allowIPLocked(key string, now time.Time) bool {
 	capacity := float64(l.config.Burst)
@@ -203,16 +241,64 @@ type admission struct {
 	code    string
 }
 
+// AllowIP checks and consumes only the per-IP token bucket. Callers that separate
+// pre-authentication IP throttling from post-authentication global resource budgets
+// can pair AllowIP with AcquireProcess / ReleaseProcess.
+func (l *IPRateLimiter) AllowIP(key string) (bool, string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.allowIPLocked(key, l.now()) {
+		return false, l.config.PerIPCode
+	}
+	return true, ""
+}
+
+// AcquireProcess checks and reserves only the process-wide request and concurrency
+// budgets. On success the caller must call ReleaseProcess when work completes.
+func (l *IPRateLimiter) AcquireProcess() (bool, string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+
+	processCapacity := float64(l.config.ProcessRequestsPerMinute)
+	processBucket := tokenBucket{
+		tokens: l.processTokens,
+		last:   l.processLast,
+	}
+	refill(&processBucket, now, processCapacity, processCapacity)
+	l.processTokens, l.processLast = processBucket.tokens, processBucket.last
+	if l.processTokens < 1 {
+		return false, l.config.BudgetExhaustedCode
+	}
+	if l.inFlight >= l.config.ProcessMaxInFlight {
+		return false, l.config.ConcurrencyLimitCode
+	}
+	l.processTokens--
+	l.inFlight++
+	return true, ""
+}
+
+// ReleaseProcess returns a concurrency slot previously acquired via AcquireProcess
+// and charges the optional process-wide byte budget.
+func (l *IPRateLimiter) ReleaseProcess(bodyBytes int64) {
+	l.release(bodyBytes)
+}
+
+// LogScope returns the configured log scope label for rejection warnings.
+func (l *IPRateLimiter) LogScope() string {
+	return l.config.LogScope
+}
+
 // reserve applies the per-IP and process-wide request budgets plus the
-// concurrency budget. On success the caller must call release when the handler
-// returns.
+// concurrency budget atomically so a global rejection never drains the caller's
+// per-IP bucket. On success the caller must call release when the handler returns.
 func (l *IPRateLimiter) reserve(key string) admission {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
 
-	if !l.allowIPLocked(key, now) {
-		return admission{code: rateLimitCodePerIP}
+	if !l.canAllowIPLocked(key, now) {
+		return admission{code: l.config.PerIPCode}
 	}
 
 	processCapacity := float64(l.config.ProcessRequestsPerMinute)
@@ -223,13 +309,16 @@ func (l *IPRateLimiter) reserve(key string) admission {
 	refill(&processBucket, now, processCapacity, processCapacity)
 	l.processTokens, l.processLast = processBucket.tokens, processBucket.last
 	if l.processTokens < 1 {
-		return admission{code: rateLimitCodeProcessRequests}
+		return admission{code: l.config.BudgetExhaustedCode}
 	}
 
 	if l.inFlight >= l.config.ProcessMaxInFlight {
-		return admission{code: rateLimitCodeProcessInFlight}
+		return admission{code: l.config.ConcurrencyLimitCode}
 	}
 
+	if !l.allowIPLocked(key, now) {
+		return admission{code: l.config.PerIPCode}
+	}
 	l.processTokens--
 	l.inFlight++
 	return admission{allowed: true}
@@ -267,6 +356,7 @@ func RateLimit(limiter *IPRateLimiter, logger *zap.Logger) gin.HandlerFunc {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	msg := limiter.config.LogScope + " request rejected by rate limit"
 	return func(c *gin.Context) {
 		// ClientIP reflects the TCP peer because the router disables trusted
 		// proxies. Forwarding headers are never consulted.
@@ -274,7 +364,7 @@ func RateLimit(limiter *IPRateLimiter, logger *zap.Logger) gin.HandlerFunc {
 		result := limiter.reserve(key)
 		if !result.allowed {
 			logger.Warn(
-				"client log request rejected by rate limit",
+				msg,
 				zap.String("route", c.FullPath()),
 				zap.String("reason", result.code),
 				zap.String("clientIp", logsafe.IP(key)),

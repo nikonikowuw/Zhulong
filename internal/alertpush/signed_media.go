@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"path"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -14,6 +14,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/filestore"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
+	"github.com/nikonikowuw/Zhulong/internal/logsafe"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 )
 
@@ -85,9 +86,17 @@ func NewSignedMediaHandlerWithOptions(opts SignedMediaHandlerOptions) *SignedMed
 	if burst <= 0 {
 		burst = DefaultSignedMediaRateLimitBurst
 	}
+	processPerMin := max(perMin*4, perMin)
+	processMaxInFlight := max(burst*4, 32)
 	limiter := httpmiddleware.NewIPRateLimiter(httpmiddleware.RateLimitConfig{
-		PerMinute: perMin,
-		Burst:     burst,
+		PerMinute:                perMin,
+		Burst:                    burst,
+		ProcessRequestsPerMinute: processPerMin,
+		ProcessMaxInFlight:       processMaxInFlight,
+		PerIPCode:                CodeMediaURLRateLimited,
+		BudgetExhaustedCode:      CodeMediaURLRateLimited,
+		ConcurrencyLimitCode:     CodeMediaURLRateLimited,
+		LogScope:                 "signed media",
 	})
 	return &SignedMediaHandler{
 		signer:       opts.Signer,
@@ -101,10 +110,36 @@ func NewSignedMediaHandlerWithOptions(opts SignedMediaHandlerOptions) *SignedMed
 // RegisterRoutes registers the public signed media endpoint.
 func (h *SignedMediaHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	group := rg.Group("/media")
-	group.Use(httpmiddleware.RateLimit(h.rateLimiter, h.logger))
+	group.Use(h.perIPRateLimitMiddleware())
 	{
 		group.GET("/signed/*path", h.ServeSignedMedia)
 		group.HEAD("/signed/*path", h.ServeSignedMedia)
+	}
+}
+
+// perIPRateLimitMiddleware throttles each client IP before signature verification so
+// unauthenticated invalid-signature floods are isolated to the caller's own bucket
+// and never exhaust the process-wide media budget reserved for verified requests.
+func (h *SignedMediaHandler) perIPRateLimitMiddleware() gin.HandlerFunc {
+	if h.rateLimiter == nil {
+		return func(c *gin.Context) { c.Next() }
+	}
+	msg := h.rateLimiter.LogScope() + " request rejected by rate limit"
+	return func(c *gin.Context) {
+		key := c.ClientIP()
+		if ok, code := h.rateLimiter.AllowIP(key); !ok {
+			h.logger.Warn(
+				msg,
+				zap.String("route", c.FullPath()),
+				zap.String("reason", code),
+				zap.String("clientIp", logsafe.IP(key)),
+				zap.String("requestId", httpmiddleware.GetRequestID(c)),
+			)
+			httputil.WriteError(c, apperr.RateLimited(code, "Signed media rate limit exceeded", nil))
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
 }
 
@@ -112,17 +147,38 @@ func (h *SignedMediaHandler) RegisterRoutes(rg *gin.RouterGroup) {
 // (for snapshots) or the isolated gallery reader (for faces).
 //
 // @Summary      Serve signed media content
-// @Description  Streams snapshot or face gallery reference bytes verified by HMAC signature without cookie authentication.
+// @Description  Streams snapshot or face gallery reference bytes verified by HMAC signature without cookie authentication. Supports RFC 7233 range requests, HEAD probes, and HTTP 302 redirects to presigned object URLs when remote redirect delivery is enabled.
 // @Tags         media
-// @Produce      image/jpeg
-// @Param        path  path      string  true  "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg or faces/person_face.jpg"
-// @Param        exp   query     int64   true  "Expiration Unix timestamp"
-// @Param        sig   query     string  true  "Base64URL HMAC signature"
-// @Success      200   {file}    binary
-// @Failure      403   {object}  httputil.Response
-// @Failure      404   {object}  httputil.Response
+// @Produce      image/jpeg,image/png,image/webp,application/octet-stream
+// @Param        path   path      string  true   "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg or faces/person_face.jpg"
+// @Param        exp    query     int64   true   "Expiration Unix timestamp"
+// @Param        sig    query     string  true   "Base64URL HMAC signature"
+// @Param        Range  header    string  false  "Byte range, e.g. bytes=0-1023"
+// @Success      200    {file}    binary
+// @Success      206    {file}    binary
+// @Success      302    {string}  string  "Redirect to presigned object URL"
+// @Failure      403    {object}  httputil.Response
+// @Failure      404    {object}  httputil.Response
+// @Failure      416    {string}  string  "Invalid range"
+// @Failure      429    {object}  httputil.Response
+// @Failure      500    {object}  httputil.Response
+// @Failure      503    {object}  httputil.Response
 // @Router       /media/signed/{path} [get]
+// @Router       /media/signed/{path} [head]
 func (h *SignedMediaHandler) ServeSignedMedia(c *gin.Context) {
+	if h.signer == nil || !h.signer.IsConfigured() {
+		httputil.WriteError(
+			c,
+			httputil.NewError(
+				http.StatusServiceUnavailable,
+				CodeMediaSignerUnavailable,
+				"Signed media signer unavailable",
+				ErrSignerNotConfigured,
+			),
+		)
+		return
+	}
+
 	relPath := strings.TrimPrefix(c.Param("path"), "/")
 	expStr := c.Query("exp")
 	sig := c.Query("sig")
@@ -135,21 +191,20 @@ func (h *SignedMediaHandler) ServeSignedMedia(c *gin.Context) {
 		return
 	}
 
-	exp, err := strconv.ParseInt(expStr, 10, 64)
+	normPath, expTime, err := h.signer.VerifyWithExpiry(relPath, expStr, sig)
 	if err != nil {
-		httputil.WriteError(
-			c,
-			apperr.PermissionDenied(CodeMediaURLInvalid, "Invalid expiration format", err),
-		)
-		return
-	}
-
-	if h.signer == nil {
-		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "URL signer unavailable", nil))
-		return
-	}
-
-	if err := h.signer.Verify(relPath, exp, sig); err != nil {
+		if errors.Is(err, ErrSignerNotConfigured) {
+			httputil.WriteError(
+				c,
+				httputil.NewError(
+					http.StatusServiceUnavailable,
+					CodeMediaSignerUnavailable,
+					"Signed media signer unavailable",
+					err,
+				),
+			)
+			return
+		}
 		if errors.Is(err, ErrURLExpired) {
 			httputil.WriteError(
 				c,
@@ -164,9 +219,24 @@ func (h *SignedMediaHandler) ServeSignedMedia(c *gin.Context) {
 		return
 	}
 
-	normPath := normalizeRelativePath(relPath)
+	if h.rateLimiter != nil {
+		if ok, code := h.rateLimiter.AcquireProcess(); !ok {
+			h.logger.Warn(
+				h.rateLimiter.LogScope()+" request rejected by rate limit",
+				zap.String("route", c.FullPath()),
+				zap.String("reason", code),
+				zap.String("clientIp", logsafe.IP(c.ClientIP())),
+				zap.String("requestId", httpmiddleware.GetRequestID(c)),
+			)
+			httputil.WriteError(c, apperr.RateLimited(code, "Signed media rate limit exceeded", nil))
+			return
+		}
+		defer h.rateLimiter.ReleaseProcess(0)
+	}
+
+	remaining := max(time.Until(expTime), time.Second)
 	if isAllowedFaceSignedPath(normPath) {
-		h.serveGalleryMedia(c, normPath)
+		h.serveGalleryMedia(c, normPath, remaining)
 		return
 	}
 
@@ -175,10 +245,10 @@ func (h *SignedMediaHandler) ServeSignedMedia(c *gin.Context) {
 		return
 	}
 
-	h.mediaHandler.ServeContent(c, normPath)
+	h.mediaHandler.ServeContentWithMaxRedirectTTL(c, normPath, remaining)
 }
 
-func (h *SignedMediaHandler) serveGalleryMedia(c *gin.Context, relPath string) {
+func (h *SignedMediaHandler) serveGalleryMedia(c *gin.Context, relPath string, maxTTL time.Duration) {
 	if h.galleryMedia == nil {
 		httputil.WriteError(c, apperr.Internal("INTERNAL_ERROR", "Gallery media reader unavailable", nil))
 		return
@@ -187,7 +257,7 @@ func (h *SignedMediaHandler) serveGalleryMedia(c *gin.Context, relPath string) {
 	ctx := c.Request.Context()
 	if c.Request.Method != http.MethodHead {
 		if presigner, ok := h.galleryMedia.(MediaPresigner); ok {
-			redirectURL, handled, err := presigner.PresignMediaURL(ctx, relPath, 0)
+			redirectURL, handled, err := presigner.PresignMediaURL(ctx, relPath, maxTTL)
 			if err != nil {
 				writeSignedGalleryError(c, err)
 				return
@@ -217,6 +287,7 @@ func (h *SignedMediaHandler) serveGalleryMedia(c *gin.Context, relPath string) {
 	}
 	contentType := signedGalleryContentType(name, info.ContentType)
 	c.Header("Content-Type", contentType)
+	c.Header("Cache-Control", "no-store")
 	http.ServeContent(
 		c.Writer,
 		c.Request,

@@ -132,13 +132,14 @@ func TestGalleryReferenceImageDeliveryAcrossModes(t *testing.T) {
 		defer server.Close()
 
 		sender, senderErr := NewWebhookSender(WebhookSenderOptions{
-			ID:           "dest_mp_ref",
-			ImageMode:    ImageModeMultipart,
-			URL:          server.URL,
-			Signer:       signer,
-			SignedURLTTL: time.Hour,
-			Media:        snapshotReader,
-			GalleryMedia: galleryReader,
+			ID:            "dest_mp_ref",
+			ImageMode:     ImageModeMultipart,
+			URL:           server.URL,
+			Signer:        signer,
+			SignedURLTTL:  time.Hour,
+			Media:         snapshotReader,
+			GalleryMedia:  galleryReader,
+			AllowLoopback: true,
 		})
 		if senderErr != nil {
 			t.Fatalf("NewWebhookSender: %v", senderErr)
@@ -184,6 +185,7 @@ func TestGalleryReferenceImageDeliveryAcrossModes(t *testing.T) {
 			Media:          snapshotReader,
 			GalleryMedia:   galleryReader,
 			InlineMaxBytes: 1024,
+			AllowLoopback:  true,
 		})
 		if senderErr != nil {
 			t.Fatalf("NewMQTTSender: %v", senderErr)

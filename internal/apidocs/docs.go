@@ -44,6 +44,12 @@ const docTemplate = `{
                             ]
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -92,6 +98,18 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "409": {
@@ -158,8 +176,38 @@ const docTemplate = `{
                             ]
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
                     "422": {
                         "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -217,6 +265,18 @@ const docTemplate = `{
                             ]
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -264,6 +324,12 @@ const docTemplate = `{
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -321,8 +387,20 @@ const docTemplate = `{
                             ]
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -368,8 +446,20 @@ const docTemplate = `{
                             ]
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -2602,9 +2692,12 @@ const docTemplate = `{
         },
         "/media/signed/{path}": {
             "get": {
-                "description": "Streams snapshot or face gallery reference bytes verified by HMAC signature without cookie authentication.",
+                "description": "Streams snapshot or face gallery reference bytes verified by HMAC signature without cookie authentication. Supports RFC 7233 range requests, HEAD probes, and HTTP 302 redirects to presigned object URLs when remote redirect delivery is enabled.",
                 "produces": [
-                    "image/jpeg"
+                    "image/jpeg",
+                    "image/png",
+                    "image/webp",
+                    "application/octet-stream"
                 ],
                 "tags": [
                     "media"
@@ -2632,6 +2725,12 @@ const docTemplate = `{
                         "name": "sig",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Byte range, e.g. bytes=0-1023",
+                        "name": "Range",
+                        "in": "header"
                     }
                 ],
                 "responses": {
@@ -2639,6 +2738,18 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "type": "file"
+                        }
+                    },
+                    "206": {
+                        "description": "Partial Content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "302": {
+                        "description": "Redirect to presigned object URL",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "403": {
@@ -2649,6 +2760,129 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "416": {
+                        "description": "Invalid range",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "head": {
+                "description": "Streams snapshot or face gallery reference bytes verified by HMAC signature without cookie authentication. Supports RFC 7233 range requests, HEAD probes, and HTTP 302 redirects to presigned object URLs when remote redirect delivery is enabled.",
+                "produces": [
+                    "image/jpeg",
+                    "image/png",
+                    "image/webp",
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "media"
+                ],
+                "summary": "Serve signed media content",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg or faces/person_face.jpg",
+                        "name": "path",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Expiration Unix timestamp",
+                        "name": "exp",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Base64URL HMAC signature",
+                        "name": "sig",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Byte range, e.g. bytes=0-1023",
+                        "name": "Range",
+                        "in": "header"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "206": {
+                        "description": "Partial Content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "302": {
+                        "description": "Redirect to presigned object URL",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "416": {
+                        "description": "Invalid range",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -7537,6 +7771,9 @@ const docTemplate = `{
                 "secretSet": {
                     "type": "boolean"
                 },
+                "signingSecretSet": {
+                    "type": "boolean"
+                },
                 "status": {
                     "$ref": "#/definitions/alertpush.AlertDestinationStatus"
                 }
@@ -7552,6 +7789,9 @@ const docTemplate = `{
                     }
                 },
                 "password": {
+                    "type": "string"
+                },
+                "signingSecret": {
                     "type": "string"
                 },
                 "token": {
@@ -7674,6 +7914,9 @@ const docTemplate = `{
         "alertpush.UpdateAlertDestinationRequest": {
             "type": "object",
             "properties": {
+                "channelType": {
+                    "type": "string"
+                },
                 "config": {
                     "$ref": "#/definitions/alertpush.AlertDestinationConfigInfo"
                 },

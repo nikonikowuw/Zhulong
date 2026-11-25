@@ -1,6 +1,12 @@
 import { useMemo, useState } from 'react'
-import { useWatch, type Control, type UseFormSetValue } from 'react-hook-form'
 import {
+  useFormState,
+  useWatch,
+  type Control,
+  type UseFormSetValue,
+} from 'react-hook-form'
+import {
+  AlertCircle,
   BellRing,
   Car,
   Check,
@@ -8,11 +14,14 @@ import {
   Filter,
   Globe,
   Layers,
+  Loader2,
   Search,
   ShieldAlert,
   UserCheck,
+  X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -77,7 +86,8 @@ const EVENT_TYPE_OPTIONS = [
 interface DestinationFiltersSectionProps {
   control: Control<AlertDestinationFormValues>
   setValue: UseFormSetValue<AlertDestinationFormValues>
-  initialFiltersOpen?: boolean
+  filtersOpen: boolean
+  onFiltersOpenChange: (open: boolean) => void
 }
 
 /**
@@ -105,38 +115,31 @@ function FiltersSummaryBadge({
   )
 }
 
-export function DestinationFiltersSection({
+/**
+ * 延迟挂载的算法/摄像机来源选择器：仅在开启事件推送且展开过滤区时才触发查询，
+ * 避免仅存活上报目标或折叠状态下强拉全量算法/摄像机列表。
+ */
+function SourceFiltersPanel({
   control,
   setValue,
-  initialFiltersOpen = false,
-}: DestinationFiltersSectionProps) {
+}: {
+  control: Control<AlertDestinationFormValues>
+  setValue: UseFormSetValue<AlertDestinationFormValues>
+}) {
   const { t } = useTranslation('alertPush')
-  const [filtersOpen, setFiltersOpen] = useState(initialFiltersOpen)
   const [algoSearch, setAlgoSearch] = useState('')
   const [camSearch, setCamSearch] = useState('')
 
-  const { algorithms: availableAlgorithms, cameras: availableCameras } =
-    useDestinationFilterOptions()
-
-  const eventsEnabled = useWatch({
-    control,
-    name: 'eventsEnabled',
-  })
-
-  const channelType = useWatch({
-    control,
-    name: 'channelType',
-  })
-  const imageMode = useWatch({ control, name: 'imageMode' })
-  // 与图片模式下拉框的回退规则保持一致：切换协议时 imageMode 可能短暂为空
-  const effectiveImageMode =
-    imageMode || (channelType === 'mqtt' ? 'base64' : 'multipart')
-
-  const selectedEventTypes =
-    useWatch({
-      control,
-      name: 'eventTypes',
-    }) || []
+  const {
+    algorithms: availableAlgorithms,
+    cameras: availableCameras,
+    isAlgosLoading,
+    isCamerasLoading,
+    isAlgosError,
+    isCamerasError,
+    refetchAlgorithms,
+    refetchCameras,
+  } = useDestinationFilterOptions()
 
   const selectedAlgoIds =
     useWatch({
@@ -150,15 +153,6 @@ export function DestinationFiltersSection({
       name: 'cameraIds',
     }) || []
 
-  // 过滤事件切换
-  const toggleEventType = (et: string) => {
-    const next = selectedEventTypes.includes(et)
-      ? selectedEventTypes.filter((x) => x !== et)
-      : [...selectedEventTypes, et]
-    setValue('eventTypes', next)
-  }
-
-  // 算法选择
   const toggleAlgoSelection = (id: string) => {
     const next = selectedAlgoIds.includes(id)
       ? selectedAlgoIds.filter((x) => x !== id)
@@ -177,7 +171,6 @@ export function DestinationFiltersSection({
     setValue('algorithmIds', [])
   }
 
-  // 摄像机选择
   const toggleCamSelection = (id: string) => {
     const next = selectedCamIds.includes(id)
       ? selectedCamIds.filter((x) => x !== id)
@@ -207,6 +200,106 @@ export function DestinationFiltersSection({
     const q = camSearch.toLowerCase()
     return availableCameras.filter((c) => c.name.toLowerCase().includes(q))
   }, [availableCameras, camSearch])
+
+  return (
+    <>
+      {/* 2. 算法过滤 */}
+      <FilterOptionsSelector
+        icon={Layers}
+        title={t('sections.filterAlgos')}
+        options={availableAlgorithms}
+        filteredOptions={filteredAlgos}
+        selectedIds={selectedAlgoIds}
+        isLoading={isAlgosLoading}
+        isError={isAlgosError}
+        onRetry={() => void refetchAlgorithms()}
+        searchValue={algoSearch}
+        onSearchChange={setAlgoSearch}
+        onToggle={toggleAlgoSelection}
+        onSelectAll={handleSelectAllAlgos}
+        onClearAll={handleClearAllAlgos}
+        searchPlaceholder={t('filters.searchAlgoPlaceholder')}
+        loadingText={t('filters.loadingAlgos')}
+        errorText={t('filters.loadAlgosFailed')}
+        retryText={t('actions.retry')}
+        emptyText={t('filters.noAlgos')}
+        notFoundText={t('filters.noAlgosFound')}
+        allActiveText={t('filters.allAlgosActive')}
+        orphanSuffix={t('filters.orphanSuffix')}
+        selectedCountText={(count) => t('filters.selectedCount', { count })}
+        selectAllText={t('filters.selectAll')}
+        clearAllText={t('filters.clearAll')}
+      />
+
+      {/* 3. 摄像机过滤 */}
+      <FilterOptionsSelector
+        icon={Globe}
+        title={t('sections.filterCameras')}
+        options={availableCameras}
+        filteredOptions={filteredCams}
+        selectedIds={selectedCamIds}
+        isLoading={isCamerasLoading}
+        isError={isCamerasError}
+        onRetry={() => void refetchCameras()}
+        searchValue={camSearch}
+        onSearchChange={setCamSearch}
+        onToggle={toggleCamSelection}
+        onSelectAll={handleSelectAllCams}
+        onClearAll={handleClearAllCams}
+        searchPlaceholder={t('filters.searchCameraPlaceholder')}
+        loadingText={t('filters.loadingCameras')}
+        errorText={t('filters.loadCamerasFailed')}
+        retryText={t('actions.retry')}
+        emptyText={t('filters.noCameras')}
+        notFoundText={t('filters.noCamerasFound')}
+        allActiveText={t('filters.allCamerasActive')}
+        orphanSuffix={t('filters.orphanSuffix')}
+        selectedCountText={(count) => t('filters.selectedCount', { count })}
+        selectAllText={t('filters.selectAll')}
+        clearAllText={t('filters.clearAll')}
+      />
+    </>
+  )
+}
+
+export function DestinationFiltersSection({
+  control,
+  setValue,
+  filtersOpen,
+  onFiltersOpenChange,
+}: DestinationFiltersSectionProps) {
+  const { t } = useTranslation('alertPush')
+
+  const eventsEnabled = useWatch({
+    control,
+    name: 'eventsEnabled',
+  })
+
+  const channelType = useWatch({
+    control,
+    name: 'channelType',
+  })
+  const imageMode = useWatch({ control, name: 'imageMode' })
+  // 与图片模式下拉框的回退规则保持一致：切换协议时 imageMode 可能短暂为空
+  const effectiveImageMode =
+    imageMode || (channelType === 'mqtt' ? 'base64' : 'multipart')
+
+  const selectedEventTypes =
+    useWatch({
+      control,
+      name: 'eventTypes',
+    }) || []
+
+  const { errors } = useFormState({ control, name: 'eventTypes' })
+  const eventTypesError = errors.eventTypes?.message
+
+  // 过滤事件切换
+  const toggleEventType = (et: string) => {
+    const next = selectedEventTypes.includes(et)
+      ? selectedEventTypes.filter((x) => x !== et)
+      : [...selectedEventTypes, et]
+    setValue('eventTypes', next)
+  }
 
   return (
     <div className='space-y-3.5 rounded-xl border border-border/80 bg-card/60 p-4 shadow-2xs transition-colors'>
@@ -327,7 +420,7 @@ export function DestinationFiltersSection({
           {/* 可折叠的事件与通道过滤 */}
           <Collapsible
             open={filtersOpen}
-            onOpenChange={setFiltersOpen}
+            onOpenChange={onFiltersOpenChange}
             className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3 transition-colors'
           >
             <div className='flex items-center justify-between'>
@@ -378,6 +471,7 @@ export function DestinationFiltersSection({
                         <button
                           key={type}
                           type='button'
+                          aria-pressed={selected}
                           onClick={() => toggleEventType(type)}
                           className={cn(
                             'flex flex-col justify-between rounded-lg border p-2.5 text-start shadow-2xs transition-all',
@@ -418,53 +512,18 @@ export function DestinationFiltersSection({
                     }
                   )}
                 </div>
+
+                {eventTypesError ? (
+                  <p className='text-xs font-medium text-destructive'>
+                    {eventTypesError}
+                  </p>
+                ) : null}
               </div>
 
-              {/* 2. 算法过滤 */}
-              <FilterOptionsSelector
-                icon={Layers}
-                title={t('sections.filterAlgos')}
-                options={availableAlgorithms}
-                filteredOptions={filteredAlgos}
-                selectedIds={selectedAlgoIds}
-                searchValue={algoSearch}
-                onSearchChange={setAlgoSearch}
-                onToggle={toggleAlgoSelection}
-                onSelectAll={handleSelectAllAlgos}
-                onClearAll={handleClearAllAlgos}
-                searchPlaceholder={t('filters.searchAlgoPlaceholder')}
-                emptyText={t('filters.noAlgos')}
-                notFoundText={t('filters.noAlgosFound')}
-                allActiveText={t('filters.allAlgosActive')}
-                selectedCountText={(count) =>
-                  t('filters.selectedCount', { count })
-                }
-                selectAllText={t('filters.selectAll')}
-                clearAllText={t('filters.clearAll')}
-              />
-
-              {/* 3. 摄像机过滤 */}
-              <FilterOptionsSelector
-                icon={Globe}
-                title={t('sections.filterCameras')}
-                options={availableCameras}
-                filteredOptions={filteredCams}
-                selectedIds={selectedCamIds}
-                searchValue={camSearch}
-                onSearchChange={setCamSearch}
-                onToggle={toggleCamSelection}
-                onSelectAll={handleSelectAllCams}
-                onClearAll={handleClearAllCams}
-                searchPlaceholder={t('filters.searchCameraPlaceholder')}
-                emptyText={t('filters.noCameras')}
-                notFoundText={t('filters.noCamerasFound')}
-                allActiveText={t('filters.allCamerasActive')}
-                selectedCountText={(count) =>
-                  t('filters.selectedCount', { count })
-                }
-                selectAllText={t('filters.selectAll')}
-                clearAllText={t('filters.clearAll')}
-              />
+              {/* 2 & 3. 算法/摄像机来源过滤（按需挂载拉取） */}
+              {filtersOpen ? (
+                <SourceFiltersPanel control={control} setValue={setValue} />
+              ) : null}
             </CollapsibleContent>
           </Collapsible>
         </div>
@@ -479,15 +538,22 @@ interface FilterOptionsSelectorProps {
   options: FilterOption[]
   filteredOptions: FilterOption[]
   selectedIds: string[]
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
   searchValue: string
   onSearchChange: (val: string) => void
   onToggle: (id: string) => void
   onSelectAll: () => void
   onClearAll: () => void
   searchPlaceholder: string
+  loadingText: string
+  errorText: string
+  retryText: string
   emptyText: string
   notFoundText: string
   allActiveText: string
+  orphanSuffix: string
   selectedCountText: (count: number) => string
   selectAllText: string
   clearAllText: string
@@ -499,20 +565,38 @@ function FilterOptionsSelector({
   options,
   filteredOptions,
   selectedIds,
+  isLoading,
+  isError,
+  onRetry,
   searchValue,
   onSearchChange,
   onToggle,
   onSelectAll,
   onClearAll,
   searchPlaceholder,
+  loadingText,
+  errorText,
+  retryText,
   emptyText,
   notFoundText,
   allActiveText,
+  orphanSuffix,
   selectedCountText,
   selectAllText,
   clearAllText,
 }: FilterOptionsSelectorProps) {
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  const optionIdSet = useMemo(
+    () => new Set(options.map((opt) => opt.id)),
+    [options]
+  )
+  const orphanIds = useMemo(
+    () =>
+      isLoading || isError
+        ? []
+        : selectedIds.filter((id) => !optionIdSet.has(id)),
+    [isLoading, isError, selectedIds, optionIdSet]
+  )
 
   return (
     <div className='space-y-2.5 rounded-lg border border-border/60 bg-background/60 p-3.5'>
@@ -533,7 +617,7 @@ function FilterOptionsSelector({
             variant='ghost'
             size='sm'
             onClick={onSelectAll}
-            disabled={options.length === 0}
+            disabled={isLoading || isError || options.length === 0}
             className='h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground'
           >
             {selectAllText}
@@ -564,29 +648,73 @@ function FilterOptionsSelector({
         </div>
       ) : null}
 
-      <div className='flex max-h-28 min-h-14 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-border/60 bg-muted/20 p-2'>
-        {options.length === 0 ? (
+      <div className='flex max-h-28 min-h-14 flex-wrap items-start gap-1.5 overflow-y-auto rounded-md border border-border/60 bg-muted/20 p-2'>
+        {isLoading ? (
+          <div className='flex h-full w-full items-center justify-center gap-1.5 text-xs text-muted-foreground'>
+            <Loader2 className='size-3.5 animate-spin' />
+            <span>{loadingText}</span>
+          </div>
+        ) : isError ? (
+          <div className='flex h-full w-full items-center justify-center gap-2 text-xs text-destructive'>
+            <AlertCircle className='size-3.5 shrink-0' />
+            <span>{errorText}</span>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={onRetry}
+              className='h-6 px-2 text-[11px]'
+            >
+              {retryText}
+            </Button>
+          </div>
+        ) : options.length === 0 && orphanIds.length === 0 ? (
           <div className='flex h-full w-full items-center justify-center text-xs text-muted-foreground'>
             {emptyText}
           </div>
-        ) : filteredOptions.length === 0 ? (
+        ) : filteredOptions.length === 0 && orphanIds.length === 0 ? (
           <div className='flex h-full w-full items-center justify-center text-xs text-muted-foreground'>
             {notFoundText}
           </div>
         ) : (
-          filteredOptions.map((opt) => {
-            const selected = selectedIdSet.has(opt.id)
-            return (
-              <Badge
-                key={opt.id}
-                variant={selected ? 'default' : 'outline'}
-                className='cursor-pointer text-xs font-normal transition-colors'
-                onClick={() => onToggle(opt.id)}
+          <>
+            {orphanIds.map((id) => (
+              <button
+                key={`orphan-${id}`}
+                type='button'
+                aria-pressed={true}
+                onClick={() => onToggle(id)}
+                className={cn(
+                  'inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                  statusLevelClass('warning')
+                )}
               >
-                {opt.name}
-              </Badge>
-            )
-          })
+                <span>
+                  {id} ({orphanSuffix})
+                </span>
+                <X className='size-3' />
+              </button>
+            ))}
+            {filteredOptions.map((opt) => {
+              const selected = selectedIdSet.has(opt.id)
+              return (
+                <button
+                  key={opt.id}
+                  type='button'
+                  aria-pressed={selected}
+                  onClick={() => onToggle(opt.id)}
+                  className={cn(
+                    'inline-flex cursor-pointer items-center rounded-md border px-2 py-0.5 text-xs font-normal transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                    selected
+                      ? 'border-transparent bg-primary text-primary-foreground hover:bg-primary/90'
+                      : 'border-border bg-background text-foreground hover:bg-muted'
+                  )}
+                >
+                  {opt.name}
+                </button>
+              )
+            })}
+          </>
         )}
       </div>
       <p className='text-[11px] text-muted-foreground'>

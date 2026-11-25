@@ -12,25 +12,29 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/filestore"
 )
 
-// Webhook envelope headers mirroring the payload's routing metadata.
+// Webhook envelope headers mirroring the payload's routing and authenticity metadata.
 const (
-	headerZhulongEvent    = "X-Zhulong-Event"
-	headerZhulongDelivery = "X-Zhulong-Delivery"
-	headerZhulongSchema   = "X-Zhulong-Schema"
+	headerZhulongEvent     = "X-Zhulong-Event"
+	headerZhulongDelivery  = "X-Zhulong-Delivery"
+	headerZhulongSchema    = "X-Zhulong-Schema"
+	headerZhulongTimestamp = "X-Zhulong-Timestamp"
+	headerZhulongSignature = "X-Zhulong-Signature"
 )
 
 var reservedHeaders = map[string]struct{}{
-	"accept":             {},
-	"authorization":      {},
-	"connection":         {},
-	"content-length":     {},
-	"content-type":       {},
-	"host":               {},
-	"transfer-encoding":  {},
-	"user-agent":         {},
-	"x-zhulong-event":    {},
-	"x-zhulong-delivery": {},
-	"x-zhulong-schema":   {},
+	"accept":              {},
+	"authorization":       {},
+	"connection":          {},
+	"content-length":      {},
+	"content-type":        {},
+	"host":                {},
+	"transfer-encoding":   {},
+	"user-agent":          {},
+	"x-zhulong-event":     {},
+	"x-zhulong-delivery":  {},
+	"x-zhulong-schema":    {},
+	"x-zhulong-timestamp": {},
+	"x-zhulong-signature": {},
 }
 
 // MediaReader abstracts read access to media files with four-layer path protection.
@@ -245,10 +249,23 @@ func generateSignedURL(
 	relPath string,
 	ttl time.Duration,
 ) (string, error) {
+	if ttl <= 0 {
+		ttl = defaultSignedURLTTL
+	}
+	exp := time.Now().UTC().Add(ttl).Truncate(time.Second).Unix()
+	return generateSignedURLAt(publicBaseURL, signer, relPath, exp)
+}
+
+// generateSignedURLAt generates an absolute signed URL bound to an explicit Unix expiry timestamp.
+func generateSignedURLAt(
+	publicBaseURL string,
+	signer *URLSigner,
+	relPath string,
+	exp int64,
+) (string, error) {
 	if signer == nil || relPath == "" || publicBaseURL == "" {
 		return "", nil
 	}
-	exp := time.Now().Add(ttl).Unix()
 	sig, err := signer.Sign(relPath, exp)
 	if err != nil {
 		return "", err

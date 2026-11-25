@@ -10,6 +10,8 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { errorMessageOf } from '@/lib/handle-server-error'
 import { statusDotClass, statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -40,6 +42,7 @@ export function AlertPushPage() {
   const [deletingDest, setDeletingDest] = useState<AlertDestination | null>(
     null
   )
+  const [togglingIds, setTogglingIds] = useState<Set<string>>(() => new Set())
 
   // Quick Test Dialog
   const [testModalDest, setTestModalDest] = useState<AlertDestination | null>(
@@ -49,6 +52,18 @@ export function AlertPushPage() {
   const [quickTestResult, setQuickTestResult] =
     useState<TestDestinationResult | null>(null)
   const quickTestSeqRef = useRef(0)
+
+  const markToggling = useCallback((id: string, pending: boolean) => {
+    setTogglingIds((prev) => {
+      const next = new Set(prev)
+      if (pending) {
+        next.add(id)
+      } else {
+        next.delete(id)
+      }
+      return next
+    })
+  }, [])
 
   // Queries
   const {
@@ -66,20 +81,37 @@ export function AlertPushPage() {
   // Mutations
   const enableMutation = useMutation({
     mutationFn: (id: string) => alertPushApi.enable(id),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['alert-destinations'] }),
+    onMutate: (id) => {
+      markToggling(id, true)
+    },
+    onSuccess: () => {
+      toast.success(t('toast.enabled'))
+      void queryClient.invalidateQueries({ queryKey: ['alert-destinations'] })
+    },
+    onSettled: (_data, _err, id) => {
+      markToggling(id, false)
+    },
   })
 
   const disableMutation = useMutation({
     mutationFn: (id: string) => alertPushApi.disable(id),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['alert-destinations'] }),
+    onMutate: (id) => {
+      markToggling(id, true)
+    },
+    onSuccess: () => {
+      toast.success(t('toast.disabled'))
+      void queryClient.invalidateQueries({ queryKey: ['alert-destinations'] })
+    },
+    onSettled: (_data, _err, id) => {
+      markToggling(id, false)
+    },
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => alertPushApi.delete(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['alert-destinations'] })
+      toast.success(t('toast.deleted'))
+      void queryClient.invalidateQueries({ queryKey: ['alert-destinations'] })
       setDeletingDest(null)
     },
   })
@@ -120,14 +152,20 @@ export function AlertPushPage() {
       setQuickTestResult(null)
 
       try {
-        const res = await alertPushApi.test({ id: dest.id })
+        const res = await alertPushApi.test({
+          id: dest.id,
+          channelType: dest.channelType,
+        })
         if (seq === quickTestSeqRef.current) {
           setQuickTestResult(res)
         }
       } catch (err: unknown) {
         if (seq === quickTestSeqRef.current) {
-          const msg = err instanceof Error ? err.message : String(err)
-          setQuickTestResult({ ok: false, latencyMs: 0, reason: msg })
+          setQuickTestResult({
+            ok: false,
+            latencyMs: 0,
+            reason: errorMessageOf(err),
+          })
         }
       } finally {
         if (seq === quickTestSeqRef.current) {
@@ -147,7 +185,7 @@ export function AlertPushPage() {
 
   const isLimitReached = destinations.length >= MAX_DESTINATIONS
   const quotaLevel = isLimitReached ? 'destructive' : 'active'
-  const errorMessage = error instanceof Error ? error.message : String(error)
+  const errorMessage = error ? errorMessageOf(error) : ''
 
   return (
     <ContentSection
@@ -274,6 +312,7 @@ export function AlertPushPage() {
         ) : (
           <AlertDestinationsTable
             destinations={destinations}
+            togglingIds={togglingIds}
             onEdit={handleEdit}
             onDelete={handleDeletePrompt}
             onToggle={handleToggle}

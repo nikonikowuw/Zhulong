@@ -1,8 +1,8 @@
-import { useState } from 'react'
 import { useWatch, type Control } from 'react-hook-form'
 import { ChevronDown, Globe, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Collapsible,
   CollapsibleContent,
@@ -17,6 +17,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -33,8 +34,13 @@ interface WebhookConfigSectionProps {
   control: Control<AlertDestinationFormValues>
   isEdit: boolean
   secretSet?: boolean
+  signingSecretSet?: boolean
+  originalAuthType?: AuthType
   originalHeaderNames?: string[]
-  initialAdvancedOpen?: boolean
+  clearSigningSecret?: boolean
+  onClearSigningSecretChange?: (clear: boolean) => void
+  advancedOpen: boolean
+  onAdvancedOpenChange: (open: boolean) => void
 }
 
 /**
@@ -72,16 +78,25 @@ export function WebhookConfigSection({
   control,
   isEdit,
   secretSet,
+  signingSecretSet = false,
+  originalAuthType,
   originalHeaderNames,
-  initialAdvancedOpen = false,
+  clearSigningSecret = false,
+  onClearSigningSecretChange,
+  advancedOpen,
+  onAdvancedOpenChange,
 }: WebhookConfigSectionProps) {
   const { t } = useTranslation('alertPush')
-  const [advancedOpen, setAdvancedOpen] = useState(initialAdvancedOpen)
 
   const authType = useWatch({
     control,
     name: 'authType',
   })
+
+  // 仅在编辑态且未切换鉴权类型时，才展示“凭据已保存，留空保持不变”提示
+  const hasRetainedAuthSecret = Boolean(
+    isEdit && secretSet && (!originalAuthType || authType === originalAuthType)
+  )
 
   return (
     <div className='space-y-3.5 rounded-xl border border-border/80 bg-card/60 p-4 shadow-2xs'>
@@ -158,7 +173,7 @@ export function WebhookConfigSection({
                     {...field}
                     type='password'
                     placeholder={
-                      isEdit && secretSet
+                      hasRetainedAuthSecret
                         ? t('fields.secretRetained')
                         : t('fields.bearerTokenPlaceholder')
                     }
@@ -186,7 +201,7 @@ export function WebhookConfigSection({
                     <Input
                       {...field}
                       placeholder={
-                        isEdit && secretSet
+                        hasRetainedAuthSecret
                           ? t('fields.secretRetained')
                           : t('fields.basicUsernamePlaceholder')
                       }
@@ -212,7 +227,7 @@ export function WebhookConfigSection({
                       {...field}
                       type='password'
                       placeholder={
-                        isEdit && secretSet
+                        hasRetainedAuthSecret
                           ? t('fields.secretRetained')
                           : t('fields.basicPasswordPlaceholder')
                       }
@@ -228,10 +243,10 @@ export function WebhookConfigSection({
         ) : null}
       </div>
 
-      {/* 可折叠的高级传输与标头 */}
+      {/* 可折叠的高级传输、签名密钥与标头 */}
       <Collapsible
         open={advancedOpen}
-        onOpenChange={setAdvancedOpen}
+        onOpenChange={onAdvancedOpenChange}
         className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3 transition-colors'
       >
         <div className='flex items-center justify-between'>
@@ -282,6 +297,62 @@ export function WebhookConfigSection({
                     className='bg-background font-mono text-xs'
                   />
                 </FormControl>
+                <FormMessage className='text-xs' />
+              </FormItem>
+            )}
+          />
+
+          {/* 出站 HMAC-SHA256 签名密钥（可选） */}
+          <FormField
+            control={control}
+            name='signingSecret'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel className='text-xs font-medium'>
+                  {t('fields.signingSecret')}
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    {...field}
+                    type='password'
+                    disabled={clearSigningSecret}
+                    onChange={(e) => {
+                      if (clearSigningSecret && e.target.value) {
+                        onClearSigningSecretChange?.(false)
+                      }
+                      field.onChange(e)
+                    }}
+                    placeholder={
+                      clearSigningSecret
+                        ? t('fields.signingSecretWillClear')
+                        : isEdit && signingSecretSet
+                          ? t('fields.secretRetained')
+                          : t('fields.signingSecretPlaceholder')
+                    }
+                    className='bg-background font-mono text-xs'
+                    autoComplete='off'
+                  />
+                </FormControl>
+                <FormDescription className='text-[11px] leading-relaxed text-muted-foreground'>
+                  {t('fields.signingSecretHint')}
+                </FormDescription>
+                {isEdit && signingSecretSet ? (
+                  <div className='flex items-center gap-2 pt-1'>
+                    <Checkbox
+                      id='clear-signing-secret'
+                      checked={clearSigningSecret}
+                      onCheckedChange={(checked) =>
+                        onClearSigningSecretChange?.(checked === true)
+                      }
+                    />
+                    <Label
+                      htmlFor='clear-signing-secret'
+                      className='cursor-pointer text-[11px] font-normal text-muted-foreground'
+                    >
+                      {t('fields.clearSigningSecret')}
+                    </Label>
+                  </div>
+                ) : null}
                 <FormMessage className='text-xs' />
               </FormItem>
             )}

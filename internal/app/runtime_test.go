@@ -361,11 +361,13 @@ func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
 			algorithm:      algorithmStub{events: events},
 			audit:          auditStub{events: events},
 			storage:        storageLifecycleStub{events: events},
+			fileStore:      fileStoreLifecycleStub{events: events},
 			person:         personLifecycleStub{events: events},
 			asyncJobs:      asyncJobLifecycleStub{events: events},
 			record:         &recordContextStub{events: events},
 			snapshot:       snapshotLifecycleStub{events: events},
 			spatial:        spatialLifecycleStub{events: events},
+			alertPush:      alertPushStub{events: events},
 			logger:         zap.NewNop(),
 			databaseReady:  true,
 			nativeReady:    true,
@@ -373,11 +375,13 @@ func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
 			algorithmReady: true,
 			auditReady:     true,
 			storageReady:   true,
+			fileStoreReady: true,
 			personReady:    true,
 			asyncJobsReady: true,
 			recordReady:    true,
 			snapshotReady:  true,
 			spatialReady:   true,
+			alertPushReady: true,
 		}
 	}
 
@@ -1224,4 +1228,205 @@ func TestLifecycleRuntimeStartsAutoTLS(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("expected status 204, got %d", resp.StatusCode)
 	}
+}
+
+type systemInfoLifecycleStub struct {
+	events *eventLog
+}
+
+func (s systemInfoLifecycleStub) Start(context.Context) error {
+	s.events.add("systeminfo.start")
+	return nil
+}
+
+func (s systemInfoLifecycleStub) Stop(context.Context) error {
+	s.events.add("systeminfo.stop")
+	return nil
+}
+
+type fileStoreLifecycleStub struct {
+	events *eventLog
+}
+
+func (f fileStoreLifecycleStub) Close() error {
+	f.events.add("filestore.close")
+	return nil
+}
+
+type alertPushStub struct {
+	events   *eventLog
+	startErr error
+	stopErr  error
+}
+
+func (a alertPushStub) Start(context.Context) error {
+	a.events.add("alertpush.start")
+	return a.startErr
+}
+
+func (a alertPushStub) Stop(context.Context) error {
+	a.events.add("alertpush.stop")
+	return a.stopErr
+}
+
+// TestAlertPushLifecycleOrder guards the startup and teardown dependency order of alertpush:
+// - Start runs after systemInfo, storage, and camera.InitCipher, and before algorithm.Start.
+// - Stop runs before record, snapshot, storage, fileStore, and database.
+func TestAlertPushLifecycleOrder(t *testing.T) {
+	events := &eventLog{}
+	server := &http.Server{Addr: "127.0.0.1:0", Handler: http.NotFoundHandler()}
+	runtime := &lifecycleRuntime{
+		database:   databaseStub{events: events},
+		native:     engineStub{events: events},
+		systemInfo: systemInfoLifecycleStub{events: events},
+		fileStore:  fileStoreLifecycleStub{events: events},
+		storage:    storageLifecycleStub{events: events},
+		snapshot:   snapshotLifecycleStub{events: events},
+		record:     &recordContextStub{events: events},
+		camera:     cameraStub{events: events},
+		alertPush:  alertPushStub{events: events},
+		algorithm:  algorithmStub{events: events},
+		server:     server,
+		logger:     zap.NewNop(),
+		listen: func(network, address string) (net.Listener, error) {
+			events.add("http.listen")
+			return net.Listen(network, address)
+		},
+		shutdown: func(ctx context.Context) error {
+			events.add("http.shutdown")
+			return server.Shutdown(ctx)
+		},
+	}
+
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	order := events.snapshot()
+	index := func(event string) int {
+		for i, got := range order {
+			if got == event {
+				return i
+			}
+		}
+		t.Fatalf("event %q missing from lifecycle order %v", event, order)
+		return -1
+	}
+
+	if index("systeminfo.start") > index("alertpush.start") {
+		t.Fatalf("alertpush must start after systeminfo: %v", order)
+	}
+	if index("storage.start") > index("alertpush.start") {
+		t.Fatalf("alertpush must start after storage: %v", order)
+	}
+	if index("camera.cipher") > index("alertpush.start") {
+		t.Fatalf("alertpush must start after camera.cipher: %v", order)
+	}
+	if index("alertpush.start") > index("algorithm.start") {
+		t.Fatalf("alertpush must start before algorithm: %v", order)
+	}
+
+	if index("alertpush.stop") > index("record.stop") {
+		t.Fatalf("alertpush must stop before record: %v", order)
+	}
+	if index("alertpush.stop") > index("snapshot.stop") {
+		t.Fatalf("alertpush must stop before snapshot: %v", order)
+	}
+	if index("alertpush.stop") > index("storage.stop") {
+		t.Fatalf("alertpush must stop before storage: %v", order)
+	}
+	if index("alertpush.stop") > index("filestore.close") {
+		t.Fatalf("alertpush must stop before filestore: %v", order)
+	}
+	if index("alertpush.stop") > index("database.close") {
+		t.Fatalf("alertpush must stop before database: %v", order)
+	}
+}
+
+// TestAlertPushStartFailureIsDegradedAndStillStopped verifies that a failed alertPush.Start
+// marks the host degraded without aborting boot, keeps alertPushReady=true, and still invokes
+// alertPush.Stop during both clean shutdown and startup rollback.
+func TestAlertPushStartFailureIsDegradedAndStillStopped(t *testing.T) {
+	t.Run("normal_stop", func(t *testing.T) {
+		events := &eventLog{}
+		server := &http.Server{Addr: "127.0.0.1:0", Handler: http.NotFoundHandler()}
+		runtime := &lifecycleRuntime{
+			database:  databaseStub{events: events},
+			native:    engineStub{events: events},
+			fileStore: fileStoreLifecycleStub{events: events},
+			storage:   storageLifecycleStub{events: events},
+			snapshot:  snapshotLifecycleStub{events: events},
+			record:    &recordContextStub{events: events},
+			camera:    cameraStub{events: events},
+			alertPush: alertPushStub{events: events, startErr: errors.New("signing key corrupt")},
+			server:    server,
+			logger:    zap.NewNop(),
+			listen: func(network, address string) (net.Listener, error) {
+				events.add("http.listen")
+				return net.Listen(network, address)
+			},
+			shutdown: func(ctx context.Context) error {
+				events.add("http.shutdown")
+				return server.Shutdown(ctx)
+			},
+		}
+
+		if err := runtime.Start(context.Background()); err != nil {
+			t.Fatalf("alertpush start failure must degrade, not abort boot: %v", err)
+		}
+		if !slices.Contains(runtime.degraded, "alertpush") {
+			t.Fatalf("expected alertpush in degraded list, got %v", runtime.degraded)
+		}
+		if !runtime.alertPushReady {
+			t.Fatal("alertPushReady must stay true so Stop releases partially started resources")
+		}
+
+		if err := runtime.Stop(context.Background()); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		order := events.snapshot()
+		if !slices.Contains(order, "alertpush.stop") {
+			t.Fatalf("expected alertpush.stop on shutdown, got %v", order)
+		}
+		if slices.Index(order, "alertpush.stop") > slices.Index(order, "record.stop") {
+			t.Fatalf("expected alertpush.stop before record.stop, got %v", order)
+		}
+	})
+
+	t.Run("startup_rollback", func(t *testing.T) {
+		events := &eventLog{}
+		server := &http.Server{Addr: "127.0.0.1:0", Handler: http.NotFoundHandler()}
+		runtime := &lifecycleRuntime{
+			database:  databaseStub{events: events},
+			native:    engineStub{events: events},
+			fileStore: fileStoreLifecycleStub{events: events},
+			storage:   storageLifecycleStub{events: events},
+			snapshot:  snapshotLifecycleStub{events: events},
+			record:    &recordContextStub{events: events},
+			camera:    cameraStub{events: events},
+			alertPush: alertPushStub{events: events, startErr: errors.New("signing key corrupt")},
+			server:    server,
+			logger:    zap.NewNop(),
+			listen: func(string, string) (net.Listener, error) {
+				return nil, errors.New("bind failed")
+			},
+			shutdown: server.Shutdown,
+		}
+
+		if err := runtime.Start(context.Background()); err == nil {
+			t.Fatal("expected Start to fail on listener error")
+		}
+		order := events.snapshot()
+		if !slices.Contains(order, "alertpush.stop") {
+			t.Fatalf("expected alertpush.stop during startup rollback, got %v", order)
+		}
+		for _, after := range []string{"record.stop", "snapshot.stop", "storage.stop", "filestore.close", "database.close"} {
+			if slices.Index(order, "alertpush.stop") > slices.Index(order, after) {
+				t.Fatalf("expected alertpush.stop before %s during rollback, got %v", after, order)
+			}
+		}
+	})
 }

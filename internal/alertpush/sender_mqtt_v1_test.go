@@ -91,7 +91,7 @@ func TestMQTTInlineBudget(t *testing.T) {
 				ID: "mqtt_budget", ImageMode: ImageModeBase64,
 				Broker: "tcp://127.0.0.1:1", ClientID: "budget-test", Topic: "zhulong/events",
 				PublicBaseURL: tt.publicBaseURL, Signer: signer, SignedURLTTL: time.Hour,
-				Media: media, InlineMaxBytes: tt.budget,
+				Media: media, InlineMaxBytes: tt.budget, AllowLoopback: true,
 			})
 			if err != nil {
 				t.Fatalf("NewMQTTSender: %v", err)
@@ -138,7 +138,7 @@ func TestMQTTInlineBudget(t *testing.T) {
 func TestMQTTDefaultInlineBudget(t *testing.T) {
 	sender, err := NewMQTTSender(MQTTSenderOptions{
 		Broker: "tcp://127.0.0.1:1", ClientID: "default-budget", Topic: "zhulong/events",
-		ImageMode: ImageModeBase64,
+		ImageMode: ImageModeBase64, AllowLoopback: true,
 	})
 	if err != nil {
 		t.Fatalf("NewMQTTSender: %v", err)

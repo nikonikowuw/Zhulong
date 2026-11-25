@@ -78,8 +78,8 @@ func mqttCreateRequest(name string, inlineMaxKB *int) CreateAlertDestinationRequ
 		ChannelType: ChannelTypeMQTT,
 		ImageMode:   ImageModeBase64,
 		Config: AlertDestinationConfigInfo{
-			Broker:      "tcp://broker.local:1883",
-			Topic:       "zhulong/events",
+			Broker:      stringPtr("tcp://broker.local:1883"),
+			Topic:       stringPtr("zhulong/events"),
 			InlineMaxKB: inlineMaxKB,
 		},
 	}
@@ -96,6 +96,7 @@ func TestInlineMaxKB(t *testing.T) {
 		wantKB   int
 	}{
 		{name: "absent uses default", value: nil, wantCode: http.StatusOK, wantKB: DefaultInlineMaxKB},
+		{name: "explicit zero rejected", value: intPtr(0), wantCode: http.StatusUnprocessableEntity},
 		{name: "below minimum", value: intPtr(63), wantCode: http.StatusUnprocessableEntity},
 		{name: "minimum", value: intPtr(64), wantCode: http.StatusOK, wantKB: 64},
 		{name: "maximum", value: intPtr(8192), wantCode: http.StatusOK, wantKB: 8192},
@@ -112,8 +113,8 @@ func TestInlineMaxKB(t *testing.T) {
 				t.Fatalf("status = %d (%s), want %d", code, envCode, tt.wantCode)
 			}
 			if tt.wantCode != http.StatusOK {
-				if envCode != CodeAlertDestinationConfigInvalid {
-					t.Fatalf("code = %q, want %q", envCode, CodeAlertDestinationConfigInvalid)
+				if envCode != "VALIDATION_FAILED" {
+					t.Fatalf("code = %q, want VALIDATION_FAILED", envCode)
 				}
 				return
 			}
@@ -141,10 +142,17 @@ func TestInlineMaxKB_UpdateRoundTripAndWebhookIgnores(t *testing.T) {
 	}
 
 	code, envCode, _ = putDestination(t, router, created.ID, UpdateAlertDestinationRequest{
+		Config: &AlertDestinationConfigInfo{InlineMaxKB: intPtr(0)},
+	})
+	if code != http.StatusUnprocessableEntity || envCode != "VALIDATION_FAILED" {
+		t.Fatalf("zero update status = %d code = %q, want 422 VALIDATION_FAILED", code, envCode)
+	}
+
+	code, envCode, _ = putDestination(t, router, created.ID, UpdateAlertDestinationRequest{
 		Config: &AlertDestinationConfigInfo{InlineMaxKB: intPtr(9000)},
 	})
-	if code != http.StatusUnprocessableEntity || envCode != CodeAlertDestinationConfigInvalid {
-		t.Fatalf("out-of-range update status = %d code = %q, want 422", code, envCode)
+	if code != http.StatusUnprocessableEntity || envCode != "VALIDATION_FAILED" {
+		t.Fatalf("out-of-range update status = %d code = %q, want 422 VALIDATION_FAILED", code, envCode)
 	}
 
 	code, envCode, webhook := postDestination(t, router, CreateAlertDestinationRequest{
@@ -152,7 +160,7 @@ func TestInlineMaxKB_UpdateRoundTripAndWebhookIgnores(t *testing.T) {
 		ChannelType: ChannelTypeWebhook,
 		ImageMode:   ImageModeMultipart,
 		Config: AlertDestinationConfigInfo{
-			URL:         "https://example.com/hook",
+			URL:         stringPtr("https://example.com/hook"),
 			InlineMaxKB: intPtr(1),
 		},
 	})
@@ -261,7 +269,7 @@ func TestHandlerTestEndpointSendsV1AlarmProbe(t *testing.T) {
 		bytes.NewReader(mustMarshalJSON(t, TestAlertDestinationRequest{
 			ChannelType: ChannelTypeWebhook,
 			ImageMode:   ImageModeURL,
-			Config:      AlertDestinationConfigInfo{URL: target.URL + "/events"},
+			Config:      AlertDestinationConfigInfo{URL: stringPtr(target.URL + "/events")},
 		})),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -275,7 +283,8 @@ func TestHandlerTestEndpointSendsV1AlarmProbe(t *testing.T) {
 		t.Fatalf("unmarshal probe: %v (%s)", err, gotBody)
 	}
 	probeOK := probe.SchemaVersion == SchemaVersion && probe.EventType == EventTypeAlarm &&
-		probe.Seq == 0 && probe.Alarm != nil &&
+		probe.Seq == 0 && probe.ID != "" && probe.ID != "01TESTALARM0000000000000" &&
+		probe.Alarm != nil &&
 		probe.Alarm.Type == "test_ping" &&
 		probe.Camera != nil && probe.Camera.ID == "test_cam"
 	if !probeOK {
@@ -283,6 +292,9 @@ func TestHandlerTestEndpointSendsV1AlarmProbe(t *testing.T) {
 	}
 	if gotHeaders.Get(headerZhulongEvent) != EventTypeAlarm || gotHeaders.Get(headerZhulongSchema) != "1" {
 		t.Fatalf("unexpected probe headers: %v", gotHeaders)
+	}
+	if gotHeaders.Get(headerZhulongTimestamp) == "" {
+		t.Fatalf("expected %s header on webhook probe", headerZhulongTimestamp)
 	}
 }
 
@@ -295,8 +307,8 @@ func TestMQTTUpdatePreservesCustomClientIDAndValidatesFields(t *testing.T) {
 		ChannelType: ChannelTypeMQTT,
 		ImageMode:   ImageModeBase64,
 		Config: AlertDestinationConfigInfo{
-			Broker:        "ssl://broker.local:8883",
-			Topic:         "zhulong/events",
+			Broker:        stringPtr("ssl://broker.local:8883"),
+			Topic:         stringPtr("zhulong/events"),
 			ClientID:      stringPtr("edge-custom-01"),
 			Username:      stringPtr("ops-user"),
 			TLSSkipVerify: boolPtr(true),
@@ -368,13 +380,13 @@ func TestMQTTUpdatePreservesCustomClientIDAndValidatesFields(t *testing.T) {
 		t.Fatalf("tlsSkipVerify = %v, want false", cleared.Config.TLSSkipVerify)
 	}
 
-	// 4. Invalid MQTT update fields must be rejected with 422.
+	// 4. Invalid MQTT update fields must be rejected with 422 VALIDATION_FAILED.
 	invalidQoS := uint8(3)
 	invalidUpdates := []struct {
 		name string
 		cfg  AlertDestinationConfigInfo
 	}{
-		{name: "broker with userinfo", cfg: AlertDestinationConfigInfo{Broker: "tcp://user:pass@broker.local:1883"}},
+		{name: "broker with userinfo", cfg: AlertDestinationConfigInfo{Broker: stringPtr("tcp://user:pass@broker.local:1883")}},
 		{name: "clientId > 23 chars", cfg: AlertDestinationConfigInfo{ClientID: stringPtr("client-id-longer-than-23")}},
 		{name: "keepAlive 0", cfg: AlertDestinationConfigInfo{KeepAliveSeconds: intPtr(0)}},
 		{name: "keepAlive below 5", cfg: AlertDestinationConfigInfo{KeepAliveSeconds: intPtr(4)}},
@@ -387,8 +399,8 @@ func TestMQTTUpdatePreservesCustomClientIDAndValidatesFields(t *testing.T) {
 			st, codeStr, _ := putDestination(t, router, created.ID, UpdateAlertDestinationRequest{
 				Config: &cfgCopy,
 			})
-			if st != http.StatusUnprocessableEntity || codeStr != CodeAlertDestinationConfigInvalid {
-				t.Fatalf("%s: status=%d code=%q, want 422 %s", tc.name, st, codeStr, CodeAlertDestinationConfigInvalid)
+			if st != http.StatusUnprocessableEntity || codeStr != "VALIDATION_FAILED" {
+				t.Fatalf("%s: status=%d code=%q, want 422 VALIDATION_FAILED", tc.name, st, codeStr)
 			}
 		})
 	}
@@ -398,19 +410,27 @@ func TestHandlerReservedHeadersParity(t *testing.T) {
 	router, _, cleanup := setupTestRouter(t)
 	defer cleanup()
 
-	for _, hdr := range []string{"User-Agent", "Accept", "Transfer-Encoding", "X-Zhulong-Schema"} {
+	reserved := []string{
+		"User-Agent",
+		"Accept",
+		"Transfer-Encoding",
+		"X-Zhulong-Schema",
+		"X-Zhulong-Timestamp",
+		"X-Zhulong-Signature",
+	}
+	for _, hdr := range reserved {
 		req := CreateAlertDestinationRequest{
 			Name:        "Reserved-" + hdr,
 			ChannelType: ChannelTypeWebhook,
 			ImageMode:   ImageModeMultipart,
-			Config:      AlertDestinationConfigInfo{URL: "https://example.com/hook"},
+			Config:      AlertDestinationConfigInfo{URL: stringPtr("https://example.com/hook")},
 			Secret: &AlertDestinationSecretInfo{
 				Headers: map[string]string{hdr: "bad"},
 			},
 		}
 		code, envCode, _ := postDestination(t, router, req)
-		if code != http.StatusUnprocessableEntity || envCode != CodeAlertDestinationConfigInvalid {
-			t.Fatalf("header %q: status=%d code=%q, want 422", hdr, code, envCode)
+		if code != http.StatusUnprocessableEntity || envCode != "VALIDATION_FAILED" {
+			t.Fatalf("header %q: status=%d code=%q, want 422 VALIDATION_FAILED", hdr, code, envCode)
 		}
 	}
 }
@@ -427,8 +447,8 @@ func TestHandlerMaxDestinationsLimitEnforced(t *testing.T) {
 	}
 
 	code, envCode, _ := postDestination(t, router, mqttCreateRequest("dest-limit-overflow", nil))
-	if code != http.StatusUnprocessableEntity || envCode != CodeAlertDestinationConfigInvalid {
-		t.Fatalf("33rd destination: status=%d code=%q, want 422 %s", code, envCode, CodeAlertDestinationConfigInvalid)
+	if code != http.StatusUnprocessableEntity || envCode != CodeAlertMaxDestinationsReached {
+		t.Fatalf("33rd destination: status=%d code=%q, want 422 %s", code, envCode, CodeAlertMaxDestinationsReached)
 	}
 }
 
@@ -454,8 +474,8 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 				ChannelType: ChannelTypeWebhook,
 				ImageMode:   ImageModeMultipart,
 				Config: AlertDestinationConfigInfo{
-					URL:      "https://example.com/hook",
-					AuthType: "digest",
+					URL:      stringPtr("https://example.com/hook"),
+					AuthType: stringPtr("digest"),
 				},
 			},
 		},
@@ -466,7 +486,7 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 				ChannelType: ChannelTypeWebhook,
 				ImageMode:   ImageModeMultipart,
 				Config: AlertDestinationConfigInfo{
-					URL:            "https://example.com/hook",
+					URL:            stringPtr("https://example.com/hook"),
 					TimeoutSeconds: intPtr(0),
 				},
 			},
@@ -478,7 +498,7 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 				ChannelType: ChannelTypeWebhook,
 				ImageMode:   ImageModeMultipart,
 				Config: AlertDestinationConfigInfo{
-					URL:            "https://example.com/hook",
+					URL:            stringPtr("https://example.com/hook"),
 					TimeoutSeconds: intPtr(31),
 				},
 			},
@@ -487,8 +507,8 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 	for _, tc := range createInvalid {
 		t.Run("create/"+tc.name, func(t *testing.T) {
 			code, envCode, _ := postDestination(t, router, tc.req)
-			if code != http.StatusUnprocessableEntity || envCode != CodeAlertDestinationConfigInvalid {
-				t.Fatalf("status=%d code=%q, want 422 %s", code, envCode, CodeAlertDestinationConfigInvalid)
+			if code != http.StatusUnprocessableEntity || envCode != "VALIDATION_FAILED" {
+				t.Fatalf("status=%d code=%q, want 422 VALIDATION_FAILED", code, envCode)
 			}
 		})
 	}
@@ -506,8 +526,8 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 		ChannelType: ChannelTypeWebhook,
 		ImageMode:   ImageModeMultipart,
 		Config: AlertDestinationConfigInfo{
-			URL:            target.URL + "/events",
-			AuthType:       AuthTypeBearer,
+			URL:            stringPtr(target.URL + "/events"),
+			AuthType:       stringPtr(AuthTypeBearer),
 			TimeoutSeconds: intPtr(5),
 		},
 		Secret: &AlertDestinationSecretInfo{
@@ -527,7 +547,7 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 		{name: "overlong name", req: UpdateAlertDestinationRequest{Name: stringPtr(longName)}},
 		{
 			name: "invalid authType",
-			req:  UpdateAlertDestinationRequest{Config: &AlertDestinationConfigInfo{AuthType: "oauth"}},
+			req:  UpdateAlertDestinationRequest{Config: &AlertDestinationConfigInfo{AuthType: stringPtr("oauth")}},
 		},
 		{
 			name: "timeoutSeconds 0",
@@ -541,8 +561,8 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 	for _, tc := range updateInvalid {
 		t.Run("update/"+tc.name, func(t *testing.T) {
 			st, env, _ := putDestination(t, router, created.ID, tc.req)
-			if st != http.StatusUnprocessableEntity || env != CodeAlertDestinationConfigInvalid {
-				t.Fatalf("status=%d code=%q, want 422 %s", st, env, CodeAlertDestinationConfigInvalid)
+			if st != http.StatusUnprocessableEntity || env != "VALIDATION_FAILED" {
+				t.Fatalf("status=%d code=%q, want 422 VALIDATION_FAILED", st, env)
 			}
 		})
 	}
@@ -556,7 +576,7 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 			name: "switch authType to basic without creds",
 			req: TestAlertDestinationRequest{
 				ID:     created.ID,
-				Config: AlertDestinationConfigInfo{AuthType: AuthTypeBasic},
+				Config: AlertDestinationConfigInfo{AuthType: stringPtr(AuthTypeBasic)},
 			},
 		},
 		{
@@ -572,8 +592,8 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 				ChannelType: ChannelTypeWebhook,
 				ImageMode:   ImageModeMultipart,
 				Config: AlertDestinationConfigInfo{
-					URL:      target.URL + "/events",
-					AuthType: "bogus",
+					URL:      stringPtr(target.URL + "/events"),
+					AuthType: stringPtr("bogus"),
 				},
 			},
 		},
@@ -601,7 +621,7 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 		"/api/v1/alert-destinations/test",
 		bytes.NewReader(mustMarshalJSON(t, TestAlertDestinationRequest{
 			ID:     created.ID,
-			Config: AlertDestinationConfigInfo{AuthType: AuthTypeNone},
+			Config: AlertDestinationConfigInfo{AuthType: stringPtr(AuthTypeNone)},
 		})),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -641,8 +661,8 @@ func TestHandlerDraftTestDoesNotPolluteLiveDestinationStatus(t *testing.T) {
 		ChannelType: ChannelTypeWebhook,
 		ImageMode:   ImageModeMultipart,
 		Config: AlertDestinationConfigInfo{
-			URL:            okTarget.URL + "/events",
-			AuthType:       AuthTypeNone,
+			URL:            stringPtr(okTarget.URL + "/events"),
+			AuthType:       stringPtr(AuthTypeNone),
 			TimeoutSeconds: intPtr(5),
 		},
 	})
@@ -677,8 +697,8 @@ func TestHandlerDraftTestDoesNotPolluteLiveDestinationStatus(t *testing.T) {
 			ChannelType: ChannelTypeWebhook,
 			ImageMode:   ImageModeMultipart,
 			Config: AlertDestinationConfigInfo{
-				URL:            failTarget.URL + "/events",
-				AuthType:       AuthTypeNone,
+				URL:            stringPtr(failTarget.URL + "/events"),
+				AuthType:       stringPtr(AuthTypeNone),
 				TimeoutSeconds: intPtr(5),
 			},
 		})),
@@ -721,6 +741,7 @@ func TestHandlerExistingMQTTTestValidatesClientID(t *testing.T) {
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for overlong clientId on existing MQTT /test, got %d: %s", w.Code, w.Body.String())
 	}
+	assertValidationDetail(t, w, "config.clientId", "MAX_LENGTH")
 }
 
 func TestHandlerWebhookTLSSkipVerifyRoundTrip(t *testing.T) {
@@ -737,7 +758,7 @@ func TestHandlerWebhookTLSSkipVerifyRoundTrip(t *testing.T) {
 		ChannelType: ChannelTypeWebhook,
 		ImageMode:   ImageModeMultipart,
 		Config: AlertDestinationConfigInfo{
-			URL:           tlsServer.URL + "/events",
+			URL:           stringPtr(tlsServer.URL + "/events"),
 			TLSSkipVerify: boolPtr(true),
 		},
 	})

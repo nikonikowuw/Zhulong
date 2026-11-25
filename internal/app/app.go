@@ -1064,7 +1064,7 @@ var apiTokenModule = fx.Module("apitoken",
 	fx.Provide(provideAPIToken),
 )
 
-// --- OpenAPI Module ---
+// --- Shared Status Snapshot Module ---
 
 type statusSnapshotParams struct {
 	fx.In
@@ -1098,6 +1098,12 @@ func provideStatusSnapshotAdapter(p statusSnapshotParams) *statusSnapshotAdapter
 	}
 }
 
+var statusSnapshotModule = fx.Module("status-snapshot",
+	fx.Provide(provideStatusSnapshotAdapter),
+)
+
+// --- OpenAPI Module ---
+
 type openAPIOut struct {
 	fx.Out
 
@@ -1125,7 +1131,7 @@ func provideOpenAPI(p openAPIParams) openAPIOut {
 }
 
 var openAPIModule = fx.Module("openapi",
-	fx.Provide(provideStatusSnapshotAdapter, provideOpenAPI),
+	fx.Provide(provideOpenAPI),
 )
 
 // --- AlertPush Module ---
@@ -1278,6 +1284,7 @@ var Module = fx.Options(
 	recordModule,
 	spatialModule,
 	apiTokenModule,
+	statusSnapshotModule,
 	openAPIModule,
 	alertPushModule,
 	httpModule,

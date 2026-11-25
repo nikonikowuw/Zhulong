@@ -67,6 +67,7 @@ func TestStoreCRUD(t *testing.T) {
 		Name:             "Default Webhook",
 		ChannelType:      ChannelTypeWebhook,
 		Enabled:          true,
+		EventsEnabled:    true,
 		ImageMode:        ImageModeURL,
 		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
 		SecretCiphertext: secData,
@@ -84,11 +85,12 @@ func TestStoreCRUD(t *testing.T) {
 
 	// 4. Duplicate name fails
 	dup := &AlertDestination{
-		ID:          "01J8Z000000000000000000002",
-		Name:        "Default Webhook",
-		ChannelType: ChannelTypeWebhook,
-		Enabled:     true,
-		ImageMode:   ImageModeURL,
+		ID:            "01J8Z000000000000000000002",
+		Name:          "Default Webhook",
+		ChannelType:   ChannelTypeWebhook,
+		Enabled:       true,
+		EventsEnabled: true,
+		ImageMode:     ImageModeURL,
 	}
 	if err := store.Create(ctx, dup); !errors.Is(err, ErrDestinationNameConflict) {
 		t.Fatalf("expected ErrDestinationNameConflict, got %v", err)
@@ -265,12 +267,13 @@ func TestStoreMQTTClientIDUnique(t *testing.T) {
 	clientID := "z01J8Z00000000000000000"
 	cID := clientID
 	dest1 := &AlertDestination{
-		ID:           "01J8Z000000000000000000010",
-		Name:         "MQTT 1",
-		ChannelType:  ChannelTypeMQTT,
-		Enabled:      true,
-		ImageMode:    ImageModeBase64,
-		MQTTClientID: &cID,
+		ID:            "01J8Z000000000000000000010",
+		Name:          "MQTT 1",
+		ChannelType:   ChannelTypeMQTT,
+		Enabled:       true,
+		EventsEnabled: true,
+		ImageMode:     ImageModeBase64,
+		MQTTClientID:  &cID,
 	}
 	if err := store.Create(ctx, dest1); err != nil {
 		t.Fatalf("Create dest1 failed: %v", err)
@@ -289,14 +292,69 @@ func TestStoreMQTTClientIDUnique(t *testing.T) {
 
 	// Creating another with same MQTT client ID fails
 	dest2 := &AlertDestination{
-		ID:           "01J8Z000000000000000000011",
-		Name:         "MQTT 2",
-		ChannelType:  ChannelTypeMQTT,
-		Enabled:      true,
-		ImageMode:    ImageModeBase64,
-		MQTTClientID: &cID,
+		ID:            "01J8Z000000000000000000011",
+		Name:          "MQTT 2",
+		ChannelType:   ChannelTypeMQTT,
+		Enabled:       true,
+		EventsEnabled: true,
+		ImageMode:     ImageModeBase64,
+		MQTTClientID:  &cID,
 	}
 	if err := store.Create(ctx, dest2); !errors.Is(err, ErrClientIDConflict) {
 		t.Fatalf("expected ErrClientIDConflict, got %v", err)
+	}
+}
+
+func TestStoreRejectsBothCapabilitiesFalseAndKeepsChannelTypeImmutable(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Both capabilities false must be rejected explicitly (never silently flipped to true).
+	invalid := &AlertDestination{
+		ID:               "01J8Z000000000000000000050",
+		Name:             "No Capabilities",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          true,
+		EventsEnabled:    false,
+		HeartbeatEnabled: false,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:       `{}`,
+	}
+	if err := store.Create(ctx, invalid); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("expected ErrInvalidConfig when both capabilities are false, got %v", err)
+	}
+
+	// Store.Update must not allow mutating channel_type even if the caller alters the struct field.
+	validID := "01J8Z000000000000000000051"
+	valid := &AlertDestination{
+		ID:               validID,
+		Name:             "Immutable Channel",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          true,
+		EventsEnabled:    true,
+		HeartbeatEnabled: false,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:       `{}`,
+	}
+	if err := store.Create(ctx, valid); err != nil {
+		t.Fatalf("Create valid failed: %v", err)
+	}
+	valid.ChannelType = ChannelTypeMQTT
+	valid.Name = "Renamed Immutable"
+	if err := store.Update(ctx, valid); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	reloaded, err := store.GetByID(ctx, validID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if reloaded.ChannelType != ChannelTypeWebhook {
+		t.Fatalf("channel_type mutated to %q, want %q", reloaded.ChannelType, ChannelTypeWebhook)
+	}
+	if reloaded.Name != "Renamed Immutable" {
+		t.Fatalf("name = %q, want Renamed Immutable", reloaded.Name)
 	}
 }

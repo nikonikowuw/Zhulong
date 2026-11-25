@@ -20,6 +20,7 @@ interface ChannelTypeCardsProps {
   setValue: UseFormSetValue<AlertDestinationFormValues>
   isEdit: boolean
   disabled?: boolean
+  onChannelTypeChange?: (nextChannel: ChannelType) => void
   onResetTestResult?: () => void
 }
 
@@ -28,6 +29,7 @@ export function ChannelTypeCards({
   setValue,
   isEdit,
   disabled = false,
+  onChannelTypeChange,
   onResetTestResult,
 }: ChannelTypeCardsProps) {
   const { t } = useTranslation('alertPush')
@@ -51,6 +53,7 @@ export function ChannelTypeCards({
     } else if (nextChannel === 'mqtt' && imageMode === 'multipart') {
       setValue('imageMode', 'base64')
     }
+    onChannelTypeChange?.(nextChannel)
     onResetTestResult?.()
   }
 

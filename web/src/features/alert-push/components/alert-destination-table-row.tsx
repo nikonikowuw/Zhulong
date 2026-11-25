@@ -1,6 +1,7 @@
 import React from 'react'
 import {
   BellRing,
+  CheckCircle2,
   Clock,
   Globe,
   HeartPulse,
@@ -17,6 +18,7 @@ import { categoryTextClass } from '@/lib/category-palette'
 import {
   statusDotClass,
   statusLevelClass,
+  statusTextClass,
   type StatusLevel,
 } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
@@ -40,6 +42,7 @@ import type { AlertDestination, DestinationStatus } from '../types'
 
 interface DestinationTableRowProps {
   dest: AlertDestination
+  isToggling?: boolean
   onEdit: (dest: AlertDestination) => void
   onDelete: (dest: AlertDestination) => void
   onToggle: (dest: AlertDestination, enabled: boolean) => void
@@ -93,6 +96,21 @@ function formatSafeDateTime(
   if (!dateStr) return '-'
   const d = new Date(dateStr)
   return isNaN(d.getTime()) ? '-' : getDateTimeFormatter(language).format(d)
+}
+
+/**
+ * 脱敏展示 Webhook URL：隐藏可能内嵌访问令牌的 query 参数，避免列表页旁观泄露
+ */
+function maskWebhookUrl(rawUrl: string | undefined): string {
+  if (!rawUrl) return ''
+  try {
+    const parsed = new URL(rawUrl)
+    if (!parsed.search) return rawUrl
+    return `${parsed.origin}${parsed.pathname}?...${parsed.hash}`
+  } catch {
+    const queryIndex = rawUrl.indexOf('?')
+    return queryIndex >= 0 ? `${rawUrl.slice(0, queryIndex)}?...` : rawUrl
+  }
 }
 
 const DESTINATION_STATUS_LEVEL: Record<
@@ -236,6 +254,7 @@ export function DestinationImageModeBadge({ mode }: { mode: string }) {
 export const AlertDestinationTableRow = React.memo(
   function AlertDestinationTableRow({
     dest,
+    isToggling = false,
     onEdit,
     onDelete,
     onToggle,
@@ -243,6 +262,10 @@ export const AlertDestinationTableRow = React.memo(
   }: DestinationTableRowProps) {
     const { t, i18n } = useTranslation('alertPush')
     const hbInterval = dest.config.heartbeatIntervalSeconds ?? 60
+    const endpointSubtitle =
+      dest.channelType === 'webhook'
+        ? maskWebhookUrl(dest.config.url)
+        : dest.config.broker
 
     return (
       <TableRow>
@@ -288,9 +311,7 @@ export const AlertDestinationTableRow = React.memo(
               ) : null}
             </div>
             <span className='max-w-[240px] truncate font-mono text-xs text-muted-foreground'>
-              {dest.channelType === 'webhook'
-                ? dest.config.url
-                : dest.config.broker}
+              {endpointSubtitle}
             </span>
           </div>
         </TableCell>
@@ -317,6 +338,7 @@ export const AlertDestinationTableRow = React.memo(
         <TableCell>
           <Switch
             checked={dest.enabled}
+            disabled={isToggling}
             onCheckedChange={(checked) => onToggle(dest, checked)}
             aria-label={dest.name}
           />
@@ -328,50 +350,103 @@ export const AlertDestinationTableRow = React.memo(
 
         <TableCell>
           {dest.eventsEnabled ? (
-            <div className='flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground'>
-              <div className='flex items-center gap-1'>
-                <Layers className='size-3.5' />
-                <span>
-                  {dest.status.queueLength} / {dest.status.queueCapacity}
-                </span>
+            <div className='flex flex-col gap-1 text-xs text-muted-foreground'>
+              <div className='flex flex-wrap items-center gap-1.5'>
+                <div className='flex items-center gap-1'>
+                  <Layers className='size-3.5' />
+                  <span>
+                    {dest.status.queueLength} / {dest.status.queueCapacity}
+                  </span>
+                </div>
+                {dest.status.dropped > 0 ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Badge
+                        variant='outline'
+                        className={cn(
+                          'h-5 cursor-help px-1.5 text-[10px] font-normal',
+                          statusLevelClass('warning')
+                        )}
+                      >
+                        {t('fields.droppedBadge', {
+                          count: dest.status.dropped,
+                        })}
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className='text-xs'>
+                        {t('fields.droppedTooltip', {
+                          count: dest.status.dropped,
+                        })}
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                ) : null}
               </div>
-              {dest.status.dropped > 0 ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Badge
-                      variant='outline'
-                      className={cn(
-                        'h-5 cursor-help px-1.5 text-[10px] font-normal',
-                        statusLevelClass('warning')
-                      )}
-                    >
-                      {t('fields.droppedBadge', {
-                        count: dest.status.dropped,
-                      })}
-                    </Badge>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className='text-xs'>
-                      {t('fields.droppedTooltip', {
-                        count: dest.status.dropped,
-                      })}
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              ) : null}
+              <span className='text-[11px] text-muted-foreground/80'>
+                {t('fields.totalDispatchedShort', {
+                  count: dest.status.totalDispatched,
+                })}
+              </span>
             </div>
           ) : (
-            <span className='text-xs text-muted-foreground'>—</span>
+            <div className='flex flex-col gap-0.5 text-xs text-muted-foreground'>
+              <span>—</span>
+              {dest.status.totalDispatched > 0 ? (
+                <span className='text-[11px] text-muted-foreground/80'>
+                  {t('fields.totalDispatchedShort', {
+                    count: dest.status.totalDispatched,
+                  })}
+                </span>
+              ) : null}
+            </div>
           )}
         </TableCell>
 
         <TableCell>
-          <div className='flex items-center gap-1 text-xs text-muted-foreground'>
-            <Clock className='size-3.5' />
-            <span>
-              {formatSafeTime(dest.status.lastAttemptAt, i18n.language)}
-            </span>
-          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className='flex cursor-help flex-col gap-0.5 text-xs text-muted-foreground'>
+                <div className='flex items-center gap-1'>
+                  <Clock className='size-3.5 shrink-0' />
+                  <span>
+                    {formatSafeTime(dest.status.lastAttemptAt, i18n.language)}
+                  </span>
+                </div>
+                {dest.status.lastSuccessAt ? (
+                  <div className='flex items-center gap-1 text-[11px] text-muted-foreground/85'>
+                    <CheckCircle2
+                      className={cn(
+                        'size-3 shrink-0',
+                        statusTextClass('active')
+                      )}
+                    />
+                    <span>
+                      {t('fields.lastSuccessShort', {
+                        time: formatSafeTime(
+                          dest.status.lastSuccessAt,
+                          i18n.language
+                        ),
+                      })}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent className='space-y-0.5 text-xs'>
+              <p>
+                {t('fields.lastAttempt')}:{' '}
+                {formatSafeDateTime(dest.status.lastAttemptAt, i18n.language)}
+              </p>
+              <p>
+                {t('fields.lastSuccess')}:{' '}
+                {formatSafeDateTime(dest.status.lastSuccessAt, i18n.language)}
+              </p>
+              <p>
+                {t('fields.totalDispatched')}: {dest.status.totalDispatched}
+              </p>
+            </TooltipContent>
+          </Tooltip>
         </TableCell>
 
         <TableCell className='text-end'>

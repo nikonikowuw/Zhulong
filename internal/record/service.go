@@ -1034,7 +1034,9 @@ func (s *Service) dispatchOrEnqueueEvent(
 	s.pendingMu.Lock()
 	if !s.accepting || len(s.pendingAlarms) >= maxPendingAlarms {
 		s.pendingMu.Unlock()
-		sink.Enqueue(ev.job)
+		if !sink.Enqueue(ev.job) {
+			s.clearJobPath(ctx, ev.job)
+		}
 		listener.OnAlarm(ctx, ev.event.withoutEvidence())
 		return
 	}

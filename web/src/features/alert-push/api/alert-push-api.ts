@@ -107,6 +107,7 @@ const baseDestinationSchema = {
   imageMode: z.enum(['url', 'multipart', 'base64']),
   filter: destinationFilterSchema,
   secretSet: z.boolean().default(false),
+  signingSecretSet: z.boolean().default(false),
   headerNames: z.array(z.string()).optional(),
   status: destinationStatusSchema,
 }
@@ -179,7 +180,10 @@ export const alertPushApi = {
   },
 
   async delete(id: string): Promise<void> {
-    await apiClient.delete<unknown>(`/alert-destinations/${id}`)
+    const resp = await apiClient.delete<unknown>(`/alert-destinations/${id}`)
+    z.object({
+      code: z.literal('OK'),
+    }).parse(resp.data)
   },
 
   async enable(id: string): Promise<AlertDestination> {

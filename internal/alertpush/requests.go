@@ -15,6 +15,7 @@ type CreateAlertDestinationRequest struct {
 // UpdateAlertDestinationRequest payload for updating an alert destination.
 type UpdateAlertDestinationRequest struct {
 	Name             *string                     `json:"name,omitempty"`
+	ChannelType      *string                     `json:"channelType,omitempty"`
 	EventsEnabled    *bool                       `json:"eventsEnabled,omitempty"`
 	HeartbeatEnabled *bool                       `json:"heartbeatEnabled,omitempty"`
 	ImageMode        *string                     `json:"imageMode,omitempty"`
@@ -36,8 +37,9 @@ type TestAlertDestinationRequest struct {
 
 // AlertDestinationSecretInfo holds sensitive inbound credentials. Never returned in responses.
 type AlertDestinationSecretInfo struct {
-	Token    *string           `json:"token,omitempty"`
-	Username *string           `json:"username,omitempty"`
-	Password *string           `json:"password,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
+	Token         *string           `json:"token,omitempty"`
+	Username      *string           `json:"username,omitempty"`
+	Password      *string           `json:"password,omitempty"`
+	SigningSecret *string           `json:"signingSecret,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
 }
