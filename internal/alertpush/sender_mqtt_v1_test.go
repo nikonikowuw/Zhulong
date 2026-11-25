@@ -48,7 +48,7 @@ func TestMQTTInlineBudget(t *testing.T) {
 			files:         map[string][]byte{scenePath: scene4K, cropPath: crop},
 			want: []want{
 				{role: ImageRoleScene, inline: false, url: true, sizeBytes: int64(len(scene4K))},
-				{role: ImageRoleObject, inline: true, url: true, sizeBytes: int64(len(crop))},
+				{role: ImageRoleObject, inline: true, url: false, sizeBytes: int64(len(crop))},
 			},
 		},
 		{
@@ -101,22 +101,27 @@ func TestMQTTInlineBudget(t *testing.T) {
 			if media.opens.Load() != media.closes.Load() {
 				t.Fatalf("opens=%d closes=%d", media.opens.Load(), media.closes.Load())
 			}
-			if len(images) != len(tt.want) {
-				t.Fatalf("images = %+v, want %d entries", images, len(tt.want))
+			gotRoles := imageRolesPresent(images)
+			if len(gotRoles) != len(tt.want) {
+				t.Fatalf("images = %+v (roles %v), want %d entries", images, gotRoles, len(tt.want))
 			}
 
+			byRole := map[string]*ImageInfo{
+				ImageRoleScene:     images.Scene,
+				ImageRoleObject:    images.Object,
+				ImageRoleReference: images.Reference,
+			}
 			var inlined int64
-			for i, w := range tt.want {
-				img := images[i]
-				if img.Role != w.role || (img.Base64 != nil) != w.inline || (img.URL != nil) != w.url {
-					t.Fatalf("image[%d] = role %s base64=%v url=%v, want %+v",
-						i, img.Role, img.Base64 != nil, img.URL != nil, w)
+			for _, w := range tt.want {
+				img := byRole[w.role]
+				if img == nil || (img.Base64 != "") != w.inline || (img.URL != "") != w.url {
+					t.Fatalf("role %s = %+v, want %+v", w.role, img, w)
 				}
 				if img.SizeBytes == nil || *img.SizeBytes != w.sizeBytes {
-					t.Fatalf("image[%d] size = %v, want %d", i, img.SizeBytes, w.sizeBytes)
+					t.Fatalf("role %s size = %v, want %d", w.role, img.SizeBytes, w.sizeBytes)
 				}
-				if img.Base64 != nil {
-					raw, err := base64.StdEncoding.DecodeString(*img.Base64)
+				if img.Base64 != "" {
+					raw, err := base64.StdEncoding.DecodeString(img.Base64)
 					if err != nil {
 						t.Fatalf("decode: %v", err)
 					}
@@ -144,17 +149,22 @@ func TestMQTTDefaultInlineBudget(t *testing.T) {
 }
 
 func TestMQTTWillPayloadBytes(t *testing.T) {
-	will := buildOfflineEnvelope(OfflineReasonConnectionLost, "box-lwt", nil, nil)
+	will := buildOfflinePayload(OfflineReasonConnectionLost, "box-lwt", nil, nil)
 	raw, err := json.Marshal(will)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	for _, fragment := range []string{
-		`"schema_version":1`, `"event_type":"offline"`, `"seq":null`, `"sent_at":null`,
-		`"offline":{"reason":"connection_lost"}`, `"device_id":"box-lwt"`,
+		`"schema_version":1`, `"event_type":"offline"`,
+		`"reason":"connection_lost"`, `"device_id":"box-lwt"`,
 	} {
 		if !strings.Contains(string(raw), fragment) {
 			t.Fatalf("will payload %s missing %s", raw, fragment)
+		}
+	}
+	for _, absent := range []string{`"seq"`, `"sent_at"`, `"images"`, `"source"`} {
+		if strings.Contains(string(raw), absent) {
+			t.Fatalf("will payload %s must omit %s", raw, absent)
 		}
 	}
 }

@@ -275,9 +275,9 @@ func TestHandlerTestEndpointSendsV1AlarmProbe(t *testing.T) {
 		t.Fatalf("unmarshal probe: %v (%s)", err, gotBody)
 	}
 	probeOK := probe.SchemaVersion == SchemaVersion && probe.EventType == EventTypeAlarm &&
-		probe.Seq != nil && *probe.Seq == 0 && probe.Alarm != nil &&
-		probe.Alarm.AlarmType != nil && *probe.Alarm.AlarmType == "test_ping" &&
-		probe.Source != nil && probe.Source.Camera.ID == "test_cam"
+		probe.Seq == 0 && probe.Alarm != nil &&
+		probe.Alarm.Type == "test_ping" &&
+		probe.Camera != nil && probe.Camera.ID == "test_cam"
 	if !probeOK {
 		t.Fatalf("unexpected probe payload: %s", gotBody)
 	}

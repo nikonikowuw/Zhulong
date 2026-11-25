@@ -432,11 +432,11 @@ func TestHandlerTestEndpointHeartbeatOnlySendsHeartbeat(t *testing.T) {
 		t.Fatalf("expected 200 OK on test endpoint, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var hb EventPayload
+	var hb HeartbeatPayload
 	if err := json.Unmarshal(gotBody, &hb); err != nil {
 		t.Fatalf("unmarshal test heartbeat payload: %v", err)
 	}
-	if hb.EventType != EventTypeHeartbeat || hb.Seq == nil || *hb.Seq != 0 || hb.Heartbeat == nil {
+	if hb.EventType != EventTypeHeartbeat || hb.Seq != 0 || hb.Status == "" {
 		t.Fatalf("expected test endpoint to send event_type=heartbeat seq=0, got %+v", hb)
 	}
 

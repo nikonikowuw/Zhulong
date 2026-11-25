@@ -145,7 +145,7 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 	var willArmed bool
 	if opts.HeartbeatEnabled && opts.LWTEnabled {
 		willDeviceID = resolveDeviceID(opts.Identity)
-		willPayload := buildOfflineEnvelope(
+		willPayload := buildOfflinePayload(
 			OfflineReasonConnectionLost,
 			willDeviceID,
 			nil,
@@ -335,7 +335,7 @@ func (s *MQTTSender) publishGracefulOfflineLocked() {
 		seq = &next
 	}
 	now := time.Now()
-	offline := buildOfflineEnvelope(
+	offline := buildOfflinePayload(
 		OfflineReasonGracefulShutdown,
 		resolveDeviceID(s.opts.Identity),
 		seq,
@@ -388,7 +388,7 @@ func (s *MQTTSender) Send(ctx context.Context, d Delivery) error {
 		800*time.Millisecond + time.Duration(rand.IntN(100))*time.Millisecond,
 	}
 
-	var images []ImageInfo
+	var images *EventImages
 	var imagesReady bool
 
 	var lastErr error
@@ -445,7 +445,7 @@ func (s *MQTTSender) SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, 
 		return err
 	}
 
-	payload := buildHeartbeatEnvelope(
+	payload := buildHeartbeatPayload(
 		snap,
 		resolveDeviceID(s.opts.Identity),
 		seq,
@@ -459,7 +459,7 @@ func (s *MQTTSender) SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, 
 	return s.publishBytes(ctx, s.statusTopic(), data)
 }
 
-func (s *MQTTSender) prepareImages(ctx context.Context, ev record.AlarmEvent) []ImageInfo {
+func (s *MQTTSender) prepareImages(ctx context.Context, ev record.AlarmEvent) *EventImages {
 	switch s.opts.ImageMode {
 	case ImageModeBase64:
 		return s.inlineImages(ctx, ev)
@@ -567,11 +567,11 @@ func (s *MQTTSender) inlineBudget() int64 {
 }
 
 // inlineImages implements the base64 image mode. Images claim the raw-byte budget in
-// inlinePriority order; an image that does not fit falls back to a URL when one can be
-// minted and is omitted (with a warning) otherwise.
-func (s *MQTTSender) inlineImages(ctx context.Context, ev record.AlarmEvent) []ImageInfo {
+// inlinePriority order (object -> reference -> scene); an image that fits is inlined as
+// base64, while an image that does not fit falls back to a URL when available or is omitted.
+func (s *MQTTSender) inlineImages(ctx context.Context, ev record.AlarmEvent) *EventImages {
 	candidates := imageCandidates(ev)
-	byRole := make(map[string]ImageInfo, len(candidates))
+	images := &EventImages{}
 	remaining := s.inlineBudget()
 	params := s.imageURLParams()
 
@@ -581,7 +581,20 @@ func (s *MQTTSender) inlineImages(ctx context.Context, ev record.AlarmEvent) []I
 			continue
 		}
 		c := candidates[idx]
-		info := newImageInfo(c.role, c.relPath)
+		info := newImageInfo(c.relPath)
+
+		data, size, err := s.readWithinBudget(ctx, c.relPath, remaining)
+		if size >= 0 {
+			info.SizeBytes = &size
+		}
+		if err == nil {
+			info.Base64 = base64.StdEncoding.EncodeToString(data)
+			remaining -= int64(len(data))
+			images.set(c.role, info)
+			continue
+		}
+
+		// Exceeded budget or unreadable locally: fall back to a signed/presigned URL.
 		signed, ok := mintImageURL(
 			ctx,
 			params,
@@ -589,37 +602,22 @@ func (s *MQTTSender) inlineImages(ctx context.Context, ev record.AlarmEvent) []I
 			false,
 		)
 		if ok {
-			info.URL = &signed.url
-			info.URLExpiresAt = &signed.expiresAt
-		}
-
-		data, size, err := s.readWithinBudget(ctx, c.relPath, remaining)
-		if size >= 0 {
-			info.SizeBytes = &size
-		}
-		if err == nil {
-			encoded := base64.StdEncoding.EncodeToString(data)
-			info.Base64 = &encoded
-			remaining -= int64(len(data))
-		}
-
-		if info.Base64 == nil && info.URL == nil {
-			s.logger.Warn("image omitted from mqtt payload: exceeds inline budget and no url available",
-				zap.String("role", c.role),
-				zap.Int64("size_bytes", size),
-				zap.Int64("remaining_budget_bytes", remaining),
-				zap.Error(err),
-			)
+			info.URL = signed.url
+			info.ExpiresAt = signed.expiresAt
+			images.set(c.role, info)
 			continue
 		}
-		byRole[c.role] = info
+
+		s.logger.Warn("image omitted from mqtt payload: exceeds inline budget and no url available",
+			zap.String("role", c.role),
+			zap.Int64("size_bytes", size),
+			zap.Int64("remaining_budget_bytes", remaining),
+			zap.Error(err),
+		)
 	}
 
-	images := make([]ImageInfo, 0, len(byRole))
-	for _, c := range candidates {
-		if info, ok := byRole[c.role]; ok {
-			images = append(images, info)
-		}
+	if images.Empty() {
+		return nil
 	}
 	return images
 }

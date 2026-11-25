@@ -468,9 +468,8 @@ func TestDispatcherMQTTHotReloadNoSessionKickOrFalseOffline(t *testing.T) {
 		t.Fatalf("Dispatcher.Stop: %v", err)
 	}
 	offline := waitStatusMsg("shutdown offline")
-	offlineInfo, _ := offline["offline"].(map[string]any)
 	isGracefulOffline := offline["event_type"] == EventTypeOffline &&
-		offlineInfo != nil && offlineInfo["reason"] == OfflineReasonGracefulShutdown
+		offline["reason"] == OfflineReasonGracefulShutdown
 	if !isGracefulOffline {
 		t.Fatalf("expected graceful_shutdown offline on Stop, got %+v", offline)
 	}

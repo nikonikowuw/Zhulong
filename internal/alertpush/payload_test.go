@@ -13,11 +13,6 @@ import (
 
 var payloadTimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`)
 
-var envelopeKeys = []string{
-	"schema_version", "id", "seq", "event_type", "device_id",
-	"source", "captured_at", "sent_at", "images",
-}
-
 func TestExternalEventType(t *testing.T) {
 	tests := []struct {
 		in   record.EventType
@@ -70,44 +65,34 @@ func decodeKeys(t *testing.T, v any) map[string]json.RawMessage {
 	return out
 }
 
-func assertExactKeys(t *testing.T, got map[string]json.RawMessage, subObject string) {
+func assertKeysEqual(t *testing.T, got map[string]json.RawMessage, want ...string) {
 	t.Helper()
-	want := append(slices.Clone(envelopeKeys), subObject)
-	slices.Sort(want)
+	wantSorted := slices.Clone(want)
+	slices.Sort(wantSorted)
 	keys := make([]string, 0, len(got))
 	for k := range got {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	if !slices.Equal(keys, want) {
-		t.Fatalf("payload keys = %v, want %v", keys, want)
-	}
-}
-
-func assertNull(t *testing.T, obj map[string]json.RawMessage, key string) {
-	t.Helper()
-	if string(obj[key]) != "null" {
-		t.Fatalf("%s = %s, want null", key, obj[key])
+	if !slices.Equal(keys, wantSorted) {
+		t.Fatalf("payload keys = %v, want %v", keys, wantSorted)
 	}
 }
 
 func TestBuildEventPayload(t *testing.T) {
 	captured := time.Date(2026, 11, 24, 3, 22, 46, 123000000, time.UTC)
 	sentAt := captured.Add(750 * time.Millisecond)
-	cameraName := "东门入口"
-	algoName := "安全帽检测"
-	algoVersion := "1.1.0"
 	resolved := SourceInfo{
-		Camera:    &CameraSourceInfo{ID: "ignored", Name: &cameraName},
-		Algorithm: &AlgorithmSourceInfo{ID: "ignored", Name: &algoName, Version: &algoVersion},
+		Camera:    &CameraSourceInfo{ID: "ignored", Name: "东门入口"},
+		Algorithm: &AlgorithmSourceInfo{ID: "ignored", Name: "安全帽检测", Version: "1.1.0"},
 	}
 
 	tests := []struct {
-		name      string
-		delivery  Delivery
-		deviceID  string
-		subObject string
-		check     func(t *testing.T, p EventPayload, obj map[string]json.RawMessage)
+		name     string
+		delivery Delivery
+		deviceID string
+		wantKeys []string
+		check    func(t *testing.T, p EventPayload, obj map[string]json.RawMessage)
 	}{
 		{
 			name: "alarm with nested data and resolved source",
@@ -123,28 +108,28 @@ func TestBuildEventPayload(t *testing.T) {
 					},
 				},
 			},
-			deviceID:  "site-a",
-			subObject: "alarm",
+			deviceID: "site-a",
+			wantKeys: []string{
+				"schema_version", "id", "seq", "event_type", "device_id",
+				"camera", "algorithm", "captured_at", "sent_at", "alarm",
+			},
 			check: func(t *testing.T, p EventPayload, obj map[string]json.RawMessage) {
-				if p.SchemaVersion != 1 || p.ID != "01ALARM" || *p.Seq != 7 || p.EventType != "alarm" {
+				if p.SchemaVersion != 1 || p.ID != "01ALARM" || p.Seq != 7 || p.EventType != "alarm" {
 					t.Fatalf("envelope = %+v", p)
 				}
-				if *p.DeviceID != "site-a" || *p.CapturedAt != "2026-11-24T03:22:46.123Z" ||
-					*p.SentAt != "2026-11-24T03:22:46.873Z" {
-					t.Fatalf("envelope strings = %v %v %v", *p.DeviceID, *p.CapturedAt, *p.SentAt)
+				if p.DeviceID != "site-a" || p.CapturedAt != "2026-11-24T03:22:46.123Z" ||
+					p.SentAt != "2026-11-24T03:22:46.873Z" {
+					t.Fatalf("envelope strings = %q %q %q", p.DeviceID, p.CapturedAt, p.SentAt)
 				}
-				if p.Source.Camera.ID != "cam_1" || *p.Source.Camera.Name != cameraName {
-					t.Fatalf("camera = %+v", p.Source.Camera)
+				if p.Camera == nil || p.Camera.ID != "cam_1" || p.Camera.Name != "东门入口" {
+					t.Fatalf("camera = %+v", p.Camera)
 				}
-				if p.Source.Algorithm.ID != "ppe_helmet" || *p.Source.Algorithm.Version != "1.1.0" {
-					t.Fatalf("algorithm = %+v", p.Source.Algorithm)
+				if p.Algorithm == nil || p.Algorithm.ID != "ppe_helmet" || p.Algorithm.Version != "1.1.0" {
+					t.Fatalf("algorithm = %+v", p.Algorithm)
 				}
-				if *p.Alarm.AlarmType != "no_helmet" || *p.Alarm.Box != [4]float64{0.1, 0.2, 0.3, 0.4} ||
+				if p.Alarm.Type != "no_helmet" || *p.Alarm.Box != [4]float64{0.1, 0.2, 0.3, 0.4} ||
 					p.Alarm.Attributes["zone"] != "a" {
 					t.Fatalf("alarm = %+v", p.Alarm)
-				}
-				if string(obj["images"]) != "[]" {
-					t.Fatalf("images = %s, want []", obj["images"])
 				}
 				alarm := map[string]json.RawMessage{}
 				if err := json.Unmarshal(obj["alarm"], &alarm); err != nil {
@@ -156,20 +141,27 @@ func TestBuildEventPayload(t *testing.T) {
 			},
 		},
 		{
-			name: "legacy flat alarm with zero box and blank device",
+			name: "legacy flat alarm omits blank device, zero box, empty attributes, and missing algorithm",
 			delivery: Delivery{Event: record.AlarmEvent{
 				ID: "01LEGACY", CameraID: "cam_2", CapturedAt: captured,
 				AlarmType: "intrusion", Score: 0.5,
 			}},
-			subObject: "alarm",
+			wantKeys: []string{
+				"schema_version", "id", "seq", "event_type",
+				"camera", "captured_at", "sent_at", "alarm",
+			},
 			check: func(t *testing.T, p EventPayload, obj map[string]json.RawMessage) {
-				assertNull(t, obj, "device_id")
-				if *p.Alarm.AlarmType != "intrusion" || p.Alarm.Box != nil || p.Alarm.Attributes == nil {
+				if p.Alarm.Type != "intrusion" || p.Alarm.Box != nil || p.Alarm.Attributes != nil {
 					t.Fatalf("alarm = %+v", p.Alarm)
 				}
-				if p.Source.Camera.Name != nil || p.Source.Algorithm != nil {
-					t.Fatalf("source = %+v, want unresolved camera and null algorithm", p.Source)
+				if p.Camera == nil || p.Camera.ID != "cam_2" || p.Camera.Name != "" || p.Algorithm != nil {
+					t.Fatalf("camera=%+v algorithm=%+v", p.Camera, p.Algorithm)
 				}
+				alarm := map[string]json.RawMessage{}
+				if err := json.Unmarshal(obj["alarm"], &alarm); err != nil {
+					t.Fatal(err)
+				}
+				assertKeysEqual(t, alarm, "type", "score")
 			},
 		},
 		{
@@ -182,35 +174,40 @@ func TestBuildEventPayload(t *testing.T) {
 					Box: [4]float64{0.3, 0.2, 0.4, 0.35},
 				},
 			}},
-			subObject: "face",
+			wantKeys: []string{
+				"schema_version", "id", "seq", "event_type",
+				"camera", "algorithm", "captured_at", "sent_at", "face",
+			},
 			check: func(t *testing.T, p EventPayload, _ map[string]json.RawMessage) {
-				if p.EventType != "face" || *p.Face.Person.ID != "EMP_10086" || *p.Face.Person.Name != "张三" ||
-					*p.Face.Similarity != 0.94 {
+				if p.EventType != "face" || p.Face.Person == nil ||
+					p.Face.Person.ID != "EMP_10086" || p.Face.Person.Name != "张三" ||
+					p.Face.Similarity == nil || *p.Face.Similarity != 0.94 {
 					t.Fatalf("face = %+v", p.Face)
 				}
-				if p.Source.Algorithm == nil || p.Source.Algorithm.Name != nil {
-					t.Fatalf("algorithm = %+v, want id with null name", p.Source.Algorithm)
+				if p.Algorithm == nil || p.Algorithm.ID != "face_recognition" || p.Algorithm.Name != "" {
+					t.Fatalf("algorithm = %+v", p.Algorithm)
 				}
 			},
 		},
 		{
-			name: "face unmatched",
+			name: "face unmatched omits person, similarity, box and empty attributes",
 			delivery: Delivery{Event: record.AlarmEvent{
 				ID: "01STRANGER", EventType: record.EventTypeFaceRecognition, CameraID: "cam_1",
 				CapturedAt: captured,
 				Face:       &record.FaceEventData{Matched: false, Similarity: 0.41, PersonID: ""},
 			}},
-			subObject: "face",
+			wantKeys: []string{
+				"schema_version", "id", "seq", "event_type",
+				"camera", "captured_at", "sent_at", "face",
+			},
 			check: func(t *testing.T, _ EventPayload, obj map[string]json.RawMessage) {
 				face := map[string]json.RawMessage{}
 				if err := json.Unmarshal(obj["face"], &face); err != nil {
 					t.Fatal(err)
 				}
-				assertNull(t, face, "person")
-				assertNull(t, face, "similarity")
-				assertNull(t, face, "box")
-				if string(face["attributes"]) != "{}" {
-					t.Fatalf("attributes = %s, want {}", face["attributes"])
+				assertKeysEqual(t, face, "matched")
+				if string(face["matched"]) != "false" {
+					t.Fatalf("matched = %s, want false", face["matched"])
 				}
 			},
 		},
@@ -228,12 +225,15 @@ func TestBuildEventPayload(t *testing.T) {
 					},
 				},
 			}},
-			subObject: "vehicle",
+			wantKeys: []string{
+				"schema_version", "id", "seq", "event_type",
+				"camera", "captured_at", "sent_at", "vehicle",
+			},
 			check: func(t *testing.T, p EventPayload, _ map[string]json.RawMessage) {
-				if p.Vehicle.Plate == nil || p.Vehicle.Plate.Number != "粤BD12345" || *p.Vehicle.Plate.Color != "green" {
+				if p.Vehicle.Plate == nil || p.Vehicle.Plate.Number != "粤BD12345" || p.Vehicle.Plate.Color != "green" {
 					t.Fatalf("plate = %+v", p.Vehicle.Plate)
 				}
-				if *p.Vehicle.VehicleType != "suv" || p.Vehicle.VehicleColor != nil {
+				if p.Vehicle.Type != "suv" || p.Vehicle.Color != "" {
 					t.Fatalf("vehicle = %+v", p.Vehicle)
 				}
 				if len(p.Vehicle.Attributes) != 1 || p.Vehicle.Attributes["plate_type"] != 5 {
@@ -242,16 +242,24 @@ func TestBuildEventPayload(t *testing.T) {
 			},
 		},
 		{
-			name: "vehicle without plate",
+			name: "vehicle without plate omits plate and empty attributes",
 			delivery: Delivery{Event: record.AlarmEvent{
 				ID: "01CAR2", EventType: record.EventTypePlateRecognition, CameraID: "cam_3",
 				CapturedAt: captured, Vehicle: &record.VehicleEventData{VehicleType: "truck"},
 			}},
-			subObject: "vehicle",
-			check: func(t *testing.T, p EventPayload, _ map[string]json.RawMessage) {
-				if p.Vehicle.Plate != nil || p.Vehicle.Attributes == nil {
-					t.Fatalf("vehicle = %+v, want null plate and empty attributes", p.Vehicle)
+			wantKeys: []string{
+				"schema_version", "id", "seq", "event_type",
+				"camera", "captured_at", "sent_at", "vehicle",
+			},
+			check: func(t *testing.T, p EventPayload, obj map[string]json.RawMessage) {
+				if p.Vehicle.Plate != nil || p.Vehicle.Attributes != nil {
+					t.Fatalf("vehicle = %+v, want nil plate and nil attributes", p.Vehicle)
 				}
+				veh := map[string]json.RawMessage{}
+				if err := json.Unmarshal(obj["vehicle"], &veh); err != nil {
+					t.Fatal(err)
+				}
+				assertKeysEqual(t, veh, "type", "score")
 			},
 		},
 	}
@@ -260,7 +268,7 @@ func TestBuildEventPayload(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := buildEventPayload(tt.delivery, tt.deviceID, sentAt)
 			obj := decodeKeys(t, p)
-			assertExactKeys(t, obj, tt.subObject)
+			assertKeysEqual(t, obj, tt.wantKeys...)
 			for _, key := range []string{"captured_at", "sent_at"} {
 				var s string
 				if err := json.Unmarshal(obj[key], &s); err != nil || !payloadTimePattern.MatchString(s) {
@@ -299,51 +307,55 @@ func TestBuildEventPayload_DoesNotMutateSharedAttributes(t *testing.T) {
 	}
 }
 
-func TestBuildHeartbeatEnvelope(t *testing.T) {
+func TestBuildHeartbeatPayload(t *testing.T) {
 	sentAt := time.Date(2026, 11, 24, 3, 23, 0, 4000000, time.UTC)
 	snap := HeartbeatSnapshot{
 		Status:  "degraded",
 		Reasons: []string{"camera_offline"},
 		Host:    HeartbeatHostPayload{Arch: "arm64", UptimeSeconds: 10},
 	}
-	p := buildHeartbeatEnvelope(snap, "site-a", 42, sentAt)
+	p := buildHeartbeatPayload(snap, "site-a", 42, sentAt)
 	obj := decodeKeys(t, p)
-	assertExactKeys(t, obj, "heartbeat")
-	assertNull(t, obj, "source")
-	assertNull(t, obj, "captured_at")
-	if string(obj["images"]) != "[]" {
-		t.Fatalf("images = %s, want []", obj["images"])
+	assertKeysEqual(
+		t,
+		obj,
+		"schema_version", "id", "seq", "event_type", "device_id", "sent_at",
+		"status", "reasons", "host", "resources", "storage", "workload",
+	)
+	if p.EventType != EventTypeHeartbeat || p.Seq != 42 || p.SentAt != "2026-11-24T03:23:00.004Z" {
+		t.Fatalf("heartbeat = %+v", p)
 	}
-	if p.EventType != EventTypeHeartbeat || *p.Seq != 42 || *p.SentAt != "2026-11-24T03:23:00.004Z" {
-		t.Fatalf("envelope = %+v", p)
-	}
-	if p.Heartbeat.Status != "degraded" || p.Heartbeat.Host.Arch != "arm64" || p.ID == "" {
-		t.Fatalf("heartbeat = %+v", p.Heartbeat)
+	if p.Status != "degraded" || p.Host.Arch != "arm64" || p.ID == "" {
+		t.Fatalf("heartbeat = %+v", p)
 	}
 
-	defaults := buildHeartbeatEnvelope(HeartbeatSnapshot{}, "", 1, sentAt)
-	if defaults.Heartbeat.Status != "ready" || defaults.Heartbeat.Reasons == nil || defaults.DeviceID != nil {
+	defaults := buildHeartbeatPayload(HeartbeatSnapshot{}, "", 1, sentAt)
+	defaultObj := decodeKeys(t, defaults)
+	assertKeysEqual(
+		t,
+		defaultObj,
+		"schema_version", "id", "seq", "event_type", "sent_at",
+		"status", "host", "resources", "storage", "workload",
+	)
+	if defaults.Status != "ready" || defaults.DeviceID != "" {
 		t.Fatalf("defaults = %+v", defaults)
 	}
 }
 
-func TestBuildOfflineEnvelope(t *testing.T) {
-	will := buildOfflineEnvelope(OfflineReasonConnectionLost, "site-a", nil, nil)
+func TestBuildOfflinePayload(t *testing.T) {
+	will := buildOfflinePayload(OfflineReasonConnectionLost, "site-a", nil, nil)
 	obj := decodeKeys(t, will)
-	assertExactKeys(t, obj, "offline")
-	assertNull(t, obj, "seq")
-	assertNull(t, obj, "sent_at")
-	assertNull(t, obj, "source")
-	assertNull(t, obj, "captured_at")
-	if will.Offline.Reason != OfflineReasonConnectionLost || will.ID == "" {
+	assertKeysEqual(t, obj, "schema_version", "id", "event_type", "device_id", "reason")
+	if will.Reason != OfflineReasonConnectionLost || will.ID == "" {
 		t.Fatalf("will = %+v", will)
 	}
 
 	seq := uint64(9)
 	now := time.Date(2026, 11, 24, 4, 0, 0, 0, time.UTC)
-	graceful := buildOfflineEnvelope(OfflineReasonGracefulShutdown, "site-a", &seq, &now)
-	if graceful.Seq == nil || *graceful.Seq != 9 || graceful.SentAt == nil ||
-		*graceful.SentAt != "2026-11-24T04:00:00.000Z" {
+	graceful := buildOfflinePayload(OfflineReasonGracefulShutdown, "site-a", &seq, &now)
+	gracefulObj := decodeKeys(t, graceful)
+	assertKeysEqual(t, gracefulObj, "schema_version", "id", "seq", "event_type", "device_id", "sent_at", "reason")
+	if graceful.Seq == nil || *graceful.Seq != 9 || graceful.SentAt != "2026-11-24T04:00:00.000Z" {
 		t.Fatalf("graceful = %+v", graceful)
 	}
 }

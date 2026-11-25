@@ -14,15 +14,15 @@ import (
 // any change to an existing field's meaning, type or value set must bump it.
 const SchemaVersion = 1
 
-// External v1 event types. Each value equals the key of the single business
-// sub-object carried by the payload (EventTypeHeartbeat / EventTypeOffline live in model.go).
+// External v1 event types. Perception events carry a single matching sub-object
+// (alarm / face / vehicle); heartbeat and offline use their own flat envelopes.
 const (
 	EventTypeAlarm   = "alarm"
 	EventTypeFace    = "face"
 	EventTypeVehicle = "vehicle"
 )
 
-// Image roles inside EventPayload.Images, emitted in this fixed order.
+// Image roles inside EventImages.
 const (
 	ImageRoleScene     = "scene"
 	ImageRoleObject    = "object"
@@ -42,110 +42,146 @@ var vehicleAttributeKeysPromoted = []string{"plate_number", "plate_color", "vehi
 // filterEventTypes is the closed set accepted by destination filters.
 var filterEventTypes = []string{EventTypeAlarm, EventTypeFace, EventTypeVehicle}
 
-// EventPayload is the v1 outbound envelope shared by perception events, heartbeats and
-// offline notices. Optional scalars are always present and serialize as null; exactly one
-// business sub-object (named after EventType) is non-nil.
+// EventPayload is the v1 outbound envelope for perception events (alarm, face, vehicle).
+// Optional fields omit empty values so payloads stay concise; exactly one business
+// sub-object (named after EventType) is populated.
 type EventPayload struct {
-	SchemaVersion int            `json:"schema_version"`
-	ID            string         `json:"id"`
-	Seq           *uint64        `json:"seq"`
-	EventType     string         `json:"event_type"`
-	DeviceID      *string        `json:"device_id"`
-	Source        *SourceInfo    `json:"source"`
-	CapturedAt    *string        `json:"captured_at"`
-	SentAt        *string        `json:"sent_at"`
-	Images        []ImageInfo    `json:"images"`
-	Alarm         *AlarmInfo     `json:"alarm,omitempty"`
-	Face          *FaceInfo      `json:"face,omitempty"`
-	Vehicle       *VehicleInfo   `json:"vehicle,omitempty"`
-	Heartbeat     *HeartbeatInfo `json:"heartbeat,omitempty"`
-	Offline       *OfflineInfo   `json:"offline,omitempty"`
+	SchemaVersion int                  `json:"schema_version"`
+	ID            string               `json:"id"`
+	Seq           uint64               `json:"seq"`
+	EventType     string               `json:"event_type"`
+	DeviceID      string               `json:"device_id,omitempty"`
+	Camera        *CameraSourceInfo    `json:"camera,omitempty"`
+	Algorithm     *AlgorithmSourceInfo `json:"algorithm,omitempty"`
+	CapturedAt    string               `json:"captured_at"`
+	SentAt        string               `json:"sent_at"`
+	Images        *EventImages         `json:"images,omitempty"`
+	Alarm         *AlarmInfo           `json:"alarm,omitempty"`
+	Face          *FaceInfo            `json:"face,omitempty"`
+	Vehicle       *VehicleInfo         `json:"vehicle,omitempty"`
 }
 
-// SourceInfo identifies where a perception event came from.
+// HeartbeatPayload is the v1 liveness summary envelope, kept separate from perception
+// events so liveness traffic never carries unused source/image fields.
+type HeartbeatPayload struct {
+	SchemaVersion int                       `json:"schema_version"`
+	ID            string                    `json:"id"`
+	Seq           uint64                    `json:"seq"`
+	EventType     string                    `json:"event_type"`
+	DeviceID      string                    `json:"device_id,omitempty"`
+	SentAt        string                    `json:"sent_at"`
+	Status        string                    `json:"status"`
+	Reasons       []string                  `json:"reasons,omitempty"`
+	Host          HeartbeatHostPayload      `json:"host"`
+	Resources     HeartbeatResourcesPayload `json:"resources"`
+	Storage       HeartbeatStoragePayload   `json:"storage"`
+	Workload      HeartbeatWorkloadPayload  `json:"workload"`
+}
+
+// OfflinePayload is the v1 host offline notice. MQTT last-will bytes are frozen at connect
+// time, so they omit seq and sent_at; graceful shutdown populates both.
+type OfflinePayload struct {
+	SchemaVersion int     `json:"schema_version"`
+	ID            string  `json:"id"`
+	Seq           *uint64 `json:"seq,omitempty"`
+	EventType     string  `json:"event_type"`
+	DeviceID      string  `json:"device_id,omitempty"`
+	SentAt        string  `json:"sent_at,omitempty"`
+	Reason        string  `json:"reason"`
+}
+
+// SourceInfo bundles resolved camera and algorithm metadata returned by SourceResolver.
 type SourceInfo struct {
-	Camera    *CameraSourceInfo    `json:"camera"`
-	Algorithm *AlgorithmSourceInfo `json:"algorithm"`
+	Camera    *CameraSourceInfo
+	Algorithm *AlgorithmSourceInfo
 }
 
 // CameraSourceInfo carries the camera surrogate key plus its human-readable name.
 type CameraSourceInfo struct {
-	ID   string  `json:"id"`
-	Name *string `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 // AlgorithmSourceInfo carries the algorithm package identity. Version is the version
 // installed at push time, not necessarily the one that produced the event.
 type AlgorithmSourceInfo struct {
-	ID      string  `json:"id"`
-	Name    *string `json:"name"`
-	Version *string `json:"version"`
+	ID      string `json:"id"`
+	Name    string `json:"name,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
-// ImageInfo describes one image deliverable with this message. An image that cannot be
-// delivered through any carrier is omitted from the list entirely.
+// EventImages indexes deliverable images directly by role so receivers do not need to scan
+// a list. Unavailable roles are omitted; when no role is deliverable, EventPayload.Images is nil.
+type EventImages struct {
+	Scene     *ImageInfo `json:"scene,omitempty"`
+	Object    *ImageInfo `json:"object,omitempty"`
+	Reference *ImageInfo `json:"reference,omitempty"`
+}
+
+// Empty reports whether no image role is populated.
+func (e *EventImages) Empty() bool {
+	return e == nil || (e.Scene == nil && e.Object == nil && e.Reference == nil)
+}
+
+func (e *EventImages) set(role string, info *ImageInfo) {
+	switch role {
+	case ImageRoleScene:
+		e.Scene = info
+	case ImageRoleObject:
+		e.Object = info
+	case ImageRoleReference:
+		e.Reference = info
+	}
+}
+
+// ImageInfo describes one deliverable image. Only fields relevant to the chosen delivery
+// carrier (url, part, or base64) are populated.
 type ImageInfo struct {
-	Role         string  `json:"role"`
-	MIME         string  `json:"mime"`
-	SizeBytes    *int64  `json:"size_bytes"`
-	URL          *string `json:"url"`
-	URLExpiresAt *string `json:"url_expires_at"`
-	Part         *string `json:"part"`
-	Base64       *string `json:"base64"`
+	MIME      string `json:"mime"`
+	SizeBytes *int64 `json:"size_bytes,omitempty"`
+	URL       string `json:"url,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+	Part      string `json:"part,omitempty"`
+	Base64    string `json:"base64,omitempty"`
 }
 
 // AlarmInfo holds behavior and safety alarm details.
 type AlarmInfo struct {
-	AlarmType  *string        `json:"alarm_type"`
+	Type       string         `json:"type,omitempty"`
 	Score      float64        `json:"score"`
-	Box        *[4]float64    `json:"box"`
-	Attributes map[string]any `json:"attributes"`
+	Box        *[4]float64    `json:"box,omitempty"`
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
-// FaceInfo holds face recognition results. Person and Similarity are null when unmatched.
+// FaceInfo holds face recognition results. Person and Similarity are omitted when unmatched.
 type FaceInfo struct {
 	Matched    bool           `json:"matched"`
-	Person     *PersonInfo    `json:"person"`
-	Similarity *float64       `json:"similarity"`
-	Box        *[4]float64    `json:"box"`
-	Attributes map[string]any `json:"attributes"`
+	Person     *PersonInfo    `json:"person,omitempty"`
+	Similarity *float64       `json:"similarity,omitempty"`
+	Box        *[4]float64    `json:"box,omitempty"`
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
 // PersonInfo exposes the business key of a matched person, never the internal primary key.
 type PersonInfo struct {
-	ID   *string `json:"id"`
-	Name *string `json:"name"`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // VehicleInfo holds vehicle and license plate recognition results.
 type VehicleInfo struct {
-	Plate        *PlateInfo     `json:"plate"`
-	VehicleType  *string        `json:"vehicle_type"`
-	VehicleColor *string        `json:"vehicle_color"`
-	Score        float64        `json:"score"`
-	Box          *[4]float64    `json:"box"`
-	Attributes   map[string]any `json:"attributes"`
+	Plate      *PlateInfo     `json:"plate,omitempty"`
+	Type       string         `json:"type,omitempty"`
+	Color      string         `json:"color,omitempty"`
+	Score      float64        `json:"score"`
+	Box        *[4]float64    `json:"box,omitempty"`
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
 // PlateInfo holds the recognized license plate.
 type PlateInfo struct {
-	Number string  `json:"number"`
-	Color  *string `json:"color"`
-}
-
-// HeartbeatInfo is the sanitized host health snapshot carried by heartbeat messages.
-type HeartbeatInfo struct {
-	Status    string                    `json:"status"`
-	Reasons   []string                  `json:"reasons"`
-	Host      HeartbeatHostPayload      `json:"host"`
-	Resources HeartbeatResourcesPayload `json:"resources"`
-	Storage   HeartbeatStoragePayload   `json:"storage"`
-	Workload  HeartbeatWorkloadPayload  `json:"workload"`
-}
-
-// OfflineInfo explains why the host went offline.
-type OfflineInfo struct {
-	Reason string `json:"reason"`
+	Number string `json:"number"`
+	Color  string `json:"color,omitempty"`
 }
 
 // Delivery is one queued perception event bound for a single destination. Seq is assigned
@@ -158,7 +194,7 @@ type Delivery struct {
 
 // SourceResolver looks up human-readable source metadata. It is declared on the consumer
 // side so alertpush never imports the camera or algorithm packages. Implementations must
-// not fail: lookup errors degrade to null fields so an event is never lost over metadata.
+// not fail: lookup errors degrade to omitted names so an event is never lost over metadata.
 type SourceResolver interface {
 	ResolveSource(ctx context.Context, cameraID, algorithmID string) SourceInfo
 }
@@ -181,24 +217,22 @@ func externalEventType(t record.EventType) string {
 	}
 }
 
-// buildEventPayload projects a perception delivery onto the v1 envelope. Images start empty;
-// each sender fills them according to its image mode.
+// buildEventPayload projects a perception delivery onto the lightweight v1 envelope.
+// Images start nil; each sender populates them according to its image mode.
 func buildEventPayload(d Delivery, deviceID string, sentAt time.Time) EventPayload {
 	ev := d.Event
-	seq := d.Seq
-	capturedAt := formatPayloadTime(ev.CapturedAt)
-	sent := formatPayloadTime(sentAt)
+	camera, algo := normalizeSource(d.Source, ev.CameraID, ev.AlgorithmID)
 
 	payload := EventPayload{
 		SchemaVersion: SchemaVersion,
 		ID:            ev.ID,
-		Seq:           &seq,
+		Seq:           d.Seq,
 		EventType:     externalEventType(ev.EventType),
-		DeviceID:      optionalString(deviceID),
-		Source:        normalizeSource(d.Source, ev.CameraID, ev.AlgorithmID),
-		CapturedAt:    &capturedAt,
-		SentAt:        &sent,
-		Images:        []ImageInfo{},
+		DeviceID:      strings.TrimSpace(deviceID),
+		Camera:        camera,
+		Algorithm:     algo,
+		CapturedAt:    formatPayloadTime(ev.CapturedAt),
+		SentAt:        formatPayloadTime(sentAt),
 	}
 
 	switch payload.EventType {
@@ -212,171 +246,152 @@ func buildEventPayload(d Delivery, deviceID string, sentAt time.Time) EventPaylo
 	return payload
 }
 
-// normalizeSource guarantees camera.id always mirrors the event and fills defaults when the
-// resolver is absent or returned nothing.
-func normalizeSource(src SourceInfo, cameraID, algorithmID string) *SourceInfo {
-	out := SourceInfo{
-		Camera:    &CameraSourceInfo{ID: cameraID},
-		Algorithm: nil,
-	}
-	if src.Camera != nil {
-		out.Camera.Name = optionalStringPtr(src.Camera.Name)
+// normalizeSource guarantees camera.id always mirrors the event and omits unresolved optional names.
+func normalizeSource(
+	src SourceInfo,
+	cameraID, algorithmID string,
+) (*CameraSourceInfo, *AlgorithmSourceInfo) {
+	var cam *CameraSourceInfo
+	if camID := strings.TrimSpace(cameraID); camID != "" {
+		cam = &CameraSourceInfo{ID: camID}
+		if src.Camera != nil {
+			cam.Name = strings.TrimSpace(src.Camera.Name)
+		}
 	}
 
 	algoID := strings.TrimSpace(algorithmID)
 	if algoID == "" {
-		return &out
+		return cam, nil
 	}
-	out.Algorithm = &AlgorithmSourceInfo{ID: algoID}
+	algo := &AlgorithmSourceInfo{ID: algoID}
 	if src.Algorithm != nil {
-		out.Algorithm.Name = optionalStringPtr(src.Algorithm.Name)
-		out.Algorithm.Version = optionalStringPtr(src.Algorithm.Version)
+		algo.Name = strings.TrimSpace(src.Algorithm.Name)
+		algo.Version = strings.TrimSpace(src.Algorithm.Version)
 	}
-	return &out
+	return cam, algo
 }
 
 func buildAlarmInfo(ev record.AlarmEvent) *AlarmInfo {
 	if ev.Alarm != nil {
 		return &AlarmInfo{
-			AlarmType:  optionalString(ev.Alarm.AlarmType),
+			Type:       strings.TrimSpace(ev.Alarm.AlarmType),
 			Score:      ev.Alarm.Score,
 			Box:        optionalBox(ev.Alarm.Box),
-			Attributes: nonNilAttributes(ev.Alarm.Extra),
+			Attributes: optionalAttributes(ev.Alarm.Extra),
 		}
 	}
 	// Legacy flat fields are still populated by record for behavior alarms.
 	return &AlarmInfo{
-		AlarmType:  optionalString(ev.AlarmType),
+		Type:       strings.TrimSpace(ev.AlarmType),
 		Score:      ev.Score,
 		Box:        optionalBox(ev.Box),
-		Attributes: nonNilAttributes(ev.Extra),
+		Attributes: optionalAttributes(ev.Extra),
 	}
 }
 
 func buildFaceInfo(face *record.FaceEventData) *FaceInfo {
 	if face == nil {
-		return &FaceInfo{Attributes: map[string]any{}}
+		return &FaceInfo{}
 	}
 	info := &FaceInfo{
 		Matched:    face.Matched,
 		Box:        optionalBox(face.Box),
-		Attributes: nonNilAttributes(face.Attributes),
+		Attributes: optionalAttributes(face.Attributes),
 	}
 	if !face.Matched {
 		return info
 	}
 	similarity := face.Similarity
 	info.Similarity = &similarity
-	info.Person = &PersonInfo{
-		ID:   optionalString(face.PersonID),
-		Name: optionalString(face.PersonName),
+	personID := strings.TrimSpace(face.PersonID)
+	personName := strings.TrimSpace(face.PersonName)
+	if personID != "" || personName != "" {
+		info.Person = &PersonInfo{
+			ID:   personID,
+			Name: personName,
+		}
 	}
 	return info
 }
 
 func buildVehicleInfo(vehicle *record.VehicleEventData) *VehicleInfo {
 	if vehicle == nil {
-		return &VehicleInfo{Attributes: map[string]any{}}
+		return &VehicleInfo{}
 	}
 
 	// The event is a value copy but its attribute map is shared across destinations,
 	// so promoted keys are removed from a clone, never from the original.
 	attrs := maps.Clone(vehicle.Attributes)
-	if attrs == nil {
-		attrs = map[string]any{}
-	}
 	for _, key := range vehicleAttributeKeysPromoted {
 		delete(attrs, key)
 	}
 
 	info := &VehicleInfo{
-		VehicleType:  optionalString(vehicle.VehicleType),
-		VehicleColor: optionalString(vehicle.VehicleColor),
-		Score:        vehicle.Score,
-		Box:          optionalBox(vehicle.Box),
-		Attributes:   attrs,
+		Type:       strings.TrimSpace(vehicle.VehicleType),
+		Color:      strings.TrimSpace(vehicle.VehicleColor),
+		Score:      vehicle.Score,
+		Box:        optionalBox(vehicle.Box),
+		Attributes: optionalAttributes(attrs),
 	}
 	if number := strings.TrimSpace(vehicle.PlateNumber); number != "" {
 		info.Plate = &PlateInfo{
 			Number: number,
-			Color:  optionalString(vehicle.PlateColor),
+			Color:  strings.TrimSpace(vehicle.PlateColor),
 		}
 	}
 	return info
 }
 
-// buildHeartbeatEnvelope wraps a liveness snapshot in the v1 envelope.
-func buildHeartbeatEnvelope(
+// buildHeartbeatPayload wraps a liveness snapshot in the standalone v1 heartbeat envelope.
+func buildHeartbeatPayload(
 	snap HeartbeatSnapshot,
 	deviceID string,
 	seq uint64,
 	sentAt time.Time,
-) EventPayload {
+) HeartbeatPayload {
 	status := snap.Status
 	if status == "" {
 		status = "ready"
 	}
-	reasons := snap.Reasons
-	if reasons == nil {
-		reasons = []string{}
-	}
-	sent := formatPayloadTime(sentAt)
 
-	return EventPayload{
+	return HeartbeatPayload{
 		SchemaVersion: SchemaVersion,
 		ID:            idutil.New(),
-		Seq:           &seq,
+		Seq:           seq,
 		EventType:     EventTypeHeartbeat,
-		DeviceID:      optionalString(deviceID),
-		SentAt:        &sent,
-		Images:        []ImageInfo{},
-		Heartbeat: &HeartbeatInfo{
-			Status:    status,
-			Reasons:   reasons,
-			Host:      snap.Host,
-			Resources: snap.Resources,
-			Storage:   snap.Storage,
-			Workload:  snap.Workload,
-		},
+		DeviceID:      strings.TrimSpace(deviceID),
+		SentAt:        formatPayloadTime(sentAt),
+		Status:        status,
+		Reasons:       snap.Reasons,
+		Host:          snap.Host,
+		Resources:     snap.Resources,
+		Storage:       snap.Storage,
+		Workload:      snap.Workload,
 	}
 }
 
-// buildOfflineEnvelope builds an offline notice. The MQTT last-will is registered at connect
-// time as static bytes, so it passes nil seq and sentAt: it cannot know when the link drops.
-func buildOfflineEnvelope(reason, deviceID string, seq *uint64, sentAt *time.Time) EventPayload {
-	payload := EventPayload{
+// buildOfflinePayload builds a standalone offline notice. The MQTT last-will is registered
+// at connect time as static bytes, so it passes nil seq and sentAt.
+func buildOfflinePayload(
+	reason, deviceID string,
+	seq *uint64,
+	sentAt *time.Time,
+) OfflinePayload {
+	payload := OfflinePayload{
 		SchemaVersion: SchemaVersion,
 		ID:            idutil.New(),
 		EventType:     EventTypeOffline,
-		DeviceID:      optionalString(deviceID),
-		Images:        []ImageInfo{},
-		Offline:       &OfflineInfo{Reason: reason},
+		DeviceID:      strings.TrimSpace(deviceID),
+		Reason:        reason,
 	}
 	if seq != nil {
 		value := *seq
 		payload.Seq = &value
 	}
 	if sentAt != nil {
-		sent := formatPayloadTime(*sentAt)
-		payload.SentAt = &sent
+		payload.SentAt = formatPayloadTime(*sentAt)
 	}
 	return payload
-}
-
-// optionalString maps blank strings to nil so they serialize as null.
-func optionalString(s string) *string {
-	trimmed := strings.TrimSpace(s)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
-}
-
-func optionalStringPtr(s *string) *string {
-	if s == nil {
-		return nil
-	}
-	return optionalString(*s)
 }
 
 // optionalBox treats an all-zero box as "no box": classification results carry none.
@@ -388,9 +403,9 @@ func optionalBox(box [4]float64) *[4]float64 {
 	return &out
 }
 
-func nonNilAttributes(attrs map[string]any) map[string]any {
-	if attrs == nil {
-		return map[string]any{}
+func optionalAttributes(attrs map[string]any) map[string]any {
+	if len(attrs) == 0 {
+		return nil
 	}
 	return attrs
 }

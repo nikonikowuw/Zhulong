@@ -79,18 +79,18 @@ func TestGalleryReferenceImageDeliveryAcrossModes(t *testing.T) {
 			},
 			faceEvent,
 		)
-		if len(images) != 3 {
-			t.Fatalf("images = %+v, want 3 entries", images)
+		if images == nil || images.Scene == nil || images.Object == nil || images.Reference == nil {
+			t.Fatalf("images = %+v, want scene, object, reference", images)
 		}
-		ref := images[2]
-		if ref.Role != ImageRoleReference || ref.MIME != imageMIMEPNG {
-			t.Fatalf("ref = %+v, want role=reference mime=image/png", ref)
+		ref := images.Reference
+		if ref.MIME != imageMIMEPNG {
+			t.Fatalf("ref = %+v, want mime=image/png", ref)
 		}
 		if ref.SizeBytes == nil || *ref.SizeBytes != int64(len(refPNGBytes)) {
 			t.Fatalf("ref size = %v, want %d", ref.SizeBytes, len(refPNGBytes))
 		}
-		if ref.URL == nil || !strings.Contains(*ref.URL, "/api/v1/media/signed/"+normRefKey+"?") {
-			t.Fatalf("ref url = %v, want signed faces/ path", ref.URL)
+		if !strings.Contains(ref.URL, "/api/v1/media/signed/"+normRefKey+"?") {
+			t.Fatalf("ref url = %q, want signed faces/ path", ref.URL)
 		}
 
 		// Verify the minted URL streams back from SignedMediaHandler (GET and HEAD).
@@ -100,7 +100,7 @@ func TestGalleryReferenceImageDeliveryAcrossModes(t *testing.T) {
 		h := NewSignedMediaHandlerWithGallery(signer, nil, galleryReader, zap.NewNop())
 		h.RegisterRoutes(api)
 
-		parsedURL, parseErr := url.Parse(*ref.URL)
+		parsedURL, parseErr := url.Parse(ref.URL)
 		if parseErr != nil {
 			t.Fatalf("parse signed url: %v", parseErr)
 		}
@@ -165,7 +165,8 @@ func TestGalleryReferenceImageDeliveryAcrossModes(t *testing.T) {
 		if err := json.Unmarshal(capture.payload, &payload); err != nil {
 			t.Fatalf("unmarshal payload: %v", err)
 		}
-		if len(payload.Images) != 3 || payload.Images[2].MIME != imageMIMEPNG {
+		if payload.Images == nil || payload.Images.Reference == nil ||
+			payload.Images.Reference.MIME != imageMIMEPNG {
 			t.Fatalf("payload images = %+v", payload.Images)
 		}
 	})
@@ -189,14 +190,14 @@ func TestGalleryReferenceImageDeliveryAcrossModes(t *testing.T) {
 		}
 
 		images := sender.inlineImages(context.Background(), faceEvent)
-		if len(images) != 3 {
-			t.Fatalf("images = %+v, want 3", images)
+		if images == nil || images.Scene == nil || images.Object == nil || images.Reference == nil {
+			t.Fatalf("images = %+v, want 3 roles", images)
 		}
-		ref := images[2]
-		if ref.Role != ImageRoleReference || ref.MIME != imageMIMEPNG || ref.Base64 == nil {
+		ref := images.Reference
+		if ref.MIME != imageMIMEPNG || ref.Base64 == "" {
 			t.Fatalf("ref = %+v, want inlined png reference", ref)
 		}
-		decoded, decErr := base64.StdEncoding.DecodeString(*ref.Base64)
+		decoded, decErr := base64.StdEncoding.DecodeString(ref.Base64)
 		if decErr != nil || !bytes.Equal(decoded, refPNGBytes) {
 			t.Fatalf("decoded reference mismatch: err=%v", decErr)
 		}

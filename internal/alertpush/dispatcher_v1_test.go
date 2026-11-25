@@ -55,18 +55,15 @@ type slowResolver struct {
 func (r *slowResolver) ResolveSource(ctx context.Context, _, _ string) SourceInfo {
 	r.calls.Add(1)
 	<-ctx.Done()
-	name := "late"
-	return SourceInfo{Camera: &CameraSourceInfo{Name: &name}}
+	return SourceInfo{Camera: &CameraSourceInfo{Name: "late"}}
 }
 
 type staticResolver struct{}
 
 func (staticResolver) ResolveSource(_ context.Context, cameraID, algorithmID string) SourceInfo {
-	name := "name-" + cameraID
-	version := "v-" + algorithmID
 	return SourceInfo{
-		Camera:    &CameraSourceInfo{ID: cameraID, Name: &name},
-		Algorithm: &AlgorithmSourceInfo{ID: algorithmID, Version: &version},
+		Camera:    &CameraSourceInfo{ID: cameraID, Name: "name-" + cameraID},
+		Algorithm: &AlgorithmSourceInfo{ID: algorithmID, Version: "v-" + algorithmID},
 	}
 }
 
@@ -210,7 +207,7 @@ func TestDispatcherResolvesSourceOffHotPath(t *testing.T) {
 	})
 	got, _ := sender.snapshot()
 	src := got[0].Source
-	if src.Camera == nil || *src.Camera.Name != "name-cam_9" || *src.Algorithm.Version != "v-algo_x" {
+	if src.Camera == nil || src.Camera.Name != "name-cam_9" || src.Algorithm.Version != "v-algo_x" {
 		t.Fatalf("source = %+v", src)
 	}
 }

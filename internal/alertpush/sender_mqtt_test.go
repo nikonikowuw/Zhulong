@@ -136,13 +136,13 @@ func TestMQTTSenderBase64AndURL(t *testing.T) {
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		t.Fatalf("unmarshal payload failed: %v", err)
 	}
-	if len(payload.Images) != 1 || payload.Images[0].Role != ImageRoleScene || payload.Images[0].Base64 == nil {
+	if payload.Images == nil || payload.Images.Scene == nil || payload.Images.Scene.Base64 == "" {
 		t.Fatalf("expected inlined scene image, got %+v", payload.Images)
 	}
 	if payload.SchemaVersion != SchemaVersion || payload.Alarm == nil {
 		t.Fatalf("unexpected envelope: %+v", payload)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(*payload.Images[0].Base64)
+	decoded, err := base64.StdEncoding.DecodeString(payload.Images.Scene.Base64)
 	if err != nil {
 		t.Fatalf("base64 decode failed: %v", err)
 	}
@@ -223,8 +223,8 @@ func TestMQTTSenderBase64OversizedFallback(t *testing.T) {
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		t.Fatalf("unmarshal payload failed: %v", err)
 	}
-	if len(payload.Images) != 0 {
-		t.Errorf("expected oversized image without url to be omitted, got %+v", payload.Images)
+	if payload.Images != nil {
+		t.Errorf("expected oversized image without url to omit images, got %+v", payload.Images)
 	}
 }
 
@@ -325,12 +325,12 @@ func TestMQTTSenderHeartbeatAndGracefulOffline(t *testing.T) {
 
 	select {
 	case raw := <-msgCh:
-		var hb EventPayload
+		var hb HeartbeatPayload
 		if err := json.Unmarshal(raw, &hb); err != nil {
 			t.Fatalf("unmarshal heartbeat: %v", err)
 		}
-		headerOK := hb.EventType == EventTypeHeartbeat && hb.Seq != nil && *hb.Seq == 3 &&
-			hb.DeviceID != nil && *hb.DeviceID == "box-01" && hb.Heartbeat != nil
+		headerOK := hb.EventType == EventTypeHeartbeat && hb.Seq == 3 &&
+			hb.DeviceID == "box-01" && hb.Status == "ready"
 		if !headerOK {
 			t.Fatalf("unexpected mqtt heartbeat: %+v", hb)
 		}
@@ -354,16 +354,15 @@ func TestMQTTSenderHeartbeatAndGracefulOffline(t *testing.T) {
 
 	select {
 	case raw := <-msgCh:
-		var offline EventPayload
+		var offline OfflinePayload
 		if err := json.Unmarshal(raw, &offline); err != nil {
 			t.Fatalf("unmarshal graceful offline: %v", err)
 		}
-		if offline.EventType != EventTypeOffline || offline.Offline == nil ||
-			offline.Offline.Reason != OfflineReasonGracefulShutdown {
+		if offline.EventType != EventTypeOffline || offline.Reason != OfflineReasonGracefulShutdown {
 			t.Fatalf("unexpected graceful offline payload: %+v", offline)
 		}
-		fieldsPopulated := offline.DeviceID != nil && *offline.DeviceID == "box-01-renamed" &&
-			offline.SentAt != nil && offline.Seq != nil && *offline.Seq == 99 &&
+		fieldsPopulated := offline.DeviceID == "box-01-renamed" &&
+			offline.SentAt != "" && offline.Seq != nil && *offline.Seq == 99 &&
 			offline.ID != ""
 		if !fieldsPopulated {
 			t.Fatalf("expected populated id/device_id/seq/sent_at on graceful offline: %+v", offline)
@@ -626,7 +625,7 @@ func TestMQTTSenderRetriesTransientPublishFailure(t *testing.T) {
 		if err := json.Unmarshal(raw, &p); err != nil {
 			t.Fatalf("attempt %d unmarshal: %v", i, err)
 		}
-		if p.ID != "01MQTTRETRY" || p.Seq == nil || *p.Seq != 12 {
+		if p.ID != "01MQTTRETRY" || p.Seq != 12 {
 			t.Fatalf("attempt %d changed id/seq: %+v", i, p)
 		}
 	}

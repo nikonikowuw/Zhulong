@@ -21,14 +21,16 @@
 
 ## 2. 对外载荷契约 v1
 
-- **统一信封（`schema_version: 1`）**：感知事件（`alarm` / `face` / `vehicle`）、心跳（`heartbeat`）、离线通知（`offline`）共用 `EventPayload`；可选标量始终输出为 `null`，且仅携带一个与 `event_type` 同名的业务子对象；时间戳固定为 UTC 毫秒精度（`2006-01-02T15:04:05.000Z`）。
-- **序号与丢包可观测性**：每个推送目标维护单调递增 `seq` 计数器；事件在**入队时**分配（队列溢出丢弃会留下可观测缺口），心跳与优雅离线在发送时分配（若配置了独立的 `heartbeat_url`/`heartbeat_topic` 分流，单侧流可见因另一轨消费产生的跨轨序号跳进，属既定目标级单调序列语义）；连通性探测（告警及仅心跳探测）统一使用 `seq: 0`，不占用真实序列空间；MQTT LWT 离线消息的 `seq` 与 `sent_at` 为 `null`。
+- **轻量化分型信封（`schema_version: 1`）**：
+  - 感知事件（`EventPayload`，`event_type ∈ {alarm, face, vehicle}`）、存活心跳（`HeartbeatPayload`，`event_type: "heartbeat"`）与离线通知（`OfflinePayload`，`event_type: "offline"`）各自独立结构，避免心跳/离线携带无意义的 `source`/`captured_at`/`images`；所有可选空字段均省略（`omitempty`），时间戳固定为 UTC 毫秒精度（`2006-01-02T15:04:05.000Z`）。
+  - 感知事件将 `camera{id, name?}` 与 `algorithm{id, name?, version?}` 直接平铺在顶层，并仅携带一个与 `event_type` 同名的业务子对象。
+- **序号与丢包可观测性**：每个推送目标维护单调递增 `seq` 计数器；事件在**入队时**分配（队列溢出丢弃会留下可观测缺口），心跳与优雅离线在发送时分配（若配置了独立的 `heartbeat_url`/`heartbeat_topic` 分流，单侧流可见因另一轨消费产生的跨轨序号跳进，属既定目标级单调序列语义）；连通性探测（告警及仅心跳探测）统一使用 `seq: 0`，不占用真实序列空间；MQTT LWT 离线消息省略 `seq` 与 `sent_at`。
 - **业务子对象与缺省策略**：
-  - `alarm{alarm_type, score, box, attributes}`
-  - `face{matched, person, similarity, box, attributes}`（未匹配时 `person` 与 `similarity` 为 `null`）
-  - `vehicle{plate, vehicle_type, vehicle_color, score, box, attributes}`（外提键 `plate_number`、`plate_color`、`vehicle_type`、`vehicle_color` 不在 `attributes` 中重复）
-  - 无检测框时 `box` 为 `null`，严禁输出 `[0,0,0,0]`。
-- **图片列表 `images[]` 与模式一致性**：按固定顺序 `scene → object → reference` 输出 `{role, mime, size_bytes, url, url_expires_at, part, base64}`，无法经任一载体交付的图片整项省略；`url`、`multipart`、`base64` 三种模式均覆盖全部可用图片角色。其中 `reference`（人脸底库参考图）自动将生产库裸文件名规范化为 `faces/<filename>` 并经独立受控的 `GalleryMedia` 只读适配器读取/预签名，MIME 与附件后缀按实际扩展名确定性输出（支持 `image/jpeg`、`image/png`、`image/webp`）。
+  - `alarm{type?, score, box?, attributes?}`
+  - `face{matched, person?, similarity?, box?, attributes?}`（未匹配时省略 `person` 与 `similarity`）
+  - `vehicle{plate?, type?, color?, score, box?, attributes?}`（外提键 `plate_number`、`plate_color`、`vehicle_type`、`vehicle_color` 不在 `attributes` 中重复）
+  - 无检测框时省略 `box`，严禁输出 `[0,0,0,0]`；空 `attributes` 直接省略。
+- **图片对象 `images{scene?, object?, reference?}` 与单载体原则**：按角色键直接索引 `{mime, size_bytes?, url?, expires_at?, part?, base64?}`，仅输出实际生效的载体字段，无任何可交付图片时省略 `images`；`url`、`multipart`、`base64` 三种模式均覆盖全部可用图片角色（`multipart` 读图失败或 `base64` 超预算时才回退 `url`，否则不冗余签发 URL）。其中 `reference`（人脸底库参考图）自动将生产库裸文件名规范化为 `faces/<filename>` 并经独立受控的 `GalleryMedia` 只读适配器读取/预签名，MIME 与附件后缀按实际扩展名确定性输出（支持 `image/jpeg`、`image/png`、`image/webp`）。
 - **MQTT `base64` 内联预算（`inline_max_kb`）**：范围 `64..8192` KiB（默认 `500`，按编码前原始字节计），按 `object → reference → scene`（小图优先）扣减预算；超预算图片回退 `url`，无可用 URL 时省略并记录 Warn 日志。
 
 ---

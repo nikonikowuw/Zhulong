@@ -128,7 +128,7 @@ func TestWebhookMultipartV1(t *testing.T) {
 		event         record.AlarmEvent
 		wantParts     map[string]int
 		wantImages    []string
-		check         func(t *testing.T, images []ImageInfo)
+		check         func(t *testing.T, images *EventImages)
 	}{
 		{
 			name: "all images as parts, 4K scene uncapped",
@@ -138,14 +138,19 @@ func TestWebhookMultipartV1(t *testing.T) {
 			event:      faceEvent,
 			wantParts:  map[string]int{"image_scene": len(scene4K), "image_object": 4, "image_reference": 3},
 			wantImages: []string{ImageRoleScene, ImageRoleObject, ImageRoleReference},
-			check: func(t *testing.T, images []ImageInfo) {
-				for _, img := range images {
-					if img.Part == nil || *img.Part != "image_"+img.Role || img.URL != nil || img.Base64 != nil {
-						t.Fatalf("image = %+v", img)
+			check: func(t *testing.T, images *EventImages) {
+				byRole := map[string]*ImageInfo{
+					ImageRoleScene:     images.Scene,
+					ImageRoleObject:    images.Object,
+					ImageRoleReference: images.Reference,
+				}
+				for role, img := range byRole {
+					if img == nil || img.Part != "image_"+role || img.URL != "" || img.Base64 != "" {
+						t.Fatalf("role %s image = %+v", role, img)
 					}
 				}
-				if *images[0].SizeBytes != int64(len(scene4K)) {
-					t.Fatalf("scene size = %d", *images[0].SizeBytes)
+				if *images.Scene.SizeBytes != int64(len(scene4K)) {
+					t.Fatalf("scene size = %d", *images.Scene.SizeBytes)
 				}
 			},
 		},
@@ -159,12 +164,12 @@ func TestWebhookMultipartV1(t *testing.T) {
 			event:      record.AlarmEvent{ID: "01A", CameraID: "cam_01", ImagePath: scenePath, ImageReady: true, CropPath: cropPath, CropReady: true},
 			wantParts:  map[string]int{"image_scene": 5},
 			wantImages: []string{ImageRoleScene, ImageRoleObject},
-			check: func(t *testing.T, images []ImageInfo) {
-				if images[0].Part == nil || images[0].URL == nil {
-					t.Fatalf("scene = %+v, want part and backup url", images[0])
+			check: func(t *testing.T, images *EventImages) {
+				if images.Scene == nil || images.Scene.Part != "image_scene" || images.Scene.URL != "" {
+					t.Fatalf("scene = %+v, want part only", images.Scene)
 				}
-				if images[1].Part != nil || images[1].URL == nil || images[1].SizeBytes != nil {
-					t.Fatalf("object = %+v, want url only", images[1])
+				if images.Object == nil || images.Object.Part != "" || images.Object.URL == "" || images.Object.SizeBytes != nil {
+					t.Fatalf("object = %+v, want url fallback only", images.Object)
 				}
 			},
 		},
@@ -177,6 +182,11 @@ func TestWebhookMultipartV1(t *testing.T) {
 			event:      record.AlarmEvent{ID: "01B", CameraID: "cam_01", ImagePath: scenePath, ImageReady: true},
 			wantParts:  map[string]int{},
 			wantImages: []string{},
+			check: func(t *testing.T, images *EventImages) {
+				if images != nil {
+					t.Fatalf("images = %+v, want nil when nothing deliverable", images)
+				}
+			},
 		},
 	}
 
@@ -225,10 +235,7 @@ func TestWebhookMultipartV1(t *testing.T) {
 			if err := json.Unmarshal(capture.payload, &payload); err != nil {
 				t.Fatalf("unmarshal payload: %v", err)
 			}
-			roles := []string{}
-			for _, img := range payload.Images {
-				roles = append(roles, img.Role)
-			}
+			roles := imageRolesPresent(payload.Images)
 			if strings.Join(roles, ",") != strings.Join(tt.wantImages, ",") {
 				t.Fatalf("roles = %v, want %v", roles, tt.wantImages)
 			}
@@ -242,6 +249,23 @@ func TestWebhookMultipartV1(t *testing.T) {
 			}
 		})
 	}
+}
+
+func imageRolesPresent(images *EventImages) []string {
+	roles := []string{}
+	if images == nil {
+		return roles
+	}
+	if images.Scene != nil {
+		roles = append(roles, ImageRoleScene)
+	}
+	if images.Object != nil {
+		roles = append(roles, ImageRoleObject)
+	}
+	if images.Reference != nil {
+		roles = append(roles, ImageRoleReference)
+	}
+	return roles
 }
 
 func TestWebhookRetryKeepsIDAndSeq(t *testing.T) {
@@ -297,7 +321,7 @@ func TestWebhookRetryKeepsIDAndSeq(t *testing.T) {
 		t.Fatalf("attempts = %d, want 3", len(bodies))
 	}
 	for i, p := range bodies {
-		if p.ID != "01RETRY" || p.Seq == nil || *p.Seq != 41 || p.EventType != EventTypeVehicle {
+		if p.ID != "01RETRY" || p.Seq != 41 || p.EventType != EventTypeVehicle {
 			t.Fatalf("attempt %d payload = %+v", i, p)
 		}
 		if headers[i].Get(headerZhulongEvent) != EventTypeVehicle ||

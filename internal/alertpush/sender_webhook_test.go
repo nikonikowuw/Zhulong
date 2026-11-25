@@ -124,17 +124,17 @@ func TestWebhookSenderURLMode(t *testing.T) {
 	if err := json.Unmarshal(receivedBody, &payload); err != nil {
 		t.Fatalf("unmarshal received body: %v", err)
 	}
-	if len(payload.Images) != 2 || payload.Images[0].Role != ImageRoleScene ||
-		payload.Images[1].Role != ImageRoleObject {
+	if payload.Images == nil || payload.Images.Scene == nil || payload.Images.Object == nil ||
+		payload.Images.Reference != nil {
 		t.Fatalf("expected scene+object images, got %+v", payload.Images)
 	}
-	for _, img := range payload.Images {
-		if img.URL == nil || img.Part != nil || img.Base64 != nil {
+	for _, img := range []*ImageInfo{payload.Images.Scene, payload.Images.Object} {
+		if img.URL == "" || img.Part != "" || img.Base64 != "" {
 			t.Fatalf("url mode image = %+v", img)
 		}
 	}
-	if payload.DeviceID == nil || *payload.DeviceID != "site-a-gate-01" {
-		t.Fatalf("expected device_id site-a-gate-01, got %v", payload.DeviceID)
+	if payload.DeviceID != "site-a-gate-01" {
+		t.Fatalf("expected device_id site-a-gate-01, got %q", payload.DeviceID)
 	}
 
 	// Renaming the identity must affect the very next send without rebuilding the
@@ -146,8 +146,8 @@ func TestWebhookSenderURLMode(t *testing.T) {
 	if err := json.Unmarshal(receivedBody, &payload); err != nil {
 		t.Fatalf("unmarshal second body: %v", err)
 	}
-	if payload.DeviceID == nil || *payload.DeviceID != "site-a-gate-02" {
-		t.Fatalf("expected device_id to follow the provider, got %v", payload.DeviceID)
+	if payload.DeviceID != "site-a-gate-02" {
+		t.Fatalf("expected device_id to follow the provider, got %q", payload.DeviceID)
 	}
 }
 
@@ -299,20 +299,19 @@ func TestWebhookSenderHeartbeatRouteSplitAndSingleShot(t *testing.T) {
 		t.Fatalf("expected shared bearer auth, got %q", gotAuth)
 	}
 
-	var payload EventPayload
+	var payload HeartbeatPayload
 	if err := json.Unmarshal(gotBody, &payload); err != nil {
 		t.Fatalf("unmarshal heartbeat payload: %v", err)
 	}
 	headerOK := payload.EventType == EventTypeHeartbeat &&
-		payload.Seq != nil && *payload.Seq == 7 &&
-		payload.DeviceID != nil && *payload.DeviceID == "edge-box-09" &&
-		payload.Heartbeat != nil
+		payload.Seq == 7 &&
+		payload.DeviceID == "edge-box-09"
 	if !headerOK {
 		t.Fatalf("unexpected heartbeat payload header: %+v", payload)
 	}
-	reasonsOK := len(payload.Heartbeat.Reasons) == 1 && payload.Heartbeat.Reasons[0] == "camera_offline"
-	if payload.Heartbeat.Status != "degraded" || !reasonsOK {
-		t.Fatalf("unexpected status/reasons: %+v", payload.Heartbeat)
+	reasonsOK := len(payload.Reasons) == 1 && payload.Reasons[0] == "camera_offline"
+	if payload.Status != "degraded" || !reasonsOK {
+		t.Fatalf("unexpected status/reasons: %+v", payload)
 	}
 	if gotHeaders.Get(headerZhulongEvent) != EventTypeHeartbeat ||
 		gotHeaders.Get(headerZhulongDelivery) != payload.ID ||

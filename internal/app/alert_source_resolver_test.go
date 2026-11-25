@@ -62,12 +62,8 @@ func TestAlertSourceResolver(t *testing.T) {
 			if src.Camera == nil || src.Camera.ID != tt.cameraID {
 				t.Fatalf("camera = %+v", src.Camera)
 			}
-			gotName := ""
-			if src.Camera.Name != nil {
-				gotName = *src.Camera.Name
-			}
-			if gotName != tt.wantCamera {
-				t.Fatalf("camera name = %q, want %q", gotName, tt.wantCamera)
+			if src.Camera.Name != tt.wantCamera {
+				t.Fatalf("camera name = %q, want %q", src.Camera.Name, tt.wantCamera)
 			}
 			if (src.Algorithm != nil) != tt.wantAlgo {
 				t.Fatalf("algorithm = %+v, want present=%v", src.Algorithm, tt.wantAlgo)
@@ -78,12 +74,8 @@ func TestAlertSourceResolver(t *testing.T) {
 			if src.Algorithm.ID != tt.algorithmID {
 				t.Fatalf("algorithm id = %q", src.Algorithm.ID)
 			}
-			gotVersion := ""
-			if src.Algorithm.Version != nil {
-				gotVersion = *src.Algorithm.Version
-			}
-			if gotVersion != tt.wantVersion {
-				t.Fatalf("algorithm version = %q, want %q", gotVersion, tt.wantVersion)
+			if src.Algorithm.Version != tt.wantVersion {
+				t.Fatalf("algorithm version = %q, want %q", src.Algorithm.Version, tt.wantVersion)
 			}
 		})
 	}
@@ -92,10 +84,10 @@ func TestAlertSourceResolver(t *testing.T) {
 func TestAlertSourceResolver_NilDependencies(t *testing.T) {
 	resolver := newAlertSourceResolver(nil, nil, nil)
 	src := resolver.ResolveSource(context.Background(), "cam_1", "algo_1")
-	if src.Camera == nil || src.Camera.ID != "cam_1" || src.Camera.Name != nil {
+	if src.Camera == nil || src.Camera.ID != "cam_1" || src.Camera.Name != "" {
 		t.Fatalf("camera = %+v", src.Camera)
 	}
-	if src.Algorithm == nil || src.Algorithm.ID != "algo_1" || src.Algorithm.Name != nil || src.Algorithm.Version != nil {
+	if src.Algorithm == nil || src.Algorithm.ID != "algo_1" || src.Algorithm.Name != "" || src.Algorithm.Version != "" {
 		t.Fatalf("algorithm = %+v", src.Algorithm)
 	}
 }

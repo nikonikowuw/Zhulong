@@ -1032,8 +1032,7 @@ func (r *alertSourceResolver) ResolveSource(
 		case err != nil:
 			r.logger.Debug("resolve alert camera name", zap.String("camera_id", cameraID), zap.Error(err))
 		case cam != nil && cam.Name != "":
-			name := cam.Name
-			src.Camera.Name = &name
+			src.Camera.Name = cam.Name
 		}
 	}
 
@@ -1049,14 +1048,8 @@ func (r *alertSourceResolver) ResolveSource(
 		r.logger.Debug("resolve alert algorithm", zap.String("algorithm_id", algorithmID), zap.Error(err))
 		return src
 	}
-	if algo.Name != "" {
-		name := algo.Name
-		src.Algorithm.Name = &name
-	}
-	if algo.Version != "" {
-		version := algo.Version
-		src.Algorithm.Version = &version
-	}
+	src.Algorithm.Name = algo.Name
+	src.Algorithm.Version = algo.Version
 	return src
 }
 

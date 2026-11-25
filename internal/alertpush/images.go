@@ -94,9 +94,9 @@ func mediaReaderForPath(media, galleryMedia MediaReader, relPath string) MediaRe
 }
 
 // resolveImageURLs implements the url image mode: every candidate that can be signed or
-// presigned becomes an ImageInfo; the rest are omitted.
-func resolveImageURLs(ctx context.Context, p imageURLParams, ev record.AlarmEvent) []ImageInfo {
-	images := []ImageInfo{}
+// presigned populates its role on EventImages; returns nil when none are deliverable.
+func resolveImageURLs(ctx context.Context, p imageURLParams, ev record.AlarmEvent) *EventImages {
+	images := &EventImages{}
 	for _, c := range imageCandidates(ev) {
 		signed, ok := mintImageURL(
 			ctx,
@@ -107,11 +107,14 @@ func resolveImageURLs(ctx context.Context, p imageURLParams, ev record.AlarmEven
 		if !ok {
 			continue
 		}
-		info := newImageInfo(c.role, c.relPath)
-		info.URL = &signed.url
-		info.URLExpiresAt = &signed.expiresAt
+		info := newImageInfo(c.relPath)
+		info.URL = signed.url
+		info.ExpiresAt = signed.expiresAt
 		info.SizeBytes = signed.sizeBytes
-		images = append(images, info)
+		images.set(c.role, info)
+	}
+	if images.Empty() {
+		return nil
 	}
 	return images
 }
@@ -170,8 +173,8 @@ func statImageSize(ctx context.Context, media MediaReader, relPath string) *int6
 	return &size
 }
 
-func newImageInfo(role, relPath string) ImageInfo {
-	return ImageInfo{Role: role, MIME: imageMIMEForPath(relPath)}
+func newImageInfo(relPath string) *ImageInfo {
+	return &ImageInfo{MIME: imageMIMEForPath(relPath)}
 }
 
 func imageMIMEForPath(relPath string) string {

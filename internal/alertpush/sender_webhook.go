@@ -145,7 +145,7 @@ func (s *WebhookSender) HeartbeatSendBudget() time.Duration {
 // preparedWebhookImages caches image metadata (and raw bytes in multipart mode) once per
 // delivery so retries never re-open disk files or duplicate full multipart buffers.
 type preparedWebhookImages struct {
-	images []ImageInfo
+	images *EventImages
 	parts  []preparedMultipartImage
 }
 
@@ -202,7 +202,7 @@ func (s *WebhookSender) SendHeartbeat(
 		targetURL = s.opts.URL
 	}
 
-	payload := buildHeartbeatEnvelope(
+	payload := buildHeartbeatPayload(
 		snap,
 		resolveDeviceID(s.opts.Identity),
 		seq,
@@ -219,7 +219,7 @@ func (s *WebhookSender) SendHeartbeat(
 	}
 	req.Header.Set("Content-Type", "application/json")
 	s.applyAuthAndHeaders(req)
-	setEnvelopeHeaders(req, payload)
+	setEnvelopeHeaders(req, payload.EventType, payload.ID, payload.SchemaVersion)
 
 	_, err = s.executeRequest(ctx, req, targetURL)
 	return err
@@ -326,7 +326,7 @@ func (s *WebhookSender) buildJSONRequest(payload EventPayload) (*http.Request, e
 	}
 	req.Header.Set("Content-Type", "application/json")
 	s.applyAuthAndHeaders(req)
-	setEnvelopeHeaders(req, payload)
+	setEnvelopeHeaders(req, payload.EventType, payload.ID, payload.SchemaVersion)
 	return req, nil
 }
 
@@ -335,29 +335,18 @@ func (s *WebhookSender) buildJSONRequest(payload EventPayload) (*http.Request, e
 func (s *WebhookSender) loadMultipartImages(
 	ctx context.Context,
 	ev record.AlarmEvent,
-) ([]ImageInfo, []preparedMultipartImage) {
-	images := []ImageInfo{}
+) (*EventImages, []preparedMultipartImage) {
+	images := &EventImages{}
 	parts := []preparedMultipartImage{}
 	params := s.imageURLParams()
 
 	for _, c := range imageCandidates(ev) {
-		info := newImageInfo(c.role, c.relPath)
-		signed, ok := mintImageURL(
-			ctx,
-			params,
-			c.relPath,
-			false,
-		)
-		if ok {
-			info.URL = &signed.url
-			info.URLExpiresAt = &signed.expiresAt
-		}
-
+		info := newImageInfo(c.relPath)
 		data, readErr := s.readMediaBytes(ctx, c.role, c.relPath)
 		if readErr == nil {
 			partName := "image_" + c.role
 			size := int64(len(data))
-			info.Part = &partName
+			info.Part = partName
 			info.SizeBytes = &size
 			parts = append(parts, preparedMultipartImage{
 				part: partName,
@@ -365,12 +354,26 @@ func (s *WebhookSender) loadMultipartImages(
 				ext:  imageExtForMIME(info.MIME),
 				data: data,
 			})
-		}
-
-		if info.Part == nil && info.URL == nil {
+			images.set(c.role, info)
 			continue
 		}
-		images = append(images, info)
+
+		// Open/read failed: fall back to signed/presigned URL if configured.
+		signed, ok := mintImageURL(
+			ctx,
+			params,
+			c.relPath,
+			false,
+		)
+		if !ok {
+			continue
+		}
+		info.URL = signed.url
+		info.ExpiresAt = signed.expiresAt
+		images.set(c.role, info)
+	}
+	if images.Empty() {
+		return nil, parts
 	}
 	return images, parts
 }
@@ -428,7 +431,7 @@ func (s *WebhookSender) buildMultipartRequest(
 		return replayBody, nil
 	}
 	s.applyAuthAndHeaders(req)
-	setEnvelopeHeaders(req, payload)
+	setEnvelopeHeaders(req, payload.EventType, payload.ID, payload.SchemaVersion)
 	return req, nil
 }
 
@@ -472,10 +475,14 @@ func buildMultipartBody(
 
 // setEnvelopeHeaders mirrors routing metadata into reserved headers so gateways can route
 // without parsing the body. It runs after custom headers, which can never override these.
-func setEnvelopeHeaders(req *http.Request, payload EventPayload) {
-	req.Header.Set(headerZhulongEvent, payload.EventType)
-	req.Header.Set(headerZhulongDelivery, payload.ID)
-	req.Header.Set(headerZhulongSchema, strconv.Itoa(payload.SchemaVersion))
+func setEnvelopeHeaders(
+	req *http.Request,
+	eventType, deliveryID string,
+	schemaVersion int,
+) {
+	req.Header.Set(headerZhulongEvent, eventType)
+	req.Header.Set(headerZhulongDelivery, deliveryID)
+	req.Header.Set(headerZhulongSchema, strconv.Itoa(schemaVersion))
 }
 
 func (s *WebhookSender) applyAuthAndHeaders(req *http.Request) {

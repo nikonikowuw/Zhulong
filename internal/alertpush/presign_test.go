@@ -91,15 +91,15 @@ func TestWebhookSender_UsesPresignerWithHMACFallback(t *testing.T) {
 		t.Fatalf("Send failed: %v", err)
 	}
 
-	if len(received.Images) != 2 {
+	if received.Images == nil || received.Images.Scene == nil || received.Images.Object == nil {
 		t.Fatalf("expected scene and object images, got %+v", received.Images)
 	}
-	scene, object := received.Images[0], received.Images[1]
-	if scene.URL == nil || *scene.URL != media.presigned[ev.ImagePath] {
-		t.Fatalf("expected presigned scene URL, got %v", scene.URL)
+	scene, object := received.Images.Scene, received.Images.Object
+	if scene.URL != media.presigned[ev.ImagePath] {
+		t.Fatalf("expected presigned scene URL, got %q", scene.URL)
 	}
-	if object.URL == nil || !strings.HasPrefix(*object.URL, "https://edge.local/api/v1/media/signed/") {
-		t.Fatalf("expected HMAC fallback for unpresigned object URL, got %v", object.URL)
+	if !strings.HasPrefix(object.URL, "https://edge.local/api/v1/media/signed/") {
+		t.Fatalf("expected HMAC fallback for unpresigned object URL, got %q", object.URL)
 	}
 }
 
@@ -125,10 +125,10 @@ func TestResolveImageURLs(t *testing.T) {
 		params    imageURLParams
 		event     record.AlarmEvent
 		wantRoles []string
-		check     func(t *testing.T, images []ImageInfo)
+		check     func(t *testing.T, images *EventImages)
 	}{
 		{
-			name: "fixed order with local sizes",
+			name: "all three roles with local sizes",
 			params: imageURLParams{
 				PublicBaseURL: "https://edge.local", Signer: signer, TTL: time.Minute,
 				Media: &fakeMediaService{files: map[string][]byte{
@@ -137,31 +137,36 @@ func TestResolveImageURLs(t *testing.T) {
 			},
 			event:     faceEvent,
 			wantRoles: []string{ImageRoleScene, ImageRoleObject, ImageRoleReference},
-			check: func(t *testing.T, images []ImageInfo) {
-				if *images[0].SizeBytes != 2048 || *images[1].SizeBytes != 64 {
-					t.Fatalf("sizes = %v %v", *images[0].SizeBytes, *images[1].SizeBytes)
+			check: func(t *testing.T, images *EventImages) {
+				if *images.Scene.SizeBytes != 2048 || *images.Object.SizeBytes != 64 {
+					t.Fatalf("sizes = %v %v", *images.Scene.SizeBytes, *images.Object.SizeBytes)
 				}
-				for _, img := range images {
-					if img.URL == nil || !strings.HasPrefix(*img.URL, "https://edge.local/api/v1/media/signed/") {
-						t.Fatalf("url = %v", img.URL)
+				for _, img := range []*ImageInfo{images.Scene, images.Object, images.Reference} {
+					if !strings.HasPrefix(img.URL, "https://edge.local/api/v1/media/signed/") {
+						t.Fatalf("url = %q", img.URL)
 					}
-					if img.URLExpiresAt == nil || !payloadTimePattern.MatchString(*img.URLExpiresAt) {
-						t.Fatalf("url_expires_at = %v", img.URLExpiresAt)
+					if !payloadTimePattern.MatchString(img.ExpiresAt) {
+						t.Fatalf("expires_at = %q", img.ExpiresAt)
 					}
-					if img.MIME != imageMIMEJPEG || img.Part != nil || img.Base64 != nil {
+					if img.MIME != imageMIMEJPEG || img.Part != "" || img.Base64 != "" {
 						t.Fatalf("image = %+v", img)
 					}
 				}
 			},
 		},
 		{
-			name:      "no signer and no presigner omits every image",
+			name:      "no signer and no presigner returns nil",
 			params:    imageURLParams{PublicBaseURL: "https://edge.local", TTL: time.Minute},
 			event:     faceEvent,
 			wantRoles: []string{},
+			check: func(t *testing.T, images *EventImages) {
+				if images != nil {
+					t.Fatalf("images = %+v, want nil", images)
+				}
+			},
 		},
 		{
-			name: "presigned scene keeps null size, unready crop omitted",
+			name: "presigned scene omits size, unready crop omitted",
 			params: imageURLParams{
 				PublicBaseURL: "https://edge.local", Signer: signer, TTL: time.Minute,
 				Media: &stubPresigningMediaReader{
@@ -174,9 +179,9 @@ func TestResolveImageURLs(t *testing.T) {
 				CropPath: cropPath, CropReady: false,
 			},
 			wantRoles: []string{ImageRoleScene},
-			check: func(t *testing.T, images []ImageInfo) {
-				if *images[0].URL != "https://minio.local/evt.jpg?sig=1" || images[0].SizeBytes != nil {
-					t.Fatalf("scene = %+v", images[0])
+			check: func(t *testing.T, images *EventImages) {
+				if images.Scene.URL != "https://minio.local/evt.jpg?sig=1" || images.Scene.SizeBytes != nil {
+					t.Fatalf("scene = %+v", images.Scene)
 				}
 			},
 		},
@@ -185,10 +190,7 @@ func TestResolveImageURLs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			images := resolveImageURLs(context.Background(), tt.params, tt.event)
-			roles := make([]string, 0, len(images))
-			for _, img := range images {
-				roles = append(roles, img.Role)
-			}
+			roles := imageRolesPresent(images)
 			if strings.Join(roles, ",") != strings.Join(tt.wantRoles, ",") {
 				t.Fatalf("roles = %v, want %v", roles, tt.wantRoles)
 			}
