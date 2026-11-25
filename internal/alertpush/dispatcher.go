@@ -28,8 +28,10 @@ type AlertDestinationStatus struct {
 	LastSuccessAt       *time.Time `json:"lastSuccessAt"`
 	LastFailureAt       *time.Time `json:"lastFailureAt"`
 	ConsecutiveFailures int64      `json:"consecutiveFailures"`
+	TotalDispatched     int64      `json:"totalDispatched"`
 	Dropped             int64      `json:"dropped"`
 	Queued              int64      `json:"queued"`
+	QueueCapacity       int64      `json:"queueCapacity"`
 }
 
 // Config represents alertpush configuration injected into Dispatcher.
@@ -47,9 +49,13 @@ type Config struct {
 	Source SourceResolver
 }
 
-// sourceResolveTimeout bounds metadata lookups so a slow store never stalls a worker
-// (or its retirement drain).
-const sourceResolveTimeout = 2 * time.Second
+const (
+	// sourceResolveTimeout bounds metadata lookups so a slow store never stalls a worker
+	// (or its retirement drain).
+	sourceResolveTimeout   = 2 * time.Second
+	workerQueueCapacity    = 16
+	retirementDrainTimeout = 3 * time.Second
+)
 
 // queuedEvent pairs an event with the sequence number assigned at enqueue time.
 type queuedEvent struct {
@@ -217,7 +223,8 @@ func (d *Dispatcher) RequestReload() {
 func (d *Dispatcher) GetStatus(id string, enabled bool) AlertDestinationStatus {
 	if !enabled {
 		return AlertDestinationStatus{
-			State: StateDisabled,
+			State:         StateDisabled,
+			QueueCapacity: workerQueueCapacity,
 		}
 	}
 
@@ -233,11 +240,15 @@ func (d *Dispatcher) GetStatus(id string, enabled bool) AlertDestinationStatus {
 	st, found := d.stats[id]
 	d.statsMu.RUnlock()
 	if found {
+		if st.QueueCapacity <= 0 {
+			st.QueueCapacity = workerQueueCapacity
+		}
 		return st
 	}
 
 	return AlertDestinationStatus{
-		State: StateUnverified,
+		State:         StateUnverified,
+		QueueCapacity: workerQueueCapacity,
 	}
 }
 
@@ -322,6 +333,7 @@ func (d *Dispatcher) reconcile() {
 			continue
 		}
 
+		var prevStatus *AlertDestinationStatus
 		if exists {
 			if dest.HeartbeatEnabled {
 				toRetireReload = append(toRetireReload, currentWorker)
@@ -329,9 +341,18 @@ func (d *Dispatcher) reconcile() {
 				toRetireOffline = append(toRetireOffline, currentWorker)
 			}
 			delete(d.workers, dest.ID)
+			snap := currentWorker.getStatus()
+			prevStatus = &snap
 			d.statsMu.Lock()
-			d.stats[dest.ID] = currentWorker.getStatus()
+			d.stats[dest.ID] = snap
 			d.statsMu.Unlock()
+		} else {
+			d.statsMu.RLock()
+			if snap, found := d.stats[dest.ID]; found {
+				snapCopy := snap
+				prevStatus = &snapCopy
+			}
+			d.statsMu.RUnlock()
 		}
 
 		w := newDestinationWorker(destinationWorkerOptions{
@@ -345,6 +366,7 @@ func (d *Dispatcher) reconcile() {
 			seqCounter:        d.counterFor(dest.ID),
 			sourceResolver:    d.config.Source,
 			onWillStale:       d.RequestReload,
+			initialStatus:     prevStatus,
 			logger:            d.logger,
 		})
 		d.workers[dest.ID] = w
@@ -509,6 +531,7 @@ type destinationWorkerOptions struct {
 	seqCounter        *atomic.Uint64
 	sourceResolver    SourceResolver
 	onWillStale       func()
+	initialStatus     *AlertDestinationStatus
 	logger            *zap.Logger
 }
 
@@ -531,6 +554,7 @@ type destinationWorker struct {
 	// enqueueMu makes seq assignment and enqueue one step, so concurrent Dispatch calls
 	// cannot reorder sequence numbers inside the queue.
 	enqueueMu           sync.Mutex
+	totalDispatched     atomic.Int64
 	dropped             atomic.Int64
 	state               atomic.Value // string
 	lastError           atomic.Value // string
@@ -543,8 +567,6 @@ type destinationWorker struct {
 	suppressOffline     atomic.Bool
 	stopOnce            sync.Once
 	stopCh              chan struct{}
-	hbCtx               context.Context
-	hbCancel            context.CancelFunc
 	wg                  sync.WaitGroup
 	doneCh              chan struct{}
 	logger              *zap.Logger
@@ -568,8 +590,6 @@ func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
 		seqCounter = &atomic.Uint64{}
 	}
 
-	hbCtx, hbCancel := context.WithCancel(context.Background())
-
 	w := &destinationWorker{
 		id:                opts.dest.ID,
 		name:              opts.dest.Name,
@@ -585,11 +605,9 @@ func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
 		onWillStale:       opts.onWillStale,
 		filter:            opts.filter,
 		sender:            opts.sender,
-		queue:             make(chan queuedEvent, 16),
+		queue:             make(chan queuedEvent, workerQueueCapacity),
 		fingerprint:       opts.fingerprint,
 		stopCh:            make(chan struct{}),
-		hbCtx:             hbCtx,
-		hbCancel:          hbCancel,
 		doneCh:            make(chan struct{}),
 		logger:            opts.logger.With(zap.String("destination_id", opts.dest.ID)),
 	}
@@ -600,6 +618,25 @@ func newDestinationWorker(opts destinationWorkerOptions) *destinationWorker {
 	}
 	w.state.Store(initialState)
 	w.lastError.Store("")
+
+	// Carry forward cumulative counters and historical timestamps across hot-reloads
+	// while resetting health state so updated config is evaluated cleanly.
+	if st := opts.initialStatus; st != nil {
+		w.totalDispatched.Store(st.TotalDispatched)
+		w.dropped.Store(st.Dropped)
+		if st.LastAttemptAt != nil {
+			t := *st.LastAttemptAt
+			w.lastAttemptAt.Store(&t)
+		}
+		if st.LastSuccessAt != nil {
+			t := *st.LastSuccessAt
+			w.lastSuccessAt.Store(&t)
+		}
+		if st.LastFailureAt != nil {
+			t := *st.LastFailureAt
+			w.lastFailureAt.Store(&t)
+		}
+	}
 	return w
 }
 
@@ -608,8 +645,19 @@ func (w *destinationWorker) start() {
 		return
 	}
 
+	hbCtx, hbCancel := context.WithCancel(context.Background())
+	hbStopDone := make(chan struct{})
+	go func() {
+		defer close(hbStopDone)
+		select {
+		case <-w.stopCh:
+			hbCancel()
+		case <-hbCtx.Done():
+		}
+	}()
+
 	if mqttSender, ok := w.sender.(*MQTTSender); ok {
-		w.initMQTTConnection(mqttSender)
+		w.initMQTTConnection(hbCtx, mqttSender)
 	}
 
 	w.wg.Add(1)
@@ -617,17 +665,19 @@ func (w *destinationWorker) start() {
 
 	if w.heartbeatEnabled {
 		w.wg.Add(1)
-		go w.runHeartbeats()
+		go w.runHeartbeats(hbCtx)
 	}
 
 	go func() {
 		w.wg.Wait()
+		hbCancel()
+		<-hbStopDone
 		w.closeSender()
 		close(w.doneCh)
 	}()
 }
 
-func (w *destinationWorker) initMQTTConnection(mqttSender *MQTTSender) {
+func (w *destinationWorker) initMQTTConnection(stopCtx context.Context, mqttSender *MQTTSender) {
 	mqttSender.SetConnectionHooks(
 		func() {
 			w.state.Store(StateConnected)
@@ -655,8 +705,8 @@ func (w *destinationWorker) initMQTTConnection(mqttSender *MQTTSender) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		if connectErr := mqttSender.ConnectContext(w.hbCtx); connectErr != nil {
-			if w.hbCtx.Err() != nil {
+		if connectErr := mqttSender.ConnectContext(stopCtx); connectErr != nil {
+			if stopCtx.Err() != nil {
 				return
 			}
 			reason := classifyError(connectErr)
@@ -670,36 +720,73 @@ func (w *destinationWorker) initMQTTConnection(mqttSender *MQTTSender) {
 func (w *destinationWorker) runEvents() {
 	defer w.wg.Done()
 
+	// Bind in-flight deliveries and retirement drain to a single bounded grace window
+	// after stopCh closes so slow Webhook retries (up to 92s) can never breach the
+	// host's 60s shutdown timeout.
+	eventCtx, eventCancel := context.WithCancel(context.Background())
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-w.stopCh:
+			timer := time.NewTimer(retirementDrainTimeout)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				eventCancel()
+			case <-eventCtx.Done():
+			}
+		case <-eventCtx.Done():
+		}
+	}()
+	defer func() {
+		eventCancel()
+		<-watcherDone
+	}()
+
 	for {
 		select {
 		case <-w.stopCh:
-			// 目标退役时，在 3s 独立 deadline 内排空队列已排队事件
-			drainCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			for {
-				select {
-				case qe := <-w.queue:
-					if err := w.sender.Send(drainCtx, w.delivery(drainCtx, qe)); err != nil {
-						w.logger.Debug("failed to send drained event on retirement", zap.Error(err))
-					}
-				case <-drainCtx.Done():
-					return
-				default:
-					return
-				}
-			}
+			w.drainQueuedEvents(eventCtx)
+			return
 		case qe := <-w.queue:
-			ctx, cancel := context.WithTimeout(context.Background(), w.eventSendBudget())
+			ctx, cancel := context.WithTimeout(eventCtx, w.eventSendBudget())
 			err := w.sender.Send(ctx, w.delivery(ctx, qe))
 			cancel()
 
-			if err == nil {
+			switch {
+			case err == nil:
+				w.totalDispatched.Add(1)
 				w.recordSuccess()
-			} else {
+			case eventCtx.Err() != nil:
+				w.logger.Debug("in-flight dispatch canceled on worker shutdown", zap.Error(err))
+			default:
 				reason := classifyError(err)
 				w.recordFailure(reason)
 				w.logger.Warn("destination dispatch failed", zap.Error(err))
 			}
+		}
+	}
+}
+
+func (w *destinationWorker) drainQueuedEvents(eventCtx context.Context) {
+	drainCtx, cancel := context.WithTimeout(eventCtx, retirementDrainTimeout)
+	defer cancel()
+	for {
+		if drainCtx.Err() != nil {
+			return
+		}
+		select {
+		case qe := <-w.queue:
+			if err := w.sender.Send(drainCtx, w.delivery(drainCtx, qe)); err != nil {
+				w.logger.Debug("failed to send drained event on retirement", zap.Error(err))
+			} else {
+				w.totalDispatched.Add(1)
+			}
+		case <-drainCtx.Done():
+			return
+		default:
+			return
 		}
 	}
 }
@@ -742,7 +829,7 @@ func (w *destinationWorker) delivery(parent context.Context, qe queuedEvent) Del
 	return d
 }
 
-func (w *destinationWorker) runHeartbeats() {
+func (w *destinationWorker) runHeartbeats(stopCtx context.Context) {
 	defer w.wg.Done()
 
 	var prevErrReason string
@@ -761,13 +848,13 @@ func (w *destinationWorker) runHeartbeats() {
 				}
 			}
 
-			sendCtx, cancel := context.WithTimeout(w.hbCtx, w.heartbeatSendBudget())
+			sendCtx, cancel := context.WithTimeout(stopCtx, w.heartbeatSendBudget())
 			snap := resolveHeartbeatSnapshot(sendCtx, w.snapshotProvider, w.publicBaseURL)
 			seq := w.seqCounter.Add(1)
 			err := w.sender.SendHeartbeat(sendCtx, snap, seq)
 			cancel()
 
-			if w.hbCtx.Err() != nil {
+			if stopCtx.Err() != nil {
 				return
 			}
 
@@ -868,7 +955,6 @@ func (w *destinationWorker) stopForReload() {
 
 func (w *destinationWorker) stop() {
 	w.stopOnce.Do(func() {
-		w.hbCancel()
 		close(w.stopCh)
 	})
 
@@ -913,8 +999,10 @@ func (w *destinationWorker) getStatus() AlertDestinationStatus {
 		LastSuccessAt:       w.lastSuccessAt.Load(),
 		LastFailureAt:       w.lastFailureAt.Load(),
 		ConsecutiveFailures: w.consecutiveFailures.Load(),
+		TotalDispatched:     w.totalDispatched.Load(),
 		Dropped:             w.dropped.Load(),
 		Queued:              int64(len(w.queue)),
+		QueueCapacity:       workerQueueCapacity,
 	}
 }
 
@@ -969,6 +1057,10 @@ func classifyError(err error) string {
 	isPublishFailed := errors.Is(err, ErrMQTTPublishFailed) || strings.Contains(errStr, "publish")
 
 	switch {
+	case errors.Is(err, ErrCrossOriginRedirect):
+		return "cross_origin_redirect"
+	case errors.Is(err, ErrWebhookRedirectMethodChanged), errors.Is(err, ErrWebhookTooManyRedirects):
+		return "redirect_blocked"
 	case isDNS:
 		return "dns"
 	case strings.Contains(errStr, "connection refused"):

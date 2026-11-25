@@ -128,3 +128,34 @@ func TestIdentityService_UpdateRejectsInvalidValues(t *testing.T) {
 		t.Fatalf("rejected updates must not mutate the identity: %q != %q", got, original)
 	}
 }
+
+func TestIdentityService_NotifiesChangeListeners(t *testing.T) {
+	db := newTestIdentityDB(t)
+	svc := NewIdentityService(db, zaptest.NewLogger(t))
+	if err := svc.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	received := []string{}
+	svc.AddChangeListener(func(id string) {
+		// Reading DeviceID inside the listener proves callbacks run outside s.mu.
+		if svc.DeviceID() != id {
+			t.Errorf("DeviceID() inside listener = %q, want %q", svc.DeviceID(), id)
+		}
+		received = append(received, id)
+	})
+
+	if _, err := svc.Update(context.Background(), "edge-unit-01"); err != nil {
+		t.Fatalf("first Update: %v", err)
+	}
+	if _, err := svc.Update(context.Background(), "edge-unit-01"); err != nil {
+		t.Fatalf("idempotent Update: %v", err)
+	}
+	if _, err := svc.Update(context.Background(), "edge-unit-02"); err != nil {
+		t.Fatalf("second Update: %v", err)
+	}
+
+	if len(received) != 2 || received[0] != "edge-unit-01" || received[1] != "edge-unit-02" {
+		t.Fatalf("listener received %v, want [edge-unit-01 edge-unit-02]", received)
+	}
+}

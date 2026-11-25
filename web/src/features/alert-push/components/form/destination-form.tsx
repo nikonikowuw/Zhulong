@@ -99,8 +99,16 @@ export function DestinationForm({
     [destination?.headerNames]
   )
 
-  // 初始折叠展开判定：若编辑已有配置且存在自定义标头/过滤器，自动展开
+  // 初始折叠展开判定：编辑态下若存在对应协议的自定义高级项或过滤器，自动展开
   const hasCustomHeaders = originalHeaderNames.length > 0
+  const hasCustomMqttAdvanced = Boolean(
+    destination?.channelType === 'mqtt' &&
+    ((destination.config.clientId &&
+      destination.config.clientId !== `z${destination.id.slice(4)}`) ||
+      (destination.config.qos ?? 0) !== 0 ||
+      (destination.config.keepAliveSeconds ?? 30) !== 30 ||
+      Boolean(destination.config.tlsSkipVerify))
+  )
   const hasCustomFilters = Boolean(
     (destination?.filter?.eventTypes &&
       destination.filter.eventTypes.length > 0) ||
@@ -428,7 +436,7 @@ export function DestinationForm({
               control={form.control}
               isEdit={isEdit}
               secretSet={destination?.secretSet}
-              initialAdvancedOpen={hasCustomHeaders}
+              initialAdvancedOpen={hasCustomMqttAdvanced}
             />
           )}
 

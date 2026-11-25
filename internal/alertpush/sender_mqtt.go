@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -20,7 +22,10 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/record"
 )
 
-const mqttGracefulOfflineTimeout = 500 * time.Millisecond
+const (
+	mqttGracefulOfflineTimeout = 500 * time.Millisecond
+	mqttPublishTimeout         = 5 * time.Second
+)
 
 // inlinePriority is the order images claim the base64 budget: small, information-dense
 // crops first so they survive even when a 4K scene (1–3MB) cannot. Output order is
@@ -28,11 +33,13 @@ const mqttGracefulOfflineTimeout = 500 * time.Millisecond
 var inlinePriority = []string{ImageRoleObject, ImageRoleReference, ImageRoleScene}
 
 var (
-	ErrMQTTBrokerMissing = errors.New("mqtt broker url is missing")
-	ErrMQTTTopicMissing  = errors.New("mqtt topic is missing")
-	ErrMQTTWildcardTopic = errors.New("mqtt publish topic must not contain wildcards + or #")
-	ErrMQTTPublishFailed = errors.New("mqtt publish failed")
-	ErrMQTTNotConnected  = errors.New("mqtt client is not connected")
+	ErrMQTTBrokerMissing  = errors.New("mqtt broker url is missing")
+	ErrMQTTTopicMissing   = errors.New("mqtt topic is missing")
+	ErrMQTTWildcardTopic  = errors.New("mqtt publish topic must not contain wildcards + or #")
+	ErrMQTTPublishFailed  = errors.New("mqtt publish failed")
+	ErrMQTTNotConnected   = errors.New("mqtt client is not connected")
+	errMQTTSenderClosed   = errors.New("mqtt sender is closed")
+	errMQTTConnectTimeout = errors.New("mqtt connect timed out")
 )
 
 // MQTTSenderOptions contains configuration for MQTTSender.
@@ -161,10 +168,7 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 		willArmed = true
 	}
 
-	isSecureScheme := strings.HasPrefix(opts.Broker, "ssl://") ||
-		strings.HasPrefix(opts.Broker, "tls://") ||
-		strings.HasPrefix(opts.Broker, "tcps://")
-	if isSecureScheme {
+	if isSecureMQTTBroker(opts.Broker) {
 		clientOpts.SetTLSConfig(&tls.Config{
 			InsecureSkipVerify: opts.TLSSkipVerify,
 		})
@@ -236,10 +240,14 @@ func (s *MQTTSender) Connect() error {
 // ConnectContext establishes the MQTT broker connection, aborting promptly when ctx
 // is canceled or the sender is closed.
 func (s *MQTTSender) ConnectContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return errors.New("mqtt sender is closed")
+		return errMQTTSenderClosed
 	}
 	client := s.client
 	timeout := s.connectTimeout
@@ -258,7 +266,7 @@ func (s *MQTTSender) ConnectContext(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-closeCh:
-		return errors.New("mqtt sender is closed")
+		return errMQTTSenderClosed
 	case <-token.Done():
 		if err := token.Error(); err != nil {
 			s.logger.Warn("mqtt broker connect failed",
@@ -273,7 +281,12 @@ func (s *MQTTSender) ConnectContext(ctx context.Context) error {
 			zap.String("broker", logsafe.URL(s.opts.Broker)),
 			zap.Duration("timeout", timeout),
 		)
-		return fmt.Errorf("%w: connect timed out after %s", ErrMQTTNotConnected, timeout)
+		return fmt.Errorf(
+			"%w: %w after %s",
+			ErrMQTTNotConnected,
+			errMQTTConnectTimeout,
+			timeout,
+		)
 	}
 }
 
@@ -347,31 +360,88 @@ func (s *MQTTSender) publishGracefulOfflineLocked() {
 	}
 }
 
-// Send formats and publishes a perception event to the target topic.
+// EventSendBudget returns the total context budget for up to 3 publish attempts
+// plus an initial reconnect and backoffs.
+func (s *MQTTSender) EventSendBudget() time.Duration {
+	const (
+		attempts       = 3
+		backoffCeiling = 2 * time.Second
+	)
+	return max(defaultSendBudget, s.connectTimeout+attempts*mqttPublishTimeout+backoffCeiling)
+}
+
+// HeartbeatSendBudget returns the single-shot context budget for one heartbeat publish.
+func (s *MQTTSender) HeartbeatSendBudget() time.Duration {
+	return max(defaultSendBudget, s.connectTimeout+mqttPublishTimeout+time.Second)
+}
+
+// Send formats and publishes a perception event to the target topic, retrying transient
+// publish or reconnect blips while reusing the delivery's id, seq and prepared images.
 func (s *MQTTSender) Send(ctx context.Context, d Delivery) error {
-	if err := s.ensureConnected(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	payload := buildEventPayload(d, resolveDeviceID(s.opts.Identity), time.Now())
-	switch s.opts.ImageMode {
-	case ImageModeBase64:
-		payload.Images = s.inlineImages(ctx, d.Event)
-	default:
-		payload.Images = resolveImageURLs(ctx, s.imageURLParams(), d.Event)
+	const attempts = 3
+	backoffs := []time.Duration{
+		200*time.Millisecond + time.Duration(rand.IntN(50))*time.Millisecond,
+		800*time.Millisecond + time.Duration(rand.IntN(100))*time.Millisecond,
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal mqtt payload: %w", err)
-	}
+	var images []ImageInfo
+	var imagesReady bool
 
-	return s.publishBytes(ctx, s.opts.Topic, data)
+	var lastErr error
+	for attempt := range attempts {
+		if attempt > 0 {
+			backoffTimer := time.NewTimer(backoffs[attempt-1])
+			select {
+			case <-ctx.Done():
+				backoffTimer.Stop()
+				return ctx.Err()
+			case <-s.closeCh:
+				backoffTimer.Stop()
+				return errMQTTSenderClosed
+			case <-backoffTimer.C:
+			}
+		}
+
+		if err := s.ensureConnected(ctx); err != nil {
+			lastErr = err
+			if !isRetryableMQTTError(ctx, err) {
+				break
+			}
+			continue
+		}
+
+		if !imagesReady {
+			images = s.prepareImages(ctx, d.Event)
+			imagesReady = true
+		}
+
+		payload := buildEventPayload(d, resolveDeviceID(s.opts.Identity), time.Now())
+		payload.Images = images
+
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal mqtt payload: %w", err)
+		}
+
+		if err := s.publishBytes(ctx, s.opts.Topic, data); err != nil {
+			lastErr = err
+			if !isRetryableMQTTError(ctx, err) {
+				break
+			}
+			continue
+		}
+		return nil
+	}
+	return lastErr
 }
 
 // SendHeartbeat formats and publishes a liveness snapshot to the configured status topic.
 func (s *MQTTSender) SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, seq uint64) error {
-	if err := s.ensureConnected(); err != nil {
+	if err := s.ensureConnected(ctx); err != nil {
 		return err
 	}
 
@@ -389,17 +459,59 @@ func (s *MQTTSender) SendHeartbeat(ctx context.Context, snap HeartbeatSnapshot, 
 	return s.publishBytes(ctx, s.statusTopic(), data)
 }
 
-func (s *MQTTSender) ensureConnected() error {
+func (s *MQTTSender) prepareImages(ctx context.Context, ev record.AlarmEvent) []ImageInfo {
+	switch s.opts.ImageMode {
+	case ImageModeBase64:
+		return s.inlineImages(ctx, ev)
+	default:
+		return resolveImageURLs(ctx, s.imageURLParams(), ev)
+	}
+}
+
+func isRetryableMQTTError(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, errMQTTSenderClosed) || errors.Is(err, errMQTTConnectTimeout) {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
+}
+
+func isSecureMQTTBroker(rawBroker string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawBroker))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "ssl", "tls", "tcps", "wss", "mqtts":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *MQTTSender) ensureConnected(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return errors.New("sender closed")
+		return errMQTTSenderClosed
 	}
 	s.mu.Unlock()
 
 	if !s.client.IsConnected() {
-		if err := s.Connect(); err != nil {
-			if errors.Is(err, ErrMQTTNotConnected) {
+		if err := s.ConnectContext(ctx); err != nil {
+			isDirectErr := errors.Is(err, ErrMQTTNotConnected) ||
+				errors.Is(err, errMQTTSenderClosed) ||
+				errors.Is(err, context.Canceled) ||
+				errors.Is(err, context.DeadlineExceeded)
+			if isDirectErr {
 				return err
 			}
 			return fmt.Errorf("%w: %w", ErrMQTTNotConnected, err)
@@ -409,19 +521,23 @@ func (s *MQTTSender) ensureConnected() error {
 }
 
 func (s *MQTTSender) publishBytes(ctx context.Context, topic string, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	token := s.client.Publish(
 		topic,
 		byte(s.opts.QoS),
 		false,
 		data,
 	)
-	const publishTimeout = 5 * time.Second
-	timer := time.NewTimer(publishTimeout)
+	timer := time.NewTimer(mqttPublishTimeout)
 	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-s.closeCh:
+		return errMQTTSenderClosed
 	case <-token.Done():
 		if err := token.Error(); err != nil {
 			s.logger.Warn("mqtt publish failed", zap.Error(err))

@@ -431,3 +431,185 @@ func TestHandlerMaxDestinationsLimitEnforced(t *testing.T) {
 		t.Fatalf("33rd destination: status=%d code=%q, want 422 %s", code, envCode, CodeAlertDestinationConfigInvalid)
 	}
 }
+
+func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
+	router, _, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	longName := string(bytes.Repeat([]byte("a"), MaxDestinationNameLength+1))
+
+	// 1. Create rejects overlong name, invalid authType, and out-of-range timeoutSeconds.
+	createInvalid := []struct {
+		name string
+		req  CreateAlertDestinationRequest
+	}{
+		{
+			name: "name exceeds 64 chars",
+			req:  mqttCreateRequest(longName, nil),
+		},
+		{
+			name: "webhook invalid authType",
+			req: CreateAlertDestinationRequest{
+				Name:        "bad-auth",
+				ChannelType: ChannelTypeWebhook,
+				ImageMode:   ImageModeMultipart,
+				Config: AlertDestinationConfigInfo{
+					URL:      "https://example.com/hook",
+					AuthType: "digest",
+				},
+			},
+		},
+		{
+			name: "webhook timeoutSeconds 0",
+			req: CreateAlertDestinationRequest{
+				Name:        "bad-timeout-0",
+				ChannelType: ChannelTypeWebhook,
+				ImageMode:   ImageModeMultipart,
+				Config: AlertDestinationConfigInfo{
+					URL:            "https://example.com/hook",
+					TimeoutSeconds: intPtr(0),
+				},
+			},
+		},
+		{
+			name: "webhook timeoutSeconds 31",
+			req: CreateAlertDestinationRequest{
+				Name:        "bad-timeout-31",
+				ChannelType: ChannelTypeWebhook,
+				ImageMode:   ImageModeMultipart,
+				Config: AlertDestinationConfigInfo{
+					URL:            "https://example.com/hook",
+					TimeoutSeconds: intPtr(31),
+				},
+			},
+		},
+	}
+	for _, tc := range createInvalid {
+		t.Run("create/"+tc.name, func(t *testing.T) {
+			code, envCode, _ := postDestination(t, router, tc.req)
+			if code != http.StatusUnprocessableEntity || envCode != CodeAlertDestinationConfigInvalid {
+				t.Fatalf("status=%d code=%q, want 422 %s", code, envCode, CodeAlertDestinationConfigInvalid)
+			}
+		})
+	}
+
+	// Create a valid bearer webhook to test Update and existing-target /test parity.
+	var receivedAuth string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	code, envCode, created := postDestination(t, router, CreateAlertDestinationRequest{
+		Name:        "Valid Bearer Hook",
+		ChannelType: ChannelTypeWebhook,
+		ImageMode:   ImageModeMultipart,
+		Config: AlertDestinationConfigInfo{
+			URL:            target.URL + "/events",
+			AuthType:       AuthTypeBearer,
+			TimeoutSeconds: intPtr(5),
+		},
+		Secret: &AlertDestinationSecretInfo{
+			Token: stringPtr("tok-abc"),
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("create valid webhook: %d (%s)", code, envCode)
+	}
+
+	// 2. Update rejects blank name, overlong name, invalid authType, and out-of-range timeoutSeconds.
+	updateInvalid := []struct {
+		name string
+		req  UpdateAlertDestinationRequest
+	}{
+		{name: "blank name", req: UpdateAlertDestinationRequest{Name: stringPtr("   ")}},
+		{name: "overlong name", req: UpdateAlertDestinationRequest{Name: stringPtr(longName)}},
+		{
+			name: "invalid authType",
+			req:  UpdateAlertDestinationRequest{Config: &AlertDestinationConfigInfo{AuthType: "oauth"}},
+		},
+		{
+			name: "timeoutSeconds 0",
+			req:  UpdateAlertDestinationRequest{Config: &AlertDestinationConfigInfo{TimeoutSeconds: intPtr(0)}},
+		},
+		{
+			name: "timeoutSeconds 35",
+			req:  UpdateAlertDestinationRequest{Config: &AlertDestinationConfigInfo{TimeoutSeconds: intPtr(35)}},
+		},
+	}
+	for _, tc := range updateInvalid {
+		t.Run("update/"+tc.name, func(t *testing.T) {
+			st, env, _ := putDestination(t, router, created.ID, tc.req)
+			if st != http.StatusUnprocessableEntity || env != CodeAlertDestinationConfigInvalid {
+				t.Fatalf("status=%d code=%q, want 422 %s", st, env, CodeAlertDestinationConfigInvalid)
+			}
+		})
+	}
+
+	// 3. Existing-target /test rejects switching bearer -> basic without credentials and out-of-range timeout.
+	testInvalid := []struct {
+		name string
+		req  TestAlertDestinationRequest
+	}{
+		{
+			name: "switch authType to basic without creds",
+			req: TestAlertDestinationRequest{
+				ID:     created.ID,
+				Config: AlertDestinationConfigInfo{AuthType: AuthTypeBasic},
+			},
+		},
+		{
+			name: "invalid timeoutSeconds",
+			req: TestAlertDestinationRequest{
+				ID:     created.ID,
+				Config: AlertDestinationConfigInfo{TimeoutSeconds: intPtr(99)},
+			},
+		},
+		{
+			name: "draft invalid authType",
+			req: TestAlertDestinationRequest{
+				ChannelType: ChannelTypeWebhook,
+				ImageMode:   ImageModeMultipart,
+				Config: AlertDestinationConfigInfo{
+					URL:      target.URL + "/events",
+					AuthType: "bogus",
+				},
+			},
+		},
+	}
+	for _, tc := range testInvalid {
+		t.Run("test/"+tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/alert-destinations/test",
+				bytes.NewReader(mustMarshalJSON(t, tc.req)),
+			)
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+			if w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status=%d (%s), want 422", w.Code, w.Body.String())
+			}
+		})
+	}
+
+	// 4. Existing-target /test switching bearer -> none must strip old bearer token before sending.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/test",
+		bytes.NewReader(mustMarshalJSON(t, TestAlertDestinationRequest{
+			ID:     created.ID,
+			Config: AlertDestinationConfigInfo{AuthType: AuthTypeNone},
+		})),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("test bearer->none status=%d: %s", w.Code, w.Body.String())
+	}
+	if receivedAuth != "" {
+		t.Fatalf("switching authType to none on /test leaked Authorization=%q", receivedAuth)
+	}
+}

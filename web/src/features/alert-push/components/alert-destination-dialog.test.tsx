@@ -521,4 +521,56 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
     await expect.element(getByText('16 / 16')).toBeInTheDocument()
     await expect.element(getByText('丢弃 7')).toBeInTheDocument()
   })
+
+  it('auto-expands MQTT advanced section in edit mode when custom MQTT options are set', async () => {
+    const customMqttDest: AlertDestination = {
+      id: '01J8ZMQTTEDIT000000000001',
+      name: 'TLS MQTT Broker',
+      channelType: 'mqtt',
+      enabled: true,
+      eventsEnabled: true,
+      heartbeatEnabled: false,
+      imageMode: 'base64',
+      config: {
+        broker: 'wss://broker.example.com:8084/mqtt',
+        topic: 'zhulong/events',
+        clientId: 'edge-custom-id',
+        qos: 1,
+        keepAliveSeconds: 60,
+        tlsSkipVerify: true,
+        inlineMaxKb: 500,
+      },
+      filter: {
+        eventTypes: [],
+        algorithmIds: [],
+        cameraIds: [],
+      },
+      secretSet: false,
+      status: {
+        consecutiveFailures: 0,
+        totalDispatched: 5,
+        dropped: 0,
+        queueLength: 0,
+        queueCapacity: 16,
+        state: 'running',
+      },
+    }
+
+    const queryClient = new QueryClient()
+    const { getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={customMqttDest}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    // Client ID input is inside the collapsible MQTT advanced section; it must be visible without clicking toggle.
+    await expect
+      .element(getByRole('textbox', { name: /Client ID/i }))
+      .toHaveValue('edge-custom-id')
+  })
 })

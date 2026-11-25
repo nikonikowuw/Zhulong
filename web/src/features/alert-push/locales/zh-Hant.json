@@ -225,6 +225,8 @@
     "not_found": "目標端點不存在 (404)",
     "http_error": "目標服務回傳 HTTP 錯誤",
     "http_status": "目標服務回傳非 2xx 狀態碼",
+    "cross_origin_redirect": "已攔截攜帶憑證的跨來源重新導向",
+    "redirect_blocked": "重新導向次數超限或將 POST 降級為 GET",
     "mqtt_connect": "MQTT 握手失敗",
     "not_connected": "MQTT 未連線",
     "publish_failed": "MQTT 發布失敗",

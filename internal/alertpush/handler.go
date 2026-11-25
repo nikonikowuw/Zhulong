@@ -435,9 +435,19 @@ func (h *Handler) resolveExistingTestTarget(
 			}
 		}
 		if req.Config.AuthType != "" {
+			if !isValidWebhookAuthType(req.Config.AuthType) {
+				return nil, nil, fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
+			}
 			cfg.AuthType = req.Config.AuthType
 		}
-		if req.Config.TimeoutSeconds != nil && *req.Config.TimeoutSeconds > 0 {
+		if req.Config.TimeoutSeconds != nil {
+			if !isValidWebhookTimeout(*req.Config.TimeoutSeconds) {
+				return nil, nil, fmt.Errorf(
+					"timeoutSeconds must be between %d and %d",
+					MinWebhookTimeoutSeconds,
+					MaxWebhookTimeoutSeconds,
+				)
+			}
 			cfg.TimeoutSeconds = *req.Config.TimeoutSeconds
 		}
 		if req.Config.HeartbeatIntervalSeconds != nil {
@@ -457,10 +467,23 @@ func (h *Handler) resolveExistingTestTarget(
 			return nil, nil, err
 		}
 		if req.Config.URL != "" {
+			if err := validateWebhookURL(req.Config.URL); err != nil {
+				return nil, nil, err
+			}
 			sec.URL = req.Config.URL
 		}
 		if req.Config.HeartbeatURL != nil {
-			sec.HeartbeatURL = strings.TrimSpace(*req.Config.HeartbeatURL)
+			trimmed := strings.TrimSpace(*req.Config.HeartbeatURL)
+			if trimmed != "" {
+				if err := validateWebhookURL(trimmed); err != nil {
+					return nil, nil, err
+				}
+			}
+			sec.HeartbeatURL = trimmed
+		}
+		normalizeWebhookAuthCredentials(cfg.AuthType, sec)
+		if err := validateWebhookAuthCredentials(cfg.AuthType, sec); err != nil {
+			return nil, nil, err
 		}
 		return existing, sec, nil
 	case ChannelTypeMQTT:
@@ -552,12 +575,22 @@ func (h *Handler) resolveDraftTestTarget(
 
 	switch req.ChannelType {
 	case ChannelTypeWebhook:
-		timeout := 5
-		if req.Config.TimeoutSeconds != nil && *req.Config.TimeoutSeconds > 0 {
+		timeout := DefaultWebhookTimeoutSec
+		if req.Config.TimeoutSeconds != nil {
+			if !isValidWebhookTimeout(*req.Config.TimeoutSeconds) {
+				return nil, nil, fmt.Errorf(
+					"timeoutSeconds must be between %d and %d",
+					MinWebhookTimeoutSeconds,
+					MaxWebhookTimeoutSeconds,
+				)
+			}
 			timeout = *req.Config.TimeoutSeconds
 		}
 		authType := AuthTypeNone
 		if req.Config.AuthType != "" {
+			if !isValidWebhookAuthType(req.Config.AuthType) {
+				return nil, nil, fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
+			}
 			authType = req.Config.AuthType
 		}
 		hbInterval := DefaultHeartbeatIntervalSeconds
@@ -581,6 +614,10 @@ func (h *Handler) resolveDraftTestTarget(
 			sec.HeartbeatURL = strings.TrimSpace(*req.Config.HeartbeatURL)
 		}
 		if err := applyWebhookSecretOverrides(sec, req.Secret, true); err != nil {
+			return nil, nil, err
+		}
+		normalizeWebhookAuthCredentials(authType, sec)
+		if err := validateWebhookAuthCredentials(authType, sec); err != nil {
 			return nil, nil, err
 		}
 		return dest, sec, nil
@@ -700,12 +737,22 @@ func (h *Handler) parseWebhookCreate(
 		return nil, err
 	}
 
-	timeout := 5
-	if isValidTimeoutSeconds(req.Config.TimeoutSeconds) {
+	timeout := DefaultWebhookTimeoutSec
+	if req.Config.TimeoutSeconds != nil {
+		if !isValidWebhookTimeout(*req.Config.TimeoutSeconds) {
+			return nil, fmt.Errorf(
+				"timeoutSeconds must be between %d and %d",
+				MinWebhookTimeoutSeconds,
+				MaxWebhookTimeoutSeconds,
+			)
+		}
 		timeout = *req.Config.TimeoutSeconds
 	}
 	authType := AuthTypeNone
 	if req.Config.AuthType != "" {
+		if !isValidWebhookAuthType(req.Config.AuthType) {
+			return nil, fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
+		}
 		authType = req.Config.AuthType
 	}
 
@@ -909,9 +956,19 @@ func (h *Handler) applyWebhookUpdate(
 			curSec.HeartbeatURL = trimmed
 		}
 		if req.Config.AuthType != "" {
+			if !isValidWebhookAuthType(req.Config.AuthType) {
+				return fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
+			}
 			curCfg.AuthType = req.Config.AuthType
 		}
-		if isValidTimeoutSeconds(req.Config.TimeoutSeconds) {
+		if req.Config.TimeoutSeconds != nil {
+			if !isValidWebhookTimeout(*req.Config.TimeoutSeconds) {
+				return fmt.Errorf(
+					"timeoutSeconds must be between %d and %d",
+					MinWebhookTimeoutSeconds,
+					MaxWebhookTimeoutSeconds,
+				)
+			}
 			curCfg.TimeoutSeconds = *req.Config.TimeoutSeconds
 		}
 		if req.Config.HeartbeatIntervalSeconds != nil {
@@ -927,17 +984,7 @@ func (h *Handler) applyWebhookUpdate(
 	}
 
 	// Normalize and validate by auth_type
-	switch curCfg.AuthType {
-	case AuthTypeNone:
-		curSec.Token = ""
-		curSec.Username = ""
-		curSec.Password = ""
-	case AuthTypeBearer:
-		curSec.Username = ""
-		curSec.Password = ""
-	case AuthTypeBasic:
-		curSec.Token = ""
-	}
+	normalizeWebhookAuthCredentials(curCfg.AuthType, curSec)
 	if err := validateWebhookAuthCredentials(curCfg.AuthType, curSec); err != nil {
 		return err
 	}
@@ -1201,8 +1248,21 @@ func validateWebhookURL(rawURL string) error {
 	return nil
 }
 
-func isValidTimeoutSeconds(v *int) bool {
-	return v != nil && *v >= 1 && *v <= 30
+func normalizeWebhookAuthCredentials(authType string, sec *webhookSecret) {
+	if sec == nil {
+		return
+	}
+	switch authType {
+	case "", AuthTypeNone:
+		sec.Token = ""
+		sec.Username = ""
+		sec.Password = ""
+	case AuthTypeBearer:
+		sec.Username = ""
+		sec.Password = ""
+	case AuthTypeBasic:
+		sec.Token = ""
+	}
 }
 
 // inlineMaxKBFromInfo copies the optional API value verbatim; range checks live in

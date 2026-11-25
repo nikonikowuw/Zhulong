@@ -492,3 +492,142 @@ func TestMQTTSenderCloseUnblocksInFlightConnect(t *testing.T) {
 		t.Fatal("Connect() did not unblock promptly after Close()")
 	}
 }
+
+func TestMQTTSenderEnsureConnectedRespectsContext(t *testing.T) {
+	brokerURL, cleanup := startSilentTCPListener(t)
+	defer cleanup()
+
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:             "mqtt_ctx_connect",
+		ImageMode:      ImageModeBase64,
+		Broker:         brokerURL,
+		ClientID:       "zhulong-ctx-conn-1",
+		Topic:          "zhulong/alerts/ctx",
+		ConnectTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	sendErr := sender.Send(ctx, Delivery{
+		Event: record.AlarmEvent{ID: "01CTX", CapturedAt: time.Now().UTC()},
+	})
+	elapsed := time.Since(start)
+	if !errors.Is(sendErr, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", sendErr)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("Send ignored ctx deadline during connect: elapsed=%v", elapsed)
+	}
+
+	hbCtx, hbCancel := context.WithCancel(context.Background())
+	hbCancel()
+	hbErr := sender.SendHeartbeat(hbCtx, HeartbeatSnapshot{ReportedAt: time.Now().UTC()}, 1)
+	if !errors.Is(hbErr, context.Canceled) {
+		t.Fatalf("expected context.Canceled on heartbeat, got %v", hbErr)
+	}
+}
+
+func TestMQTTSenderSecureSchemeDetection(t *testing.T) {
+	cases := []struct {
+		broker string
+		want   bool
+	}{
+		{broker: "ssl://broker.local:8883", want: true},
+		{broker: "tls://broker.local:8883", want: true},
+		{broker: "tcps://broker.local:8883", want: true},
+		{broker: "wss://broker.local:8084/mqtt", want: true},
+		{broker: "WSS://broker.local:8084/mqtt", want: true},
+		{broker: "TLS://broker.local:8883", want: true},
+		{broker: "mqtts://broker.local:8883", want: true},
+		{broker: "tcp://broker.local:1883", want: false},
+		{broker: "ws://broker.local:8083/mqtt", want: false},
+	}
+	for _, tc := range cases {
+		if got := isSecureMQTTBroker(tc.broker); got != tc.want {
+			t.Errorf("isSecureMQTTBroker(%q) = %v, want %v", tc.broker, got, tc.want)
+		}
+	}
+}
+
+type mockMQTTToken struct {
+	done chan struct{}
+	err  error
+}
+
+func newDoneMQTTToken(err error) *mockMQTTToken {
+	ch := make(chan struct{})
+	close(ch)
+	return &mockMQTTToken{done: ch, err: err}
+}
+
+func (m *mockMQTTToken) Wait() bool                     { return true }
+func (m *mockMQTTToken) WaitTimeout(time.Duration) bool { return true }
+func (m *mockMQTTToken) Done() <-chan struct{}          { return m.done }
+func (m *mockMQTTToken) Error() error                   { return m.err }
+
+type flakyMQTTClient struct {
+	mqtt.Client
+	failCount int
+	calls     int
+	payloads  [][]byte
+}
+
+func (f *flakyMQTTClient) IsConnected() bool { return true }
+
+func (f *flakyMQTTClient) Publish(_ string, _ byte, _ bool, payload any) mqtt.Token {
+	f.calls++
+	if raw, ok := payload.([]byte); ok {
+		f.payloads = append(f.payloads, append([]byte(nil), raw...))
+	}
+	if f.calls <= f.failCount {
+		return newDoneMQTTToken(errors.New("transient broker disconnect"))
+	}
+	return newDoneMQTTToken(nil)
+}
+
+func TestMQTTSenderRetriesTransientPublishFailure(t *testing.T) {
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:        "mqtt_retry",
+		ImageMode: ImageModeBase64,
+		Broker:    "tcp://127.0.0.1:1883",
+		ClientID:  "zhulong-retry-1",
+		Topic:     "zhulong/alerts/retry",
+		QoS:       1,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+	fakeClient := &flakyMQTTClient{failCount: 2}
+	sender.client = fakeClient
+
+	ev := record.AlarmEvent{
+		ID:         "01MQTTRETRY",
+		CameraID:   "cam_01",
+		CapturedAt: time.Now().UTC(),
+	}
+	if err := sender.Send(context.Background(), Delivery{Event: ev, Seq: 12}); err != nil {
+		t.Fatalf("Send should succeed on 3rd attempt, got %v", err)
+	}
+	if fakeClient.calls != 3 {
+		t.Fatalf("publish attempts = %d, want 3", fakeClient.calls)
+	}
+	for i, raw := range fakeClient.payloads {
+		var p EventPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			t.Fatalf("attempt %d unmarshal: %v", i, err)
+		}
+		if p.ID != "01MQTTRETRY" || p.Seq == nil || *p.Seq != 12 {
+			t.Fatalf("attempt %d changed id/seq: %+v", i, p)
+		}
+	}
+}

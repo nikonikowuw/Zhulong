@@ -225,6 +225,8 @@
     "not_found": "Endpoint Not Found (404)",
     "http_error": "HTTP Error Returned",
     "http_status": "Non-2xx HTTP Status",
+    "cross_origin_redirect": "Cross-origin redirect blocked with credentials",
+    "redirect_blocked": "Redirect limit exceeded or POST method downgraded",
     "mqtt_connect": "MQTT Connect Failed",
     "not_connected": "MQTT Not Connected",
     "publish_failed": "MQTT Publish Failed",

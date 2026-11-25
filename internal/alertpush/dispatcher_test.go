@@ -734,3 +734,140 @@ func TestDispatcherConcurrentStopAndRemoveState(t *testing.T) {
 		t.Fatalf("expected concurrent Stop across 4 workers (<900ms), took %v", elapsed)
 	}
 }
+
+func TestDispatcherStopBoundsSlowInFlightSend(t *testing.T) {
+	d := NewDispatcher(DispatcherOptions{Logger: zap.NewNop()})
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	startedCh := make(chan struct{})
+	slowSender := &blockingBudgetSender{
+		eventBudget: 92 * time.Second,
+		startedCh:   startedCh,
+	}
+	w := newDestinationWorker(destinationWorkerOptions{
+		dest:        &AlertDestination{ID: "slow-92s", ChannelType: ChannelTypeWebhook, EventsEnabled: true},
+		sender:      slowSender,
+		fingerprint: "fp-slow",
+		logger:      zap.NewNop(),
+	})
+	d.mu.Lock()
+	d.workers[w.id] = w
+	d.mu.Unlock()
+	w.start()
+
+	d.Dispatch(record.AlarmEvent{ID: "ev-slow"})
+	select {
+	case <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for slow send to begin")
+	}
+
+	start := time.Now()
+	if err := d.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > retirementDrainTimeout+1500*time.Millisecond {
+		t.Fatalf("Stop took %v, expected bounded by retirementDrainTimeout (%v)", elapsed, retirementDrainTimeout)
+	}
+}
+
+type blockingBudgetSender struct {
+	eventBudget time.Duration
+	startedCh   chan struct{}
+	once        sync.Once
+}
+
+func (s *blockingBudgetSender) EventSendBudget() time.Duration     { return s.eventBudget }
+func (s *blockingBudgetSender) HeartbeatSendBudget() time.Duration { return defaultSendBudget }
+func (s *blockingBudgetSender) Close() error                       { return nil }
+func (s *blockingBudgetSender) SendHeartbeat(context.Context, HeartbeatSnapshot, uint64) error {
+	return nil
+}
+
+func (s *blockingBudgetSender) Send(ctx context.Context, _ Delivery) error {
+	s.once.Do(func() { close(s.startedCh) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestDispatcherReconcilePreservesCumulativeStatusAndCapacity(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dest := &AlertDestination{
+		ID:               "dest_stats_preserve",
+		Name:             "Webhook Stats",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          true,
+		EventsEnabled:    true,
+		HeartbeatEnabled: false,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:       `{}`,
+	}
+	secBytes, err := store.EncryptSecret(dest.ID, &webhookSecret{URL: "http://127.0.0.1:9999/hook"})
+	if err != nil {
+		t.Fatalf("EncryptSecret: %v", err)
+	}
+	dest.SecretCiphertext = secBytes
+	if err := store.Create(ctx, dest); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+
+	d := NewDispatcher(DispatcherOptions{
+		Store:  store,
+		Signer: NewEmptyURLSigner(),
+		Config: Config{PublicBaseURL: "http://127.0.0.1:8000"},
+		Logger: zap.NewNop(),
+	})
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		if stopErr := d.Stop(ctx); stopErr != nil {
+			t.Errorf("Stop: %v", stopErr)
+		}
+	}()
+
+	d.mu.RLock()
+	origWorker := d.workers[dest.ID]
+	d.mu.RUnlock()
+	origWorker.totalDispatched.Store(7)
+	origWorker.dropped.Store(3)
+	origWorker.recordSuccess()
+	origWorker.recordFailure("timeout")
+
+	// Update config to force worker replacement in reconcile.
+	dest.ConfigJSON = `{"auth_type":"none","timeout_seconds":8}`
+	if err := store.Update(ctx, dest); err != nil {
+		t.Fatalf("store.Update: %v", err)
+	}
+	d.reconcile()
+
+	st := d.GetStatus(dest.ID, true)
+	if st.TotalDispatched != 7 || st.Dropped != 3 || st.QueueCapacity != workerQueueCapacity {
+		t.Fatalf("status counters not preserved across reconcile: %+v", st)
+	}
+	if st.LastSuccessAt == nil || st.LastFailureAt == nil || st.LastAttemptAt == nil {
+		t.Fatalf("status timestamps not preserved across reconcile: %+v", st)
+	}
+	if st.State != StateUnverified || st.ConsecutiveFailures != 0 || st.LastError != "" {
+		t.Fatalf("health state should reset on config reload, got %+v", st)
+	}
+}
+
+func TestClassifyErrorRedirectReasons(t *testing.T) {
+	if got := classifyError(ErrCrossOriginRedirect); got != "cross_origin_redirect" {
+		t.Fatalf("classifyError(ErrCrossOriginRedirect) = %q, want cross_origin_redirect", got)
+	}
+	if got := classifyError(ErrWebhookRedirectMethodChanged); got != "redirect_blocked" {
+		t.Fatalf("classifyError(ErrWebhookRedirectMethodChanged) = %q, want redirect_blocked", got)
+	}
+	if got := classifyError(ErrWebhookTooManyRedirects); got != "redirect_blocked" {
+		t.Fatalf("classifyError(ErrWebhookTooManyRedirects) = %q, want redirect_blocked", got)
+	}
+}

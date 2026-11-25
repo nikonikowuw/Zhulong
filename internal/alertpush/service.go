@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 
@@ -92,6 +93,10 @@ func (s *Service) Create(
 	dest *AlertDestination,
 	secretRaw destinationSecret,
 ) error {
+	dest.Name = strings.TrimSpace(dest.Name)
+	if err := validateDestinationName(dest.Name); err != nil {
+		return err
+	}
 	if !dest.EventsEnabled && strings.TrimSpace(dest.ImageMode) == "" {
 		dest.ImageMode = ImageModeURL
 	}
@@ -139,8 +144,12 @@ func (s *Service) Update(
 	existing *AlertDestination,
 	params UpdateParams,
 ) error {
-	if params.Name != nil && strings.TrimSpace(*params.Name) != "" {
-		existing.Name = strings.TrimSpace(*params.Name)
+	if params.Name != nil {
+		trimmed := strings.TrimSpace(*params.Name)
+		if err := validateDestinationName(trimmed); err != nil {
+			return err
+		}
+		existing.Name = trimmed
 	}
 	if params.EventsEnabled != nil {
 		existing.EventsEnabled = *params.EventsEnabled
@@ -434,11 +443,36 @@ func (s *Service) validateDestination(dest *AlertDestination, secretRaw destinat
 	return nil
 }
 
+func validateDestinationName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: destination name is required", ErrInvalidConfig)
+	}
+	if utf8.RuneCountInString(name) > MaxDestinationNameLength {
+		return fmt.Errorf(
+			"%w: destination name must not exceed %d characters",
+			ErrInvalidConfig,
+			MaxDestinationNameLength,
+		)
+	}
+	return nil
+}
+
 func validateWebhookTarget(configJSON string, secretRaw destinationSecret) error {
 	var cfg webhookConfig
 	if configJSON != "" {
 		if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
+		if !isValidWebhookAuthType(cfg.AuthType) {
+			return fmt.Errorf("%w: unsupported webhook auth_type %q", ErrInvalidConfig, cfg.AuthType)
+		}
+		if cfg.TimeoutSeconds != 0 && !isValidWebhookTimeout(cfg.TimeoutSeconds) {
+			return fmt.Errorf(
+				"%w: timeout_seconds must be between %d and %d",
+				ErrInvalidConfig,
+				MinWebhookTimeoutSeconds,
+				MaxWebhookTimeoutSeconds,
+			)
 		}
 		if cfg.HeartbeatIntervalSeconds != 0 && !isValidHeartbeatInterval(cfg.HeartbeatIntervalSeconds) {
 			return fmt.Errorf("%w: heartbeat_interval_seconds must be between 15 and 3600", ErrInvalidConfig)
@@ -446,6 +480,9 @@ func validateWebhookTarget(configJSON string, secretRaw destinationSecret) error
 	}
 	if sec, ok := secretRaw.(*webhookSecret); ok && sec != nil {
 		if err := validateWebhookURL(sec.URL); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
+		if err := validateWebhookAuthCredentials(cfg.AuthType, sec); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
 		}
 		if err := validateWebhookHeartbeatOrigin(cfg.AuthType, sec); err != nil {

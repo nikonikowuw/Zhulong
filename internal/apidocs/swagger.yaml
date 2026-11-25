@@ -239,10 +239,14 @@ definitions:
         type: string
       lastSuccessAt:
         type: string
+      queueCapacity:
+        type: integer
       queued:
         type: integer
       state:
         type: string
+      totalDispatched:
+        type: integer
     type: object
   alertpush.CreateAlertDestinationRequest:
     properties:

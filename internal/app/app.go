@@ -1200,6 +1200,11 @@ func provideAlertPush(p alertPushParams) alertPushOut {
 
 	p.CameraManager.AddEncryptedDataProbe(comp.Store)
 	p.RecordService.SetAlarmListener(comp.Dispatcher)
+	if p.SystemInfo != nil {
+		p.SystemInfo.AddChangeListener(func(string) {
+			comp.Dispatcher.RequestReload()
+		})
+	}
 
 	return alertPushOut{
 		Store:             comp.Store,

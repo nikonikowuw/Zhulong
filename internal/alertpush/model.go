@@ -61,11 +61,15 @@ const (
 	MinInlineMaxKB     = 64
 	MaxInlineMaxKB     = 8192
 
-	MaxDestinations       = 32
-	MinKeepAliveSeconds   = 5
-	MaxKeepAliveSeconds   = 300
-	MaxMQTTClientIDLength = 23
-	MaxMQTTQoS            = 2
+	MaxDestinations          = 32
+	MaxDestinationNameLength = 64
+	MinWebhookTimeoutSeconds = 1
+	MaxWebhookTimeoutSeconds = 30
+	DefaultWebhookTimeoutSec = 5
+	MinKeepAliveSeconds      = 5
+	MaxKeepAliveSeconds      = 300
+	MaxMQTTClientIDLength    = 23
+	MaxMQTTQoS               = 2
 )
 
 // AlertDestination represents the database persistence model for an alert target.
@@ -148,6 +152,19 @@ func isValidHeartbeatInterval(sec int) bool {
 
 func isValidKeepAliveSeconds(sec int) bool {
 	return sec >= MinKeepAliveSeconds && sec <= MaxKeepAliveSeconds
+}
+
+func isValidWebhookTimeout(sec int) bool {
+	return sec >= MinWebhookTimeoutSeconds && sec <= MaxWebhookTimeoutSeconds
+}
+
+func isValidWebhookAuthType(authType string) bool {
+	switch authType {
+	case "", AuthTypeNone, AuthTypeBearer, AuthTypeBasic:
+		return true
+	default:
+		return false
+	}
 }
 
 func isValidMQTTQoS(qos uint8) bool {

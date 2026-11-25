@@ -318,3 +318,77 @@ func TestReservedEnvelopeHeadersRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestWebhookMultipartRetryReadsDiskOnce(t *testing.T) {
+	const scenePath = "snapshots/cam_01/2026-11-24/retry_once.jpg"
+	media := &countingMediaReader{
+		files: map[string][]byte{
+			scenePath: []byte("reusable-multipart-jpeg"),
+		},
+	}
+
+	var attempts atomic.Int32
+	var finalImage []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		f, _, err := r.FormFile("image_scene")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		data, err := io.ReadAll(f)
+		if closeErr := f.Close(); closeErr != nil {
+			t.Errorf("close form file: %v", closeErr)
+		}
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if attempts.Add(1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		finalImage = data
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:        "dest_mp_retry",
+		ImageMode: ImageModeMultipart,
+		URL:       server.URL,
+		Media:     media,
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	err = sender.Send(context.Background(), Delivery{
+		Event: record.AlarmEvent{
+			ID: "01MPRETRY", CameraID: "cam_01", CapturedAt: time.Now().UTC(),
+			ImagePath: scenePath, ImageReady: true,
+		},
+		Seq: 9,
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if attempts.Load() != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts.Load())
+	}
+	if media.opens.Load() != 1 || media.closes.Load() != 1 {
+		t.Fatalf("expected single disk open/close across 3 retries, got opens=%d closes=%d",
+			media.opens.Load(), media.closes.Load())
+	}
+	if string(finalImage) != "reusable-multipart-jpeg" {
+		t.Fatalf("final image = %q, want reusable-multipart-jpeg", string(finalImage))
+	}
+}

@@ -51,7 +51,7 @@
     "mqttTitle": "高级会话与 TLS 策略",
     "filtersTitle": "感知事件与数据过滤 (Filters)",
     "filtersAllSummary": "默认全量推送（全部事件 · 全部算法 · 全部摄像机）",
-    "filtersCustomSummary": "已配置自定义过滤規則",
+    "filtersCustomSummary": "已配置自定义过滤规则",
     "webhookSummary": "超时 {{timeout}} 秒 · {{count}} 个自定义标头",
     "mqttSummary": "QoS {{qos}} · 保活 {{keepAlive}} 秒 · {{clientId}}"
   },
@@ -225,6 +225,8 @@
     "not_found": "目标端点不存在 (404)",
     "http_error": "目标服务返回 HTTP 错误",
     "http_status": "目标服务返回非 2xx 状态码",
+    "cross_origin_redirect": "已拦截携带凭据的跨源重定向",
+    "redirect_blocked": "重定向次数超限或将 POST 降级为 GET",
     "mqtt_connect": "MQTT 握手失败",
     "not_connected": "MQTT 未连接",
     "publish_failed": "MQTT 发布失败",

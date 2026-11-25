@@ -8,20 +8,21 @@
 
 - **通道与图片模式**：支持 `webhook` 与 `mqtt` 两种通道类型，以及 `url`、`multipart`、`base64` 三种图片载荷模式（受各通道能力校验约束）。
 - **设备身份与来源实时读取**：
-  - `Dispatcher` 通过 `DeviceIDProvider` 与 `HeartbeatSnapshotProvider` 在每次发送/心跳时动态读取宿主身份与运行快照，**不在构造期缓存**，确保修改系统设备标识后无需重建目标即可生效。
+  - `Dispatcher` 通过 `DeviceIDProvider` 与 `HeartbeatSnapshotProvider` 在每次发送/心跳时动态读取宿主身份与运行快照，**不在构造期缓存**，确保修改系统设备标识后无需重建目标即可生效；同时 `systeminfo.IdentityService` 在变更时经宿主注册的回调主动触发 `Dispatcher.RequestReload()`，立即刷新 MQTT LWT（心跳前仍保留 `hasStaleWillDeviceID` 兜底检查）。
   - 来源元数据通过消费侧接口 `SourceResolver`（由 `internal/app` 适配器注入，alertpush 不反向依赖 `camera` / `algorithm`）在发送时动态解析摄像头名称与算法信息；查找失败降级为 `null` 字段，不得因元数据缺失丢弃事件。
-- **保留请求头与跨源校验**：自定义 Webhook Header 禁止覆盖保留系统头（前后端统一：`accept`、`authorization`、`connection`、`content-length`、`content-type`、`host`、`transfer-encoding`、`user-agent` 及 `X-Zhulong-Event`、`X-Zhulong-Delivery`、`X-Zhulong-Schema`，`ErrReservedHeaderUsed`），系统路由头在自定义头之后写入；若配置了认证凭据，心跳地址（`heartbeat_url`）必须与主推送 `url` 同源（`ErrCrossOriginHeartbeatURL`），防止凭据跨源泄露。
+- **保留请求头与跨源校验**：自定义 Webhook Header 禁止覆盖保留系统头（前后端统一：`accept`、`authorization`、`connection`、`content-length`、`content-type`、`host`、`transfer-encoding`、`user-agent` 及 `X-Zhulong-Event`、`X-Zhulong-Delivery`、`X-Zhulong-Schema`，`ErrReservedHeaderUsed`），系统路由头在自定义头之后写入；若配置了认证凭据，心跳地址（`heartbeat_url`）必须与主推送 `url` 同源（`ErrCrossOriginHeartbeatURL`），防止凭据跨源泄露；HTTP 客户端拦截跨源重定向、超过 3 次重定向以及导致 POST 降级为 GET 的 301/302/303 重定向，且不重试。
+- **输入校验一致性**：Create/Update/Test 共享统一的字段校验规则（名称非空且 ≤64 字符、Webhook `authType` 白名单、`timeoutSeconds` 范围 `1..30`、鉴权凭据归一化与必填校验、MQTT Broker/Topic/QoS/KeepAlive/ClientID/InlineMaxKB 校验），越界或非法值一律返回 422 而非静默忽略。
 - **过滤器事件类型白名单**：`filter.event_types` 仅接受外部短名 `{alarm, face, vehicle}`（`ErrInvalidFilterEventType`），与 `record.EventType` 内部取值隔离并由 alertpush 映射（存量配置迁移见 `000040_alert_filter_event_type_v1`）。
-- **MQTT 局部更新与连接状态可观测性**：
-  - `AlertDestinationConfigInfo` 的可选字段（`clientId`、`username`、`tlsSkipVerify`、`heartbeatTopic`、`heartbeatUrl` 等）使用指针区分「省略（保持原值）」与「显式清空/关闭」；局部更新不覆写自定义 `clientId`，Create/Update/Test 共享统一的 Broker/Topic/QoS/KeepAlive/ClientID 校验。
-  - `MQTTSender` 经 Paho `OnConnect`/`ConnectionLost` 回调实时维护 `AlertDestinationStatus`（含 `state`、`lastError`、`lastAttemptAt`、`lastSuccessAt`、`lastFailureAt`、`consecutiveFailures`、`dropped`、`queued`）。
+- **MQTT 局部更新、TLS 与连接状态可观测性**：
+  - `AlertDestinationConfigInfo` 的可选字段（`clientId`、`username`、`tlsSkipVerify`、`heartbeatTopic`、`heartbeatUrl` 等）使用指针区分「省略（保持原值）」与「显式清空/关闭」；局部更新不覆写自定义 `clientId`；安全连接按小写 scheme 识别 `ssl`/`tls`/`tcps`/`wss`/`mqtts` 并应用 TLS 配置；事件发布对瞬断/发布失败支持最多 3 次有界重试（建连超时与取消不重试），且 `ensureConnected` 透传 `ctx`。
+  - `MQTTSender` 经 Paho `OnConnect`/`ConnectionLost` 回调实时维护 `AlertDestinationStatus`（含 `state`、`lastError`、`lastAttemptAt`、`lastSuccessAt`、`lastFailureAt`、`consecutiveFailures`、`totalDispatched`、`dropped`、`queued`、`queueCapacity`）；配置热重载时保留历史累计计数与时间戳并重置健康态。
 
 ---
 
 ## 2. 对外载荷契约 v1
 
 - **统一信封（`schema_version: 1`）**：感知事件（`alarm` / `face` / `vehicle`）、心跳（`heartbeat`）、离线通知（`offline`）共用 `EventPayload`；可选标量始终输出为 `null`，且仅携带一个与 `event_type` 同名的业务子对象；时间戳固定为 UTC 毫秒精度（`2006-01-02T15:04:05.000Z`）。
-- **序号与丢包可观测性**：每个推送目标维护单调递增 `seq` 计数器；事件在**入队时**分配（队列溢出丢弃会留下可观测缺口），心跳与优雅离线在发送时分配；连通性探测（告警及仅心跳探测）统一使用 `seq: 0`，不占用真实序列空间；MQTT LWT 离线消息的 `seq` 与 `sent_at` 为 `null`。
+- **序号与丢包可观测性**：每个推送目标维护单调递增 `seq` 计数器；事件在**入队时**分配（队列溢出丢弃会留下可观测缺口），心跳与优雅离线在发送时分配（若配置了独立的 `heartbeat_url`/`heartbeat_topic` 分流，单侧流可见因另一轨消费产生的跨轨序号跳进，属既定目标级单调序列语义）；连通性探测（告警及仅心跳探测）统一使用 `seq: 0`，不占用真实序列空间；MQTT LWT 离线消息的 `seq` 与 `sent_at` 为 `null`。
 - **业务子对象与缺省策略**：
   - `alarm{alarm_type, score, box, attributes}`
   - `face{matched, person, similarity, box, attributes}`（未匹配时 `person` 与 `similarity` 为 `null`）
@@ -53,4 +54,4 @@
 ## 5. 生命周期依赖
 
 - `alertPush.Start` 为可降级启动，须在 `camera` 密钥与 `storage`/`mediafile` 就绪后启动；
-- 停机时 `alertPush.Stop` 必须先于 `record`、`snapshot` 与 `storage`（见 [dependency-injection.md](./dependency-injection.md)），防止推送 worker 在媒体根目录或记录库关闭后继续读取图片；`Dispatcher.Stop` 与 `reconcile` 并发停止退役 worker，防止多目标串行排空超出宿主停机预算。
+- 停机时 `alertPush.Stop` 必须先于 `record`、`snapshot` 与 `storage`（见 [dependency-injection.md](./dependency-injection.md)），防止推送 worker 在媒体根目录或记录库关闭后继续读取图片；`Dispatcher.Stop` 与 `reconcile` 并发停止退役 worker，且 `runEvents` 的在飞发送与排空共享 `retirementDrainTimeout`（3s）硬上界，防止慢重试击穿宿主 60s 停机预算。

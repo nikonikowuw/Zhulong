@@ -7583,11 +7583,17 @@ const docTemplate = `{
                 "lastSuccessAt": {
                     "type": "string"
                 },
+                "queueCapacity": {
+                    "type": "integer"
+                },
                 "queued": {
                     "type": "integer"
                 },
                 "state": {
                     "type": "string"
+                },
+                "totalDispatched": {
+                    "type": "integer"
                 }
             }
         },

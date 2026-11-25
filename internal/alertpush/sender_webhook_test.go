@@ -497,3 +497,143 @@ func TestWebhookSenderSendBudgets(t *testing.T) {
 		})
 	}
 }
+
+func TestWebhookSenderCrossOriginRedirectDoesNotRetry(t *testing.T) {
+	var originHits atomic.Int32
+	evilServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer evilServer.Close()
+
+	originServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originHits.Add(1)
+		http.Redirect(w, r, evilServer.URL+"/steal", http.StatusTemporaryRedirect)
+	}))
+	defer originServer.Close()
+
+	sender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:            "dest_cross_no_retry",
+		ImageMode:     ImageModeURL,
+		PublicBaseURL: "http://10.0.0.12:8000",
+		URL:           originServer.URL + "/events",
+		AuthType:      AuthTypeBearer,
+		Token:         "secret-tok",
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	err = sender.Send(context.Background(), Delivery{
+		Event: record.AlarmEvent{ID: "01XORIGIN", CapturedAt: time.Now().UTC()},
+	})
+	if !errors.Is(err, ErrCrossOriginRedirect) {
+		t.Fatalf("expected ErrCrossOriginRedirect, got %v", err)
+	}
+	if originHits.Load() != 1 {
+		t.Fatalf("cross-origin redirect must not retry: got %d attempts, want 1", originHits.Load())
+	}
+}
+
+func TestWebhookSenderBlocks302AndPreservesMultipartOn307(t *testing.T) {
+	var hits302 atomic.Int32
+	var receivedPart []byte
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/downgrade", func(w http.ResponseWriter, r *http.Request) {
+		hits302.Add(1)
+		http.Redirect(w, r, "/final", http.StatusFound)
+	})
+	mux.HandleFunc("/temp-redirect", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/final", http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/final", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		f, _, err := r.FormFile("image_scene")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer func() {
+			if closeErr := f.Close(); closeErr != nil {
+				t.Errorf("close form file: %v", closeErr)
+			}
+		}()
+		data, err := io.ReadAll(f)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		receivedPart = data
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// 1. 302 downgrade must be rejected on first attempt without retrying.
+	downgradeSender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:        "dest_302",
+		ImageMode: ImageModeMultipart,
+		URL:       server.URL + "/downgrade",
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender 302: %v", err)
+	}
+	defer func() {
+		if closeErr := downgradeSender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	err = downgradeSender.Send(context.Background(), Delivery{
+		Event: record.AlarmEvent{ID: "01DOWNGRADE", CapturedAt: time.Now().UTC()},
+	})
+	if !errors.Is(err, ErrWebhookRedirectMethodChanged) {
+		t.Fatalf("expected ErrWebhookRedirectMethodChanged, got %v", err)
+	}
+	if hits302.Load() != 1 {
+		t.Fatalf("302 method downgrade must not retry: got %d hits, want 1", hits302.Load())
+	}
+
+	// 2. Same-origin 307 must replay multipart body cleanly via req.GetBody.
+	sceneKey := "snapshots/cam_01/2026-11-24/redir.jpg"
+	redirSender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:        "dest_307",
+		ImageMode: ImageModeMultipart,
+		URL:       server.URL + "/temp-redirect",
+		Media:     &fakeMediaService{files: map[string][]byte{sceneKey: []byte("jpeg-307-bytes")}},
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender 307: %v", err)
+	}
+	defer func() {
+		if closeErr := redirSender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	err = redirSender.Send(context.Background(), Delivery{
+		Event: record.AlarmEvent{
+			ID: "01TEMP307", CameraID: "cam_01", CapturedAt: time.Now().UTC(),
+			ImagePath: sceneKey, ImageReady: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("307 same-origin multipart redirect failed: %v", err)
+	}
+	if string(receivedPart) != "jpeg-307-bytes" {
+		t.Fatalf("received multipart image = %q, want jpeg-307-bytes", string(receivedPart))
+	}
+}

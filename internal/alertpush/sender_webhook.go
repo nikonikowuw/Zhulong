@@ -10,7 +10,6 @@ import (
 	"math/rand/v2"
 	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -22,10 +21,12 @@ import (
 )
 
 var (
-	ErrWebhookURLMissing      = errors.New("webhook url is missing")
-	ErrPublicBaseURLMissing   = errors.New("public base url is required for url image mode")
-	ErrWebhookHTTPStatusError = errors.New("webhook target returned non-success http status")
-	ErrCrossOriginRedirect    = errors.New(
+	ErrWebhookURLMissing            = errors.New("webhook url is missing")
+	ErrPublicBaseURLMissing         = errors.New("public base url is required for url image mode")
+	ErrWebhookHTTPStatusError       = errors.New("webhook target returned non-success http status")
+	ErrWebhookTooManyRedirects      = errors.New("stopped after 3 redirects")
+	ErrWebhookRedirectMethodChanged = errors.New("refusing redirect that changes POST method")
+	ErrCrossOriginRedirect          = errors.New(
 		"refusing cross-origin redirect when credentials are configured",
 	)
 )
@@ -91,7 +92,11 @@ func NewWebhookSender(opts WebhookSenderOptions) (*WebhookSender, error) {
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
-				return errors.New("stopped after 3 redirects")
+				return ErrWebhookTooManyRedirects
+			}
+			// 301/302/303 rewrite POST to GET and drop the payload body; only 307/308 preserve POST.
+			if len(via) > 0 && via[0].Method == http.MethodPost && req.Method != http.MethodPost {
+				return ErrWebhookRedirectMethodChanged
 			}
 			mustGuardOrigin := hasCredentials && len(via) > 0
 			if mustGuardOrigin && !sameOrigin(via[0].URL.String(), req.URL.String()) {
@@ -137,14 +142,30 @@ func (s *WebhookSender) HeartbeatSendBudget() time.Duration {
 	return max(defaultSendBudget, s.client.Timeout+time.Second)
 }
 
+// preparedWebhookImages caches image metadata (and raw bytes in multipart mode) once per
+// delivery so retries never re-open disk files or duplicate full multipart buffers.
+type preparedWebhookImages struct {
+	images []ImageInfo
+	parts  []preparedMultipartImage
+}
+
+type preparedMultipartImage struct {
+	part string
+	mime string
+	ext  string
+	data []byte
+}
+
 // Send dispatches a perception event via Webhook according to the configured image mode.
-// Retries reuse the delivery's id and seq; only sent_at is re-stamped per attempt.
+// Retries reuse the delivery's id, seq and prepared images; only sent_at is re-stamped per attempt.
 func (s *WebhookSender) Send(ctx context.Context, d Delivery) error {
 	const attempts = 3
 	backoffs := []time.Duration{
 		200*time.Millisecond + time.Duration(rand.IntN(50))*time.Millisecond,
 		800*time.Millisecond + time.Duration(rand.IntN(100))*time.Millisecond,
 	}
+
+	prepared := s.prepareImages(ctx, d.Event)
 
 	var lastErr error
 	for attempt := range attempts {
@@ -158,7 +179,7 @@ func (s *WebhookSender) Send(ctx context.Context, d Delivery) error {
 			}
 		}
 
-		retryable, err := s.doSendOnce(ctx, d)
+		retryable, err := s.doSendOnce(ctx, d, prepared)
 		if err == nil {
 			return nil
 		}
@@ -204,11 +225,12 @@ func (s *WebhookSender) SendHeartbeat(
 	return err
 }
 
-func (s *WebhookSender) doSendOnce(ctx context.Context, d Delivery) (bool, error) {
-	req, cleanup, err := s.buildRequest(ctx, d)
-	if cleanup != nil {
-		defer cleanup()
-	}
+func (s *WebhookSender) doSendOnce(
+	ctx context.Context,
+	d Delivery,
+	prepared preparedWebhookImages,
+) (bool, error) {
+	req, err := s.buildRequest(d, prepared)
 	if err != nil {
 		return false, err
 	}
@@ -226,6 +248,12 @@ func (s *WebhookSender) executeRequest(
 			zap.String("target_url", logsafe.URL(targetURL)),
 			zap.Error(err),
 		)
+		nonRetryableRedirect := errors.Is(err, ErrCrossOriginRedirect) ||
+			errors.Is(err, ErrWebhookRedirectMethodChanged) ||
+			errors.Is(err, ErrWebhookTooManyRedirects)
+		if nonRetryableRedirect || ctx.Err() != nil {
+			return false, err
+		}
 		return true, err
 	}
 	defer func() {
@@ -250,16 +278,30 @@ func (s *WebhookSender) executeRequest(
 	return true, fmt.Errorf("%w: status %d", ErrWebhookHTTPStatusError, resp.StatusCode)
 }
 
-func (s *WebhookSender) buildRequest(
+func (s *WebhookSender) prepareImages(
 	ctx context.Context,
+	ev record.AlarmEvent,
+) preparedWebhookImages {
+	if s.opts.ImageMode == ImageModeMultipart {
+		images, parts := s.loadMultipartImages(ctx, ev)
+		return preparedWebhookImages{images: images, parts: parts}
+	}
+	return preparedWebhookImages{
+		images: resolveImageURLs(ctx, s.imageURLParams(), ev),
+	}
+}
+
+func (s *WebhookSender) buildRequest(
 	d Delivery,
-) (*http.Request, func(), error) {
+	prepared preparedWebhookImages,
+) (*http.Request, error) {
 	payload := buildEventPayload(d, resolveDeviceID(s.opts.Identity), time.Now())
+	payload.Images = prepared.images
 
 	if s.opts.ImageMode == ImageModeMultipart {
-		return s.buildMultipartRequest(ctx, payload, d.Event)
+		return s.buildMultipartRequest(payload, prepared.parts)
 	}
-	return s.buildJSONRequest(ctx, payload, d.Event)
+	return s.buildJSONRequest(payload)
 }
 
 func (s *WebhookSender) imageURLParams() imageURLParams {
@@ -272,45 +314,30 @@ func (s *WebhookSender) imageURLParams() imageURLParams {
 	}
 }
 
-func (s *WebhookSender) buildJSONRequest(
-	ctx context.Context,
-	payload EventPayload,
-	ev record.AlarmEvent,
-) (*http.Request, func(), error) {
-	payload.Images = resolveImageURLs(ctx, s.imageURLParams(), ev)
-
+func (s *WebhookSender) buildJSONRequest(payload EventPayload) (*http.Request, error) {
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal json payload: %w", err)
+		return nil, fmt.Errorf("marshal json payload: %w", err)
 	}
 
 	req, err := http.NewRequest(http.MethodPost, s.opts.URL, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, nil, fmt.Errorf("create http request: %w", err)
+		return nil, fmt.Errorf("create http request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	s.applyAuthAndHeaders(req)
 	setEnvelopeHeaders(req, payload)
-	return req, nil, nil
+	return req, nil
 }
 
-// multipartImage is an opened evidence image that becomes one form part.
-type multipartImage struct {
-	part string
-	mime string
-	ext  string
-	file io.ReadSeekCloser
-}
-
-// openMultipartImages opens every ready image as a part named image_<role>. Images that
-// cannot be opened fall back to a URL when one can be minted and are omitted otherwise.
-// The caller must close every returned file, on success and on error.
-func (s *WebhookSender) openMultipartImages(
+// loadMultipartImages reads every ready image once and closes file handles before any
+// network I/O begins. Images that cannot be read fall back to a URL when available.
+func (s *WebhookSender) loadMultipartImages(
 	ctx context.Context,
 	ev record.AlarmEvent,
-) ([]ImageInfo, []multipartImage) {
+) ([]ImageInfo, []preparedMultipartImage) {
 	images := []ImageInfo{}
-	opened := []multipartImage{}
+	parts := []preparedMultipartImage{}
 	params := s.imageURLParams()
 
 	for _, c := range imageCandidates(ev) {
@@ -326,27 +353,18 @@ func (s *WebhookSender) openMultipartImages(
 			info.URLExpiresAt = &signed.expiresAt
 		}
 
-		reader := mediaReaderForPath(s.opts.Media, s.opts.GalleryMedia, c.relPath)
-		if reader != nil {
-			f, objInfo, err := reader.OpenContent(ctx, c.relPath)
-			if err == nil {
-				partName := "image_" + c.role
-				size := objInfo.SizeBytes
-				info.Part = &partName
-				info.SizeBytes = &size
-				opened = append(opened, multipartImage{
-					part: partName,
-					mime: info.MIME,
-					ext:  imageExtForMIME(info.MIME),
-					file: f,
-				})
-			} else {
-				s.logger.Warn("failed to open image for multipart payload",
-					zap.String("role", c.role),
-					zap.String("path", c.relPath),
-					zap.Error(err),
-				)
-			}
+		data, readErr := s.readMediaBytes(ctx, c.role, c.relPath)
+		if readErr == nil {
+			partName := "image_" + c.role
+			size := int64(len(data))
+			info.Part = &partName
+			info.SizeBytes = &size
+			parts = append(parts, preparedMultipartImage{
+				part: partName,
+				mime: info.MIME,
+				ext:  imageExtForMIME(info.MIME),
+				data: data,
+			})
 		}
 
 		if info.Part == nil && info.URL == nil {
@@ -354,72 +372,102 @@ func (s *WebhookSender) openMultipartImages(
 		}
 		images = append(images, info)
 	}
-	return images, opened
+	return images, parts
+}
+
+func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string) ([]byte, error) {
+	reader := mediaReaderForPath(s.opts.Media, s.opts.GalleryMedia, relPath)
+	if reader == nil {
+		return nil, errors.New("media reader is not configured")
+	}
+	f, _, err := reader.OpenContent(ctx, relPath)
+	if err != nil {
+		s.logger.Warn("failed to open image for multipart payload",
+			zap.String("role", role),
+			zap.String("path", relPath),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+	data, readErr := io.ReadAll(f)
+	closeErr := f.Close()
+	if closeErr != nil {
+		s.logger.Debug("close multipart image file", zap.Error(closeErr))
+	}
+	if readErr != nil {
+		s.logger.Warn("failed to read image for multipart payload",
+			zap.String("role", role),
+			zap.String("path", relPath),
+			zap.Error(readErr),
+		)
+		return nil, readErr
+	}
+	return data, nil
 }
 
 func (s *WebhookSender) buildMultipartRequest(
-	ctx context.Context,
 	payload EventPayload,
-	ev record.AlarmEvent,
-) (*http.Request, func(), error) {
-	images, opened := s.openMultipartImages(ctx, ev)
-	cleanup := func() {
-		for _, img := range opened {
-			if closeErr := img.file.Close(); closeErr != nil {
-				s.logger.Debug("close multipart image file", zap.Error(closeErr))
-			}
-		}
-	}
-	payload.Images = images
-
-	var buf bytes.Buffer
-	w := multipart.NewWriter(&buf)
-
+	parts []preparedMultipartImage,
+) (*http.Request, error) {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, cleanup, fmt.Errorf("marshal payload: %w", err)
+		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", `form-data; name="payload"`)
-	h.Set("Content-Type", "application/json")
-	pWriter, err := w.CreatePart(h)
+
+	boundary := multipart.NewWriter(io.Discard).Boundary()
+	body, contentLength := buildMultipartBody(boundary, payloadBytes, parts)
+
+	req, err := http.NewRequest(http.MethodPost, s.opts.URL, body)
 	if err != nil {
-		return nil, cleanup, fmt.Errorf("create payload part: %w", err)
+		return nil, fmt.Errorf("create multipart request: %w", err)
 	}
-	if _, err := pWriter.Write(payloadBytes); err != nil {
-		return nil, cleanup, fmt.Errorf("write payload part: %w", err)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	req.ContentLength = contentLength
+	req.GetBody = func() (io.ReadCloser, error) {
+		replayBody, _ := buildMultipartBody(boundary, payloadBytes, parts)
+		return replayBody, nil
 	}
-
-	for _, img := range opened {
-		imgHeader := make(textproto.MIMEHeader)
-		role := strings.TrimPrefix(img.part, "image_")
-		imgHeader.Set(
-			"Content-Disposition",
-			fmt.Sprintf(`form-data; name=%q; filename=%q`, img.part, role+img.ext),
-		)
-		imgHeader.Set("Content-Type", img.mime)
-		imgWriter, err := w.CreatePart(imgHeader)
-		if err != nil {
-			return nil, cleanup, fmt.Errorf("create image part: %w", err)
-		}
-		if _, err := io.Copy(imgWriter, img.file); err != nil {
-			return nil, cleanup, fmt.Errorf("copy image bytes: %w", err)
-		}
-	}
-
-	if err := w.Close(); err != nil {
-		return nil, cleanup, fmt.Errorf("close multipart writer: %w", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, s.opts.URL, bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		return nil, cleanup, fmt.Errorf("create multipart request: %w", err)
-	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
-	req.ContentLength = int64(buf.Len())
 	s.applyAuthAndHeaders(req)
 	setEnvelopeHeaders(req, payload)
-	return req, cleanup, nil
+	return req, nil
+}
+
+// buildMultipartBody streams the JSON payload and cached image slices through io.MultiReader
+// with an exact Content-Length, avoiding a second full-size copy into bytes.Buffer.
+func buildMultipartBody(
+	boundary string,
+	payloadBytes []byte,
+	parts []preparedMultipartImage,
+) (io.ReadCloser, int64) {
+	readers := make([]io.Reader, 0, 3+len(parts)*2)
+	var total int64
+	appendBytes := func(b []byte) {
+		readers = append(readers, bytes.NewReader(b))
+		total += int64(len(b))
+	}
+
+	payloadHeader := fmt.Sprintf(
+		"--%s\r\nContent-Disposition: form-data; name=\"payload\"\r\nContent-Type: application/json\r\n\r\n",
+		boundary,
+	)
+	appendBytes([]byte(payloadHeader))
+	appendBytes(payloadBytes)
+
+	for _, img := range parts {
+		role := strings.TrimPrefix(img.part, "image_")
+		imgHeader := fmt.Sprintf(
+			"\r\n--%s\r\nContent-Disposition: form-data; name=%q; filename=%q\r\nContent-Type: %s\r\n\r\n",
+			boundary,
+			img.part,
+			role+img.ext,
+			img.mime,
+		)
+		appendBytes([]byte(imgHeader))
+		appendBytes(img.data)
+	}
+
+	appendBytes([]byte("\r\n--" + boundary + "--\r\n"))
+	return io.NopCloser(io.MultiReader(readers...)), total
 }
 
 // setEnvelopeHeaders mirrors routing metadata into reserved headers so gateways can route
