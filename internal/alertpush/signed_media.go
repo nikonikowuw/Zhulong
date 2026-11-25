@@ -17,6 +17,21 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 )
 
+const (
+	DefaultSignedMediaRateLimitPerMin = 120
+	DefaultSignedMediaRateLimitBurst  = 8
+)
+
+// SignedMediaHandlerOptions configures SignedMediaHandler construction.
+type SignedMediaHandlerOptions struct {
+	Signer       *URLSigner
+	MediaHandler *mediafile.Handler
+	GalleryMedia MediaReader
+	RatePerMin   int
+	RateBurst    int
+	Logger       *zap.Logger
+}
+
 // SignedMediaHandler serves unauthenticated but signature-verified media requests.
 type SignedMediaHandler struct {
 	signer       *URLSigner
@@ -48,18 +63,36 @@ func NewSignedMediaHandlerWithGallery(
 	galleryMedia MediaReader,
 	logger *zap.Logger,
 ) *SignedMediaHandler {
+	return NewSignedMediaHandlerWithOptions(SignedMediaHandlerOptions{
+		Signer:       signer,
+		MediaHandler: mediaHandler,
+		GalleryMedia: galleryMedia,
+		Logger:       logger,
+	})
+}
+
+// NewSignedMediaHandlerWithOptions constructs a SignedMediaHandler with configurable rate limits.
+func NewSignedMediaHandlerWithOptions(opts SignedMediaHandlerOptions) *SignedMediaHandler {
+	logger := opts.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	// Limit per IP: 120 req/min, burst 8
+	perMin := opts.RatePerMin
+	if perMin <= 0 {
+		perMin = DefaultSignedMediaRateLimitPerMin
+	}
+	burst := opts.RateBurst
+	if burst <= 0 {
+		burst = DefaultSignedMediaRateLimitBurst
+	}
 	limiter := httpmiddleware.NewIPRateLimiter(httpmiddleware.RateLimitConfig{
-		PerMinute: 120,
-		Burst:     8,
+		PerMinute: perMin,
+		Burst:     burst,
 	})
 	return &SignedMediaHandler{
-		signer:       signer,
-		mediaHandler: mediaHandler,
-		galleryMedia: galleryMedia,
+		signer:       opts.Signer,
+		mediaHandler: opts.MediaHandler,
+		galleryMedia: opts.GalleryMedia,
 		rateLimiter:  limiter,
 		logger:       logger.Named("alertpush.signed_media"),
 	}

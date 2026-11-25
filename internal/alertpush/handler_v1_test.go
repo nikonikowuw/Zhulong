@@ -613,3 +613,205 @@ func TestHandlerValidationParityAcrossCreateUpdateAndTest(t *testing.T) {
 		t.Fatalf("switching authType to none on /test leaked Authorization=%q", receivedAuth)
 	}
 }
+
+func TestHandlerDraftTestDoesNotPolluteLiveDestinationStatus(t *testing.T) {
+	okTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okTarget.Close()
+
+	failTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer failTarget.Close()
+
+	router, comp, cleanup := setupTestRouter(t)
+	defer cleanup()
+	if err := comp.Dispatcher.Start(t.Context()); err != nil {
+		t.Fatalf("Dispatcher.Start: %v", err)
+	}
+	defer func() {
+		if err := comp.Dispatcher.Stop(t.Context()); err != nil {
+			t.Errorf("Dispatcher.Stop: %v", err)
+		}
+	}()
+
+	code, envCode, created := postDestination(t, router, CreateAlertDestinationRequest{
+		Name:        "Live Webhook",
+		ChannelType: ChannelTypeWebhook,
+		ImageMode:   ImageModeMultipart,
+		Config: AlertDestinationConfigInfo{
+			URL:            okTarget.URL + "/events",
+			AuthType:       AuthTypeNone,
+			TimeoutSeconds: intPtr(5),
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("create failed: %d (%s)", code, envCode)
+	}
+
+	// 1. Saved-target quick test (ID only, no draft overrides) updates live status to connected.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/test",
+		bytes.NewReader(mustMarshalJSON(t, TestAlertDestinationRequest{ID: created.ID})),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("saved quick test status=%d: %s", w.Code, w.Body.String())
+	}
+	st := comp.Dispatcher.GetStatus(created.ID, true)
+	if st.State != StateConnected || st.ConsecutiveFailures != 0 {
+		t.Fatalf("expected connected status after saved quick test, got %+v", st)
+	}
+
+	// 2. Edit-form draft test pointing to a failing URL must NOT pollute the live worker's status.
+	wDraft := httptest.NewRecorder()
+	reqDraft := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/test",
+		bytes.NewReader(mustMarshalJSON(t, TestAlertDestinationRequest{
+			ID:          created.ID,
+			ChannelType: ChannelTypeWebhook,
+			ImageMode:   ImageModeMultipart,
+			Config: AlertDestinationConfigInfo{
+				URL:            failTarget.URL + "/events",
+				AuthType:       AuthTypeNone,
+				TimeoutSeconds: intPtr(5),
+			},
+		})),
+	)
+	reqDraft.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(wDraft, reqDraft)
+	if wDraft.Code != http.StatusOK {
+		t.Fatalf("draft test status=%d: %s", wDraft.Code, wDraft.Body.String())
+	}
+
+	afterDraft := comp.Dispatcher.GetStatus(created.ID, true)
+	if afterDraft.State != StateConnected || afterDraft.ConsecutiveFailures != 0 {
+		t.Fatalf("draft test polluted live destination status: got %+v", afterDraft)
+	}
+}
+
+func TestHandlerExistingMQTTTestValidatesClientID(t *testing.T) {
+	router, _, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	code, envCode, created := postDestination(t, router, mqttCreateRequest("mqtt-test-cid", nil))
+	if code != http.StatusOK {
+		t.Fatalf("create failed: %d (%s)", code, envCode)
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/test",
+		bytes.NewReader(mustMarshalJSON(t, TestAlertDestinationRequest{
+			ID:          created.ID,
+			ChannelType: ChannelTypeMQTT,
+			Config: AlertDestinationConfigInfo{
+				ClientID: stringPtr("client-id-exceeds-23-chars"),
+			},
+		})),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for overlong clientId on existing MQTT /test, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerWebhookTLSSkipVerifyRoundTrip(t *testing.T) {
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer tlsServer.Close()
+
+	router, _, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	code, envCode, created := postDestination(t, router, CreateAlertDestinationRequest{
+		Name:        "Self-Signed Hook",
+		ChannelType: ChannelTypeWebhook,
+		ImageMode:   ImageModeMultipart,
+		Config: AlertDestinationConfigInfo{
+			URL:           tlsServer.URL + "/events",
+			TLSSkipVerify: boolPtr(true),
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("create failed: %d (%s)", code, envCode)
+	}
+	if created.Config.TLSSkipVerify == nil || !*created.Config.TLSSkipVerify {
+		t.Fatalf("expected tlsSkipVerify=true on create response, got %v", created.Config.TLSSkipVerify)
+	}
+
+	// Partial update omitting tlsSkipVerify must preserve true.
+	code, _, renamed := putDestination(t, router, created.ID, UpdateAlertDestinationRequest{
+		Name: stringPtr("Self-Signed Hook Renamed"),
+	})
+	if code != http.StatusOK || renamed.Config.TLSSkipVerify == nil || !*renamed.Config.TLSSkipVerify {
+		t.Fatalf("partial update clobbered tlsSkipVerify: code=%d val=%v", code, renamed.Config.TLSSkipVerify)
+	}
+
+	// Test saved destination against self-signed TLS endpoint must succeed.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/alert-destinations/test",
+		bytes.NewReader(mustMarshalJSON(t, TestAlertDestinationRequest{ID: created.ID})),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("test status=%d: %s", w.Code, w.Body.String())
+	}
+	var env httputil.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	resMap, ok := env.Data.(map[string]any)
+	if !ok || resMap["ok"] != true {
+		t.Fatalf("expected ok=true probing self-signed webhook with tlsSkipVerify=true, got %+v", env.Data)
+	}
+
+	// Explicit false disables tlsSkipVerify.
+	code, _, cleared := putDestination(t, router, created.ID, UpdateAlertDestinationRequest{
+		Config: &AlertDestinationConfigInfo{TLSSkipVerify: boolPtr(false)},
+	})
+	if code != http.StatusOK || cleared.Config.TLSSkipVerify == nil || *cleared.Config.TLSSkipVerify {
+		t.Fatalf("explicit false failed to clear tlsSkipVerify: code=%d val=%v", code, cleared.Config.TLSSkipVerify)
+	}
+}
+
+func TestSignedMediaHandlerConfigurableRateLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	signer, err := NewURLSigner(bytes.Repeat([]byte{0x42}, 32))
+	if err != nil {
+		t.Fatalf("NewURLSigner: %v", err)
+	}
+	handler := NewSignedMediaHandlerWithOptions(SignedMediaHandlerOptions{
+		Signer:     signer,
+		RatePerMin: 60,
+		RateBurst:  2,
+	})
+
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/api/v1"))
+
+	// First 2 requests consume the burst (returning 403 for missing sig); 3rd hits 429 rate limit.
+	for i := range 3 {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/media/signed/snapshots/cam_1/a.jpg", nil)
+		req.RemoteAddr = "203.0.113.10:12345"
+		router.ServeHTTP(w, req)
+		if i < 2 && w.Code != http.StatusForbidden {
+			t.Fatalf("request %d status = %d, want 403 before burst exhausted", i+1, w.Code)
+		}
+		if i == 2 && w.Code != http.StatusTooManyRequests {
+			t.Fatalf("request 3 status = %d, want 429 after configured burst=2 exhausted", w.Code)
+		}
+	}
+}

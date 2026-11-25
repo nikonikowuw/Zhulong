@@ -77,6 +77,7 @@ export const webhookConfigSchema = z.object({
     .transform((v) => v ?? undefined),
   authType: z.enum(['none', 'bearer', 'basic']).default('none'),
   timeoutSeconds: z.number().optional(),
+  tlsSkipVerify: z.boolean().default(false),
   heartbeatIntervalSeconds: z.number().optional(),
 })
 

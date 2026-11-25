@@ -117,6 +117,7 @@
     "mqttKeepAliveUnit": "s",
     "tlsSkipVerify": "Skip TLS Certificate Verification",
     "tlsSkipVerifyDesc": "Skips Broker TLS certificate verification. Recommended for test environments only",
+    "webhookTlsSkipVerifyDesc": "Skips HTTPS Webhook TLS certificate verification. Recommended for internal self-signed endpoints only",
     "filterEvents": "Event Type Subscription (Empty for all)",
     "filterAlgorithms": "Algorithm Filter (empty for all)",
     "filterCameras": "Camera Filter (empty for all)",

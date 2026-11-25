@@ -636,3 +636,127 @@ func TestWebhookSenderBlocks302AndPreservesMultipartOn307(t *testing.T) {
 		t.Fatalf("received multipart image = %q, want jpeg-307-bytes", string(receivedPart))
 	}
 }
+
+func TestWebhookSenderMultipartSizeCapFallsBackToURL(t *testing.T) {
+	var payloadJSON []byte
+	var hasScenePart bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		payloadJSON = []byte(r.FormValue("payload"))
+		_, _, fileErr := r.FormFile("image_scene")
+		hasScenePart = fileErr == nil
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	signer, err := NewURLSigner(make([]byte, 32))
+	if err != nil {
+		t.Fatalf("NewURLSigner: %v", err)
+	}
+
+	sceneKey := "snapshots/cam_01/2026-11-25/huge.jpg"
+	cropKey := "snapshots/cam_01/2026-11-25/small_crop.jpg"
+	media := &fakeMediaService{
+		files: map[string][]byte{
+			sceneKey: bytes.Repeat([]byte{0xAA}, 2048),
+			cropKey:  []byte("small-crop"),
+		},
+	}
+
+	sender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:                     "dest_cap",
+		ImageMode:              ImageModeMultipart,
+		PublicBaseURL:          "http://10.0.0.12:8000",
+		SignedURLTTL:           time.Hour,
+		Signer:                 signer,
+		Media:                  media,
+		URL:                    server.URL,
+		MaxMultipartImageBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	err = sender.Send(context.Background(), Delivery{
+		Event: record.AlarmEvent{
+			ID: "01CAPTEST", CameraID: "cam_01", CapturedAt: time.Now().UTC(),
+			ImagePath: sceneKey, ImageReady: true, CropPath: cropKey, CropReady: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if hasScenePart {
+		t.Fatal("oversized scene image must not be attached as multipart binary")
+	}
+
+	var payload EventPayload
+	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.Images == nil || payload.Images.Scene == nil || payload.Images.Scene.URL == "" || payload.Images.Scene.Part != "" {
+		t.Fatalf("expected oversized scene to fall back to signed URL, got %+v", payload.Images)
+	}
+	if payload.Images.Object == nil || payload.Images.Object.Part != "image_object" {
+		t.Fatalf("expected small crop to remain multipart, got %+v", payload.Images.Object)
+	}
+}
+
+func TestWebhookSenderTLSSkipVerify(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ev := record.AlarmEvent{ID: "01TLSTEST", CameraID: "cam_1", CapturedAt: time.Now().UTC()}
+
+	strictSender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:        "dest_tls_strict",
+		ImageMode: ImageModeMultipart,
+		URL:       server.URL,
+		Timeout:   2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender strict: %v", err)
+	}
+	defer func() {
+		if closeErr := strictSender.Close(); closeErr != nil {
+			t.Errorf("Close strict: %v", closeErr)
+		}
+	}()
+
+	if sendErr := strictSender.Send(context.Background(), Delivery{Event: ev}); sendErr == nil {
+		t.Fatal("expected TLS verification error against self-signed server when TLSSkipVerify=false")
+	} else if reason := classifyError(sendErr); reason != "tls" {
+		t.Fatalf("classifyError(%v) = %q, want tls", sendErr, reason)
+	}
+
+	insecureSender, err := NewWebhookSender(WebhookSenderOptions{
+		ID:            "dest_tls_skip",
+		ImageMode:     ImageModeMultipart,
+		URL:           server.URL,
+		Timeout:       2 * time.Second,
+		TLSSkipVerify: true,
+	})
+	if err != nil {
+		t.Fatalf("NewWebhookSender skip verify: %v", err)
+	}
+	defer func() {
+		if closeErr := insecureSender.Close(); closeErr != nil {
+			t.Errorf("Close skip verify: %v", closeErr)
+		}
+	}()
+
+	if sendErr := insecureSender.Send(context.Background(), Delivery{Event: ev}); sendErr != nil {
+		t.Fatalf("expected self-signed webhook delivery to succeed with TLSSkipVerify=true, got %v", sendErr)
+	}
+}

@@ -581,7 +581,8 @@ type flakyMQTTClient struct {
 	payloads  [][]byte
 }
 
-func (f *flakyMQTTClient) IsConnected() bool { return true }
+func (f *flakyMQTTClient) IsConnected() bool      { return true }
+func (f *flakyMQTTClient) IsConnectionOpen() bool { return true }
 
 func (f *flakyMQTTClient) Publish(_ string, _ byte, _ bool, payload any) mqtt.Token {
 	f.calls++
@@ -628,5 +629,124 @@ func TestMQTTSenderRetriesTransientPublishFailure(t *testing.T) {
 		if p.ID != "01MQTTRETRY" || p.Seq != 12 {
 			t.Fatalf("attempt %d changed id/seq: %+v", i, p)
 		}
+	}
+}
+
+func TestMQTTSenderDoesNotFalseSucceedWhileReconnectingQoS0(t *testing.T) {
+	brokerURL, rawCleanup := startInProcessBroker(t)
+	var closeOnce sync.Once
+	cleanupBroker := func() { closeOnce.Do(rawCleanup) }
+	defer cleanupBroker()
+
+	lostCh := make(chan struct{}, 1)
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:               "mqtt_reconn_qos0",
+		ImageMode:        ImageModeBase64,
+		Broker:           brokerURL,
+		ClientID:         "zhulong-reconn-qos0",
+		Topic:            "zhulong/events/reconn",
+		HeartbeatEnabled: true,
+		LWTEnabled:       true,
+		QoS:              0,
+		KeepAlive:        10 * time.Second,
+		ConnectTimeout:   150 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+	sender.SetConnectionHooks(nil, func(error) {
+		select {
+		case lostCh <- struct{}{}:
+		default:
+		}
+	})
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	if err := sender.Connect(); err != nil {
+		t.Fatalf("initial Connect: %v", err)
+	}
+	if !sender.IsConnected() {
+		t.Fatal("expected IsConnected()=true while broker is online")
+	}
+
+	// Shut down broker so Paho transitions into AutoReconnect (reconnecting state).
+	cleanupBroker()
+	select {
+	case <-lostCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ConnectionLost callback")
+	}
+
+	if sender.IsConnected() {
+		t.Fatal("expected IsConnected()=false while Paho is reconnecting without an open socket")
+	}
+
+	ev := record.AlarmEvent{ID: "01QOS0RECONN", CameraID: "cam_1", CapturedAt: time.Now().UTC()}
+	sendErr := sender.Send(context.Background(), Delivery{Event: ev, Seq: 1})
+	if !errors.Is(sendErr, ErrMQTTNotConnected) {
+		t.Fatalf("Send while reconnecting (QoS 0) = %v, want ErrMQTTNotConnected", sendErr)
+	}
+
+	hbErr := sender.SendHeartbeat(context.Background(), HeartbeatSnapshot{ReportedAt: time.Now().UTC()}, 2)
+	if !errors.Is(hbErr, ErrMQTTNotConnected) {
+		t.Fatalf("SendHeartbeat while reconnecting (QoS 0) = %v, want ErrMQTTNotConnected", hbErr)
+	}
+
+	// Closing while disconnected must NOT stall for mqttGracefulOfflineTimeout (500ms).
+	closeStart := time.Now()
+	if closeErr := sender.Close(); closeErr != nil {
+		t.Fatalf("Close while disconnected: %v", closeErr)
+	}
+	if elapsed := time.Since(closeStart); elapsed >= 450*time.Millisecond {
+		t.Fatalf("Close while disconnected took %v, expected immediate disconnect without LWT publish wait", elapsed)
+	}
+}
+
+func TestMQTTSenderDisableReconnectSurfacesImmediateError(t *testing.T) {
+	// Reserve and immediately release a localhost port so TCP connect fails with connection refused.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen temp port: %v", err)
+	}
+	closedAddr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close temp port: %v", err)
+	}
+
+	sender, err := NewMQTTSender(MQTTSenderOptions{
+		ID:               "mqtt_probe_refused",
+		ImageMode:        ImageModeBase64,
+		Broker:           "tcp://" + closedAddr,
+		ClientID:         "test-probe-refused",
+		Topic:            "zhulong/events/probe",
+		ConnectTimeout:   5 * time.Second,
+		DisableReconnect: true,
+	})
+	if err != nil {
+		t.Fatalf("NewMQTTSender: %v", err)
+	}
+	defer func() {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
+		}
+	}()
+
+	start := time.Now()
+	sendErr := sender.Send(context.Background(), Delivery{
+		Event: record.AlarmEvent{ID: "01PROBE", CapturedAt: time.Now().UTC()},
+	})
+	elapsed := time.Since(start)
+	if sendErr == nil {
+		t.Fatal("expected error when probing closed MQTT port")
+	}
+	if reason := classifyError(sendErr); reason != "connection_refused" {
+		t.Fatalf("classifyError(%v) = %q, want connection_refused", sendErr, reason)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("DisableReconnect probe took %v, expected fast failure instead of connectTimeout wait", elapsed)
 	}
 }

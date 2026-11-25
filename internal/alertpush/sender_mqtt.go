@@ -65,6 +65,10 @@ type MQTTSenderOptions struct {
 	KeepAlive         time.Duration
 	ConnectTimeout    time.Duration
 	TLSSkipVerify     bool
+	// DisableReconnect disables Paho's ConnectRetry and AutoReconnect loops.
+	// Connectivity probes set this true so connection refused / auth / TLS failures
+	// surface immediately instead of retrying until connectTimeout expires.
+	DisableReconnect bool
 	// InlineMaxBytes caps the raw bytes of all base64-inlined images per message.
 	// Zero or negative means DefaultInlineMaxKB.
 	InlineMaxBytes int64
@@ -87,6 +91,7 @@ type MQTTSender struct {
 	mu               sync.Mutex
 	onConnect        func()
 	onConnectionLost func(error)
+	connectedCh      chan struct{}
 	closed           bool
 	closeCh          chan struct{}
 }
@@ -130,9 +135,11 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 		SetClientID(opts.ClientID).
 		SetKeepAlive(keepAlive).
 		SetConnectTimeout(connectTimeout).
-		SetAutoReconnect(true).
-		SetConnectRetry(true).
-		SetConnectRetryInterval(2 * time.Second)
+		SetAutoReconnect(!opts.DisableReconnect).
+		SetConnectRetry(!opts.DisableReconnect)
+	if !opts.DisableReconnect {
+		clientOpts.SetConnectRetryInterval(2 * time.Second)
+	}
 
 	if opts.Username != "" {
 		clientOpts.SetUsername(opts.Username)
@@ -180,6 +187,7 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 		willDeviceID:   willDeviceID,
 		willArmed:      willArmed,
 		logger:         logger.Named("alertpush.mqtt").With(zap.String("destination_id", opts.ID)),
+		connectedCh:    make(chan struct{}),
 		closeCh:        make(chan struct{}),
 	}
 
@@ -187,6 +195,10 @@ func NewMQTTSender(opts MQTTSenderOptions) (*MQTTSender, error) {
 		sender.mu.Lock()
 		closed := sender.closed
 		hook := sender.onConnect
+		if !closed && sender.connectedCh != nil {
+			close(sender.connectedCh)
+			sender.connectedCh = make(chan struct{})
+		}
 		sender.mu.Unlock()
 		if !closed && hook != nil {
 			hook()
@@ -252,16 +264,47 @@ func (s *MQTTSender) ConnectContext(ctx context.Context) error {
 	client := s.client
 	timeout := s.connectTimeout
 	closeCh := s.closeCh
+	waitCh := s.connectedCh
+	open := client.IsConnectionOpen()
+	// Paho's IsConnected() returns true while ConnectRetry/AutoReconnect loops are active
+	// even though no broker socket is open. Wait for OnConnect instead of calling Connect()
+	// again (which Paho short-circuits to nil on AutoReconnect) or publishing into a dead socket.
+	reconnecting := !open && client.IsConnected()
 	s.mu.Unlock()
 
-	if client.IsConnected() {
+	if open {
 		return nil
 	}
 
-	token := client.Connect()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
+	if reconnecting {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-closeCh:
+			return errMQTTSenderClosed
+		case <-waitCh:
+			if client.IsConnectionOpen() {
+				return nil
+			}
+			return ErrMQTTNotConnected
+		case <-timer.C:
+			s.logger.Warn("mqtt broker reconnect timed out",
+				zap.String("broker", logsafe.URL(s.opts.Broker)),
+				zap.Duration("timeout", timeout),
+			)
+			return fmt.Errorf(
+				"%w: %w after %s",
+				ErrMQTTNotConnected,
+				errMQTTConnectTimeout,
+				timeout,
+			)
+		}
+	}
+
+	token := client.Connect()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -274,6 +317,9 @@ func (s *MQTTSender) ConnectContext(ctx context.Context) error {
 				zap.Error(err),
 			)
 			return err
+		}
+		if !client.IsConnectionOpen() {
+			return ErrMQTTNotConnected
 		}
 		return nil
 	case <-timer.C:
@@ -290,12 +336,12 @@ func (s *MQTTSender) ConnectContext(ctx context.Context) error {
 	}
 }
 
-// IsConnected returns whether the underlying client is connected to broker.
+// IsConnected returns whether the underlying client currently has an active open broker session.
 func (s *MQTTSender) IsConnected() bool {
 	if s.client == nil {
 		return false
 	}
-	return s.client.IsConnected()
+	return s.client.IsConnectionOpen()
 }
 
 // Close publishes a bounded graceful-offline notice when LWT is armed, then disconnects.
@@ -319,8 +365,8 @@ func (s *MQTTSender) closeInternal(emitOffline bool) error {
 	if s.closeCh != nil {
 		close(s.closeCh)
 	}
-	if s.client != nil && s.client.IsConnected() {
-		if emitOffline && s.willArmed {
+	if s.client != nil && (s.client.IsConnectionOpen() || s.client.IsConnected()) {
+		if emitOffline && s.willArmed && s.client.IsConnectionOpen() {
 			s.publishGracefulOfflineLocked()
 		}
 		s.client.Disconnect(250)
@@ -505,7 +551,7 @@ func (s *MQTTSender) ensureConnected(ctx context.Context) error {
 	}
 	s.mu.Unlock()
 
-	if !s.client.IsConnected() {
+	if !s.client.IsConnectionOpen() {
 		if err := s.ConnectContext(ctx); err != nil {
 			isDirectErr := errors.Is(err, ErrMQTTNotConnected) ||
 				errors.Is(err, errMQTTSenderClosed) ||

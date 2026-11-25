@@ -38,6 +38,10 @@ type AlertDestinationStatus struct {
 type Config struct {
 	PublicBaseURL string
 	SignedURLTTL  time.Duration
+	// SignedMediaRateLimitPerMin / SignedMediaRateLimitBurst tune per-IP rate limiting on
+	// /api/v1/media/signed/*path. Zero values fall back to 120 req/min and burst 8.
+	SignedMediaRateLimitPerMin int
+	SignedMediaRateLimitBurst  int
 	// DeviceID supplies the host identity stamped onto every dispatched payload.
 	// It is read per send (not cached at construction) so editing it under
 	// settings → system takes effect without rebuilding destinations.
@@ -319,17 +323,33 @@ func (d *Dispatcher) reconcile() {
 		// Destination is new or updated, build replacement sender before retiring
 		sender, filter, hbInterval, err := d.buildSender(dest)
 		if err != nil {
-			d.logger.Warn("failed to build sender for destination, skipping",
+			reason := classifyError(err)
+			d.logger.Warn("failed to build sender for destination, marking failed",
 				zap.String("id", dest.ID),
+				zap.String("reason", reason),
 				zap.Error(err),
 			)
+			now := time.Now().UTC()
+			var st AlertDestinationStatus
 			if exists {
 				toRetireOffline = append(toRetireOffline, currentWorker)
 				delete(d.workers, dest.ID)
-				d.statsMu.Lock()
-				d.stats[dest.ID] = currentWorker.getStatus()
-				d.statsMu.Unlock()
+				st = currentWorker.getStatus()
+			} else {
+				d.statsMu.RLock()
+				st = d.stats[dest.ID]
+				d.statsMu.RUnlock()
 			}
+			st.State = StateFailed
+			st.LastError = reason
+			st.LastAttemptAt = &now
+			st.LastFailureAt = &now
+			st.ConsecutiveFailures++
+			st.Queued = 0
+			st.QueueCapacity = workerQueueCapacity
+			d.statsMu.Lock()
+			d.stats[dest.ID] = st
+			d.statsMu.Unlock()
 			continue
 		}
 
@@ -462,6 +482,7 @@ func (d *Dispatcher) buildWebhookSender(dest *AlertDestination) (Sender, time.Du
 		Password:          secret.Password,
 		Headers:           secret.Headers,
 		Timeout:           time.Duration(cfg.TimeoutSeconds) * time.Second,
+		TLSSkipVerify:     cfg.TLSSkipVerify,
 		Identity:          d.config.DeviceID,
 		Logger:            d.logger,
 	})
@@ -1052,11 +1073,24 @@ func classifyError(err error) string {
 		strings.Contains(errStr, "x509")
 	isAuth := strings.Contains(errStr, "401") ||
 		strings.Contains(errStr, "403") ||
-		strings.Contains(errStr, "not authorized")
+		strings.Contains(errStr, "not authorized") ||
+		strings.Contains(errStr, "bad user name or password")
 	isNotConnected := errors.Is(err, ErrMQTTNotConnected) || strings.Contains(errStr, "not connected")
 	isPublishFailed := errors.Is(err, ErrMQTTPublishFailed) || strings.Contains(errStr, "publish")
+	isConfigInvalid := errors.Is(err, ErrPublicBaseURLMissing) ||
+		errors.Is(err, ErrPublicBaseURLNotConfigured) ||
+		errors.Is(err, ErrWebhookURLMissing) ||
+		errors.Is(err, ErrMQTTBrokerMissing) ||
+		errors.Is(err, ErrMQTTTopicMissing) ||
+		errors.Is(err, ErrMQTTWildcardTopic) ||
+		errors.Is(err, ErrInvalidConfig) ||
+		errors.Is(err, ErrInvalidImageMode)
 
 	switch {
+	case errors.Is(err, ErrInvalidChannelType):
+		return "unsupported_channel"
+	case isConfigInvalid:
+		return "config_invalid"
 	case errors.Is(err, ErrCrossOriginRedirect):
 		return "cross_origin_redirect"
 	case errors.Is(err, ErrWebhookRedirectMethodChanged), errors.Is(err, ErrWebhookTooManyRedirects):

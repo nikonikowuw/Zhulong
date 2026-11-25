@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/collapsible'
 import {
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -23,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import type { AlertDestinationFormValues } from '../../data/schema'
 import type { AuthType } from '../../types'
 import { DestinationHeadersField } from './destination-headers-field'
@@ -281,6 +283,31 @@ export function WebhookConfigSection({
                   />
                 </FormControl>
                 <FormMessage className='text-xs' />
+              </FormItem>
+            )}
+          />
+
+          {/* 跳过 TLS 证书校验 */}
+          <FormField
+            control={control}
+            name='tlsSkipVerify'
+            render={({ field }) => (
+              <FormItem className='flex flex-row items-center justify-between rounded-lg border border-border/60 bg-background/80 p-3'>
+                <div className='space-y-0.5'>
+                  <FormLabel className='cursor-pointer text-xs font-medium'>
+                    {t('fields.tlsSkipVerify')}
+                  </FormLabel>
+                  <FormDescription className='text-[11px] text-muted-foreground'>
+                    {t('fields.webhookTlsSkipVerifyDesc')}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                    aria-label={t('fields.tlsSkipVerify')}
+                  />
+                </FormControl>
               </FormItem>
             )}
           />

@@ -573,4 +573,46 @@ describe('AlertDestinationDialog & Table Capabilities', () => {
       .element(getByRole('textbox', { name: /Client ID/i }))
       .toHaveValue('edge-custom-id')
   })
+
+  it('auto-expands Webhook advanced section and submits tlsSkipVerify in edit mode', async () => {
+    const selfSignedWebhook: AlertDestination = {
+      ...mockDestination,
+      id: 'dest-webhook-tls',
+      name: 'Self-Signed Webhook',
+      headerNames: [],
+      config: {
+        url: 'https://10.0.0.20:8443/alerts',
+        authType: 'none',
+        timeoutSeconds: 5,
+        tlsSkipVerify: true,
+        heartbeatIntervalSeconds: 60,
+      },
+    }
+
+    const queryClient = new QueryClient()
+    const { getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AlertDestinationDialog
+          open={true}
+          destination={selfSignedWebhook}
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    const tlsSwitch = getByRole('switch', { name: '跳过 TLS 证书校验' })
+    await expect.element(tlsSwitch).toBeChecked()
+
+    await userEvent.click(getByRole('button', { name: /保存目标/i }))
+    await vi.waitFor(() => {
+      expect(alertPushApi.update).toHaveBeenCalledTimes(1)
+    })
+    expect(alertPushApi.update).toHaveBeenLastCalledWith(
+      'dest-webhook-tls',
+      expect.objectContaining({
+        config: expect.objectContaining({ tlsSkipVerify: true }),
+      })
+    )
+  })
 })

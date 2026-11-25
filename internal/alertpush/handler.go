@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"strings"
@@ -364,7 +365,7 @@ func (h *Handler) Test(c *gin.Context) {
 	)
 
 	ctx := c.Request.Context()
-	dest, secretRaw, err := h.resolveTestTarget(ctx, req)
+	dest, secretRaw, isDraft, err := h.resolveTestTarget(ctx, req)
 	if err != nil {
 		if errors.Is(err, ErrDestinationNotFound) {
 			httputil.WriteError(
@@ -381,7 +382,7 @@ func (h *Handler) Test(c *gin.Context) {
 		return
 	}
 
-	res, err := h.service.Test(ctx, dest, secretRaw)
+	res, err := h.service.TestWithOptions(ctx, dest, secretRaw, !isDraft)
 	if err != nil {
 		h.writeValidationError(c, err)
 		return
@@ -397,24 +398,29 @@ func (h *Handler) Test(c *gin.Context) {
 func (h *Handler) resolveTestTarget(
 	ctx context.Context,
 	req TestAlertDestinationRequest,
-) (*AlertDestination, destinationSecret, error) {
+) (*AlertDestination, destinationSecret, bool, error) {
 	if req.ID != "" {
 		return h.resolveExistingTestTarget(ctx, req)
 	}
-	return h.resolveDraftTestTarget(req)
+	dest, sec, err := h.resolveDraftTestTarget(req)
+	return dest, sec, true, err
 }
 
 func (h *Handler) resolveExistingTestTarget(
 	ctx context.Context,
 	req TestAlertDestinationRequest,
-) (*AlertDestination, destinationSecret, error) {
+) (*AlertDestination, destinationSecret, bool, error) {
 	existing, err := h.store.GetByID(ctx, req.ID)
 	if err != nil {
 		if errors.Is(err, ErrDestinationNotFound) {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
-		return nil, nil, fmt.Errorf("%w: %w", errTestTargetStoreFailure, err)
+		return nil, nil, false, fmt.Errorf("%w: %w", errTestTargetStoreFailure, err)
 	}
+
+	origEvents := existing.EventsEnabled
+	origHeartbeat := existing.HeartbeatEnabled
+	origImageMode := existing.ImageMode
 
 	if req.EventsEnabled != nil {
 		existing.EventsEnabled = *req.EventsEnabled
@@ -426,23 +432,28 @@ func (h *Handler) resolveExistingTestTarget(
 		existing.ImageMode = req.ImageMode
 	}
 
+	capabilitiesChanged := existing.EventsEnabled != origEvents ||
+		existing.HeartbeatEnabled != origHeartbeat ||
+		existing.ImageMode != origImageMode
+
 	switch existing.ChannelType {
 	case ChannelTypeWebhook:
 		var cfg webhookConfig
 		if existing.ConfigJSON != "" {
 			if err := json.Unmarshal([]byte(existing.ConfigJSON), &cfg); err != nil {
-				return nil, nil, err
+				return nil, nil, false, err
 			}
 		}
+		origCfg := cfg
 		if req.Config.AuthType != "" {
 			if !isValidWebhookAuthType(req.Config.AuthType) {
-				return nil, nil, fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
+				return nil, nil, false, fmt.Errorf("unsupported webhook authType %q", req.Config.AuthType)
 			}
 			cfg.AuthType = req.Config.AuthType
 		}
 		if req.Config.TimeoutSeconds != nil {
 			if !isValidWebhookTimeout(*req.Config.TimeoutSeconds) {
-				return nil, nil, fmt.Errorf(
+				return nil, nil, false, fmt.Errorf(
 					"timeoutSeconds must be between %d and %d",
 					MinWebhookTimeoutSeconds,
 					MaxWebhookTimeoutSeconds,
@@ -450,25 +461,29 @@ func (h *Handler) resolveExistingTestTarget(
 			}
 			cfg.TimeoutSeconds = *req.Config.TimeoutSeconds
 		}
+		if req.Config.TLSSkipVerify != nil {
+			cfg.TLSSkipVerify = *req.Config.TLSSkipVerify
+		}
 		if req.Config.HeartbeatIntervalSeconds != nil {
 			cfg.HeartbeatIntervalSeconds = *req.Config.HeartbeatIntervalSeconds
 		}
 		cfgBytes, err := json.Marshal(cfg)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		existing.ConfigJSON = string(cfgBytes)
 
 		sec, err := h.store.DecryptWebhookSecret(existing.ID, existing.SecretCiphertext)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
+		origSec := cloneWebhookSecret(sec)
 		if err := applyWebhookSecretOverrides(sec, req.Secret, true); err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		if req.Config.URL != "" {
 			if err := validateWebhookURL(req.Config.URL); err != nil {
-				return nil, nil, err
+				return nil, nil, false, err
 			}
 			sec.URL = req.Config.URL
 		}
@@ -476,31 +491,37 @@ func (h *Handler) resolveExistingTestTarget(
 			trimmed := strings.TrimSpace(*req.Config.HeartbeatURL)
 			if trimmed != "" {
 				if err := validateWebhookURL(trimmed); err != nil {
-					return nil, nil, err
+					return nil, nil, false, err
 				}
 			}
 			sec.HeartbeatURL = trimmed
 		}
 		normalizeWebhookAuthCredentials(cfg.AuthType, sec)
 		if err := validateWebhookAuthCredentials(cfg.AuthType, sec); err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
-		return existing, sec, nil
+		isDraft := capabilitiesChanged ||
+			!webhookConfigsEqual(origCfg, cfg) ||
+			!webhookSecretsEqual(origSec, sec)
+		return existing, sec, isDraft, nil
 	case ChannelTypeMQTT:
 		var cfg mqttConfig
 		if existing.ConfigJSON != "" {
 			if err := json.Unmarshal([]byte(existing.ConfigJSON), &cfg); err != nil {
-				return nil, nil, err
+				return nil, nil, false, err
 			}
 		}
+		origCfg := cfg
+		origClientID := effectiveMQTTClientID(existing.ID, existing.MQTTClientID)
+
 		if req.Config.Broker != "" {
-			cfg.Broker = req.Config.Broker
+			cfg.Broker = strings.TrimSpace(req.Config.Broker)
 		}
 		if req.Config.Username != nil {
 			cfg.Username = strings.TrimSpace(*req.Config.Username)
 		}
 		if req.Config.Topic != "" {
-			cfg.Topic = req.Config.Topic
+			cfg.Topic = strings.TrimSpace(req.Config.Topic)
 		}
 		if req.Config.HeartbeatTopic != nil {
 			cfg.HeartbeatTopic = strings.TrimSpace(*req.Config.HeartbeatTopic)
@@ -517,7 +538,7 @@ func (h *Handler) resolveExistingTestTarget(
 		}
 		if req.Config.KeepAliveSeconds != nil {
 			if !isValidKeepAliveSeconds(*req.Config.KeepAliveSeconds) {
-				return nil, nil, fmt.Errorf(
+				return nil, nil, false, fmt.Errorf(
 					"keepAliveSeconds must be between %d and %d",
 					MinKeepAliveSeconds,
 					MaxKeepAliveSeconds,
@@ -531,22 +552,38 @@ func (h *Handler) resolveExistingTestTarget(
 		if req.Config.InlineMaxKB != nil {
 			cfg.InlineMaxKB = *req.Config.InlineMaxKB
 		}
+		if req.Config.ClientID != nil {
+			cID := strings.TrimSpace(*req.Config.ClientID)
+			if err := validateMQTTClientID(cID); err != nil {
+				return nil, nil, false, err
+			}
+			if cID != "" {
+				existing.MQTTClientID = &cID
+			} else {
+				existing.MQTTClientID = nil
+			}
+		}
 		cfgBytes, err := json.Marshal(cfg)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		existing.ConfigJSON = string(cfgBytes)
 
 		sec, err := h.store.DecryptMQTTSecret(existing.ID, existing.SecretCiphertext)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
+		origSec := *sec
 		if req.Secret != nil && req.Secret.Password != nil {
 			sec.Password = *req.Secret.Password
 		}
-		return existing, sec, nil
+		isDraft := capabilitiesChanged ||
+			effectiveMQTTClientID(existing.ID, existing.MQTTClientID) != origClientID ||
+			!mqttConfigsEqual(origCfg, cfg) ||
+			*sec != origSec
+		return existing, sec, isDraft, nil
 	default:
-		return nil, nil, ErrInvalidChannelType
+		return nil, nil, false, ErrInvalidChannelType
 	}
 }
 
@@ -597,9 +634,14 @@ func (h *Handler) resolveDraftTestTarget(
 		if req.Config.HeartbeatIntervalSeconds != nil {
 			hbInterval = *req.Config.HeartbeatIntervalSeconds
 		}
+		var tlsSkipVerify bool
+		if req.Config.TLSSkipVerify != nil {
+			tlsSkipVerify = *req.Config.TLSSkipVerify
+		}
 		cfgJSON, err := json.Marshal(webhookConfig{
 			AuthType:                 authType,
 			TimeoutSeconds:           timeout,
+			TLSSkipVerify:            tlsSkipVerify,
 			HeartbeatIntervalSeconds: hbInterval,
 		})
 		if err != nil {
@@ -780,9 +822,15 @@ func (h *Handler) parseWebhookCreate(
 		return nil, err
 	}
 
+	var tlsSkipVerify bool
+	if req.Config.TLSSkipVerify != nil {
+		tlsSkipVerify = *req.Config.TLSSkipVerify
+	}
+
 	cfgJSON, err := json.Marshal(webhookConfig{
 		AuthType:                 authType,
 		TimeoutSeconds:           timeout,
+		TLSSkipVerify:            tlsSkipVerify,
 		HeartbeatIntervalSeconds: hbInterval,
 	})
 	if err != nil {
@@ -971,6 +1019,9 @@ func (h *Handler) applyWebhookUpdate(
 			}
 			curCfg.TimeoutSeconds = *req.Config.TimeoutSeconds
 		}
+		if req.Config.TLSSkipVerify != nil {
+			curCfg.TLSSkipVerify = *req.Config.TLSSkipVerify
+		}
 		if req.Config.HeartbeatIntervalSeconds != nil {
 			if !isValidHeartbeatInterval(*req.Config.HeartbeatIntervalSeconds) {
 				return errors.New("heartbeatIntervalSeconds must be between 15 and 3600")
@@ -1133,8 +1184,10 @@ func (h *Handler) toResponse(
 			}
 		}
 		hbInterval := normalizeHeartbeatInterval(cfg.HeartbeatIntervalSeconds)
+		tlsSkip := cfg.TLSSkipVerify
 		resp.Config.AuthType = cfg.AuthType
 		resp.Config.TimeoutSeconds = &cfg.TimeoutSeconds
+		resp.Config.TLSSkipVerify = &tlsSkip
 		resp.Config.HeartbeatIntervalSeconds = &hbInterval
 
 		sec, err := h.store.DecryptWebhookSecret(dest.ID, dest.SecretCiphertext)
@@ -1318,4 +1371,65 @@ func validateWebhookAuthCredentials(authType string, sec *webhookSecret) error {
 		}
 	}
 	return nil
+}
+
+func cloneWebhookSecret(sec *webhookSecret) *webhookSecret {
+	if sec == nil {
+		return &webhookSecret{}
+	}
+	return &webhookSecret{
+		URL:          sec.URL,
+		HeartbeatURL: sec.HeartbeatURL,
+		Token:        sec.Token,
+		Username:     sec.Username,
+		Password:     sec.Password,
+		Headers:      maps.Clone(sec.Headers),
+	}
+}
+
+func webhookConfigsEqual(a, b webhookConfig) bool {
+	return a.AuthType == b.AuthType &&
+		a.TimeoutSeconds == b.TimeoutSeconds &&
+		a.TLSSkipVerify == b.TLSSkipVerify &&
+		normalizeHeartbeatInterval(a.HeartbeatIntervalSeconds) ==
+			normalizeHeartbeatInterval(b.HeartbeatIntervalSeconds)
+}
+
+func webhookSecretsEqual(a, b *webhookSecret) bool {
+	if a == nil {
+		a = &webhookSecret{}
+	}
+	if b == nil {
+		b = &webhookSecret{}
+	}
+	return a.URL == b.URL &&
+		a.HeartbeatURL == b.HeartbeatURL &&
+		a.Token == b.Token &&
+		a.Username == b.Username &&
+		a.Password == b.Password &&
+		maps.Equal(a.Headers, b.Headers)
+}
+
+func mqttConfigsEqual(a, b mqttConfig) bool {
+	return a.Broker == b.Broker &&
+		a.Username == b.Username &&
+		a.Topic == b.Topic &&
+		a.QoS == b.QoS &&
+		a.KeepAliveSeconds == b.KeepAliveSeconds &&
+		a.TLSSkipVerify == b.TLSSkipVerify &&
+		a.HeartbeatTopic == b.HeartbeatTopic &&
+		a.effectiveLWTEnabled() == b.effectiveLWTEnabled() &&
+		normalizeHeartbeatInterval(a.HeartbeatIntervalSeconds) ==
+			normalizeHeartbeatInterval(b.HeartbeatIntervalSeconds) &&
+		normalizeInlineMaxKB(a.InlineMaxKB) == normalizeInlineMaxKB(b.InlineMaxKB)
+}
+
+func effectiveMQTTClientID(destID string, clientID *string) string {
+	if clientID != nil && strings.TrimSpace(*clientID) != "" {
+		return strings.TrimSpace(*clientID)
+	}
+	if len(destID) > 4 {
+		return "z" + destID[4:]
+	}
+	return destID
 }

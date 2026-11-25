@@ -79,12 +79,14 @@ func NewComponents(opts Options) Components {
 		Logger:       logger,
 	})
 	handler := NewHandler(service, store, logger)
-	signedMediaHandler := NewSignedMediaHandlerWithGallery(
-		signer,
-		opts.MediaHandler,
-		opts.GalleryMedia,
-		logger,
-	)
+	signedMediaHandler := NewSignedMediaHandlerWithOptions(SignedMediaHandlerOptions{
+		Signer:       signer,
+		MediaHandler: opts.MediaHandler,
+		GalleryMedia: opts.GalleryMedia,
+		RatePerMin:   opts.Config.SignedMediaRateLimitPerMin,
+		RateBurst:    opts.Config.SignedMediaRateLimitBurst,
+		Logger:       logger,
+	})
 
 	lifecycle := &alertPushLifecycleImpl{
 		signer:     signer,

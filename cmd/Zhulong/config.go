@@ -34,8 +34,10 @@ type fileConfig struct {
 		SessionTTL string `mapstructure:"session_ttl"`
 	} `mapstructure:"auth"`
 	AlertPush struct {
-		PublicBaseURL string `mapstructure:"public_base_url"`
-		SignedURLTTL  string `mapstructure:"signed_url_ttl"`
+		PublicBaseURL            string `mapstructure:"public_base_url"`
+		SignedURLTTL             string `mapstructure:"signed_url_ttl"`
+		SignedMediaRateLimitMin  int    `mapstructure:"signed_media_rate_limit_per_min"`
+		SignedMediaRateLimitBrst int    `mapstructure:"signed_media_rate_limit_burst"`
 	} `mapstructure:"alertpush"`
 	Decode app.DecodeConfig `mapstructure:"decode"`
 }
@@ -73,6 +75,14 @@ func loadConfigFile(path string) (app.Config, error) {
 	settings.SetDefault("auth.session_ttl", "24h")
 	settings.SetDefault("alertpush.public_base_url", defaults.AlertPushPublicBaseURL)
 	settings.SetDefault("alertpush.signed_url_ttl", "24h")
+	settings.SetDefault(
+		"alertpush.signed_media_rate_limit_per_min",
+		defaults.AlertPushSignedMediaRateLimitPerMin,
+	)
+	settings.SetDefault(
+		"alertpush.signed_media_rate_limit_burst",
+		defaults.AlertPushSignedMediaRateLimitBurst,
+	)
 	settings.SetDefault("decode.backend", defaults.Decode.Backend)
 	settings.SetDefault("decode.allow_software_fallback", defaults.Decode.AllowSoftwareFallback)
 	settings.SetDefault("decode.max_sessions", defaults.Decode.MaxSessions)
@@ -117,23 +127,32 @@ func loadConfigFile(path string) (app.Config, error) {
 	if err != nil {
 		return app.Config{}, fmt.Errorf("decode configuration %q: %w", path, err)
 	}
+	alertRateMin, alertRateBurst, err := app.ValidateAlertPushRateLimit(
+		values.AlertPush.SignedMediaRateLimitMin,
+		values.AlertPush.SignedMediaRateLimitBrst,
+	)
+	if err != nil {
+		return app.Config{}, fmt.Errorf("decode configuration %q: %w", path, err)
+	}
 
 	return app.Config{
-		HTTPAddress:                  values.HTTP.Address,
-		TLSMode:                      values.HTTP.TLSMode,
-		TLSCertFile:                  values.HTTP.CertFile,
-		TLSKeyFile:                   values.HTTP.KeyFile,
-		DataDir:                      values.Data.Directory,
-		FacesDir:                     facesDir,
-		AlgorithmTarget:              values.Algorithm.Target,
-		Logging:                      values.Logging,
-		Decode:                       values.Decode,
-		ConfigPath:                   filepath.Clean(configPath),
-		CustomScript:                 values.Network.CustomScript,
-		SessionTTL:                   sessionTTL,
-		RequirePersonIDForEnrollment: values.Person.RequirePersonIDForEnrollment,
-		ExtractorAlgorithm:           values.Person.ExtractorAlgorithm,
-		AlertPushPublicBaseURL:       alertBaseURL,
-		AlertPushSignedURLTTL:        alertTTL,
+		HTTPAddress:                         values.HTTP.Address,
+		TLSMode:                             values.HTTP.TLSMode,
+		TLSCertFile:                         values.HTTP.CertFile,
+		TLSKeyFile:                          values.HTTP.KeyFile,
+		DataDir:                             values.Data.Directory,
+		FacesDir:                            facesDir,
+		AlgorithmTarget:                     values.Algorithm.Target,
+		Logging:                             values.Logging,
+		Decode:                              values.Decode,
+		ConfigPath:                          filepath.Clean(configPath),
+		CustomScript:                        values.Network.CustomScript,
+		SessionTTL:                          sessionTTL,
+		RequirePersonIDForEnrollment:        values.Person.RequirePersonIDForEnrollment,
+		ExtractorAlgorithm:                  values.Person.ExtractorAlgorithm,
+		AlertPushPublicBaseURL:              alertBaseURL,
+		AlertPushSignedURLTTL:               alertTTL,
+		AlertPushSignedMediaRateLimitPerMin: alertRateMin,
+		AlertPushSignedMediaRateLimitBurst:  alertRateBurst,
 	}, nil
 }

@@ -100,7 +100,12 @@ export function DestinationForm({
   )
 
   // 初始折叠展开判定：编辑态下若存在对应协议的自定义高级项或过滤器，自动展开
-  const hasCustomHeaders = originalHeaderNames.length > 0
+  const hasCustomWebhookAdvanced = Boolean(
+    originalHeaderNames.length > 0 ||
+    (destination?.channelType === 'webhook' &&
+      ((destination.config.timeoutSeconds ?? 5) !== 5 ||
+        Boolean(destination.config.tlsSkipVerify)))
+  )
   const hasCustomMqttAdvanced = Boolean(
     destination?.channelType === 'mqtt' &&
     ((destination.config.clientId &&
@@ -172,8 +177,13 @@ export function DestinationForm({
         INLINE_MAX_KB_DEFAULT,
       mqttUser: (isMqtt ? destination.config.username : '') || '',
       mqttPass: '',
-      tlsSkipVerify:
-        (isMqtt ? destination.config.tlsSkipVerify : false) || false,
+      tlsSkipVerify: Boolean(
+        isWebhook
+          ? destination.config.tlsSkipVerify
+          : isMqtt
+            ? destination.config.tlsSkipVerify
+            : false
+      ),
       // Filter
       eventTypes: destination?.filter?.eventTypes || [],
       algorithmIds: destination?.filter?.algorithmIds || [],
@@ -202,6 +212,7 @@ export function DestinationForm({
         heartbeatUrl: includeEmptyOverrideForClear ? hbUrl : hbUrl || undefined,
         authType: values.authType,
         timeoutSeconds: values.timeoutSeconds,
+        tlsSkipVerify: values.tlsSkipVerify,
         heartbeatIntervalSeconds: values.heartbeatIntervalSeconds,
       }
     }
@@ -429,7 +440,7 @@ export function DestinationForm({
               isEdit={isEdit}
               secretSet={destination?.secretSet}
               originalHeaderNames={originalHeaderNames}
-              initialAdvancedOpen={hasCustomHeaders}
+              initialAdvancedOpen={hasCustomWebhookAdvanced}
             />
           ) : (
             <MqttConfigSection

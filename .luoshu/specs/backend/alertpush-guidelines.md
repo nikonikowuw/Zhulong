@@ -9,13 +9,13 @@
 - **通道与图片模式**：支持 `webhook` 与 `mqtt` 两种通道类型，以及 `url`、`multipart`、`base64` 三种图片载荷模式（受各通道能力校验约束）。
 - **设备身份与来源实时读取**：
   - `Dispatcher` 通过 `DeviceIDProvider` 与 `HeartbeatSnapshotProvider` 在每次发送/心跳时动态读取宿主身份与运行快照，**不在构造期缓存**，确保修改系统设备标识后无需重建目标即可生效；同时 `systeminfo.IdentityService` 在变更时经宿主注册的回调主动触发 `Dispatcher.RequestReload()`，立即刷新 MQTT LWT（心跳前仍保留 `hasStaleWillDeviceID` 兜底检查）。
-  - 来源元数据通过消费侧接口 `SourceResolver`（由 `internal/app` 适配器注入，alertpush 不反向依赖 `camera` / `algorithm`）在发送时动态解析摄像头名称与算法信息；查找失败降级为 `null` 字段，不得因元数据缺失丢弃事件。
-- **保留请求头与跨源校验**：自定义 Webhook Header 禁止覆盖保留系统头（前后端统一：`accept`、`authorization`、`connection`、`content-length`、`content-type`、`host`、`transfer-encoding`、`user-agent` 及 `X-Zhulong-Event`、`X-Zhulong-Delivery`、`X-Zhulong-Schema`，`ErrReservedHeaderUsed`），系统路由头在自定义头之后写入；若配置了认证凭据，心跳地址（`heartbeat_url`）必须与主推送 `url` 同源（`ErrCrossOriginHeartbeatURL`），防止凭据跨源泄露；HTTP 客户端拦截跨源重定向、超过 3 次重定向以及导致 POST 降级为 GET 的 301/302/303 重定向，且不重试。
-- **输入校验一致性**：Create/Update/Test 共享统一的字段校验规则（名称非空且 ≤64 字符、Webhook `authType` 白名单、`timeoutSeconds` 范围 `1..30`、鉴权凭据归一化与必填校验、MQTT Broker/Topic/QoS/KeepAlive/ClientID/InlineMaxKB 校验），越界或非法值一律返回 422 而非静默忽略。
+  - 来源元数据通过消费侧接口 `SourceResolver`（由 `internal/app` 适配器注入，alertpush 不反向依赖 `camera` / `algorithm`）在发送时解析摄像头名称与算法信息（宿主适配器内置 15s 短 TTL 有界缓存以消除多目标 fan-out 重复查库，失败不缓存）；查找失败降级为省略名称字段，不得因元数据缺失丢弃事件。
+- **保留请求头、TLS 与跨源校验**：自定义 Webhook Header 禁止覆盖保留系统头（前后端统一：`accept`、`authorization`、`connection`、`content-length`、`content-type`、`host`、`transfer-encoding`、`user-agent` 及 `X-Zhulong-Event`、`X-Zhulong-Delivery`、`X-Zhulong-Schema`，`ErrReservedHeaderUsed`），系统路由头在自定义头之后写入；Webhook 与 MQTT 均支持按目标配置 `tlsSkipVerify`（用于内网自签名证书场景），且 Webhook `multipart` 单图读入受 `16 MiB` 硬上限保护（超限回退签名 URL）；若配置了认证凭据，心跳地址（`heartbeat_url`）必须与主推送 `url` 同源（`ErrCrossOriginHeartbeatURL`），防止凭据跨源泄露；HTTP 客户端拦截跨源重定向、超过 3 次重定向以及导致 POST 降级为 GET 的 301/302/303 重定向，且不重试。
+- **输入校验与草稿探测隔离**：Create/Update/Test 共享统一的字段校验规则（名称非空且 ≤64 字符、Webhook `authType` 白名单、`timeoutSeconds` 范围 `1..30`、鉴权凭据归一化与必填校验、MQTT Broker/Topic/QoS/KeepAlive/ClientID/InlineMaxKB 校验），越界或非法值一律返回 422 而非静默忽略；编辑态带未保存草稿覆写的 `/test` 仅返回探测结果，**不得**回写污染线上运行中目标的健康状态（仅无覆写的已保存目标快速探测才更新运行态）。
 - **过滤器事件类型白名单**：`filter.event_types` 仅接受外部短名 `{alarm, face, vehicle}`（`ErrInvalidFilterEventType`），与 `record.EventType` 内部取值隔离并由 alertpush 映射（存量配置迁移见 `000040_alert_filter_event_type_v1`）。
-- **MQTT 局部更新、TLS 与连接状态可观测性**：
-  - `AlertDestinationConfigInfo` 的可选字段（`clientId`、`username`、`tlsSkipVerify`、`heartbeatTopic`、`heartbeatUrl` 等）使用指针区分「省略（保持原值）」与「显式清空/关闭」；局部更新不覆写自定义 `clientId`；安全连接按小写 scheme 识别 `ssl`/`tls`/`tcps`/`wss`/`mqtts` 并应用 TLS 配置；事件发布对瞬断/发布失败支持最多 3 次有界重试（建连超时与取消不重试），且 `ensureConnected` 透传 `ctx`。
-  - `MQTTSender` 经 Paho `OnConnect`/`ConnectionLost` 回调实时维护 `AlertDestinationStatus`（含 `state`、`lastError`、`lastAttemptAt`、`lastSuccessAt`、`lastFailureAt`、`consecutiveFailures`、`totalDispatched`、`dropped`、`queued`、`queueCapacity`）；配置热重载时保留历史累计计数与时间戳并重置健康态。
+- **MQTT 局部更新、真实连接态与状态可观测性**：
+  - `AlertDestinationConfigInfo` 的可选字段（`clientId`、`username`、`tlsSkipVerify`、`heartbeatTopic`、`heartbeatUrl` 等）使用指针区分「省略（保持原值）」与「显式清空/关闭」；局部更新不覆写自定义 `clientId`；安全连接按小写 scheme 识别 `ssl`/`tls`/`tcps`/`wss`/`mqtts` 并应用 TLS 配置；事件发布对瞬断/发布失败支持最多 3 次有界重试（建连超时与取消不重试），且 `ensureConnected` 透传 `ctx` 并以 `IsConnectionOpen()`（而非 `IsConnected()`）判断真实会话连通态，防止 Paho 重连期间 QoS 0 静默丢包与状态误绿；连通性探测禁用 `AutoReconnect`/`ConnectRetry` 以立即暴露真实建连/鉴权/TLS 错误。
+  - `MQTTSender` 经 Paho `OnConnect`/`ConnectionLost` 回调实时维护 `AlertDestinationStatus`（含 `state`、`lastError`、`lastAttemptAt`、`lastSuccessAt`、`lastFailureAt`、`consecutiveFailures`、`totalDispatched`、`dropped`、`queued`、`queueCapacity`）；配置热重载时保留历史累计计数与时间戳并重置健康态，`reconcile` 构建 Sender 失败时显式记录 `failed` 状态与分类错误码。
 
 ---
 
@@ -49,7 +49,7 @@
 
 - **签名密钥隔离**：`URLSigner` 使用独立 32 字节密钥文件 `media_url.key`（权限 `0600`），构造函数保持纯内存创建（`NewEmptyURLSigner()`），密钥加载收敛在 `Start` 阶段。
 - **受控白名单路径**：`URLSigner.Sign` 与 `Verify` 仅放行 `snapshots/`（抓拍证据）及单层 `faces/<filename>`（人脸底库参考图），硬性拦截 `recordings/`、`exports/`、`maps/`、嵌套子目录或其他路径（`ErrPathNotAllowed`）。**严禁**将 `faces/` 并入 `mediafile` 白名单或经 `/api/v1/media/content/*` 暴露。
-- **无 Cookie 鉴权的公开端点限流**：`SignedMediaHandler` 挂载于 `public_routes`，必须叠加按 IP 限流中间件（120 req/min，burst 8）；验签通过后，`snapshots/` 委托 `mediafile.Handler` 流式输出，`faces/<filename>` 经由 `filestore.Manager` 注入的隔离 `GalleryMedia` 适配器（同样走 `os.Root` 四层防护与 S3 预签名跳转）只读流式输出。
+- **无 Cookie 鉴权的公开端点限流**：`SignedMediaHandler` 挂载于 `public_routes`，必须叠加按 IP 限流中间件（默认 120 req/min，burst 8，可通过 `[alertpush].signed_media_rate_limit_per_min` / `signed_media_rate_limit_burst` 调优）；验签通过后，`snapshots/` 委托 `mediafile.Handler` 流式输出，`faces/<filename>` 经由 `filestore.Manager` 注入的隔离 `GalleryMedia` 适配器（同样走 `os.Root` 四层防护与 S3 预签名跳转）只读流式输出。
 
 ---
 

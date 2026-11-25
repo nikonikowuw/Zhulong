@@ -68,6 +68,9 @@ max_sessions = 8                 # Maximum concurrent physical decode streams (0
 public_base_url = ""
 # Signed media URL expiration TTL (1m..168h).
 signed_url_ttl = "24h"
+# Per-IP rate limit for /api/v1/media/signed/* (defaults: 120 req/min, burst 8).
+signed_media_rate_limit_per_min = 120
+signed_media_rate_limit_burst = 8
 
 
 

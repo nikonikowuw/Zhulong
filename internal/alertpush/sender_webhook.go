@@ -3,6 +3,7 @@ package alertpush
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,8 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/record"
 )
 
+const defaultMaxWebhookMultipartImageBytes = 16 * 1024 * 1024 // 16 MiB per image part
+
 var (
 	ErrWebhookURLMissing            = errors.New("webhook url is missing")
 	ErrPublicBaseURLMissing         = errors.New("public base url is required for url image mode")
@@ -29,6 +32,7 @@ var (
 	ErrCrossOriginRedirect          = errors.New(
 		"refusing cross-origin redirect when credentials are configured",
 	)
+	errWebhookImageTooLarge = errors.New("image exceeds maximum webhook multipart size")
 )
 
 // WebhookSenderOptions contains configuration for constructing a WebhookSender.
@@ -50,6 +54,10 @@ type WebhookSenderOptions struct {
 	Password          string
 	Headers           map[string]string
 	Timeout           time.Duration
+	TLSSkipVerify     bool
+	// MaxMultipartImageBytes caps raw bytes read per image part in multipart mode.
+	// Zero or negative uses defaultMaxWebhookMultipartImageBytes (16 MiB).
+	MaxMultipartImageBytes int64
 	// Identity supplies the host device_id stamped onto every payload. Nil omits it.
 	Identity DeviceIDProvider
 	Logger   *zap.Logger
@@ -84,6 +92,11 @@ func NewWebhookSender(opts WebhookSenderOptions) (*WebhookSender, error) {
 		MaxIdleConns:        4,
 		MaxIdleConnsPerHost: 4,
 		IdleConnTimeout:     30 * time.Second,
+	}
+	if opts.TLSSkipVerify {
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
 	}
 
 	hasCredentials := (opts.AuthType != "" && opts.AuthType != AuthTypeNone) || len(opts.Headers) > 0
@@ -378,12 +391,19 @@ func (s *WebhookSender) loadMultipartImages(
 	return images, parts
 }
 
+func (s *WebhookSender) maxMultipartImageBytes() int64 {
+	if s.opts.MaxMultipartImageBytes <= 0 {
+		return defaultMaxWebhookMultipartImageBytes
+	}
+	return s.opts.MaxMultipartImageBytes
+}
+
 func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string) ([]byte, error) {
 	reader := mediaReaderForPath(s.opts.Media, s.opts.GalleryMedia, relPath)
 	if reader == nil {
 		return nil, errors.New("media reader is not configured")
 	}
-	f, _, err := reader.OpenContent(ctx, relPath)
+	f, info, err := reader.OpenContent(ctx, relPath)
 	if err != nil {
 		s.logger.Warn("failed to open image for multipart payload",
 			zap.String("role", role),
@@ -392,11 +412,24 @@ func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string
 		)
 		return nil, err
 	}
-	data, readErr := io.ReadAll(f)
-	closeErr := f.Close()
-	if closeErr != nil {
-		s.logger.Debug("close multipart image file", zap.Error(closeErr))
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			s.logger.Debug("close multipart image file", zap.Error(closeErr))
+		}
+	}()
+
+	limit := s.maxMultipartImageBytes()
+	if info.SizeBytes > limit {
+		s.logger.Warn("image exceeds webhook multipart size cap; falling back to URL if configured",
+			zap.String("role", role),
+			zap.String("path", relPath),
+			zap.Int64("size_bytes", info.SizeBytes),
+			zap.Int64("limit_bytes", limit),
+		)
+		return nil, errWebhookImageTooLarge
 	}
+
+	data, readErr := io.ReadAll(io.LimitReader(f, limit+1))
 	if readErr != nil {
 		s.logger.Warn("failed to read image for multipart payload",
 			zap.String("role", role),
@@ -404,6 +437,14 @@ func (s *WebhookSender) readMediaBytes(ctx context.Context, role, relPath string
 			zap.Error(readErr),
 		)
 		return nil, readErr
+	}
+	if int64(len(data)) > limit {
+		s.logger.Warn("image grew beyond webhook multipart size cap; falling back to URL if configured",
+			zap.String("role", role),
+			zap.String("path", relPath),
+			zap.Int64("limit_bytes", limit),
+		)
+		return nil, errWebhookImageTooLarge
 	}
 	return data, nil
 }

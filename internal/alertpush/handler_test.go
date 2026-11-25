@@ -525,7 +525,7 @@ func TestHandlerResolveExistingMQTTTestTargetAppliesOverrides(t *testing.T) {
 	h := NewHandler(nil, store, zap.NewNop())
 	var qos uint8 = 1
 	keepAlive := 45
-	dest, _, err := h.resolveExistingTestTarget(ctx, TestAlertDestinationRequest{
+	dest, _, isDraft, err := h.resolveExistingTestTarget(ctx, TestAlertDestinationRequest{
 		ID:               "01J8ZMQTTTEST0000000000001",
 		EventsEnabled:    boolPtr(false),
 		HeartbeatEnabled: boolPtr(true),
@@ -541,6 +541,9 @@ func TestHandlerResolveExistingMQTTTestTargetAppliesOverrides(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("resolveExistingTestTarget: %v", err)
+	}
+	if !isDraft {
+		t.Fatal("expected overridden existing test target to be classified as draft")
 	}
 
 	var merged mqttConfig

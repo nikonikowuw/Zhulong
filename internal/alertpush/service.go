@@ -233,11 +233,23 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 }
 
 // Test attempts sending a dummy ping/test event (or an immediate heartbeat when
-// events are disabled) to the destination.
+// events are disabled) to the destination and records the result against the active
+// destination status when testing a saved enabled destination.
 func (s *Service) Test(
 	ctx context.Context,
 	dest *AlertDestination,
 	secretRaw destinationSecret,
+) (TestExecutionResult, error) {
+	return s.TestWithOptions(ctx, dest, secretRaw, true)
+}
+
+// TestWithOptions executes a connectivity probe and updates the live destination's
+// status only when recordRuntimeStatus is true (saved-target quick test, never edited drafts).
+func (s *Service) TestWithOptions(
+	ctx context.Context,
+	dest *AlertDestination,
+	secretRaw destinationSecret,
+	recordRuntimeStatus bool,
 ) (TestExecutionResult, error) {
 	const testTimeout = 10 * time.Second
 	testCtx, cancel := context.WithTimeout(ctx, testTimeout)
@@ -292,7 +304,7 @@ func (s *Service) Test(
 		reason = classifyError(sendErr)
 	}
 
-	if dest.ID != "" && dest.Enabled {
+	if recordRuntimeStatus && dest.ID != "" && dest.Enabled {
 		s.dispatcher.UpdateTestResult(dest.ID, success, reason)
 	}
 
@@ -361,6 +373,7 @@ func (s *Service) buildTestWebhookSender(
 		Password:          sec.Password,
 		Headers:           sec.Headers,
 		Timeout:           timeout,
+		TLSSkipVerify:     cfg.TLSSkipVerify,
 		Identity:          s.config.DeviceID,
 		Logger:            s.logger,
 	})
@@ -399,6 +412,7 @@ func (s *Service) buildTestMQTTSender(dest *AlertDestination, sec *mqttSecret) (
 		QoS:               cfg.QoS,
 		KeepAlive:         30 * time.Second,
 		TLSSkipVerify:     cfg.TLSSkipVerify,
+		DisableReconnect:  true,
 		InlineMaxBytes:    int64(normalizeInlineMaxKB(cfg.InlineMaxKB)) * 1024,
 		Identity:          s.config.DeviceID,
 		Logger:            s.logger,

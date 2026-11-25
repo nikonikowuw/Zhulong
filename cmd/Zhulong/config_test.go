@@ -244,18 +244,37 @@ func TestLoadConfigAlertPush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfigFile: %v", err)
 	}
-	if got.AlertPushPublicBaseURL != "" || got.AlertPushSignedURLTTL != 24*time.Hour {
-		t.Fatalf("unexpected alert push defaults: url=%q, ttl=%v", got.AlertPushPublicBaseURL, got.AlertPushSignedURLTTL)
+	if got.AlertPushPublicBaseURL != "" || got.AlertPushSignedURLTTL != 24*time.Hour ||
+		got.AlertPushSignedMediaRateLimitPerMin != 120 || got.AlertPushSignedMediaRateLimitBurst != 8 {
+		t.Fatalf(
+			"unexpected alert push defaults: url=%q, ttl=%v, rate=%d/%d",
+			got.AlertPushPublicBaseURL,
+			got.AlertPushSignedURLTTL,
+			got.AlertPushSignedMediaRateLimitPerMin,
+			got.AlertPushSignedMediaRateLimitBurst,
+		)
 	}
 
 	// 2. Custom valid config
-	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[alertpush]\npublic_base_url = 'http://192.168.1.50:8000/'\nsigned_url_ttl = '12h'\n")
+	path = writeConfig(
+		t,
+		"[http]\naddress = '127.0.0.1:8000'\n[alertpush]\npublic_base_url = 'http://192.168.1.50:8000/'\nsigned_url_ttl = '12h'\nsigned_media_rate_limit_per_min = 600\nsigned_media_rate_limit_burst = 32\n",
+	)
 	got, err = loadConfigFile(path)
 	if err != nil {
 		t.Fatalf("loadConfigFile: %v", err)
 	}
-	if got.AlertPushPublicBaseURL != "http://192.168.1.50:8000" || got.AlertPushSignedURLTTL != 12*time.Hour {
-		t.Fatalf("unexpected custom alertpush config: url=%q, ttl=%v", got.AlertPushPublicBaseURL, got.AlertPushSignedURLTTL)
+	if got.AlertPushPublicBaseURL != "http://192.168.1.50:8000" ||
+		got.AlertPushSignedURLTTL != 12*time.Hour ||
+		got.AlertPushSignedMediaRateLimitPerMin != 600 ||
+		got.AlertPushSignedMediaRateLimitBurst != 32 {
+		t.Fatalf(
+			"unexpected custom alertpush config: url=%q, ttl=%v, rate=%d/%d",
+			got.AlertPushPublicBaseURL,
+			got.AlertPushSignedURLTTL,
+			got.AlertPushSignedMediaRateLimitPerMin,
+			got.AlertPushSignedMediaRateLimitBurst,
+		)
 	}
 
 	// 3. Invalid scheme
@@ -277,6 +296,19 @@ func TestLoadConfigAlertPush(t *testing.T) {
 	_, err = loadConfigFile(path)
 	if err == nil || !strings.Contains(err.Error(), "out of bounds") {
 		t.Fatalf("expected out of bounds error for long TTL, got %v", err)
+	}
+
+	// 6. Invalid signed media rate limits
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[alertpush]\nsigned_media_rate_limit_per_min = -1\n")
+	_, err = loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "out of bounds") {
+		t.Fatalf("expected out of bounds error for negative rate limit, got %v", err)
+	}
+
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[alertpush]\nsigned_media_rate_limit_burst = 5000\n")
+	_, err = loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "out of bounds") {
+		t.Fatalf("expected out of bounds error for excessive burst, got %v", err)
 	}
 }
 

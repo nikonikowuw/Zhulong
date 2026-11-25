@@ -16,6 +16,7 @@ import (
 	"math"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -991,12 +992,36 @@ type alertSourceAlgorithmReader interface {
 	GetAlgorithm(ctx context.Context, id string) (*algorithm.Algorithm, error)
 }
 
+const (
+	defaultAlertSourceCacheTTL = 15 * time.Second
+	maxAlertSourceCacheEntries = 512
+)
+
+type cachedCameraSource struct {
+	name      string
+	expiresAt time.Time
+}
+
+type cachedAlgorithmSource struct {
+	name      string
+	version   string
+	expiresAt time.Time
+}
+
 // alertSourceResolver implements alertpush.SourceResolver from camera and algorithm data.
-// Lookups never fail the push: errors are logged at Debug and degrade to null names.
+// Successful lookups are cached with a short bounded TTL so multi-destination fan-out
+// does not repeat identical SQLite queries; errors are never cached and degrade to empty names.
 type alertSourceResolver struct {
 	cameras    alertSourceCameraReader
 	algorithms alertSourceAlgorithmReader
 	logger     *zap.Logger
+
+	cacheTTL time.Duration
+	now      func() time.Time
+
+	mu          sync.RWMutex
+	cameraCache map[string]cachedCameraSource
+	algoCache   map[string]cachedAlgorithmSource
 }
 
 func newAlertSourceResolver(
@@ -1007,7 +1032,13 @@ func newAlertSourceResolver(
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	r := &alertSourceResolver{logger: logger.Named("alertpush.source")}
+	r := &alertSourceResolver{
+		logger:      logger.Named("alertpush.source"),
+		cacheTTL:    defaultAlertSourceCacheTTL,
+		now:         time.Now,
+		cameraCache: make(map[string]cachedCameraSource),
+		algoCache:   make(map[string]cachedAlgorithmSource),
+	}
 	// Assign only non-nil concrete pointers so a missing optional dependency stays a
 	// true nil interface instead of a typed nil that would panic on call.
 	if cameras != nil {
@@ -1019,6 +1050,20 @@ func newAlertSourceResolver(
 	return r
 }
 
+func (r *alertSourceResolver) currentTime() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
+}
+
+func (r *alertSourceResolver) ttl() time.Duration {
+	if r.cacheTTL > 0 {
+		return r.cacheTTL
+	}
+	return defaultAlertSourceCacheTTL
+}
+
 func (r *alertSourceResolver) ResolveSource(
 	ctx context.Context,
 	cameraID, algorithmID string,
@@ -1026,31 +1071,90 @@ func (r *alertSourceResolver) ResolveSource(
 	src := alertpush.SourceInfo{
 		Camera: &alertpush.CameraSourceInfo{ID: cameraID},
 	}
-	if r.cameras != nil && strings.TrimSpace(cameraID) != "" {
-		cam, err := r.cameras.Get(ctx, cameraID)
-		switch {
-		case err != nil:
-			r.logger.Debug("resolve alert camera name", zap.String("camera_id", cameraID), zap.Error(err))
-		case cam != nil && cam.Name != "":
-			src.Camera.Name = cam.Name
-		}
+	if name, ok := r.resolveCameraName(ctx, strings.TrimSpace(cameraID)); ok {
+		src.Camera.Name = name
 	}
 
-	if strings.TrimSpace(algorithmID) == "" {
+	algoID := strings.TrimSpace(algorithmID)
+	if algoID == "" {
 		return src
 	}
 	src.Algorithm = &alertpush.AlgorithmSourceInfo{ID: algorithmID}
-	if r.algorithms == nil {
-		return src
+	if name, version, ok := r.resolveAlgorithmMeta(ctx, algoID); ok {
+		src.Algorithm.Name = name
+		src.Algorithm.Version = version
 	}
+	return src
+}
+
+func (r *alertSourceResolver) resolveCameraName(ctx context.Context, cameraID string) (string, bool) {
+	if r.cameras == nil || cameraID == "" {
+		return "", false
+	}
+	now := r.currentTime()
+
+	r.mu.RLock()
+	if entry, ok := r.cameraCache[cameraID]; ok && now.Before(entry.expiresAt) {
+		r.mu.RUnlock()
+		return entry.name, entry.name != ""
+	}
+	r.mu.RUnlock()
+
+	cam, err := r.cameras.Get(ctx, cameraID)
+	if err != nil || cam == nil {
+		if r.logger != nil {
+			r.logger.Debug("resolve alert camera name", zap.String("camera_id", cameraID), zap.Error(err))
+		}
+		return "", false
+	}
+
+	r.mu.Lock()
+	if r.cameraCache == nil || len(r.cameraCache) >= maxAlertSourceCacheEntries {
+		r.cameraCache = make(map[string]cachedCameraSource)
+	}
+	r.cameraCache[cameraID] = cachedCameraSource{
+		name:      cam.Name,
+		expiresAt: now.Add(r.ttl()),
+	}
+	r.mu.Unlock()
+	return cam.Name, cam.Name != ""
+}
+
+func (r *alertSourceResolver) resolveAlgorithmMeta(
+	ctx context.Context,
+	algorithmID string,
+) (string, string, bool) {
+	if r.algorithms == nil || algorithmID == "" {
+		return "", "", false
+	}
+	now := r.currentTime()
+
+	r.mu.RLock()
+	if entry, ok := r.algoCache[algorithmID]; ok && now.Before(entry.expiresAt) {
+		r.mu.RUnlock()
+		return entry.name, entry.version, true
+	}
+	r.mu.RUnlock()
+
 	algo, err := r.algorithms.GetAlgorithm(ctx, algorithmID)
 	if err != nil || algo == nil {
-		r.logger.Debug("resolve alert algorithm", zap.String("algorithm_id", algorithmID), zap.Error(err))
-		return src
+		if r.logger != nil {
+			r.logger.Debug("resolve alert algorithm", zap.String("algorithm_id", algorithmID), zap.Error(err))
+		}
+		return "", "", false
 	}
-	src.Algorithm.Name = algo.Name
-	src.Algorithm.Version = algo.Version
-	return src
+
+	r.mu.Lock()
+	if r.algoCache == nil || len(r.algoCache) >= maxAlertSourceCacheEntries {
+		r.algoCache = make(map[string]cachedAlgorithmSource)
+	}
+	r.algoCache[algorithmID] = cachedAlgorithmSource{
+		name:      algo.Name,
+		version:   algo.Version,
+		expiresAt: now.Add(r.ttl()),
+	}
+	r.mu.Unlock()
+	return algo.Name, algo.Version, true
 }
 
 var alertGalleryNamespaces = map[string]bool{

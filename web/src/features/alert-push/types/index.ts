@@ -7,6 +7,7 @@ export interface WebhookConfig {
   heartbeatUrl?: string
   authType: AuthType
   timeoutSeconds?: number
+  tlsSkipVerify?: boolean
   heartbeatIntervalSeconds?: number
 }
 

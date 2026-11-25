@@ -104,6 +104,7 @@ func (AlertDestination) TableName() string {
 type webhookConfig struct {
 	AuthType                 string `json:"auth_type"`
 	TimeoutSeconds           int    `json:"timeout_seconds"`
+	TLSSkipVerify            bool   `json:"tls_skip_verify,omitempty"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds,omitempty"`
 }
 

@@ -869,4 +869,60 @@ func TestClassifyErrorRedirectReasons(t *testing.T) {
 	if got := classifyError(ErrWebhookTooManyRedirects); got != "redirect_blocked" {
 		t.Fatalf("classifyError(ErrWebhookTooManyRedirects) = %q, want redirect_blocked", got)
 	}
+	if got := classifyError(ErrPublicBaseURLMissing); got != "config_invalid" {
+		t.Fatalf("classifyError(ErrPublicBaseURLMissing) = %q, want config_invalid", got)
+	}
+	if got := classifyError(ErrInvalidChannelType); got != "unsupported_channel" {
+		t.Fatalf("classifyError(ErrInvalidChannelType) = %q, want unsupported_channel", got)
+	}
+}
+
+func TestDispatcherReconcileRecordsBuildSenderFailure(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dest := &AlertDestination{
+		ID:               "dest_build_fail",
+		Name:             "URL Webhook Missing Base",
+		ChannelType:      ChannelTypeWebhook,
+		Enabled:          true,
+		EventsEnabled:    true,
+		HeartbeatEnabled: false,
+		ImageMode:        ImageModeURL,
+		ConfigJSON:       `{"auth_type":"none","timeout_seconds":5}`,
+		FilterJSON:       `{}`,
+	}
+	secBytes, err := store.EncryptSecret(dest.ID, &webhookSecret{URL: "http://127.0.0.1:9999/hook"})
+	if err != nil {
+		t.Fatalf("EncryptSecret: %v", err)
+	}
+	dest.SecretCiphertext = secBytes
+	if err := store.Create(ctx, dest); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+
+	// Deliberately omit PublicBaseURL so NewWebhookSender returns ErrPublicBaseURLMissing during reconcile.
+	d := NewDispatcher(DispatcherOptions{
+		Store:  store,
+		Signer: NewEmptyURLSigner(),
+		Config: Config{PublicBaseURL: ""},
+		Logger: zap.NewNop(),
+	})
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		if stopErr := d.Stop(ctx); stopErr != nil {
+			t.Errorf("Stop: %v", stopErr)
+		}
+	}()
+
+	st := d.GetStatus(dest.ID, true)
+	if st.State != StateFailed || st.LastError != "config_invalid" {
+		t.Fatalf("expected failed/config_invalid status on reconcile build error, got %+v", st)
+	}
+	if st.ConsecutiveFailures < 1 || st.LastAttemptAt == nil || st.LastFailureAt == nil {
+		t.Fatalf("expected failure telemetry populated on build error, got %+v", st)
+	}
 }

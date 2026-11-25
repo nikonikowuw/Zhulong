@@ -76,6 +76,42 @@ type Config struct {
 	AlertPushPublicBaseURL string
 	// AlertPushSignedURLTTL is the validity duration for signed media URLs (1m..168h).
 	AlertPushSignedURLTTL time.Duration
+	// AlertPushSignedMediaRateLimitPerMin tunes per-IP requests/min for /api/v1/media/signed/* (1..60000).
+	AlertPushSignedMediaRateLimitPerMin int
+	// AlertPushSignedMediaRateLimitBurst tunes per-IP burst size for /api/v1/media/signed/* (1..1000).
+	AlertPushSignedMediaRateLimitBurst int
+}
+
+const (
+	defaultAlertPushSignedMediaRateLimitPerMin = 120
+	defaultAlertPushSignedMediaRateLimitBurst  = 8
+	maxAlertPushSignedMediaRateLimitPerMin     = 60000
+	maxAlertPushSignedMediaRateLimitBurst      = 1000
+)
+
+// ValidateAlertPushRateLimit validates optional signed-media rate limit settings.
+func ValidateAlertPushRateLimit(perMin, burst int) (int, int, error) {
+	if perMin < 0 || perMin > maxAlertPushSignedMediaRateLimitPerMin {
+		return 0, 0, fmt.Errorf(
+			"alertpush.signed_media_rate_limit_per_min %d out of bounds (must be 1..%d)",
+			perMin,
+			maxAlertPushSignedMediaRateLimitPerMin,
+		)
+	}
+	if burst < 0 || burst > maxAlertPushSignedMediaRateLimitBurst {
+		return 0, 0, fmt.Errorf(
+			"alertpush.signed_media_rate_limit_burst %d out of bounds (must be 1..%d)",
+			burst,
+			maxAlertPushSignedMediaRateLimitBurst,
+		)
+	}
+	if perMin == 0 {
+		perMin = defaultAlertPushSignedMediaRateLimitPerMin
+	}
+	if burst == 0 {
+		burst = defaultAlertPushSignedMediaRateLimitBurst
+	}
+	return perMin, burst, nil
 }
 
 // ValidateAlertPushConfig validates public_base_url and signed_url_ttl.
@@ -199,10 +235,12 @@ func DefaultConfig() Config {
 			AllowSoftwareFallback: true,
 			MaxSessions:           8,
 		},
-		SessionTTL:             24 * time.Hour,
-		ExtractorAlgorithm:     "face_recognition",
-		TLSMode:                "off",
-		AlertPushPublicBaseURL: "",
-		AlertPushSignedURLTTL:  24 * time.Hour,
+		SessionTTL:                          24 * time.Hour,
+		ExtractorAlgorithm:                  "face_recognition",
+		TLSMode:                             "off",
+		AlertPushPublicBaseURL:              "",
+		AlertPushSignedURLTTL:               24 * time.Hour,
+		AlertPushSignedMediaRateLimitPerMin: defaultAlertPushSignedMediaRateLimitPerMin,
+		AlertPushSignedMediaRateLimitBurst:  defaultAlertPushSignedMediaRateLimitBurst,
 	}
 }

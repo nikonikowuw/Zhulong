@@ -117,6 +117,7 @@
     "mqttKeepAliveUnit": "秒",
     "tlsSkipVerify": "略過 TLS 憑證校驗",
     "tlsSkipVerifyDesc": "啟用後將略過對 Broker 的 TLS 憑證簽名校驗證明，僅建議在測試環境使用",
+    "webhookTlsSkipVerifyDesc": "啟用後將略過對 HTTPS Webhook 端點的 TLS 憑證校驗，僅建議用於內部網路自簽憑證場景",
     "filterEvents": "事件類型訂閱 (留空為全部)",
     "filterAlgorithms": "演算法過濾 (留空為全部)",
     "filterCameras": "攝影機過濾 (留空為全部)",

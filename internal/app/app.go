@@ -1189,11 +1189,13 @@ func provideAlertPush(p alertPushParams) alertPushOut {
 		GalleryMedia: galleryMedia,
 		DataDir:      p.Config.DataDir,
 		Config: alertpush.Config{
-			PublicBaseURL:     p.Config.AlertPushPublicBaseURL,
-			SignedURLTTL:      p.Config.AlertPushSignedURLTTL,
-			DeviceID:          p.SystemInfo,
-			HeartbeatSnapshot: hbProvider,
-			Source:            newAlertSourceResolver(p.CameraService, p.AlgorithmService, p.Logger),
+			PublicBaseURL:              p.Config.AlertPushPublicBaseURL,
+			SignedURLTTL:               p.Config.AlertPushSignedURLTTL,
+			SignedMediaRateLimitPerMin: p.Config.AlertPushSignedMediaRateLimitPerMin,
+			SignedMediaRateLimitBurst:  p.Config.AlertPushSignedMediaRateLimitBurst,
+			DeviceID:                   p.SystemInfo,
+			HeartbeatSnapshot:          hbProvider,
+			Source:                     newAlertSourceResolver(p.CameraService, p.AlgorithmService, p.Logger),
 		},
 		Logger: p.Logger,
 	})
